@@ -83,7 +83,7 @@ WHERE req_id IN (SELECT req_id FROM evict_requests);
 
 逻辑预算求和 `length(block.z)+length(request.skeleton_z)+raw_hook未清空正文`；共享块只计一次。物理预算逐项 stat 数据目录内DB/WAL/临时文件/日志/备份等受管理产物，禁跟随符号链接扫目录外文件；文件系统剩余字节也参与admission。默认不在数据目录内保留无限日志、备份或dump，日志轮转总量上限16 MiB，维护产物提前计入预算。
 
-达到正文预算先回收至90%正文预算；80%总盘只接元数据，并将收到却没存的正文写 `body_state=partial,miss_reason=disk_body_paused`。95%或物理剩余不足时拒hook（507），暂停文件证据写入。source_cursor.committed_off不变，observed_off可增加；source_gap按来源和代际合并连续区间，不能每轮新增一行。空间不足连诊断都写不下时保留内存健康错误，接口503且stderr只写固定错误码；恢复后补写诊断，不返回成功确认。
+达到正文预算先回收至90%正文预算；80%总盘只接元数据，并将收到却没存的正文写 `body_state=partial,miss_reason=disk_body_paused`。95%或物理剩余不足时拒hook（507），暂停文件证据写入。source_cursor.committed_off不变，只将A2 `FileBatch.observedOff` 写入observed_off；seenSize另记stat长度，不代替读取进度。source_gap按来源和代际合并连续区间，不能每轮新增一行。空间不足连诊断都写不下时保留内存健康错误，接口503且stderr只写固定错误码；恢复后补写诊断，不返回成功确认。
 
 写前保护覆盖ingest、费用观测、派生、备份和维护；释放空间的回收事务保留专用余量，不因普通admission暂停而永远不能执行。B的单对象32 MiB及envelope64 MiB只是接收限制，writer还须根据实际序列化大小和引用数估算本批空间；不确定时按未压缩字节保守计量。
 
@@ -159,7 +159,7 @@ test('备份包含已提交状态且不覆盖已有目标', () => {
 });
 ```
 
-A1 `Store.close()` 实现为幂等，重复调用不报错；本例补充打开恢复库检查collector_state.probe为原值。
+A1 `Store.close()` 实现为幂等，重复调用不报错；`collector_state`由A1的明确DDL创建，本例补充打开恢复库检查collector_state.probe为原值。
 
 - [ ] **步骤 2：运行 `bun test tests/maintenance.test.ts`，确认缺命令失败。**
 
@@ -256,7 +256,7 @@ AVA schema在执行时只读检查`sqlite_master`和`PRAGMA table_info`，按实
 }
 ```
 
-令牌由32随机字节生成，写本机0600配置，不放仓库、前端或命令行参数。collector用固定Bun绝对路径启动，不依赖launchd读取交互shell PATH；plist放用户LaunchAgents，服务label采用`local.agent-trace-collector`。设置WorkingDirectory、ProgramArguments、KeepAlive、受限日志路径，先用`plutil -lint`检查。生产接入必须已经满足B末尾的推理策略决策、C1容量保护与C2恢复验证。
+令牌由32随机字节生成，写本机0600配置，不放仓库、前端或命令行参数。hook令牌不能复用A4的 `<dataDir>/read.token`；后者仅供无Origin本地脚本读取API，A3的salt也不作为认证令牌。collector用固定Bun绝对路径启动，不依赖launchd读取交互shell PATH；plist放用户LaunchAgents，服务label采用`local.agent-trace-collector`。设置WorkingDirectory、ProgramArguments、KeepAlive、受限日志路径，先用`plutil -lint`检查。生产接入必须已经满足B末尾的推理策略决策、C1容量保护与C2恢复验证。
 
 实际接入顺序：启动collector并确认Host受保护的健康接口；按magpie官方入口`magpie plugin add <本地hook路径>`添加collector并核对生成配置；保持AVA；用自然发生的流量观察至少24小时，并在窗口中覆盖一次collector重启和一个有大请求的会话。24小时是本计划建议的最小观察窗，达不到场景就延长，不人为发大模型请求补样本。每次操作前读取实际目标，注册不能覆盖整份plugins.json或移除其他插件。
 

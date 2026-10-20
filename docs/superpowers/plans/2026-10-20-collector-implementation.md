@@ -34,7 +34,7 @@
 
 ## 当前起点与交付拆分
 
-计划于 2026-10-20 开始，2026-10-21 完成。文件名保留创建日期。项目定位中的版本越界拒绝启动、第一版包含 direct、实时 trace 补充等旧表述尚未同步；涉及这些冲突时，以当前架构的越界降级、direct 关闭、三路输入为实施基准。本计划列出的额外收敛规则是建议，并不表示用户已确认架构变更。
+计划于 2026-10-20 开始，2026-10-21 完成并修订。文件名保留创建日期。[项目定位](../../project-overview.md)顶部已限定版本拒启、direct和实时trace三处旧约定失效；相关实施以当前架构的越界降级、direct关闭、三路输入为准。额外收敛规则集中在本入口，其中涉及数据删除、推理正文保留的选择仍受上线门槛约束。
 
 2026-10-20 检查时，collector 基准为 `0f6e510`，工作区干净。本仓只有研究、架构文档和 `prototypes/trace-reader-prototype.html`，没有 `package.json`、`src/`、`tests/` 或生产服务。环境可执行 `bun --version`，返回 `1.4.0`。架构中的历史性能与覆盖率仍是原文快照，本轮未重测。
 
@@ -72,7 +72,7 @@
 
 在 `request` 增加 `sort_source`、`sort_key`；优先使用最终账本证据的来源与字节偏移，其次路由 ID，最后 hook ID。字节偏移用数值比较或固定宽度编码，不能按普通十进制字符串比较。排序是 `(started_ms, sort_source, sort_key)`；`req_id` 只用于页面 keyset 的同时间兜底，不参与消息前驱判定。
 
-内部会话键使用带类型的编码，例如 `JSON.stringify(['session', session])`、`JSON.stringify(['conv', conv])`，展示时仍可显示 `magpie-<conv>`。未知归属使用独立 `['request', stableKey]`，不能把所有 NULL session 聚到一起。hook 未关联账本前没有可信 subagent，`actor_state=unknown`，不默认当父代理参与工具配对。
+内部会话键使用带类型的编码，例如 `JSON.stringify(['session', session])`、`JSON.stringify(['conv', conv])`，展示时仍可显示 `magpie-<conv>`。未知会话归属使用独立 `['request', stableKey]`，不能把所有NULL session聚到一起。hook未关联账本前没有可信subagent，长期保存 `actor=NULL, actor_state='unknown'`，不填公共哨兵；这类请求不入 `derive_queue`，不计算确定前驱或配工具。确认actor后再按新归属入队；原本已知的归属被撤回时，重算原组后继，本笔退回未知状态。
 
 派生重算按 `(conv_key, actor)` 分批，单批最多 100 笔；未处理完的起点存入 `derive_queue`，下批继续，禁止截断后继链后悄悄丢弃余项。
 
@@ -86,7 +86,7 @@
 
 ### 5. 费用与尝试
 
-through 费用补齐属于 A，不受 direct 开关控制。API 只补费用，不替换文件 token 字段，也不把返回 Row 当新的顶层请求。
+through费用补齐属于A，不受direct开关控制。API按固定日期窗口分页批量取回，本地建立route候选索引并确认一对一关联；常态不按route逐条请求。初次回填账本涉及的历史日期，运行中重扫近期窗口并周期性复核旧窗口。offset没有跨页快照保证，重叠扫描与幂等只用于收敛，不能承诺一次扫描覆盖全部新增/修正。API只补费用，不替换文件token字段，也不把返回Row当新的顶层请求。
 
 同一 route 出现多条账本和 API 行时，route 只用于寻找候选；还须比较原始 response ID、时间、status、handed_on 与用量等实际提供的字段。仅在可证明一对一时接受费用；候选仍重叠就保留 `absent` 和 `ambiguous_cost`，不能复制同一费用到每个尝试。最终费用与尝试费用分别计算，不能相加两次。
 
@@ -96,7 +96,7 @@ through 费用补齐属于 A，不受 direct 开关控制。API 只补费用，�
 
 单位在实现中固定：`GB=1_000_000_000`，`MiB=1024*1024`。80% 停正文，恢复到 75% 才重新接收；95% 停证据，恢复到 90% 才继续追赶。写前预估本批 DB/WAL/临时空间并保留至少 `max(256 MiB, 2 × 本批上界)` 的余量；正常摄入批次上限 128 行或 8 MiB，单条较大合法行独占一批。
 
-暂停期间 `committed_off` 保持不动，只更新 `observed_off` 与按来源合并的缺口区间。恢复后从 committed_off 补读；上游文件已消失时，缺口保留为 `unrecoverable`。hook 没有上游保留，暂停时返回明确拒绝，不能假装已经持久化。
+暂停期间 `committed_off` 保持不动，只按A2返回的 `FileBatch.observedOff` 更新 `observed_off` 与按来源合并的缺口区间，不把stat文件长度冒充已读取位置。恢复后从 committed_off 补读；上游文件已消失时，缺口保留为 `unrecoverable`。hook 没有上游保留，暂停时返回明确拒绝，不能假装已经持久化。
 
 架构中的 95% 停证据与继续推进提交游标不能同时成立。本计划采用上述双位置规则。默认也不自动淘汰长期元数据；淘汰会改变已约定的历史保留范围，C 提供先预览、后显式执行的命令。未批准淘汰时保持暂停，是可验收状态。
 
@@ -104,9 +104,11 @@ through 费用补齐属于 A，不受 direct 开关控制。API 只补费用，�
 
 ### 7. 安全与故障确认
 
-无 Origin 的页面 API 请求仅接受 `Sec-Fetch-Site: same-origin`，或独立的本地读取令牌；该令牌与 hook 令牌分离，不注入前端。首页仅接受精确 Host 和正常顶层导航；拒绝 `cross-site`、`Origin: null`、跨源 Origin，hook 也不允许浏览器跨站携带认证请求。绑定地址不能由环境变量改成通配地址。
+无Origin的页面API请求仅接受 `Sec-Fetch-Site: same-origin`，或独立的本地读取令牌。A4在服务启动前初始化 `<dataDir>/read.token`（32随机字节、0600、重启复用），本机curl/脚本读取并base64url编码后放入Authorization头；它与hook令牌分离，不注入前端、URL、日志或进程参数。首页仅接受精确 Host 和正常顶层导航；拒绝 `cross-site`、`Origin: null`、跨源 Origin，hook 也不允许浏览器跨站携带认证请求。绑定地址不能由环境变量改成通配地址。
 
-正文、路由错误字符串、账本原始 payload 都走同一脱敏入口；账户定位字段只留本地专用列，公共 DTO 白名单不输出它们。脱敏占位符用本地持久化随机 salt 的 HMAC，避免跨进程漂移和可逆的低熵明文摘要；salt 以 0600 文件保存在数据目录。
+正文、路由错误字符串、账本原始 payload 都走同一脱敏入口；账户定位字段只留本地专用列，公共 DTO 白名单不输出它们。脱敏占位符用本地持久化随机salt的HMAC，避免跨进程漂移和可逆的低熵明文摘要；A3在首次账本读取前初始化 `<dataDir>/redaction.salt`（32随机字节、0600），通过 `loadLocalSecret` 加载，并把同一个值传给账本/路由/费用和B3 hook。B1复用，不再首次生成。
+
+宿主 `ctx.report` 只作为请求阶段聚合诊断能力出现在HookContext中，不能为onResponse的POST分类回报；当前固定源码的report闭包在请求阶段结束后已失效。薄hook自行检查网络/截止时间/HTTP与业务确认，失败记录安全的本地固定码；collector未收到的投递不伪造为已观测失败。保持best-effort与有界重试，不增加持久投递队列。
 
 `NORMAL` 的事务确认覆盖进程崩溃恢复，不承诺整机掉电后每个 200 都持久存在。阶段 A/C 的故障报告必须区分这两类故障；本计划不暗改成 `FULL`。
 
@@ -117,7 +119,8 @@ through 费用补齐属于 A，不受 direct 开关控制。API 只补费用，�
 | 文件或文件组 | 职责 | 首次创建任务 |
 | --- | --- | --- |
 | `package.json`, `tsconfig.json`, `.gitignore`, `README.md` | 运行、测试、类型检查与数据目录说明 | A1 |
-| `src/store.ts`, `src/schema.sql`, `src/config.ts` | SQLite 初始化、迁移、事务 writer、配置校验 | A1 |
+| `src/store.ts`, `src/schema.sql`, `src/config.ts` | SQLite初始化、迁移、事务writer、配置校验；A1建 `collector_state`、`request_alias` 和会话时间索引 | A1 |
+| `src/config.ts` 的本地secret初始化 | A3提供 `loadLocalSecret` 并初始化 `redaction.salt`；A4复用初始化 `read.token` | A3、A4扩展 |
 | `src/sources/files.ts`, `src/sources/magpie.ts` | 完整行与文件代际；集中字段映射/形状/版本/API | A2、A3 |
 | `src/reconcile.ts` | 物理证据、逻辑请求、尝试与来源关联 | A3，B3 扩展 |
 | `src/privacy.ts` | 结构化脱敏、稳定占位符、日志白名单 | A3，B1 扩展 |
@@ -127,7 +130,8 @@ through 费用补齐属于 A，不受 direct 开关控制。API 只补费用，�
 | `plugins/collector.hooks.ts`, `src/hook.ts` | magpie 薄 hook；认证、尺寸、事务确认 | B3 |
 | `src/derive.ts` | actor 内前驱、标题、增量、工具配对、重算队列 | B4 |
 | `src/retention.ts`, `src/maintenance.ts` | 预算、回收、缺口、备份/恢复/重建命令 | C1、C2 |
-| `scripts/verify-cutover.ts`, `docs/operations.md` | 并行统计、切换/回滚操作与恢复记录 | C3 |
+| `scripts/verify-cutover.ts` | 并行统计与切换核对 | C3 |
+| `docs/operations.md` | 维护、恢复和本地凭证使用；C3补切换/回滚操作 | C2，C3扩展 |
 | `tests/*.test.ts`, `tests/fixtures.ts`, `tests/worker.ts` | 合成契约、子进程故障注入、受控时钟与文件 | 各任务 |
 
 `prototypes/` 保留作为演示来源。生产页面不从演示 fixture 回退取值，不通过改造原型制造已接真实数据的错觉。
@@ -199,6 +203,26 @@ export type SessionRow = {
 
 ## 本轮计划检查
 
-2026-10-21 完成文档自查：四份计划和 docs 索引的本地链接有效，代码围栏闭合，A1–A5、B1–B5、C1–C3 共13个任务均有文件、接口、测试和提交步骤；占位内容与旧插件文件名扫描无命中。36段 TypeScript/JavaScript/JSON 代码通过 Bun 转译语法检查或 JSON 解析。架构基础 DDL 与 A1 追加 DDL 已在临时内存 SQLite 中成功合并，证据唯一归属和块反向索引存在。
+2026-10-21 首轮检查确认了本地链接、围栏、36段示例语法及基础DDL可以合并；后续review指出，这些检查没有覆盖跨任务缺表和JS/TS消费类型，首轮检查不能据此宣布实施契约完整。
 
-这些检查只验证计划文件、示例语法和表结构组合，不等于示例已组成可运行工程，也没有执行未来的单元测试、类型检查、性能压测、真实回调或恢复演练。生产模块尚未创建，任务复选框均保持未完成。原架构及项目定位正文未改；实施前新增契约建议集中在本入口，便于单独审阅。
+本次修订在保持13个实施任务的基础上增加以下检查：A1明确创建全部17张表，collector_state与request_alias的读写、外键及连续合并可执行；A4会话分页命中专用索引且无临时排序；40段TS/JS/JSON示例通过转译或解析。A5导出完整Reader类型，B5扩展正文方法，两阶段的JS导出与TS消费者通过TypeScript 5.9.3；实际运行旧请求不覆盖新选择、已回收正文返回原因两项合成测试，2通过、0失败。未知actor不入NOT NULL队列，salt/read token在首次使用前初始化，FileBatch明确返回observedOff。
+
+这些检查覆盖计划示例的选定契约，不等于生产工程或所有任务测试已实现；未执行真实回调、线上费用同步、性能压测或恢复演练。生产模块尚未创建，任务复选框保持未完成。原架构正文未改；项目定位仅补限定旧契约失效的顶部说明。
+
+## 评审处理记录
+
+修订依据为2026-10-21对外部review的逐项核验。表中条号对应用户提供的11项意见；来源事实沿用上节固定物证，用户提供的真实行数与性能估算不写成本轮实测。
+
+| 条号 | 处理 | 落点 |
+| --- | --- | --- |
+| 1 | 补collector_state、request_alias DDL，测试实际读写与别名外键 | A1、文件职责表、C2 |
+| 2 | 采用日期窗口分页和本地匹配；撤逐route查询与逐秒route队列，说明上游缓存和offset边界 | A3、费用共同契约 |
+| 3 | allowJs/checkJs、完整Reader JSDoc、窄ReaderFetch、resolver与nullable类型全部明确 | A1、A5、B5 |
+| 4 | 保留actor=NULL；unknown不入队，不使用公共哨兵，归属确认后再派生 | A1、B3、B4 |
+| 5 | FileBatch增加observedOff，区分已读、候选提交与stat长度 | A2、A3、C1 |
+| 6 | 项目定位顶部标记三项旧约定失效，保留其余产品定位 | project-overview、docs索引 |
+| 7 | read.token由A4初始化，供本地无Origin脚本使用，与hook令牌分离 | A4、安全共同契约、C3 |
+| 8 | salt初始化前移A3并显式传给摄入；B1只复用 | A3、B1、B3 |
+| 9 | 新增会话时间索引，查询使用行值范围比较，检查EXPLAIN | A1、A4 |
+| 10 | 把既存docs索引改动纳入本次计划修订提交；不额外修改父仓gitlink | docs/README |
+| 11 | 保留report真实签名，拒绝把它当onResponse投递回报；使用本地安全诊断与幂等重试 | B3、安全共同契约 |

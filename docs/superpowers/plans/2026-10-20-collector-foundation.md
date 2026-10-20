@@ -49,7 +49,23 @@
 }
 ```
 
-安装时将实际解析的 `@types/bun` 版本改为精确版本并提交 `bun.lock`；生产依赖为空。`tsconfig.json` 使用 `strict:true`、`target:ESNext`、`module:Preserve`、`moduleResolution:Bundler`、`noEmit:true`、`types:[bun]`，检查 `src/tests/plugins/scripts`。前端 JS 由 Bun 语法构建与浏览器检查。
+安装时将实际解析的 `@types/bun` 版本改为精确版本并提交 `bun.lock`；生产依赖为空。`tsconfig.json` 明确包含以下配置，让 TypeScript 测试可以导入前端 JS；`checkJs:false` 不检查 JS 实现内部，因此 A5 仍须显式声明导出类型，并用类型消费者测试验证接口。前端实现另做 Bun 语法构建与浏览器检查。
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "types": ["bun"],
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "plugins/**/*.ts", "scripts/**/*.ts", "web/**/*.js"]
+}
+```
 
 ```ts
 // tests/fixtures.ts
@@ -100,6 +116,17 @@ ALTER TABLE request ADD COLUMN attempt_state TEXT NOT NULL DEFAULT 'known';
 ALTER TABLE request ADD COLUMN instance_key TEXT NOT NULL DEFAULT 'local';
 ALTER TABLE request_evidence ADD COLUMN payload_state TEXT NOT NULL DEFAULT 'present';
 CREATE UNIQUE INDEX i_evidence_owner ON request_evidence(source_kind, ref_key);
+CREATE INDEX i_req_session_time ON request(conv_key, started_ms DESC, req_id DESC);
+CREATE TABLE collector_state (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE request_alias (
+  old_id INTEGER PRIMARY KEY,
+  new_id INTEGER NOT NULL REFERENCES request(req_id),
+  CHECK(old_id <> new_id)
+);
+CREATE INDEX i_request_alias_target ON request_alias(new_id);
 CREATE TABLE derive_queue (
   conv_key TEXT NOT NULL, actor TEXT NOT NULL, from_sort TEXT NOT NULL,
   PRIMARY KEY(conv_key, actor)
@@ -121,6 +148,10 @@ CREATE TABLE cost_observation (
   PRIMARY KEY(ref_key, observed_at)
 ) WITHOUT ROWID;
 ```
+
+`collector_state` 从 A1 就存在，供 A3 探针/费用同步进度和 C2 备份测试使用。`request_alias.old_id` 指已经移除的请求，不对旧 ID 建外键；`new_id` 必须指向当前存活请求。B3 再次合并时将所有指向被合并 ID 的别名同事务改到最终 ID，避免别名链和悬空目标。A1 的 schema 测试用 `sqlite_master` 断言17张表全部存在，并实际 INSERT/SELECT `collector_state` 与 `request_alias`；B3 再覆盖连续合并。
+
+`derive_queue.actor NOT NULL` 是已确认归属的队列约束。`request.actor=NULL, actor_state='unknown'` 的行不入队，不能改填共享的空串或 `'unknown'` 来规避约束；B4 在身份确认后入队。
 
 事务核心采用同步闭包，不在事务里 await：
 
@@ -165,7 +196,8 @@ git commit -m "feat(store): add transactional SQLite foundation and crash recove
 - Consumes: `Store`、A1 游标表。
 - Produces: `readBatch(path: string, cursor: FileCursor | null): Promise<FileBatch>`。
 - `FileCursor = { generation: string; rewriteEpoch: number; committedOff: number; seenSize: number; headLen: number; headHash: string | null }`。
-- `FileBatch = { generation: string; lines: { offset: number; end: number; text: string }[]; committedOff: number; seenSize: number; headLen: number; headHash: string | null; rewriteEpoch: number }`。
+- `FileBatch = { generation: string; lines: { offset: number; end: number; text: string }[]; committedOff: number; observedOff: number; seenSize: number; headLen: number; headHash: string | null; rewriteEpoch: number }`。
+- `observedOff` 是本批实际读到的末尾字节位置，包含已读到但尚未换行的尾部；`committedOff` 是本批完整行全部写入成功后允许推进到的候选位置，只有 A3 的证据事务成功才持久化为 `committed_off`；`seenSize` 是本批 fd stat 观察到的长度。暂停路径只持久化 `observedOff` 到 `observed_off`，不得据此推进提交位置。三者分别统计，不要求相等。
 - Produces: `readRouteFiles(dir: string): Promise<{name:string; fingerprint:string; lines:string[]; kind:'jsonl'|'gz'}[]>`；gzip 可以分批返回解压行，不能把未完成摘要写成已成功。
 
 - [ ] **步骤 1：写追加与半行用例。**
@@ -183,6 +215,9 @@ test('追加不换代，末尾半行不提交', async () => {
     writeFileSync(path, '{"n":1}\n{"n":');
     const a = await readBatch(path, null);
     expect(a.lines.map(x => x.text)).toEqual(['{"n":1}']);
+    expect(a.committedOff).toBe(Buffer.byteLength('{"n":1}\n'));
+    expect(a.observedOff).toBe(Buffer.byteLength('{"n":1}\n{"n":'));
+    expect(a.observedOff).toBeGreaterThan(a.committedOff);
     appendFileSync(path, '2}\n');
     const b = await readBatch(path, a);
     expect(b.generation).toBe(a.generation);
@@ -228,13 +263,14 @@ git commit -m "feat(ingest): track complete lines and rewritten source generatio
 
 ## A3：账本、路由与费用收敛
 
-**Files:** Create `src/sources/magpie.ts`, `src/reconcile.ts`, `src/privacy.ts`, `tests/reconcile.test.ts`, `tests/magpie.test.ts`; Modify `src/schema.sql`（仅在尚未发布迁移时整理 v1）。
+**Files:** Create `src/sources/magpie.ts`, `src/reconcile.ts`, `src/privacy.ts`, `tests/reconcile.test.ts`, `tests/magpie.test.ts`; Modify `src/config.ts`（本地 secret 初始化）、`src/schema.sql`（仅在尚未发布迁移时整理 v1）。
 
 **Interfaces:**
+- `loadLocalSecret(dataDir:string, fileName:'redaction.salt'|'read.token'): Uint8Array`，在 `src/config.ts` 导出；A3 初始化 salt，A4 复用该函数初始化读取令牌。
 - `redact(value: unknown, salt: Uint8Array, rules?: {path:string; pattern:string}[]): unknown`，B1 扩充测试，不改变签名。
-- `ingestLedger(store: Store, sourceName: string, batch: FileBatch, now: number): {accepted:number; invalid:number; duplicate:number}`。
-- `ingestRoute(store: Store, records: unknown[], now: number): void`。
-- `enrichCosts(store: Store, routeId: number, baseUrl: string, now: number, fetcher?: typeof fetch): Promise<void>`。
+- `ingestLedger(store: Store, sourceName: string, batch: FileBatch, now: number, salt:Uint8Array): {accepted:number; invalid:number; duplicate:number}`。
+- `ingestRoute(store: Store, records: unknown[], now: number, salt:Uint8Array): void`。
+- `syncCosts(store:Store, period:string, baseUrl:string, now:number, salt:Uint8Array, fetcher?:typeof fetch): Promise<{pages:number;observations:number;matched:number;ambiguous:number}>`；period 必须是固定 `YYYY-MM-DD..YYYY-MM-DD` 日期窗口，未完成页与重试状态存 A1 的 `collector_state`。
 - `probeMagpie(baseUrl:string, versionFile:string, fetcher?:typeof fetch): Promise<{version:string|null; verified:boolean; reason:string|null}>`。
 - `classifyLedger(row: Record<string,unknown>): 'through'|'rejected'`；文件不推断 direct。
 
@@ -253,9 +289,10 @@ test('两条计费行只生成一个请求且保留 kind', () => {
     ];
     let offset = 0;
     const lines = rows.map(row => { const text=JSON.stringify(row); const start=offset; offset+=Buffer.byteLength(text)+1; return {offset:start,end:offset,text}; });
-    const batch = {generation:'g:0',rewriteEpoch:0,lines,committedOff:offset,seenSize:offset,headLen:0,headHash:null};
-    ingestLedger(f.store, 'usage.jsonl', batch, 1);
-    ingestLedger(f.store, 'usage.jsonl', batch, 2);
+    const batch = {generation:'g:0',rewriteEpoch:0,lines,committedOff:offset,observedOff:offset,seenSize:offset,headLen:0,headHash:null};
+    const salt = new Uint8Array(32).fill(7);
+    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    ingestLedger(f.store, 'usage.jsonl', batch, 2, salt);
     expect(f.store.read.query('SELECT status,attempt_in,attempt_billed,cache_write FROM request').all()).toEqual([{status:200,attempt_in:30,attempt_billed:2,cache_write:null}]);
     expect(f.store.read.query('SELECT count(*) AS n FROM raw_ledger').get()).toEqual({n:2});
   } finally { f.close(); }
@@ -284,9 +321,23 @@ const evidenceKey = (generation: string, offset: number) =>
 
 将版本、形状探针结果保存到小型 `collector_state(key TEXT PRIMARY KEY,value_json TEXT)` 表：文件版本与 `/v1` 不同以 HTTP 为准；HTTP 暂不可用保留最后已知值并记录过期。必需字段按来源和记录类型分组，个别缺失不是整批漂移；新版本伴随整批必需字段缺失时降级保留可解析原始证据。每分钟重探版本，每批持续检查形状。
 
+A3 首次处理账本前调用 `loadLocalSecret(config.dataDir,'redaction.salt')`，不是等到 B1。文件固定为数据目录下的 `redaction.salt`，内容32随机字节；目录0700，首次以 `wx`、0600创建，已存在则读取复用。遇到并发创建只在 EEXIST 时重新读取，其他错误启动失败；已有文件不是普通文件、是符号链接、长度不为32、属主不符或权限过宽时拒绝启动，不静默重新生成。测试覆盖首次创建、重启值不变、长度与权限错误；salt 不写入DB、日志或仓库。
+
+```ts
+// src/main.ts 在 A4 组装，首轮来源读取之前执行。
+const salt = loadLocalSecret(config.dataDir, 'redaction.salt');
+// 每轮将同一个 salt 传给 ingestLedger/ingestRoute，B3 的 acceptHook 同样接收它。
+```
+
 脱敏先覆盖头白名单、路径凭证、Bearer/sk-/AKIA/JWT/私钥以及字符串中的 JSON。schema 中 token 数值、工具 ID、工具 schema 必须保留；无法处理的自定义正则使配置启动失败，不静默忽略。stdout 只写 issue code 与计数。
 
-- [ ] **步骤 4：实现按 route 补费用并验证四态。** 先请求 `GET /v1/magpie/usage/requests?period=all&via=through&computer=this&route=<id>&offset=0&limit=500`。只读取普通 loopback；认证失败记录 `cost_api_denied`，不退到 LAN 或读取用户密钥。返回数组字段为 `rows`，下一 offset 为响应 `offset+rows.length`，空页停止；有 500 行时继续，route 已限制范围但仍按观测匹配幂等。
+- [ ] **步骤 4：按固定日期窗口分页补费用并验证四态。** 常态同步不使用 `route` 参数；请求示例为 `GET /v1/magpie/usage/requests?period=2026-10-20..2026-10-20&via=through&computer=this&offset=0&limit=500`。窗口日期按 magpie 主机时区解释，结束日包含全天；collector 使用同机时区并在健康状态中记录。只读取普通 loopback；认证失败记录 `cost_api_denied`，不退到 LAN 或读取用户密钥。
+
+首次回填按已保存账本涉及的日期排队，日窗口内从 offset=0 开始、每页最多500行，响应 `rows` 建本地 route 候选索引，再按原始response ID、时间、状态、handed_on和用量等实际字段确认归属。API 行不产生新顶层请求，route 不是费用观测唯一键。每页在一个事务内写脱敏后的 `cost_observation`、更新匹配结果与该窗口进度；`ref_key` 使用已证明唯一的本地账本证据键加费用投影摘要，未匹配/歧义行使用 `['cost-run',run_id,page_offset,row_index]` 观测键。相同本地证据的费用投影与最新已保存观测相同时不追加副本；与最新观测不同才保存变化，A→B→A的改价必须保留第三次观测，不能被历史相同值去重掉；未匹配观测按原始层7天清理，并记录清理计数，不能无限积累。
+
+分页以 `response.offset + rows.length` 前移，空页或少于500行结束；验证返回 offset 等于请求值、完整页的偏移严格增加。单次窗口运行固定 run_id、观察时间和起止日期；进度保存在 `collector_state`。进程重启后从窗口头重扫，已有匹配观测幂等跳过，未匹配观测复用未完成run_id。`total` 仅诊断，不当作固定水位；只读响应不能证明跨页快照一致。
+
+运行中每60秒重扫今天与昨天，重新从0开始以覆盖分页期间新增和跨午夜迟到；历史初次队列完成后，每24小时轮流复核一个更旧的已采集日期。日窗口只缩小扫描范围，不保证严格增量，也不保证所有更晚修正立即可见。错过页面、来源重写或上游记录已过期时明确费用尚未取得，不把一次扫描结束称为全量完成。
 
 ```ts
 const costState = (row: { priced?: boolean; cost?: number } | null) => {
@@ -299,12 +350,14 @@ const costState = (row: { priced?: boolean; cost?: number } | null) => {
 
 测试 mock 返回 `priced=true,cost=0`、`priced=false,cost=0`、正金额、401、同 route 两条可区分尝试、两条不可区分候选、后来改价；保持原 token NULL，不把 cost API 的补零拷进 request。通过 `cost_observation` 保留取值时点与原始观测，定价版本未提供则 NULL。rejected 被 `via=through` 排除，保持 `absent/not_applicable` 原因，不额外拉 direct。
 
-费用队列每秒最多一个 route，未完成集合从 request.cost_state 与重试状态恢复；失败退避 5s、30s、300s，上限 300s。不以大量历史请求阻塞 ingest，不为查询每次刷新重新抓全量历史价格。
+费用扫描只允许一个HTTP请求在途，每页提交后让出事件循环，优先服务ingest；失败退避5s、30s、300s，上限300s，成功后继续页/窗口，不再按route逐秒排队。暂停中的磁盘写入不得因费用同步绕过C1保护。测试增加501行→两页、21,196行→43个数据页、空页、重复页/错误offset、第一页后新增行、重启重扫和改价；验证请求URL无route参数，本地token NULL不被API补零覆盖，歧义费用不强行合并。
+
+源码边界：`开源源码@magpie-2374ffe` 的 `internal/usage/request_page.go:929`、`:990` 在构建分页结果时遍历候选记录并过滤route，route不是存储定位索引；`:289`、`:422`、`:621`有页缓存键、源状态失效和容量限制，`internal/usage/log_index.go:66`有日志快照。逐route查询会重复做候选遍历，但不能写成每次都全量读盘。`internal/usage/period_range.go:59`定义固定日期范围，offset仍不提供跨页快照。
 
 - [ ] **步骤 5：运行 `bun test tests/reconcile.test.ts tests/magpie.test.ts tests/files.test.ts && bun run typecheck` 后提交。** 增补乱序文件、route 先到、缺 route、显式 rejected/status=200、坏行之后正常行和 7 天 raw 删除后重放用例。
 
 ```bash
-git add src/sources/magpie.ts src/reconcile.ts src/privacy.ts src/schema.sql tests/reconcile.test.ts tests/magpie.test.ts
+git add src/sources/magpie.ts src/reconcile.ts src/privacy.ts src/config.ts src/schema.sql tests/reconcile.test.ts tests/magpie.test.ts
 git commit -m "feat(reconcile): merge ledger and route evidence with sourced cost states" -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
@@ -313,6 +366,7 @@ git commit -m "feat(reconcile): merge ledger and route evidence with sourced cos
 **Files:** Create `src/http.ts`, `src/queries.ts`, `src/main.ts`, `tests/http.test.ts`, `tests/queries.test.ts`。
 
 **Interfaces:**
+- `loadReadToken(dataDir:string):string`，由 `src/http.ts` 导出，读取A3的 `loadLocalSecret(dataDir,'read.token')` 并转为base64url；只用于本地无Origin脚本。
 - `createHandler(store:Store, config:Config, readToken:string): (req:Request)=>Promise<Response>`。
 - `startCollector(config:Config): Promise<{port:number; stop():Promise<void>}>`。
 - `listSessions(store:Store, limit:number, cursor:string|null): Page<SessionRow>`。
@@ -347,15 +401,19 @@ test('伪造 Host 和 null Origin 被拒绝', async () => {
 SELECT req_id, started_ms, title, status, model_requested, model_served,
        in_tok, out_tok, cache_read, cache_write, cost, cost_state, have, body_state
 FROM request
-WHERE conv_key = ? AND (started_ms < ? OR (started_ms = ? AND req_id < ?))
+WHERE conv_key = ? AND (started_ms, req_id) < (?, ?)
 ORDER BY started_ms DESC, req_id DESC LIMIT ?;
 ```
+
+A1 已创建 `i_req_session_time(conv_key,started_ms DESC,req_id DESC)`，用于上面的跨actor会话列表；原有 `i_req_conv(conv_key,actor,started_ms DESC,req_id DESC)` 留给actor内前驱查询。首个页面不加游标范围，后续使用上面的行值比较。`EXPLAIN QUERY PLAN` 必须使用 `i_req_session_time` 且不出现 `USE TEMP B-TREE FOR ORDER BY`，不能仅靠1,825笔耗时碰巧达标。
 
 查询 `limit+1` 条生成 next_cursor；列表 SELECT 禁止 `*`。API 不返回原始 payload/account/host/providerKeyId 或 skeleton。会话通过 GROUP BY 聚合，不建聚合表；NULL 用量显示部分汇总。活跃会话 last_ms 变动会让列表排序变化，页面按 conv_key 去重并支持刷新，不承诺跨页冻结快照。
 
 统一 `Cache-Control:no-store`、`X-Content-Type-Options:nosniff`，不发跨域 CORS。HTML 加 `frame-ancestors 'none'` 的 CSP，生产 JS 外置以允许 `script-src 'self'`。首页导航和 API 无 Origin 规则按总入口；静态文件只按允许的 `/`、`/app.js` 路径返回，其他路径404，不做任意路径读取。
 
-`/api/stats` 此阶段输出各来源游标、最后成功、解析失败、版本/形状、追赶中、pending 数；C 扩展磁盘。启动先迁移，再开 HTTP，再逐批追历史；轮询不得重入，用运行中标记和 finally 释放。SIGTERM 停止新轮询、停止接受写入、完成当前同步事务、关闭连接，未提交来源下一次重读。若另一进程已占端口启动失败；维护命令先检查服务停用，不与在线 writer 并行。
+`startCollector` 在开启HTTP前通过 `loadReadToken(config.dataDir)` 加载读取令牌：`read.token` 与salt各自独立生成32随机字节、0600保存，重启复用；它也独立于B3/C3的hook令牌。无Origin的curl/脚本从这个本地文件读取并base64url编码，作为 `Authorization: Bearer <read-token>` 使用；不将令牌嵌入前端、URL、进程参数或日志。正常同源浏览器依靠Origin/Fetch Metadata规则，不需要读取该文件。测试覆盖重启值不变、缺令牌/错令牌拒绝、read token不能用于hook端点、hook token不能用于普通无Origin API。
+
+`/api/stats` 此阶段输出各来源游标、最后成功、解析失败、版本/形状、追赶中、pending 数；C 扩展磁盘。启动先迁移并加载salt/read token，再开 HTTP，再逐批追历史；轮询不得重入，用运行中标记和 finally 释放。SIGTERM 停止新轮询、停止接受写入、完成当前同步事务、关闭连接，未提交来源下一次重读。若另一进程已占端口启动失败；维护命令先检查服务停用，不与在线 writer 并行。
 
 - [ ] **步骤 4：补 1,825 笔与访问矩阵测试。** 合成会话插入 1,825 笔，其中多个相同 started_ms，遍历分页得到恰好 1,825 个唯一 ID；跨页期间加入更新请求，旧分页不重复。验证同源、合法 read token、无认证 curl、跨站 Fetch Metadata、OPTIONS、缺 Host、Origin 端口不符、SQL 注入 cursor、超大 limit、账户字段不可见。暖查询 100 行本机目标 <100 ms，报告 p50/p95，不做跨机器绝对保证。
 
@@ -386,24 +444,30 @@ git commit -m "feat(api): serve protected keyset queries and collector health" -
 
 **Interfaces:**
 - Consumes: A4 全部接口及 DTO。
-- Produces: `createReader(fetcher: typeof fetch): { loadSessions(cursor?:string):Promise<void>; selectSession(key:string):Promise<void>; selectRequest(id:number):Promise<void>; getState():ReaderState }`，从 `web/app.js` 导出供合成网络测试。
-- `ReaderState = { request: RequestDetail|null; requestState:'loading'|'error'|'empty'|'ready'; sessionKey:string|null; error:string|null }`；前端以 JSDoc 标注，测试访问 request 前先断言非空。DOM 初始化置于 `if (typeof document !== 'undefined')` 内，纯 reader 导入不会操作浏览器。
+- Produces: `createReader(fetcher: ReaderFetch): Reader`，从 `web/app.js` 导出供合成网络测试；`ReaderFetch = (url:string)=>Promise<Response>` 是页面实际需要的GET依赖，原生 `fetch` 可传入，测试不必实现完整fetch重载。
+- `ReaderState = { request:RequestDetail|null; requestState:'loading'|'error'|'empty'|'ready'; sessionKey:string|null; error:string|null; sessions:SessionRow[]; sessionsCursor:string|null; requests:RequestRow[]; requestsCursor:string|null }`；读取nullable request前先做显式空值检查。`Reader`暴露 `loadSessions(cursor?)`、`loadRequests(cursor?)`、`selectSession(key)`、`selectRequest(id)` 和 `getState()`，分页加载沿用当前选择。DOM初始化置于 `if (typeof document !== 'undefined')` 内，纯reader导入不会操作浏览器。
 
 - [ ] **步骤 1：从原型复制 HTML/CSS，剥离合成数据并写异步竞争测试。** 保留布局、主题、URL 键与事件委托。`TIMELINE/REQUESTS/EXTRA/SESSIONS` 演示常量不进入生产 JS；用 Map 缓存已加载请求，以 `loading/error/empty/ready` 区分网络状态和正文状态。
 
-```js
-// tests/web.test.ts 的可控 fetch：慢的第一笔不能覆盖快的第二笔。
-let finishFirst;
-const fetcher = async url => {
-  if (String(url).endsWith('/1')) return await new Promise(resolve => { finishFirst = resolve; });
-  return Response.json({ req_id:2, title:'second', body_state:'pending', have:2 });
-};
-const reader = createReader(fetcher);
-const first = reader.selectRequest(1);
-await reader.selectRequest(2);
-finishFirst(Response.json({req_id:1,title:'first',body_state:'pending',have:2}));
-await first;
-expect(reader.getState().request.req_id).toBe(2);
+```ts
+// tests/web.test.ts：完整TS测试，不把JS转译成功当成类型检查。
+import { expect, test } from 'bun:test';
+import { createReader } from '../web/app.js';
+test('较慢的旧详情不覆盖新选择', async () => {
+  let finishFirst!: (response: Response) => void;
+  const fetcher = async (url: string): Promise<Response> => {
+    if (url.endsWith('/1')) return new Promise<Response>(resolve => { finishFirst = resolve; });
+    return Response.json({ req_id:2, title:'second', body_state:'pending', have:2 });
+  };
+  const reader = createReader(fetcher);
+  const first = reader.selectRequest(1);
+  await reader.selectRequest(2);
+  finishFirst(Response.json({req_id:1,title:'first',body_state:'pending',have:2}));
+  await first;
+  const request = reader.getState().request;
+  if (request === null) throw new Error('missing_request');
+  expect(request.req_id).toBe(2);
+});
 ```
 
 - [ ] **步骤 2：运行 `bun test tests/web.test.ts`，确认缺 reader 导出失败。**
@@ -411,17 +475,81 @@ expect(reader.getState().request.req_id).toBe(2);
 - [ ] **步骤 3：实现请求序号防止旧结果覆盖，并逐处替换同步假设。**
 
 ```js
-let selectionEpoch = 0;
-async function selectRequest(id) {
-  const epoch = ++selectionEpoch;
-  const response = await fetcher(`/api/requests/${id}`);
-  if (!response.ok) throw new Error(`request_http_${response.status}`);
-  const request = await response.json();
-  if (epoch !== selectionEpoch) return;
-  state.request = request;
-  state.requestState = 'ready';
+// web/app.js：JSDoc贴在实际导出函数上，TS消费者由这些类型检查调用。
+/**
+ * @typedef {import('../src/queries').RequestDetail} RequestDetail
+ * @typedef {import('../src/queries').RequestRow} RequestRow
+ * @typedef {import('../src/queries').SessionRow} SessionRow
+ * @typedef {(url: string) => Promise<Response>} ReaderFetch
+ * @typedef {{request:RequestDetail|null, requestState:'loading'|'error'|'empty'|'ready', sessionKey:string|null, error:string|null, sessions:SessionRow[], sessionsCursor:string|null, requests:RequestRow[], requestsCursor:string|null}} ReaderState
+ * @typedef {{loadSessions:(cursor?:string)=>Promise<void>, loadRequests:(cursor?:string)=>Promise<void>, selectSession:(key:string)=>Promise<void>, selectRequest:(id:number)=>Promise<void>, getState:()=>ReaderState}} Reader
+ */
+/** @param {ReaderFetch} fetcher @returns {Reader} */
+export function createReader(fetcher) {
+  /** @type {ReaderState} */
+  const state = {request:null, requestState:'empty', sessionKey:null, error:null,
+    sessions:[], sessionsCursor:null, requests:[], requestsCursor:null};
+  let selectionEpoch = 0;
+  let requestEpoch = 0;
+  /** @param {string} url */
+  async function readJSON(url) {
+    const response = await fetcher(url);
+    if (!response.ok) throw new Error(`http_${response.status}`);
+    return await response.json();
+  }
+  /** @param {number} id */
+  async function selectRequest(id) {
+    const epoch = ++selectionEpoch;
+    state.requestState = 'loading';
+    state.error = null;
+    try {
+      const request = await readJSON(`/api/requests/${id}`);
+      if (epoch !== selectionEpoch) return;
+      state.request = request;
+      state.requestState = 'ready';
+    } catch (error) {
+      if (epoch !== selectionEpoch) return;
+      state.requestState = 'error';
+      state.error = error instanceof Error ? error.message : 'request_failed';
+    }
+  }
+  /** @param {string} [cursor] */
+  async function loadSessions(cursor) {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+    const page = await readJSON(`/api/sessions${query}`);
+    const byKey = new Map((cursor ? state.sessions : []).map(row=>[row.conv_key,row]));
+    for (const row of page.items) byKey.set(row.conv_key,row);
+    state.sessions = [...byKey.values()];
+    state.sessionsCursor = page.next_cursor;
+  }
+  /** @param {string} [cursor] */
+  async function loadRequests(cursor) {
+    const key = state.sessionKey;
+    if (key === null) return;
+    const epoch = ++requestEpoch;
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+    const page = await readJSON(`/api/sessions/${encodeURIComponent(key)}/requests${query}`);
+    if (epoch !== requestEpoch || key !== state.sessionKey) return;
+    const byId = new Map((cursor ? state.requests : []).map(row=>[row.req_id,row]));
+    for (const row of page.items) byId.set(row.req_id,row);
+    state.requests = [...byId.values()];
+    state.requestsCursor = page.next_cursor;
+  }
+  /** @param {string} key */
+  async function selectSession(key) {
+    ++selectionEpoch;
+    state.sessionKey = key;
+    state.request = null;
+    state.requestState = 'empty';
+    state.requests = [];
+    state.requestsCursor = null;
+    await loadRequests();
+  }
+  return {loadSessions,loadRequests,selectSession,selectRequest,getState:()=>state};
 }
 ```
+
+API返回的DTO仍需按字段校验，渲染器消费上述缓存；JSON解析成功不表示形状合法。TypeScript消费者测试必须调用Reader全部方法，B5加入loadBody时同步扩展JSDoc和调用检查。
 
 实际 reader 内包含上述 state 和 fetcher。导航失败保留明确 error，不回退演示值。空库不能读 `SESSIONS[0].key`；URL 中过期 req id 显示未找到。统一 `deltaOnly` 为 Set，不在 `ensureSelection()` 中设 false。
 
@@ -449,6 +577,8 @@ git commit -m "feat(web): connect the trace reader to real paginated metadata" -
 
 ## A 阶段验收
 
+- [ ] A1全部17张表和后续引用列已建，collector_state读写及request_alias外键/连续合并检查通过。
+- [ ] A5完整Reader接口和测试由TypeScript检查通过，JS导入、mock参数/resolver、nullable request均无隐式any或缺方法。
 - [ ] 已证明同 route 多物理账本行、重复回放、事务中断、半行、跨午夜、gzip 替换与同 inode 重写。
 - [ ] `accepted + duplicate + invalid = 已读取完整物理行数`；raw 删除后的重放仍不重复计费。
 - [ ] 顶层请求计数与尝试计数分开，未归属请求各自独立，route-only 记录不额外增请求。

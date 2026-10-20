@@ -1,5 +1,7 @@
 # agent-trace-collector 是什么
 
+> 实施范围更新（2026-10-21）：本文仍保留早期方案中的三处旧约定：版本越界拒绝启动、第一版摄入 direct、实时 trace 作为补充。这三项已由[当前架构](architecture-design.md)调整为 `>=0.1.1294 <0.2.0` 外降级启动、direct 默认关闭、只使用 hook/账本文件/路由文件三路证据；through 费用另由 API 补齐。开工以架构和[实施总入口](superpowers/plans/2026-10-20-collector-implementation.md)为准，下文对应旧表述不作为实现要求。其余产品定位继续有效。
+
 ## 一句话
 
 一个只服务 magpie 的本机 LLM 请求记录器：每经过 magpie 网关的一笔请求，在这里留一条记录，详情页展示的就是那笔请求本身。
