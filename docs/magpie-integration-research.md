@@ -2,6 +2,8 @@
 
 本文回答一个问题：如果新工程要复用 magpie 对 Agent 流量的识别结果，能从 magpie 拿到哪些事实，这些事实由什么机制产生，边界在哪里。
 
+补充阅读：[机制与复用边界](magpie-mechanisms-research.md) 钉在 `开源源码@magpie-2374ffe`。该研究补充了模型与窗口选路、`Route.prompt`、`handed_on` 多行记账、OTLP 尝试 span、本地录制与插件形态。本文后续涉及请求失败就丢 hook、`success` 只看 error、OTLP 没有额外信息、正文只有 hook 的概括，须按新研究限定；正文表格中的旧采集数字、条件与时间保持原样，不算重测。
+
 调研时间为 2026-10-20，对象是本机安装的 magpie 0.1.1294（`/Applications/magpie.app`，网关监听 `127.0.0.1:3425`），源码钉在 `开源源码@magpie-2c3c903`，文末给提交 permalink。文中每个结论后标注来源等级，等级词表见文末。
 
 ## 结论先行
