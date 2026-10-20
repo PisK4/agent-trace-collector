@@ -1,6 +1,6 @@
 # agent-trace-collector 文档
 
-这个目录存放 trace 工具的调研与设计文档。另有[可交互的界面原型](../prototypes/README.md)，用于比较阅读结构；采集与查询后端尚未实现。
+这个目录存放 trace 工具的调研与设计文档。另有[可交互的界面原型](../prototypes/README.md)，用于比较阅读结构；采集与查询后端尚未实现，实现依据见[收敛型技术架构设计](architecture-design.md)。
 
 ## 索引
 
@@ -9,6 +9,7 @@
 | [project-overview.md](project-overview.md) | 项目定位：按请求保存、按对话导航，右侧读 Response 参数，三条数据通道、magpie 绑定与第一版范围 |
 | [magpie-integration-research.md](magpie-integration-research.md) | magpie 0.1.1294 的 Agent 识别、session 与 conv 两套会话标识、四条可接入面及原采集结果；新增研究补充了部分机制边界，见文首说明 |
 | [magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 模型、路由与上下文容量的真实控制流，现成 prompt 分解、classifier、缓存亲和性、尝试与账本、插件形态及直接集成或借鉴的取舍 |
+| [architecture-design.md](architecture-design.md) | 技术评审后的收敛型设计方案：技术栈与进程模型、三路证据收敛、SQLite 表结构、内容去重与派生字段、查询接口、10 GB 滚动预算、版本探针、AVA 下线顺序与分步落地判据 |
 
 ## 调研文档回答了什么
 
@@ -19,4 +20,6 @@
 
 ## 尚未做的事
 
-当前有研究与定位文档，以及采用合成数据的界面原型，尚无生产实现。magpie 与现有 AVA 保持未修改。建议优先直接保存 magpie 的分析结果，再决定实现方案。现有最小形态仍以 hook、账本和路由数据汇合为基础；开始建库前，需落实新研究提出的多尝试记账、历史及时摄入、缺失状态与关联歧义处理。
+当前有研究与定位文档、收敛型架构设计，以及采用合成数据的界面原型，尚无生产实现。magpie 与现有 AVA 保持未修改。
+
+架构已给定四步落地顺序，第一步（只读账本与路由、出真实数据页面）不依赖 hook，可以先做。仍在等待确认的问题列在架构文档末尾：超大请求的回调为什么丢失、direct 是否还会新增、分级保留的切分点、推理正文是否入库、多实例标识。
