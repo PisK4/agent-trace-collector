@@ -28,7 +28,7 @@
 **Files:** Create `src/body.ts`, `tests/body.test.ts`, `tests/privacy.test.ts`; Modify `src/privacy.ts`, `src/config.ts`。
 
 **Interfaces:**
-- Consumes: A1 `Store`、A3 `redact(value,salt,rules)`。
+- Consumes: A1 `Store`、A3 `redact(value,salt,rules)` 与已在首轮账本摄入前初始化的 `redaction.salt`。
 - `persistBody(store:Store, reqId:number, body:BodyInput): void`。
 - `restoreBody(store:Store, reqId:number): BodyInput | null`。
 - `BodyInput = { protocol:string; request:unknown; reply:unknown; redact_version:number }`。
@@ -59,7 +59,7 @@ test('脱敏工具参数字符串并保留 token 计数和关联 ID', () => {
 
 - [ ] **步骤 2：运行 `bun test tests/privacy.test.ts tests/body.test.ts`，缺少字符串 JSON 脱敏或内容还原时应失败。**
 
-- [ ] **步骤 3：实现稳定占位符、消息块和骨架。** 数据目录 salt 32 随机字节，首次 `open` 使用 `wx`、0600，已存在读取复用，禁止每次启动重建。占位符格式 `[redacted:<class>:<hmac-prefix>]`，HMAC 输入包含凭证类别和值。递归遍历结构，同时尝试解析工具参数内的 JSON 字符串；解析失败时只做字符串模式替换，不能丢整段参数。ID 路径先保留，敏感路径显式列出；已脱敏占位符再次处理必须不变。
+- [ ] **步骤 3：实现稳定占位符、消息块和骨架。** 复用 A3 的 `loadLocalSecret(dataDir,'redaction.salt')`，不得在 B1 另建salt或更换已有值。占位符格式 `[redacted:<class>:<hmac-prefix>]`，HMAC 输入包含凭证类别和值。递归遍历结构，同时尝试解析工具参数内的 JSON 字符串；解析失败时只做字符串模式替换，不能丢整段参数。ID 路径先保留，敏感路径显式列出；已脱敏占位符再次处理必须不变。
 
 ```ts
 import { createHash } from 'node:crypto';
@@ -167,19 +167,20 @@ git commit -m "feat(protocol): parse Anthropic and Chat bodies with paginated re
 
 **Interfaces:**
 - 插件 `onRequest(body:unknown,ctx:HookContext): void`、`onResponse(reply:unknown,ctx:HookContext): Promise<void>`。
-- `HookContext = {origin:string;protocol:string;path:string;agent?:string;session?:string;cwd?:string;model?:string;stream?:boolean;request?:unknown;success?:boolean;state:Record<string,unknown>;options:{endpoint:string;token:string;gatewayTimeoutMs?:number};signal:AbortSignal}`；未使用的宿主字段不复制进 envelope。
+- `HookReportCode = 'ready'|'empty'|'unbound'|'unauthorized'|'unavailable'|'invalid'|'skipped'`。
+- `HookContext = {origin:string;protocol:string;path:string;agent?:string;session?:string;cwd?:string;model?:string;stream?:boolean;request?:unknown;success?:boolean;state:Record<string,unknown>;options:{endpoint:string;token:string;gatewayTimeoutMs?:number};signal:AbortSignal;report(code:HookReportCode,count?:number):void}`；report是函数能力，不复制进envelope；未使用的其他宿主字段也不复制。
 - `HookEnvelope = {hook_id:string;observed_start_ms:number;observed_finish_ms:number;protocol:string;path:string;agent:string|null;session:string|null;cwd:string|null;model:string|null;stream:boolean;origin:string;success:boolean;request:unknown;reply:unknown;request_bytes:number;reply_bytes:number;body_omitted:boolean;omit_reason:string|null;magpie_version?:string}`。
-- `acceptHook(store:Store,envelope:HookEnvelope,now:number): {req_id:number;duplicate:boolean}`；只在已认证和有容量配额后调用。
+- `acceptHook(store:Store,envelope:HookEnvelope,now:number,salt:Uint8Array): {req_id:number;duplicate:boolean}`；HTTP组装传入A3已加载的salt，只在已认证和有容量配额后调用。
 - `reconcilePending(store:Store,now:number): {merged:number;pending:number;ambiguous:number}`。
 
 - [ ] **步骤 1：写稳定投递 ID 与重复 POST 用例。**
 
 ```ts
 import { expect, test } from 'bun:test';
-import { onRequest } from '../plugins/collector.hooks';
+import { onRequest, type HookContext } from '../plugins/collector.hooks';
 test('请求期只生成采集身份而不改正文', () => {
   const body = {messages:[{role:'user',content:'hello'}]};
-  const ctx = {origin:'local',protocol:'chat',path:'/v1/chat/completions',state:{},options:{endpoint:'http://127.0.0.1:8320/hook/ingest',token:'synthetic'},signal:new AbortController().signal};
+  const ctx: HookContext = {origin:'local',protocol:'chat',path:'/v1/chat/completions',state:{},options:{endpoint:'http://127.0.0.1:8320/hook/ingest',token:'synthetic'},signal:new AbortController().signal,report:()=>{}};
   expect(onRequest(body,ctx)).toBeUndefined();
   expect(typeof ctx.state.hook_id).toBe('string');
   expect(body).toEqual({messages:[{role:'user',content:'hello'}]});
@@ -204,6 +205,10 @@ onResponse 记录 finish、序列化 UTF-8 字节数，任一对象超32 MiB或 
 
 总投递截止 1500 ms，每次 fetch 上限600 ms，最多2次，第二次仅针对网络失败、408、429、5xx，间隔50 ms；共享总截止及 ctx.signal，剩余时间不足不重试。拒绝4xx不循环。宿主 `gatewayTimeoutMs=2000`，AVA 默认1000并行总预算3000 ms。回调丢失仍 best-effort，不能声称可恢复补投。
 
+`ctx.report` 仅表示请求阶段的插件聚合状态，不能报告回复POST的投递结果。`开源源码@magpie-2374ffe` 的 `internal/plugin/host.js:1310` 创建的report闭包捕获请求阶段ownSignal，`:1346`在请求阶段结束后取消它；`:1362`回复阶段只替换ctx.signal，没有重建report，因此onResponse调用会被忽略。`timeout/cancelled/error`也不在插件可传code白名单内。测试report使用空函数是模拟宿主能力，不暗示onResponse可以依赖它。
+
+onResponse自行检查HTTP状态与业务确认，失败仅记录本地固定码 `collector_network_error|collector_deadline|collector_http_rejected|collector_ack_invalid`、尝试序号和可用的HTTP状态；不写正文、令牌或URL参数。网络失败或确认丢失时接收状态可能未知，通过同hook_id重试消除重复副作用。collector只统计自身收到的请求，不能假装知道未到达的失败。诊断不新增持久投递队列，也不承诺宿主重启后补投；宿主的通用失败告警与collector本地诊断分开解释。
+
 HTTP handler 先精确 Host/Origin 与常量时间令牌比较，再 origin 过滤，再流式计 envelope 字节，超过64 MiB取消读取并413；限制同时读取中的 envelope 为1，额外请求429，避免多份大 JSON 占满内存。合法 JSON 内部再校验request/reply大小。坏 JSON400、缺ID422、认证401/403、磁盘拒收507、writer失败503；成功提交200，重放相同ID200+duplicate。
 
 持久化时同事务生成 hook 请求、保存 raw_hook 头、脱敏分块、写证据和 pending；已有关联 ledger 时复用请求。body_omitted 标 partial 和真实原因，have 仍含 hook 位。raw 副本清空后用长期 reply_state 判定缺回复。
@@ -220,7 +225,7 @@ const prefixes: Record<string,string[]> = {
 // 单次剥离最长匹配前缀；原始 ID 精确匹配优先，规则版本=1。
 ```
 
-保留原始 ID 与规范化 ID；同原始ID/规范ID多候选标 ambiguous，不按近邻时间强合并；没有ID长期 pending。字段冲突记录候选和原因。hook 暂存 actor=unknown，到账本/路由后才确认。两条 request 合并时以账本请求为保留对象，同事务迁移 evidence、request_block、tool_call、prev引用及 derive_queue，清理临时 hook 请求；原请求URL可通过 `request_alias(old_id PRIMARY KEY,new_id)` 返回重定向标记，页面跟随 canonical id。
+保留原始 ID 与规范化 ID；同原始ID/规范ID多候选标 ambiguous，不按近邻时间强合并；没有ID长期 pending。字段冲突记录候选和原因。hook 暂存 `actor=NULL, actor_state='unknown'`，到账本/路由后才确认，未知身份不写derive_queue。两条 request 合并时以账本请求为保留对象，同事务迁移 evidence、request_block、tool_call、prev引用及 derive_queue，清理临时 hook 请求；原请求URL使用A1已创建的 `request_alias` 返回canonical id。连续合并时先更新所有指向待移除请求的别名，再新增本次old→canonical映射；别名不形成链，查询不能无限跟随。
 
 测试两个证据顺序、重复 envelope、提交后响应丢失重试、规范ID碰撞、无ID、late ledger，以及 6 MiB request+3 MiB reply、合法4 MiB JSON、超64 MiB、null reply、非local、伪造origin但无token。合并前后守恒：hook证据总数不变、逻辑请求减少1、块引用按同笔正文去重而不丢消息位置。
 
@@ -237,7 +242,7 @@ git commit -m "feat(hook): ingest authenticated callbacks and reconcile stable e
 
 **Interfaces:**
 - `compareSequence(previous: readonly number[]|null,current:readonly number[],hasPredecessor:boolean): {relation:'first'|'confirmed'|'unknown';delta:number[]|null}`。
-- `enqueueDerive(store:Store,convKey:string,actor:string,fromSort:string):void`。
+- `enqueueDerive(store:Store,convKey:string,actor:string,fromSort:string):void`，只接受 `actor_state='known'` 且actor非NULL的分组。调用方先守卫身份；unknown请求保持 `prev_relation='unknown', delta_ordinals=NULL` 和模型时间标题，不入队、不配工具，不用空串/共享unknown哨兵。
 - `drainDerive(store:Store,limit?:number): {processed:number;remaining:number}`，默认100。
 - `deriveTitle(messages:unknown[],delta:number[]|null,fallback:string): {title:string;source:'user_delta'|'model_time'}`。
 - `rebuildDerived(store:Store,convKey:string): {queued:number;unavailable:number}`，C2 CLI 复用。
@@ -269,7 +274,7 @@ export function compareSequence(previous: readonly number[]|null,current:readonl
 }
 ```
 
-按总入口稳定顺序与 `(conv_key,actor)` 找前驱；unknown actor 不串到父代理。当前或前驱正文不可用、unsupported、分支/裁剪或结构指令变化无法确认时标 unknown，不能伪造新增。插入、关联、正文到达、归属改变后，把原组与新组受影响起点加入 derive_queue；每批100笔，提交派生与队列检查点同事务，进程中断后继续。不能以一批上限停止整条链。
+按总入口稳定顺序与 `(conv_key,actor)` 找前驱。入队前先检查 `actor_state==='known' && actor!==null`；未知actor保持NULL和未知派生，不尝试向NOT NULL队列写入。归属确认时对新已知分组入队；归属从已知变成未知时先重算原已知分组受影响后继，再清除本笔确定增量和工具配对。当前或前驱正文不可用、unsupported、分支/裁剪或结构指令变化无法确认时标 unknown，不能伪造新增。插入、关联、正文到达、归属改变后，把原组与新组受影响起点加入 derive_queue；每批100笔，提交派生与队列检查点同事务，进程中断后继续。不能以一批上限停止整条链。
 
 标题取第一个确定新增 USER 文本的首行，去 system-reminder/command标签、工作目录包装，再压空白取60 Unicode字符；无可用用户增量时用模型与本地HH:MM，并保存 title_source。日期按配置固定时区（默认机器当前 IANA 时区，在库创建时保存），不能重启后因系统时区变化静默改历史day。
 
@@ -277,7 +282,7 @@ export function compareSequence(previous: readonly number[]|null,current:readonl
 
 `tool_call` 增加 `result_path TEXT`，因为同消息可有多个 tool_result；增加 `derive_version INTEGER NOT NULL DEFAULT 1`。反向到达的结果通过读取持久化正文重新派生，无需再建一套独立工具事件日志。raw过期不影响仍存的正文重算；正文回收后不删除既有工具关系。
 
-- [ ] **步骤 4：写顺序无关与队列恢复测试。** 合成A→B→C与A→C→B、迟到hook、归属变化得到同样的稳定键/标题/增量/工具链接（比较稳定证据键，不能比较自增req_id）。构造父P、子S1、子S2共享session且均使用call_x，结果只能在各actor内配对；hook未关联前不能先配父工具。构造250笔链，处理100后关闭重开，最后queue为空且250笔版本一致。
+- [ ] **步骤 4：写顺序无关与队列恢复测试。** 合成A→B→C与A→C→B、迟到hook、归属变化得到同样的稳定键/标题/增量/工具链接（比较稳定证据键，不能比较自增req_id）。构造父P、子S1、子S2共享session且均使用call_x，结果只能在各actor内配对；hook未关联前不能先配父工具。构造250笔链，处理100后关闭重开，最后queue为空且250笔版本一致。另构造同session的两个actor=NULL请求，断言摄入无NOT NULL错误、derive_queue无未知分组、两笔都不确定前驱；分别补齐不同子代理身份后，各自入队，最终仍不串工具。
 
 ```ts
 // 三个输入序列的预期结果，与到达顺序无关。
@@ -304,18 +309,37 @@ git commit -m "feat(derive): converge actor-scoped deltas and tool relationships
 
 - [ ] **步骤 1：写回收/未支持状态不显示空对话测试。**
 
-```js
-const fake = async url => Response.json(String(url).includes('/body')
-  ? {state:'evicted',parse_state:'ok',reply_state:'ok',from:0,to:0,total:80,messages:[],request_fields:null,reply:null,reason:'budget'}
-  : {req_id:1,title:'history',body_state:'evicted',have:7});
-const reader = createReader(fake);
-await reader.selectRequest(1);
-const page = await reader.loadBody(1,0);
-expect(page.state).toBe('evicted');
-expect(page.reason).toBe('budget');
+```ts
+import { expect, test } from 'bun:test';
+import { createReader } from '../web/app.js';
+test('已回收正文显示原因而不是空对话', async () => {
+  const fake = async (url:string): Promise<Response> => Response.json(url.includes('/body')
+    ? {state:'evicted',parse_state:'ok',reply_state:'ok',from:0,to:0,total:80,messages:[],request_fields:null,reply:null,reason:'budget'}
+    : {req_id:1,title:'history',body_state:'evicted',have:7});
+  const reader = createReader(fake);
+  await reader.selectRequest(1);
+  const page = await reader.loadBody(1,0);
+  expect(page.state).toBe('evicted');
+  expect(page.reason).toBe('budget');
+});
 ```
 
-在 `createReader` 的返回类型补 `loadBody`；列表切换不能触发全部正文下载。
+在 `web/app.js` 的JSDoc中新增 `@typedef {import('../src/protocols').BodyPage} BodyPage`，并把A5的Reader定义替换为下列类型。B2的 `BodyPage` 类型统一从 `src/protocols.ts` 导出，查询模块使用type import；测试真实调用loadBody，不能仅修改文字接口。列表切换不能触发全部正文下载。
+
+```js
+/** @typedef {{loadSessions:(cursor?:string)=>Promise<void>, loadRequests:(cursor?:string)=>Promise<void>, selectSession:(key:string)=>Promise<void>, selectRequest:(id:number)=>Promise<void>, getState:()=>ReaderState, loadBody:(id:number,from:number)=>Promise<BodyPage>}} Reader */
+```
+
+在createReader闭包中增加以下函数，并把它与其他方法一起返回；分页与详情使用不同缓存，应用结果前检查当前选中请求。
+
+```js
+/** @param {number} id @param {number} from @returns {Promise<BodyPage>} */
+async function loadBody(id, from) {
+  return await readJSON(`/api/requests/${id}/body?from=${from}&to=${from + 40}`);
+}
+// createReader的实际返回值：
+return {loadSessions,loadRequests,selectSession,selectRequest,getState:()=>state,loadBody};
+```
 
 - [ ] **步骤 2：运行 `bun test tests/web.test.ts tests/body-api.test.ts`，确认正文加载尚未接入。**
 
