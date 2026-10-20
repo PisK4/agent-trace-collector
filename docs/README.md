@@ -1,12 +1,12 @@
 # agent-trace-collector 文档
 
-这个目录存放 trace 工具的调研与设计文档。工程本身还没有代码，先有结论。
+这个目录存放 trace 工具的调研与设计文档。另有[可交互的界面原型](../prototypes/README.md)，用于比较阅读结构；采集与查询后端尚未实现。
 
 ## 索引
 
 | 文档 | 内容 |
 | --- | --- |
-| [project-overview.md](project-overview.md) | 项目定位：显示单元是一笔请求、数据来自哪三条通道、与 magpie 的绑定有多深、第一版做什么与不做什么 |
+| [project-overview.md](project-overview.md) | 项目定位：按请求保存、按对话导航，右侧读 Response 参数，三条数据通道、magpie 绑定与第一版范围 |
 | [magpie-integration-research.md](magpie-integration-research.md) | magpie 0.1.1294 的 Agent 识别、session 与 conv 两套会话标识、四条可接入面及原采集结果；新增研究补充了部分机制边界，见文首说明 |
 | [magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 模型、路由与上下文容量的真实控制流，现成 prompt 分解、classifier、缓存亲和性、尝试与账本、插件形态及直接集成或借鉴的取舍 |
 
@@ -19,4 +19,4 @@
 
 ## 尚未做的事
 
-当前只有研究与定位文档，没有实现代码。magpie 与现有 AVA 保持未修改。本轮先完成模型、路由和上下文的源码研究，建议优先直接保存 magpie 的分析结果，再决定实现方案。现有最小形态仍以 hook、账本和路由数据汇合为基础；开始建库前，需落实新研究提出的多尝试记账、历史及时摄入、缺失状态与关联歧义处理。
+当前有研究与定位文档，以及采用合成数据的界面原型，尚无生产实现。magpie 与现有 AVA 保持未修改。建议优先直接保存 magpie 的分析结果，再决定实现方案。现有最小形态仍以 hook、账本和路由数据汇合为基础；开始建库前，需落实新研究提出的多尝试记账、历史及时摄入、缺失状态与关联歧义处理。
