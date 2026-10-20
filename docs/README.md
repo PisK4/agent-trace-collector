@@ -9,7 +9,8 @@
 | [project-overview.md](project-overview.md) | 项目定位：按请求保存、按对话导航，右侧读 Response 参数，三条数据通道、magpie 绑定与第一版范围 |
 | [magpie-integration-research.md](magpie-integration-research.md) | magpie 0.1.1294 的 Agent 识别、session 与 conv 两套会话标识、四条可接入面及原采集结果；新增研究补充了部分机制边界，见文首说明 |
 | [magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 模型、路由与上下文容量的真实控制流，现成 prompt 分解、classifier、缓存亲和性、尝试与账本、插件形态及直接集成或借鉴的取舍 |
-| [architecture-design.md](architecture-design.md) | 技术评审后的收敛型设计方案：技术栈与进程模型、三路证据收敛、SQLite 表结构、内容去重与派生字段、查询接口、10 GB 滚动预算、版本探针、AVA 下线顺序与分步落地判据 |
+| [architecture-design.md](architecture-design.md) | 第二版收敛型设计：账本物理记录身份与增量读取协议、三路证据收敛、SQLite 表结构与正文状态、内容去重与乱序重算、查询接口、正文预算与总磁盘上限、版本与形状探针、访问控制、AVA 下线顺序与分步落地判据 |
+| [architecture-review.md](architecture-review.md) | 基于设计提交的落地前评审：账本身份、持久化与恢复、正文预算和回收、乱序派生、协议与费用来源、安全边界及合成验收条件 |
 
 ## 调研文档回答了什么
 
@@ -22,4 +23,4 @@
 
 当前有研究与定位文档、收敛型架构设计，以及采用合成数据的界面原型，尚无生产实现。magpie 与现有 AVA 保持未修改。
 
-架构已给定四步落地顺序，第一步（只读账本与路由、出真实数据页面）不依赖 hook，可以先做。仍在等待确认的问题列在架构文档末尾：超大请求的回调为什么丢失、direct 是否还会新增、分级保留的切分点、推理正文是否入库、多实例标识。
+架构已给定一个持久化验证阶段加四步落地顺序，第一步（只读账本与路由、出真实数据页面）不依赖 hook，可以先做。仍在等待确认的问题列在架构文档末尾：超大请求的回调为什么丢失、direct 是否还会新增、分级保留的切分点、推理正文是否入库、路由摘要是否保留 prompt 分解、多实例标识。
