@@ -143,6 +143,7 @@ CREATE TABLE request (
   instance_key TEXT NOT NULL DEFAULT 'local'
 );
 CREATE INDEX i_req_conv ON request(conv_key, actor, started_ms DESC, req_id DESC);
+CREATE INDEX i_req_session_time ON request(conv_key, started_ms DESC, req_id DESC);
 CREATE INDEX i_req_time ON request(started_ms DESC, req_id DESC);
 CREATE INDEX i_req_route ON request(route_id);
 CREATE INDEX i_req_resp ON request(response_id_norm);
@@ -193,7 +194,9 @@ CREATE TABLE tool_call (
   tool_name  TEXT,
   result_req INTEGER,
   result_ord INTEGER,
+  result_path TEXT,
   state      TEXT NOT NULL,
+  derive_version INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (req_id, ord)
 ) WITHOUT ROWID;
 CREATE INDEX i_tool_call_id ON tool_call(call_id, req_id);
