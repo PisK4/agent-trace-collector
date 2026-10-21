@@ -184,6 +184,12 @@ code,pre,.mono{font-family:var(--mono)}
   font-size:13px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text);
   border-left:2px solid var(--line-strong);padding-left:11px;max-width:74ch;
 }
+/* 摘要形态：正文还没读时用它占位，样式上要能看出是摘要而不是原文。 */
+.conv-user-body.preview,.conv-asst-body.preview{color:var(--text-2)}
+.conv-user-body.preview::after,.conv-asst-body.preview::after{
+  content:"摘要";font:500 9.5px var(--ui);letter-spacing:.06em;color:var(--muted);
+  border:1px solid var(--line);border-radius:2px;padding:0 3px;margin-left:6px;vertical-align:1px;
+}
 .conv-user{cursor:pointer}
 .conv-user:hover .conv-user-body{border-left-color:var(--k-user)}
 .conv-asst-card{
@@ -265,7 +271,19 @@ code,pre,.mono{font-family:var(--mono)}
 .req[aria-current="true"] .req-node{border-color:var(--accent);background:var(--accent)}
 .req-time{font:11px var(--mono);color:var(--muted);white-space:nowrap}
 .req-line{min-width:0;display:flex;flex-direction:column;gap:2px}
-.req-title{font-size:13px;line-height:1.4;font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.req-title{font-size:13px;line-height:1.4;font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:baseline;gap:6px}
+.req-ord{font-size:10px;color:var(--muted);font-weight:500;flex:none}
+/* 折叠行摘要：单行截断，保持行高稳定；回复行前面带一个小标签区分来源。 */
+.req-preview{
+  font-size:11.5px;line-height:1.5;color:var(--text-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  display:flex;gap:5px;align-items:baseline;min-width:0;
+}
+.req-preview.reply{color:var(--muted)}
+.req-preview .tag{
+  font:500 9.5px var(--ui);letter-spacing:.06em;color:var(--muted);
+  border:1px solid var(--line);border-radius:2px;padding:0 3px;flex:none;
+}
 .req-sub{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;gap:6px;align-items:center;min-width:0}
 .req-sub span:last-child{overflow:hidden;text-overflow:ellipsis}
 .req-metrics{display:flex;align-items:center;gap:10px;font-size:10.5px;color:var(--muted);white-space:nowrap}

@@ -543,8 +543,12 @@ CREATE TABLE request (
   body_bytes       INTEGER,
   msg_count        INTEGER,
   prev_req_id      INTEGER,
-  prev_relation    TEXT,                -- confirmed / unknown / first
+  prev_relation    TEXT,                -- confirmed / branch / unknown / first
   delta_ordinals   TEXT,
+  -- 折叠行摘要：派生时写入，列表接口直接返回，不读正文块
+  input_preview    TEXT,
+  input_preview_kind TEXT,              -- delta / tail / tool_result
+  reply_preview    TEXT,
   -- 派生
   title TEXT, title_source TEXT,
   derive_version   INTEGER NOT NULL,
@@ -608,9 +612,11 @@ CREATE TABLE pending_hook (
 CREATE TABLE block (
   id       INTEGER PRIMARY KEY,        -- 引用行用的整数代理键
   hash     BLOB NOT NULL UNIQUE,       -- 32 字节 sha256，脱敏后完整消息的字节
+  fingerprint TEXT NOT NULL,           -- 语义指纹：去掉传输标记后的规范化消息，比对用
   z        BLOB NOT NULL,
   raw_size INTEGER NOT NULL
 );
+CREATE INDEX i_block_fp ON block(fingerprint);
 
 CREATE TABLE request_block (
   req_id INTEGER NOT NULL,
@@ -663,9 +669,51 @@ AVA 的骨架里，`request.summary` 与 `response.summary` 合计占骨架大�
 
 实测 600 条真实请求里 55 条含完全相同的重复消息，最多一条消息在一笔里出现 14 次。集合差在这些请求上会把用户真正新增的那条吞掉，同时影响对话视图与标题。
 
-算法：比较两笔的 `block` 序列共同前缀。上一笔的序列是完整前缀时，取本笔的后缀作为新增，`prev_relation = confirmed`；不是前缀（压缩、裁剪、分支、前序响应引用）时，`prev_relation = unknown`，不算增量。首笔用 `first`，与 `unknown` 分开。
+算法：比较两笔的**语义指纹**序列共同前缀。上一笔的序列是完整前缀时，取本笔的后缀作为新增，`prev_relation = confirmed`。比对不能拿块哈希做，见下一节。
+
+候选前驱不限于"紧邻的上一笔"，而是该 `(conv_key, actor)` 组里所有更早的请求：取共同前缀最长的那一笔当"近似"，取完整前缀里最长的一笔当父节点。会话里出现并发分支或乱序到达时，紧邻上一笔往往不是真正的续写来源。
+
+关系取值：
+
+| 值 | 含义 |
+| --- | --- |
+| `first` | 本组第一笔，全部消息算新增 |
+| `confirmed` | 找到完整前缀的祖先，算得出增量 |
+| `branch` | 有更早的请求，但没有任何祖先的序列是本笔前缀：另起一支或上下文被重写过 |
+| `unknown` | 更早的请求里有正文不可读的，链是断的，不能断言是分支 |
+
+`unknown` 不能升级成 `branch`：不可读的祖先可能就是真正的父节点，说"另起一支"是把缺失当成结论。
 
 比较成本实测 0.17 ms（167 条消息）。
+
+### 语义指纹
+
+块哈希只服务去重与还原，不能拿来比对。同一段历史在后续请求里会因为缓存断点移动（`cache_control` 从一处挪到另一处）、`content` 从数组换成字符串、以及 harness 重新包装而换掉字节，哈希随之全变。
+
+所以每个块额外存一份语义指纹：去掉 `cache_control`、`signature` 这类传输标记，键排序后序列化，再统一消息片段的形状（裸字符串与 `{"type":"text"}` 等价，`tool_use` / `tool_result` 各走专用分支），最后 sha256 定长存进 `block.fingerprint`。比对用指纹，去重用哈希。
+
+真实数据上的差别（同一会话 44 笔）：
+
+| 比对口径 | 判定为续写 | 判不出 |
+| --- | --- | --- |
+| 原始块哈希 | 0 | 42 |
+| 键排序 + 剥传输标记 | 27 | 15 |
+| 语义指纹 + 仅比紧邻上一笔 | 29 | 13 |
+| 语义指纹 + 任意祖先 | 35 | 7 |
+
+harness 包装也在指纹前剥掉：`<session>` 保留内容、`<transcript>` / `<command-*>` / 技能注入提示整段丢弃。这类壳只影响标题与增量提取，不影响链。
+
+### 折叠行摘要
+
+列表接口不读正文块。派生时把两行摘要写进 `request`：`input_preview`（本笔新增的用户消息）与 `reply_preview`（回复首段）。`input_preview_kind` 说明摘要来源：
+
+| kind | 含义 |
+| --- | --- |
+| `delta` | 本笔新增的用户消息 |
+| `tail` | 没有新增，取末轮用户消息兜底 |
+| `tool_result` | 本笔没有用户消息，输入是上一轮的工具结果 |
+
+用中文文案做前缀匹配来判断来源不可靠，所以单独立列。
 
 ### 工具配对
 

@@ -49,7 +49,7 @@ test('verifyDatabase报告悬空块、重复证据与待派生分组', () => {
       db.run(`INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
               VALUES (1,1,'2026-10-20','hook','pending',1,1,1,1)`);
       // 没有引用的块：悬空。
-      db.run("INSERT INTO block(id,hash,z,raw_size) VALUES (9,x'01',x'02',3)");
+      db.run("INSERT INTO block(id,hash,fingerprint,z,raw_size) VALUES (9,x'01','fp',x'02',3)");
       // 同一证据 ref_key 两个 owner：唯一索引本应拦住，这里直接测反连接能查出来。
       db.run(`INSERT INTO request_evidence(req_id,source_kind,ref_key,merge_state,added_at)
               VALUES (1,'hook','dup','merged',1)`);
@@ -94,7 +94,7 @@ function seedDays(store: ReturnType<typeof fixture>['store']): void {
     db.run(`INSERT INTO cost_observation(ref_key,observed_at,projection_hash,payload_json)
             VALUES ('r1',1,'h','{}'),('r2',1,'h','{}'),('r3',1,'h','{}')`);
     // 每笔请求一个正文块；淘汰后只应剩下存活请求的那一块。
-    db.run(`INSERT INTO block(id,hash,z,raw_size) VALUES (1,x'0a',x'01',1),(2,x'0b',x'01',1),(3,x'0c',x'01',1)`);
+    db.run(`INSERT INTO block(id,hash,fingerprint,z,raw_size) VALUES (1,x'0a','f1',x'01',1),(2,x'0b','f2',x'01',1),(3,x'0c','f3',x'01',1)`);
     db.run('INSERT INTO request_block(req_id,ord,role,block) VALUES (1,0,1,1),(2,0,1,2),(3,0,1,3)');
     // 路由摘要：100/200 只被淘汰的请求引用，300 仍被存活请求引用。
     db.run(`INSERT INTO route_summary(route_id,time_ms,z) VALUES (100,1,x'01'),(200,2,x'01'),(300,3,x'01')`);
