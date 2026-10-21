@@ -500,3 +500,167 @@ export function renderRaw(page) {
     + group('回复对象', page.reply, '这一笔没有保存到回复对象。')
     + `<p class="note">消息正文按块单独分页读取；这里只展示请求顶层字段与回复。内容在写入前已脱敏，占位符不可逆。</p>`;
 }
+
+// —— 请求能力：工具清单与技能清单 ——
+
+const SKILL_LINE = /^\s*-\s*([^:：]+)[:：]\s*(.*)$/;
+const SKILL_TOOL_HEAD = 'The following skills are available for use with the Skill tool:';
+
+/** @param {unknown} system */
+function systemTexts(system) {
+  if (typeof system === 'string') return system.length > 0 ? [system] : [];
+  if (!Array.isArray(system)) return [];
+  return system
+    .map(block => (isRecord(block) && typeof block.text === 'string' ? block.text : ''))
+    .filter(text => text.length > 0);
+}
+
+/**
+ * 从系统文本里按行解析 `- name: desc` 形式的技能列表。
+ * @param {string} text
+ * @returns {{name: string, description: string}[]}
+ */
+function skillRows(text) {
+  const rows = [];
+  for (const line of text.split(/\r?\n/)) {
+    const match = SKILL_LINE.exec(line);
+    if (match === null) continue;
+    const name = (match[1] ?? '').trim();
+    if (name.length === 0) continue;
+    rows.push({ name, description: (match[2] ?? '').trim() });
+  }
+  return rows;
+}
+
+/**
+ * 取出成对标签里的技能行，如 <skills> 与 <available_skills>。
+ * @param {string} text
+ * @param {string} tag
+ */
+function taggedSkillRows(text, tag) {
+  const open = `<${tag}>`;
+  const close = `</${tag}>`;
+  const rows = [];
+  let from = 0;
+  while (from < text.length) {
+    const start = text.indexOf(open, from);
+    if (start < 0) break;
+    const end = text.indexOf(close, start + open.length);
+    if (end < 0) break;
+    rows.push(...skillRows(text.slice(start + open.length, end)));
+    from = end + close.length;
+  }
+  return rows;
+}
+
+/**
+ * Claude Code 的清单：标题之后允许空行，列表一旦开始，空行或非列表行即结束。
+ * @param {string} text
+ */
+function claudeSkillRows(text) {
+  const lines = text.split(/\r?\n/);
+  const rows = [];
+  for (const [index, line] of lines.entries()) {
+    if (!line.includes(SKILL_TOOL_HEAD)) continue;
+    let i = index + 1;
+    while (i < lines.length && (lines[i] ?? '').trim() === '') i += 1;
+    while (i < lines.length) {
+      const match = SKILL_LINE.exec(lines[i] ?? '');
+      if (match === null) break;
+      const name = (match[1] ?? '').trim();
+      if (name.length > 0) rows.push({ name, description: (match[2] ?? '').trim() });
+      i += 1;
+    }
+  }
+  return rows;
+}
+
+/**
+ * 解析这一笔请求携带的工具与技能。工具保持请求体里的原始顺序；
+ * 技能来自系统文本，按 name 去重，先出现的描述优先。
+ * @param {BodyPage | null} page
+ * @param {Entry[]} entries
+ * @returns {{tools: {name: string, description: string, schema: unknown}[], skills: {name: string, description: string}[]}}
+ */
+export function capabilitySummary(page, entries) {
+  const fields = page === null || page === undefined ? null : page.request_fields;
+  /** @type {Record<string, unknown>} */
+  const request = isRecord(fields) ? fields : {};
+  const list = Array.isArray(request.tools) ? request.tools
+    : Array.isArray(request.functions) ? request.functions : [];
+
+  /** @type {{name: string, description: string, schema: unknown}[]} */
+  const tools = [];
+  for (const item of list) {
+    if (!isRecord(item)) continue;
+    const fn = isRecord(item.function) ? item.function : null;
+    const rawName = fn !== null ? fn.name : item.name;
+    if (typeof rawName !== 'string' || rawName.trim().length === 0) continue;
+    const description = fn !== null && typeof fn.description === 'string' ? fn.description
+      : typeof item.description === 'string' ? item.description : '';
+    const schema = item.input_schema ?? item.parameters ?? (fn === null ? null : fn.parameters) ?? null;
+    tools.push({ name: rawName, description, schema });
+  }
+
+  const texts = [...systemTexts(request.system)];
+  for (const entry of entries) {
+    if (entry.role !== 'system') continue;
+    for (const block of entry.blocks) {
+      if (block.kind === 'text' && block.text.length > 0) texts.push(block.text);
+    }
+  }
+  const rows = texts.flatMap(text => [
+    ...taggedSkillRows(text, 'skills'),
+    ...taggedSkillRows(text, 'available_skills'),
+    ...claudeSkillRows(text),
+  ]);
+  const seen = new Set();
+  const skills = rows.filter(row => {
+    if (seen.has(row.name)) return false;
+    seen.add(row.name);
+    return true;
+  });
+
+  return { tools, skills };
+}
+
+/** @param {{name: string, description: string, schema: unknown}} tool */
+function renderToolItem(tool) {
+  const schema = tool.schema === null || tool.schema === undefined
+    ? ''
+    : `<pre class="raw" tabindex="0">${esc(JSON.stringify(tool.schema, null, 2))}</pre>`;
+  return `<li class="cap-item">
+    <details>
+      <summary><code class="cap-name">${esc(tool.name)}</code><span class="cap-desc">${esc(clip(tool.description, 120))}</span></summary>
+      ${schema}
+    </details>
+  </li>`;
+}
+
+/** @param {{name: string, description: string}} skill */
+function renderSkillItem(skill) {
+  return `<li class="cap-item"><code class="cap-name">${esc(skill.name)}</code><span class="cap-desc">${esc(clip(skill.description, 120))}</span></li>`;
+}
+
+/**
+ * 请求能力区块。两类都为空时仍保留 section 并说明原因，不输出空 details。
+ * @param {BodyPage | null} page
+ * @param {Entry[]} entries
+ * @returns {string}
+ */
+export function renderCapabilities(page, entries) {
+  const summary = capabilitySummary(page, entries);
+  const head = `<div class="section-head"><h3>请求能力</h3><span class="count">${summary.tools.length} 工具 · ${summary.skills.length} 技能</span></div>`;
+  if (summary.tools.length === 0 && summary.skills.length === 0) {
+    return `<section class="section cap-section">${head}<p class="note">这一笔请求没有携带工具定义，也没有可解析的技能清单。</p></section>`;
+  }
+  const toolBlock = summary.tools.length === 0 ? '' : `<details class="cap-block">
+    <summary>工具清单 · ${summary.tools.length}</summary>
+    <ol class="cap-list">${summary.tools.map(renderToolItem).join('')}</ol>
+  </details>`;
+  const skillBlock = summary.skills.length === 0 ? '' : `<details class="cap-block">
+    <summary>技能清单 · ${summary.skills.length}</summary>
+    <ul class="cap-list">${summary.skills.map(renderSkillItem).join('')}</ul>
+  </details>`;
+  return `<section class="section cap-section">${head}${toolBlock}${skillBlock}</section>`;
+}

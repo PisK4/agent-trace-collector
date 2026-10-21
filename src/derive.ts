@@ -194,6 +194,10 @@ const DROP_WRAPPERS = [
   /^\s*<command-name>[\s\S]*?<\/command-name>\s*/i,
   /^\s*<command-message>[\s\S]*?<\/command-message>\s*/i,
   /^\s*<command-args>[\s\S]*?<\/command-args>\s*/i,
+  // harness 自己塞的整段通知与回顾，不是用户输入。`<title-request>` 不丢：
+  // 它是辅助请求，界面要靠它打标签。
+  /^\s*<system-notice>[\s\S]*?<\/system-notice>\s*/i,
+  /^\s*<recap>[\s\S]*?<\/recap>\s*/i,
   /^\s*Base directory for this skill:[\s\S]*$/i,
   /^\s*The user stepped away and is coming back\.[\s\S]*$/i,
 ];
@@ -309,6 +313,8 @@ function fingerprintsOf(db: Database, reqId: number): string[] | null {
 
 /** 摘要长度按 Unicode 字符算，避免把中文截成半个字。 */
 const PREVIEW_UNICODE_LIMIT = 90;
+/** 工具结果只取开头一小段：折叠行只需要提示这一笔在回传什么。 */
+const TOOL_RESULT_PREVIEW_LIMIT = 100;
 
 function clip(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -352,7 +358,115 @@ function tailUserPreview(db: Database, reqId: number): string | null {
   return null;
 }
 
-/** 折叠行摘要：这一笔的回复文本首段。 */function replyPreviewOf(db: Database, reqId: number): string | null {
+/** 从一条消息里取工具结果：Anthropic 的 tool_result 块与 chat 的 role=tool。 */
+function toolResultsOf(message: unknown): { callId: string; value: unknown }[] {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return [];
+  const record = message as Record<string, unknown>;
+  if (record.role === 'tool') {
+    if (typeof record.tool_call_id !== 'string') return [];
+    return [{ callId: record.tool_call_id, value: record.content ?? null }];
+  }
+  if (!Array.isArray(record.content)) return [];
+  const out: { callId: string; value: unknown }[] = [];
+  for (const block of record.content) {
+    if (block === null || typeof block !== 'object' || Array.isArray(block)) continue;
+    const entry = block as Record<string, unknown>;
+    if (entry.type !== 'tool_result' || typeof entry.tool_use_id !== 'string') continue;
+    out.push({ callId: entry.tool_use_id, value: entry.content ?? null });
+  }
+  return out;
+}
+
+/** 工具结果内容压平；数组形状里只取 text 块。 */
+function flattenToolContent(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    const parts: string[] = [];
+    for (const block of value) {
+      if (typeof block === 'string') {
+        parts.push(block);
+        continue;
+      }
+      if (block === null || typeof block !== 'object') continue;
+      const text = (block as Record<string, unknown>).text;
+      if (typeof text === 'string') parts.push(text);
+    }
+    return parts.join(' ');
+  }
+  if (value === null || value === undefined) return '';
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 增量里没有用户文本时的输入摘要：这一笔回传的工具结果。
+ *
+ * 名字从 tool_call 表按 call_id 查；derive 早于本轮的 pairToolCalls，查不到
+ * 是预期情况，此时退回结果内容本身。顺序按消息出现顺序，同名合并计数。
+ */
+function toolResultPreview(db: Database, reqId: number, delta: readonly number[]): string | null {
+  const names: string[] = [];
+  let content: string | null = null;
+  for (const ordinal of delta) {
+    for (const result of toolResultsOf(messageAt(db, reqId, ordinal))) {
+      const row = db.query<{ tool_name: string | null }, [string]>(
+        'SELECT tool_name FROM tool_call WHERE call_id=? LIMIT 1').get(result.callId);
+      if (row?.tool_name != null && row.tool_name.length > 0) names.push(row.tool_name);
+      if (content !== null) continue;
+      const flat = flattenToolContent(result.value).replace(/\s+/g, ' ').trim();
+      if (flat.length > 0) content = flat;
+    }
+  }
+  if (names.length > 0) {
+    const counts = new Map<string, number>();
+    for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+    const parts = [...counts].map(([name, count]) => count > 1 ? `${name} ×${count}` : name);
+    return clip(`工具结果 · ${parts.join(', ')}`);
+  }
+  if (content === null) return null;
+  const chars = [...content];
+  const truncated = chars.length <= TOOL_RESULT_PREVIEW_LIMIT
+    ? content
+    : `${chars.slice(0, TOOL_RESULT_PREVIEW_LIMIT).join('')}…`;
+  return `工具结果 · ${truncated}`;
+}
+
+/** 回复没有文本时的兜底：这一笔发起的工具调用名，按出现顺序列出。 */
+function replyToolSummary(reply: unknown): string | null {
+  const calls = anthropicReplyCalls(reply);
+  if (calls.length === 0) return null;
+  const names = calls.map(call => call.name.length > 0 ? call.name : 'unknown');
+  return `工具调用 · ${names.join(', ')}`;
+}
+
+/**
+ * 标题请求的回复是 `<title>` 标签或 `{"title":"…"}` JSON；折叠行里展示内容，
+ * 不展示标签属性或 JSON 外壳。其余回复原样返回。
+ */
+const TITLE_TAG_REPLY = /^<title\b[^>]*>([\s\S]*?)<\/title>\s*$/i;
+
+function titleOfReply(text: string): string | null {
+  const trimmed = text.trim();
+  const tagged = TITLE_TAG_REPLY.exec(trimmed)?.[1]?.replace(/\s+/g, ' ').trim();
+  if (tagged !== undefined && tagged.length > 0) return tagged;
+  if (!trimmed.startsWith('{')) return null;
+  try {
+    const value: unknown = JSON.parse(trimmed);
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).length !== 1 || typeof record.title !== 'string') return null;
+    const title = record.title.replace(/\s+/g, ' ').trim();
+    return title.length > 0 ? title : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 折叠行摘要：这一笔的回复文本首段；没有文本时退回工具调用摘要。 */
+function replyPreviewOf(db: Database, reqId: number): string | null {
   const row = db.query<{ skeleton_z: Uint8Array | null }, [number]>(
     'SELECT skeleton_z FROM request WHERE req_id=?').get(reqId);
   if (row == null || row.skeleton_z == null) return null;
@@ -364,8 +478,11 @@ function tailUserPreview(db: Database, reqId: number): string | null {
   }
   if (skeleton === null || typeof skeleton !== 'object') return null;
   const reply = (skeleton as Record<string, unknown>).reply;
-  const text = assistantText(reply);
-  return text === null ? null : clip(text);
+  const text = assistantText(reply) ?? replyToolSummary(reply);
+  if (text === null) return null;
+  const title = titleOfReply(text);
+  if (title !== null) return clip(`标题 · ${title}`);
+  return clip(text);
 }
 
 /** 两种协议里的回复文本；只取第一段非空文本，不拼工具调用。 */
@@ -473,11 +590,17 @@ export function drainDerive(store: Store, limit = 100): {
           const derived = deriveTitle(messages, delta.map((_, index) => index), fallback);
           title = derived.title;
           source = derived.source;
-          // 增量里常常只有工具结果或系统消息，没有用户文本。此时摘要退回
-          // "末轮输入"，界面用标签区分，不冒充新增。
+          // 增量里常常只有工具结果或系统消息，没有用户文本。
+          // 有用户文本才标成"新增"；否则照实说这一轮回传了什么工具结果。
+          // 不要回退到"末轮输入"——那会把同一句旧用户消息重复到每一笔请求上。
           const fresh = previewOf(messages);
-          inputPreview = fresh ?? tailUserPreview(db, row.req_id);
-          inputKind = fresh !== null ? 'delta' : inputPreview !== null ? 'tail' : null;
+          if (fresh !== null) {
+            inputPreview = fresh;
+            inputKind = 'delta';
+          } else {
+            inputPreview = toolResultPreview(db, row.req_id, delta);
+            inputKind = inputPreview !== null ? 'tool_result' : null;
+          }
         } else if (delta !== null) {
           // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
           inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
