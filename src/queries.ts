@@ -17,8 +17,12 @@ export type RequestRow = {
   body_state: BodyState; miss_reason: string | null;
   /** 折叠行摘要：派生时写入，不读正文块。kind 说明摘要来自新增还是末轮输入。 */
   input_preview: string | null;
-  input_preview_kind: 'delta' | 'tail' | 'tool_result' | null;
+  input_preview_kind: 'delta' | 'tail' | 'tool_result' | 'title' | null;
   reply_preview: string | null;
+  /** chat 是正常对话请求；title 是 harness 的 Title Generator 请求。 */
+  req_kind: 'chat' | 'title';
+  /** main 主链、branch 次链、aux 辅助请求（标题生成）。 */
+  chain_role: 'main' | 'branch' | 'aux';
 };
 
 export type SessionRow = {
@@ -34,7 +38,7 @@ export type ToolCallRow = {
 
 export type RequestDetail = RequestRow & {
   prev_req_id: number | null;
-  prev_relation: 'confirmed' | 'unknown' | 'first' | 'branch' | null;
+  prev_relation: 'confirmed' | 'unknown' | 'first' | 'branch' | 'aux' | null;
   delta_ordinals: number[] | null;
   parse_state: string | null;
   reply_state: string | null;
@@ -91,6 +95,28 @@ type SessionDbRow = {
   conv_key: string; last_ms: number; request_count: number; title: string | null; agents: string | null;
 };
 
+/**
+ * 会话标题：Title Generator 的正式标题优先，同一会话多次生成取最新一次；
+ * 没有正式标题才退到主链上最早的用户首句，最后才是任意一笔的兜底标题。
+ */
+const SESSION_TITLE_SQL = `COALESCE(
+  (SELECT r1.model_title FROM request r1
+   WHERE r1.conv_key = request.conv_key AND r1.req_kind = 'title'
+     AND r1.model_title IS NOT NULL
+   ORDER BY r1.started_ms DESC, r1.req_id DESC LIMIT 1),
+  (SELECT r2.title FROM request r2
+   WHERE r2.conv_key = request.conv_key AND r2.title_source = 'user_delta'
+     AND r2.req_kind = 'chat' AND r2.chain_role = 'main' AND r2.title IS NOT NULL
+   ORDER BY r2.started_ms ASC, r2.req_id ASC LIMIT 1),
+  (SELECT r3.title FROM request r3
+   WHERE r3.conv_key = request.conv_key AND r3.title_source = 'user_delta'
+     AND r3.req_kind = 'chat' AND r3.title IS NOT NULL
+   ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1),
+  (SELECT r4.title FROM request r4
+   WHERE r4.conv_key = request.conv_key AND r4.req_kind = 'chat' AND r4.title IS NOT NULL
+   ORDER BY r4.started_ms ASC, r4.req_id ASC LIMIT 1)
+)`;
+
 export function listSessions(store: Store, limit = 50, cursor: string | null = null): Page<SessionRow> {
   const size = checkLimit(limit, 100);
   const bound = cursor === null
@@ -104,18 +130,9 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
   const rows = (bound === null
     ? store.read.query<SessionDbRow, [number]>(`
         SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
-               -- 会话标题取最早一笔真正派生出来的用户标题；没有才退回最早一笔的标题。
-               -- MAX(title) 是字典序最大值，会把 group/... 之类的模型名排在前面，
-               -- 会话就被命名成一个和内容无关的字符串。
-               COALESCE(
-                 (SELECT r2.title FROM request r2
-                  WHERE r2.conv_key = request.conv_key AND r2.title_source = 'user_delta'
-                    AND r2.title IS NOT NULL
-                  ORDER BY r2.started_ms ASC, r2.req_id ASC LIMIT 1),
-                 (SELECT r3.title FROM request r3
-                  WHERE r3.conv_key = request.conv_key AND r3.title IS NOT NULL
-                  ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1)
-               ) AS title,
+               -- 会话标题取正式标题；没有才退回用户首句。MAX(title) 是字典序最大值，
+               -- 会把 group/... 之类的模型名排在前面，会话就被命名成和内容无关的字符串。
+               ${SESSION_TITLE_SQL} AS title,
                -- agents 取 magpie 的客户端标签（claude / omp 等）；actor 是会话/子代理身份，
                -- 拿 actor 当 agents 会把 UUID 当成客户端名展示。
                GROUP_CONCAT(DISTINCT agent) AS agents
@@ -128,15 +145,7 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
     : store.read.query<SessionDbRow, [number, string, number]>(`
         SELECT conv_key, last_ms, request_count, title, agents FROM (
           SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
-                 COALESCE(
-                   (SELECT r2.title FROM request r2
-                    WHERE r2.conv_key = request.conv_key AND r2.title_source = 'user_delta'
-                      AND r2.title IS NOT NULL
-                    ORDER BY r2.started_ms ASC, r2.req_id ASC LIMIT 1),
-                   (SELECT r3.title FROM request r3
-                    WHERE r3.conv_key = request.conv_key AND r3.title IS NOT NULL
-                    ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1)
-                 ) AS title,
+                 ${SESSION_TITLE_SQL} AS title,
                  -- 同首查：agents 是 magpie 的客户端标签，不是 actor 身份。
                  GROUP_CONCAT(DISTINCT agent) AS agents
           FROM request
@@ -168,7 +177,7 @@ type RequestDbRow = Omit<RequestRow, 'conv_key'> & { conv_key: string | null };
 
 const REQUEST_COLUMNS = `req_id, conv_key, actor, agent, actor_state, started_ms, title, title_source,
   status, model_requested, model_served, in_tok, out_tok, cache_read, cache_write, cost, cost_state, have,
-  ms, ttft_ms, flow_ms, body_state, miss_reason,
+  ms, ttft_ms, flow_ms, body_state, miss_reason, req_kind, chain_role,
   input_preview, input_preview_kind, reply_preview`;
 
 export function listRequests(store: Store, key: string, limit = 100, cursor: string | null = null): Page<RequestRow> {
@@ -220,6 +229,7 @@ type DetailDbRow = {
   attempt_out: number | null; attempt_cache_read: number | null; attempt_cache_write: number | null;
   attempt_reasoning: number | null; attempt_cost: number | null; attempt_cost_state: string | null;
   title_source: string | null; derive_version: number; archive: string | null;
+  req_kind: string | null; chain_role: string | null;
   route_id: number | null; summary_exists: number | null;
 };
 
@@ -313,6 +323,8 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     attempt_cost: row.attempt_cost,
     attempt_cost_state: (row.attempt_cost_state ?? 'absent') as CostState,
     title_source: row.title_source ?? 'model_time',
+    req_kind: row.req_kind === 'title' ? 'title' : 'chat',
+    chain_role: row.chain_role === 'branch' || row.chain_role === 'aux' ? row.chain_role : 'main',
     derive_version: row.derive_version,
     archive: row.archive,
     route_state: routeState,

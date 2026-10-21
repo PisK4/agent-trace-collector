@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { openStore } from '../src/store';
 import { compareSequence, deriveTitle, drainDerive, enqueueDerive, matchPredecessor, pairToolCalls } from '../src/derive';
+import { listSessions } from '../src/queries';
 import { messageFingerprint } from '../src/fingerprint';
 import { persistBody } from '../src/body';
 import type { BodyInput } from '../src/body';
@@ -419,6 +420,62 @@ test('标题请求的回复只留标题文本', () => {
   } finally {
     f.close();
   }
+});
+
+test('标题生成请求不占主链，后续请求最多的链才是主链', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'title-and-branch']);
+    f.store.write(db => {
+      const insert = db.prepare(
+        `INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,sort_source,sort_key)
+         VALUES (?,?,'session','actor-a','known',?,'2026-10-20','hook','pending',0,1,1,1,'seed','model_time','ledger',?)`,
+      );
+      insert.run(1, key, 1000, 'ledger|0001');
+      insert.run(2, key, 2000, 'ledger|0002');
+      insert.run(3, key, 3000, 'ledger|0003');
+      insert.run(4, key, 4000, 'ledger|0004');
+    });
+    const message = (text: string) => ({ role: 'user', content: [{ type: 'text', text }] });
+    // 1 是 Title Generator：单块 <session>，回复是正式标题。
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [message('<session>当前项目显示 title 有问题</session>')] },
+      reply: { id: 'msg_title', content: [{ type: 'text', text: '{"title":"trace 面板 UI 改版"}' }] },
+      redact_version: 1,
+    });
+    // 2 是真正的主对话起点；3 续写 2；4 是另一条不相接的链。
+    persistBody(f.store, 2, bodyFor(['系统指令', '工具调用']));
+    persistBody(f.store, 3, bodyFor(['系统指令', '工具调用', '继续']));
+    persistBody(f.store, 4, bodyFor(['另一份 CLAUDE.md', '另一条历史']));
+    enqueueDerive(f.store, key, 'actor-a', '');
+    drainDerive(f.store);
+    const rows = f.store.read.query<{
+      req_id: number; prev_relation: string; req_kind: string; chain_role: string; title: string;
+    }, []>('SELECT req_id, prev_relation, req_kind, chain_role, title FROM request ORDER BY req_id').all();
+    expect(rows.map(row => [row.req_id, row.prev_relation, row.req_kind, row.chain_role])).toEqual([
+      [1, 'aux', 'title', 'aux'],
+      [2, 'first', 'chat', 'main'],
+      [3, 'confirmed', 'chat', 'main'],
+      [4, 'branch', 'chat', 'branch'],
+    ]);
+    // Title Generator 的正式标题优先于用户首句，作为会话标题。
+    expect(listSessions(f.store, 10, null).items[0]?.title).toBe('trace 面板 UI 改版');
+  } finally {
+    f.close();
+  }
+});
+
+test('harness 的 caveat 与插话提示不进入标题', () => {
+  const caveat = '<local-command-caveat>CAVEAT: The command below was run directly.</local-command-caveat>';
+  expect(deriveTitle(
+    [{ role: 'user', content: `${caveat}\n<command-name>/model</command-name>` }],
+    [0], 'fallback',
+  )).toEqual({ title: 'fallback', source: 'model_time' });
+  const inserted = 'The user sent a new message while you were working: 另外我看现在 agent 判定不准\n\n'
+    + 'This is how Claude Code surfaces messages the user sends mid-turn.';
+  expect(deriveTitle([{ role: 'user', content: inserted }], [0], 'fallback'))
+    .toEqual({ title: '另外我看现在 agent 判定不准', source: 'user_delta' });
 });
 
 test('重复call_id标ambiguous不挑最近', () => {

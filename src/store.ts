@@ -10,7 +10,7 @@ export type Store = {
 };
 
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -37,7 +37,8 @@ function migrate(db: Database): void {
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
-  // v3 改了块指纹与摘要列，没有原地升级路径：旧库里的派生结果本身就不可信，
+  // v4 增加了请求类别、链角色与模型标题；v3 改了块指纹与摘要列。
+  // 两者都没有原地升级路径：旧库里的派生结果本身就不可信，
   // 就地改写只会把错误固化下来。要求删库重建，由来源重放补齐。
   if (version < SCHEMA_VERSION) throw new Error('schema_rebuild_required');
   const requestSql = db.query(
