@@ -362,6 +362,7 @@ if (typeof document !== 'undefined') {
     if (detail.prev_relation === 'first') return '会话首笔';
     if (detail.prev_relation === 'confirmed') return '续自上一笔';
     if (detail.prev_relation === 'branch') return '另起一支';
+    if (detail.prev_relation === 'aux') return '标题生成请求，不在主链上';
     if (detail.prev_relation === 'unknown') return '前驱正文不可读，无法比对';
     return '';
   }
@@ -795,21 +796,27 @@ if (typeof document !== 'undefined') {
     const primary = primaryOf(r);
     const sameAsPrevious = previous !== null && primary.kind === 'tail'
       && previous.kind === 'tail' && previous.text === primary.text;
-    // 标题请求的输入是一整段 harness 指令；回复形如标题时，折叠行只说明它在做什么。
-    const auxiliary = primary.kind !== 'tool_result'
-      && (primary.text.startsWith('<title-request>')
-        || (r.reply_preview !== null && r.reply_preview.startsWith('标题 · ')));
-    const tag = auxiliary ? '<span class="tag">辅助请求</span>'
-      : primary.kind === 'tail' ? '<span class="tag">末轮上下文</span>'
-        : primary.kind === 'tool_result' ? '<span class="tag">工具结果</span>'
-          : primary.kind === 'reply' ? '<span class="tag">回复</span>' : '';
-    // 标题请求的输入是一整段 harness 指令；折叠行只说明它在做什么。
-    const primaryText = auxiliary ? '生成会话标题' : sameAsPrevious ? '同上' : primary.text;
-    const primaryLine = `<span class="req-preview${primary.muted ? ' muted' : ''}">${tag}<span class="req-preview-text">${esc(primaryText)}</span></span>`;
-    // 主内容已经是回复时不再重复第二行。
-    const replyLine = primary.kind !== 'reply' && r.reply_preview !== null
-      ? `<span class="req-preview reply"><span class="tag">回复</span><span class="req-preview-text">${esc(r.reply_preview)}</span></span>` : '';
+    // 标题生成请求是 harness 的辅助调用：不铺输入原文，只说明它在做什么。
+    const isTitle = r.req_kind === 'title';
+    const kind = isTitle ? 'title'
+      : primary.kind === 'tool_result' ? 'tool'
+        : primary.kind === 'tail' ? 'context'
+          : primary.kind === 'reply' ? 'reply'
+            : primary.kind === 'title' ? 'context' : 'user';
+    const label = kind === 'title' ? '标题'
+      : kind === 'tool' ? '工具'
+        : kind === 'context' ? '上下文'
+          : kind === 'reply' ? '回复' : '用户';
+    const primaryText = isTitle ? '生成会话标题' : sameAsPrevious ? '同上' : primary.text;
+    // 第二行始终保留：没有回复时留空，保持所有折叠行等高、主文本起点一致。
+    const replyRow = primary.kind !== 'reply' && r.reply_preview !== null
+      ? `<span class="req-row reply"><span class="type-tag reply">回复</span><span class="req-text">${esc(r.reply_preview)}</span></span>`
+      : '<span class="req-row reply" aria-hidden="true"><span></span><span></span></span>';
+    const chainFlag = r.chain_role === 'branch'
+      ? '<span class="req-flag mute" title="与主链不相接，按后续请求数判定为次链">⎇ 分支</span>' : '';
     const metrics = [
+      chainFlag,
+      anomaly,
       r.status !== null && r.status >= 400 ? `<span class="num bad-text">HTTP ${r.status}</span>` : '',
       r.ttft_ms !== null ? `<span class="num opt">首字 ${secs(r.ttft_ms)}</span>` : '',
       r.ms !== null ? `<span class="num opt">${secs(r.ms)}</span>` : '',
@@ -821,13 +828,14 @@ if (typeof document !== 'undefined') {
         <span class="req-node" aria-hidden="true"></span>
         <span class="req-time num">${esc(clock(r.started_ms))}</span>
         <span class="req-line">
-          <span class="req-title"><span class="req-ord num">${String(ordinal).padStart(2, '0')}</span>${anomaly}${primaryLine}</span>
-          ${replyLine}
+          <span class="req-row">
+            <span class="type-tag ${kind}">${label}</span>
+            <span class="req-text${primary.muted ? ' muted' : ''}"><span class="req-ord num">${String(ordinal).padStart(2, '0')}</span>${esc(primaryText)}</span>
+          </span>
+          ${replyRow}
         </span>
-        <span class="req-metrics">
-          ${metrics}
-          <span class="req-open-mark" aria-hidden="true"><svg width="9" height="9" viewBox="0 0 10 10" fill="none"><path d="M3 1.5L7 5l-4 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-        </span>
+        <span class="req-metrics">${metrics}</span>
+        <span class="req-open-mark" aria-hidden="true"><svg width="9" height="9" viewBox="0 0 10 10" fill="none"><path d="M3 1.5L7 5l-4 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
       </button>
       ${open ? requestBody(r) : ''}
     </article>`;
