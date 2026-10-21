@@ -225,7 +225,9 @@ const prefixes: Record<string,string[]> = {
 // 单次剥离最长匹配前缀；原始 ID 精确匹配优先，规则版本=1。
 ```
 
-保留原始 ID 与规范化 ID；同原始ID/规范ID多候选标 ambiguous，不按近邻时间强合并；没有ID长期 pending。字段冲突记录候选和原因。hook 暂存 `actor=NULL, actor_state='unknown'`，到账本/路由后才确认，未知身份不写derive_queue。两条 request 合并时以账本请求为保留对象，同事务迁移 evidence、request_block、tool_call、prev引用及 derive_queue，清理临时 hook 请求；原请求URL使用A1已创建的 `request_alias` 返回canonical id。连续合并时先更新所有指向待移除请求的别名，再新增本次old→canonical映射；别名不形成链，查询不能无限跟随。
+保留原始 ID 与规范化 ID；同原始ID/规范ID多候选标 ambiguous，不按近邻时间强合并；没有ID长期 pending。字段冲突记录候选和原因。hook 暂存 `actor=NULL, actor_state='unknown'`，到账本/路由后才确认，未知身份不写derive_queue。两条 request 合并时以账本请求为保留对象，同事务迁移 evidence、request_block、tool_call、prev引用及 derive_queue，清理临时 hook 请求；原请求URL使用A1已创建的 `request_alias` 返回canonical id。连续合并时先更新所有指向待移除请求的别名，再新增本次old→canonical映射；别名不形成链，查询不能无限跟随。请求分配必须沿用A1的AUTOINCREMENT，生产INSERT省略req_id；不能以存活MAX或应用计数器重新分配被删除的ID。
+
+关联测试追加：先生成请求1/2/3，将3合并到1，再摄入新hook得到4并合并到2；3→1和4→2必须同时可查，ID=3不能成为新请求。再将1合并到2，所有别名直接指向2，foreign_key_check为空；关闭重开后新ID仍高于4。合并时更新别名目标，C2淘汰时删除目标别名，两种动作不能混用。
 
 测试两个证据顺序、重复 envelope、提交后响应丢失重试、规范ID碰撞、无ID、late ledger，以及 6 MiB request+3 MiB reply、合法4 MiB JSON、超64 MiB、null reply、非local、伪造origin但无token。合并前后守恒：hook证据总数不变、逻辑请求减少1、块引用按同笔正文去重而不丢消息位置。
 
@@ -301,7 +303,7 @@ git commit -m "feat(derive): converge actor-scoped deltas and tool relationships
 
 ## B5：正文阅读与真实对话视图
 
-**Files:** Modify `web/app.js`, `web/index.html`, `src/queries.ts`, `tests/web.test.ts`; Create `tests/body-api.test.ts`。
+**Files:** Modify `web/app.js`, `web/index.html`, `src/queries.ts`, `tests/web.test.ts`, `tests/reader-types.ts`; Create `tests/body-api.test.ts`。
 
 **Interfaces:**
 - Consumes: B2 `BodyPage`、A4 `RequestDetail`（增加工具配对数组 `tool_calls: {call_id:string;ord:number;result_req:number|null;result_ord:number|null;result_path:string|null;state:string}[]`）。
@@ -324,7 +326,7 @@ test('已回收正文显示原因而不是空对话', async () => {
 });
 ```
 
-在 `web/app.js` 的JSDoc中新增 `@typedef {import('../src/protocols').BodyPage} BodyPage`，并把A5的Reader定义替换为下列类型。B2的 `BodyPage` 类型统一从 `src/protocols.ts` 导出，查询模块使用type import；测试真实调用loadBody，不能仅修改文字接口。列表切换不能触发全部正文下载。
+保留 `web/app.js` 首行的 `// @ts-check`，在JSDoc中新增 `@typedef {import('../src/protocols').BodyPage} BodyPage`，并把A5的Reader定义替换为下列类型。B2的 `BodyPage` 类型统一从 `src/protocols.ts` 导出，查询模块使用type import；测试真实调用loadBody，不能仅修改文字接口。列表切换不能触发全部正文下载。
 
 ```js
 /** @typedef {{loadSessions:(cursor?:string)=>Promise<void>, loadRequests:(cursor?:string)=>Promise<void>, selectSession:(key:string)=>Promise<void>, selectRequest:(id:number)=>Promise<void>, getState:()=>ReaderState, loadBody:(id:number,from:number)=>Promise<BodyPage>}} Reader */
@@ -341,15 +343,33 @@ async function loadBody(id, from) {
 return {loadSessions,loadRequests,selectSession,selectRequest,getState:()=>state,loadBody};
 ```
 
+在A5的 `tests/reader-types.ts` 追加正文叶子类型探针，不在运行时执行：
+
+```ts
+// tests/reader-types.ts；沿用A5已有的reader变量。
+const body = await reader.loadBody(1,0);
+const bodyState: import('../src/queries').BodyState = body.state;
+const bodyReason: string | null = body.reason;
+// @ts-expect-error state必须为BodyState；any退化时应报未使用指令。
+const invalidState: number = body.state;
+// @ts-expect-error reason必须为string|null；any退化时应报未使用指令。
+const invalidReason: number = body.reason;
+```
+
+临时移走 `src/protocols.ts` 或拼错JSDoc中的BodyPage导出名，类型检查均须非零退出；恢复后通过。再将BodyPage的state、reason各自临时改成any，分别确认TS2578，避免仅Reader根类型正常却漏掉嵌套DTO退化。
+
 - [ ] **步骤 2：运行 `bun test tests/web.test.ts tests/body-api.test.ts`，确认正文加载尚未接入。**
 
 - [ ] **步骤 3：替换原型派生和协议假设。** 删除生产代码中的 `hashMsg/previousOf/newSet` 和fixture `newMsgs`依赖，消费服务端 `prev_relation/delta_ordinals`。confirmed/first才展示确定新增；unknown显示完整请求入口和原因，不拼出假对话。按可见请求加载正文首片，点击工具结果再加载对应请求/消息区间，不为1,825笔一次下载全量。
 
 ```js
+/** @param {number|null} value */
 function usageLabel(value) { return value === null ? '未报告' : String(value); }
+/** @param {RequestDetail['prev_relation']} relation */
 function relationLabel(relation) {
   return relation === 'unknown' ? '无法确认与上一笔的新增关系' : '';
 }
+/** @param {BodyPage} page */
 function bodyLabel(page) {
   if (page.state === 'evicted') return `正文已回收：${page.reason}`;
   if (page.state === 'unsupported') return '原对象已保存，暂不支持结构化解析';
@@ -372,13 +392,14 @@ bun run typecheck
 - [ ] **步骤 5：通过后提交。**
 
 ```bash
-git add web/app.js web/index.html src/queries.ts tests/web.test.ts tests/body-api.test.ts
+git add web/app.js web/index.html src/queries.ts tests/web.test.ts tests/reader-types.ts tests/body-api.test.ts
 git commit -m "feat(reader): render real protocol bodies and converged conversation views" -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
 ## B 阶段验收与生产接入前置
 
-- [ ] 合成链路中，hook接受、脱敏、分块、关联、派生、查询和页面全部贯通；稳定ID重复投递无副作用。
+- [ ] 合成链路中，hook接受、脱敏、分块、关联、派生、查询和页面全部贯通；稳定ID重复投递无副作用；删除最大请求ID后再摄入、连续合并与重启均不复用旧ID。
+- [ ] A5/B5类型检查通过；缺DTO模块、错误导出名和正文叶子字段退化为any的故障注入均能使检查失败，恢复后通过。
 - [ ] 6 MiB请求+3 MiB回复合法，超限明确降级或拒绝，坏JSON不落半截正文。
 - [ ] 两协议、unsupported、null回复各自准确；raw副本清空不改变reply_state。
 - [ ] 重复消息、乱序、迟到结果、父子代理、250笔派生批次恢复全部通过。

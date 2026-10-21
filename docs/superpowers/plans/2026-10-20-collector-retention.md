@@ -177,7 +177,22 @@ db.query('VACUUM INTO ?').run(destination);
 
 `rebuild --session <key>` 调用B4重建，只在有足够长期资料时重算；raw/正文均过期时返回unavailable数量和原因，不把旧标题/工具关系覆盖为空。记录算法版本及队列剩余量。
 
-`purge-metadata --before YYYY-MM-DD`默认只预览。显式apply必须先回收该范围正文，再删除相关工具链接/aliases/evidence/raw/request/无其他引用的route_summary，整个批次同事务。删行前将精确日期区间、数量、原因、approvalId写入长期`retention_event`；后续来源回放不能悄悄恢复已明确淘汰范围，单独保留按来源代际/偏移的purged范围，命中时计为purged_skip而非新证据。两个同日请求一个已淘汰一个未淘汰不能仅凭day整日跳过，范围按实际证据键记录。
+`purge-metadata --before YYYY-MM-DD`默认只预览。显式apply必须先回收该范围正文。事务内先将本批精确目标固定在临时表 `purge_requests(req_id INTEGER PRIMARY KEY)`，每批 `CREATE TEMP TABLE IF NOT EXISTS` 后清空并重新填充，批次结束再清空，临时表复用到维护连接关闭，防止同连接重复执行失败。删除evidence前，先按目标证据ref_key删除对应cost_observation，避免失去定位后永久残留；未匹配的cost-run观测仍由7天原始层规则清理。再删除相关工具链接、evidence、raw及其他引用；处理完其他引用后，必须按下面顺序先删除所有指向目标的alias，再删除request，最后清理无其他引用的route_summary。别名按new_id选取，不能按old_id大小或创建日期猜测范围，也不能删掉其他存活请求的别名。外键保留默认NO ACTION，不增加CASCADE；B3合并是重定向别名，主动淘汰才删除别名。整个批次同事务。
+
+```sql
+-- 先在request_evidence仍在时执行，其他引用也在删request前处理。
+DELETE FROM cost_observation
+WHERE ref_key IN (
+  SELECT ref_key FROM request_evidence
+  WHERE req_id IN (SELECT req_id FROM purge_requests)
+);
+DELETE FROM request_alias
+WHERE new_id IN (SELECT req_id FROM purge_requests);
+DELETE FROM request
+WHERE req_id IN (SELECT req_id FROM purge_requests);
+```
+
+删行前将精确日期区间、数量、原因、approvalId写入长期`retention_event`；后续来源回放不能悄悄恢复已明确淘汰范围，单独保留按来源代际/偏移的purged范围，命中时计为purged_skip而非新证据。两个同日请求一个已淘汰一个未淘汰不能仅凭day整日跳过，范围按实际证据键记录。
 
 ```sql
 CREATE TABLE retention_event (
@@ -193,7 +208,46 @@ CREATE TABLE purged_evidence (
 
 默认每证据保留小型tombstone，安全优先；记录它本身仍增长，不能据此声称长期元数据能永远停在固定体积。若达到需要压缩tombstone的规模，按可证明连续的物理偏移区间另做迁移，不在第一版加通用归档系统。
 
-- [ ] **步骤 4：写维护失败矩阵并记录操作命令。** 测试目标已存在、磁盘余量不足、活动writer、损坏备份、未知schema高版本、raw过期但正文仍在、正文也已回收、purge默认无副作用、apply后重放不复活、共享route保留。恢复原理和以下命令写`docs/operations.md`：
+- [ ] **步骤 4：写维护失败矩阵并记录操作命令。** 测试目标已存在、磁盘余量不足、活动writer、损坏备份、未知schema高版本、raw过期但正文仍在、正文也已回收、purge默认无副作用、apply后重放不复活、共享route保留。新增带alias目标的淘汰用例：先直接删除canonical请求确认外键拒绝，再走purge确认目标与其全部alias删除，其他存活请求的alias保留；故障注入确认整个批次回滚。最小顺序回归如下，完整purge测试还须调用本任务的purgeMetadata覆盖相同结果，并断言只清理目标证据的费用观测。
+
+```ts
+// tests/maintenance.test.ts；沿用本任务已有fixture/expect/test导入。
+test('淘汰请求必须先删除目标别名', () => {
+  const f = fixture();
+  try {
+    const insert = f.store.db.prepare("INSERT INTO request(started_ms,day,via,body_state,derive_version,have,created_at,updated_at) VALUES (1,'2026-10-20','hook','pending',0,1,1,1)");
+    for (let i=0;i<4;i++) insert.run();
+    f.store.write(db => {
+      db.run('INSERT INTO request_alias VALUES (3,1),(4,2)');
+      db.run('DELETE FROM request WHERE req_id IN (3,4)');
+    });
+    expect(() => f.store.write(db => db.run('DELETE FROM request WHERE req_id=1'))).toThrow();
+    const purge = (id:number, fail:boolean) => f.store.write(db => {
+      db.exec('CREATE TEMP TABLE IF NOT EXISTS purge_requests(req_id INTEGER PRIMARY KEY)');
+      db.run('DELETE FROM purge_requests');
+      db.run('INSERT INTO purge_requests VALUES (?)',[id]);
+      db.run('DELETE FROM request_alias WHERE new_id IN (SELECT req_id FROM purge_requests)');
+      if (fail) throw new Error('injected_purge');
+      db.run('DELETE FROM request WHERE req_id IN (SELECT req_id FROM purge_requests)');
+      db.run('DELETE FROM purge_requests');
+    });
+    expect(() => purge(1,true)).toThrow('injected_purge');
+    expect(f.store.read.query('SELECT req_id FROM request ORDER BY req_id').all()).toEqual([{req_id:1},{req_id:2}]);
+    expect(f.store.read.query('SELECT old_id,new_id FROM request_alias ORDER BY old_id').all()).toEqual([
+      {old_id:3,new_id:1},{old_id:4,new_id:2}
+    ]);
+    purge(1,false);
+    expect(f.store.read.query('SELECT req_id FROM request').all()).toEqual([{req_id:2}]);
+    expect(f.store.read.query('SELECT old_id,new_id FROM request_alias').all()).toEqual([{old_id:4,new_id:2}]);
+    purge(2,false);
+    expect(f.store.read.query('SELECT req_id FROM request').all()).toEqual([]);
+    expect(f.store.read.query('SELECT old_id FROM request_alias').all()).toEqual([]);
+    expect(f.store.read.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  } finally { f.close(); }
+});
+```
+
+操作文档同时记录费用时钟冲突的诊断：查看cost_clock_conflict计数和阻塞时点，确认系统时钟后按A3的日窗口重扫；不靠删除旧观测或伪造递增时间恢复。恢复原理和以下命令写 `docs/operations.md`：
 
 ```bash
 bun run maintain verify --db '/path/to/stopped/trace.db'

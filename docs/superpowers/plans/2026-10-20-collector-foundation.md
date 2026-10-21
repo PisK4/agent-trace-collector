@@ -49,7 +49,7 @@
 }
 ```
 
-安装时将实际解析的 `@types/bun` 版本改为精确版本并提交 `bun.lock`；生产依赖为空。`tsconfig.json` 明确包含以下配置，让 TypeScript 测试可以导入前端 JS；`checkJs:false` 不检查 JS 实现内部，因此 A5 仍须显式声明导出类型，并用类型消费者测试验证接口。前端实现另做 Bun 语法构建与浏览器检查。
+安装时将实际解析的 `@types/bun` 版本改为精确版本并提交 `bun.lock`；生产依赖为空。`tsconfig.json` 明确包含以下配置，让 TypeScript 测试可以导入前端 JS。全局保留 `checkJs:false`，但 `web/app.js` 首行必须为 `// @ts-check`，使其实现和JSDoc import都参与检查；A5/B5的TS消费者另加预期类型错误探针，防止导出退化为any后静默通过。显式声明DOM库以固定浏览器类型依赖，前端实现另做Bun语法构建与浏览器检查。
 
 ```json
 {
@@ -60,6 +60,7 @@
     "moduleResolution": "Bundler",
     "noEmit": true,
     "types": ["bun"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "allowJs": true,
     "checkJs": false
   },
@@ -98,7 +99,9 @@ test('事务失败不留下证据或游标', () => {
 
 - [ ] **步骤 2：运行 `bun install`，再运行 `bun test tests/store.test.ts`。** 预期因 `src/store` 尚未导出实现失败，记录失败点；依赖安装失败先解决环境，不把它当功能红灯。
 
-- [ ] **步骤 3：迁入 DDL 并实现存储。** 从架构的 `source_cursor/raw_ledger/raw_route/raw_hook/route_summary/request/request_evidence/pending_hook/block/request_block/tool_call` SQL 块原样建立基础列与索引，追加以下迁移补充；`schema_version` 用 `PRAGMA user_version`，新库为 1。已有未知高版本拒绝写入，已有 auto_vacuum=0 库要求离线迁移，不在启动时自动 VACUUM。
+- [ ] **步骤 3：迁入 DDL 并实现存储。** 从架构的 `source_cursor/raw_ledger/raw_route/raw_hook/route_summary/request/request_evidence/pending_hook/block/request_block/tool_call` SQL 块建立基础列与索引；创建新库时，必须将架构中request的 `req_id INTEGER PRIMARY KEY` 声明替换为 `req_id INTEGER PRIMARY KEY AUTOINCREMENT`，其余基础列保持一致，再追加下面的DDL。生产INSERT省略req_id，不在运行期重置sqlite_sequence或用MAX(req_id)+1分配。已经提交过的请求ID即使被合并删除也不能再次分配，否则旧URL和request_alias会指向不同请求。
+
+当前没有生产库，直接修正首次建表schema，`PRAGMA user_version=1`。SQLite不能用ALTER给已有主键增加AUTOINCREMENT；发现旧声明创建的库就拒绝写入，不在本次实施中自动迁移。将来确需离线重建时须先备份，保留全部ID和引用，在事务外关闭该维护连接的foreign_keys，事务内新建request副本、复制并核对、删除旧表后重命名新表并恢复索引，不能先重命名旧表而让外键目标跟着改名；提交后重新启用foreign_keys，执行foreign_key_check与别名解析检查。仅这类离线重建允许一次性抬高sqlite_sequence且不能降低；下界至少为存活req_id、alias.old_id及可证明的历史高水位的最大值。普通主键库本身没有sqlite_sequence高水位，若被删除ID已无任何记录就不能证明全历史不复用，必须停止迁移并报告该限制。未知高版本拒绝写入，已有auto_vacuum=0库要求离线迁移，不在启动时自动VACUUM。
 
 ```sql
 ALTER TABLE source_cursor ADD COLUMN rewrite_epoch INTEGER NOT NULL DEFAULT 0;
@@ -143,13 +146,18 @@ CREATE TABLE source_gap (
   PRIMARY KEY(source_kind, source_name, file_generation, from_off)
 ) WITHOUT ROWID;
 CREATE TABLE cost_observation (
-  ref_key TEXT NOT NULL, observed_at INTEGER NOT NULL, payload_json TEXT NOT NULL,
+  ref_key TEXT NOT NULL,
+  observed_at INTEGER NOT NULL,
+  projection_hash TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
   magpie_version TEXT, pricing_version TEXT,
   PRIMARY KEY(ref_key, observed_at)
 ) WITHOUT ROWID;
 ```
 
-`collector_state` 从 A1 就存在，供 A3 探针/费用同步进度和 C2 备份测试使用。`request_alias.old_id` 指已经移除的请求，不对旧 ID 建外键；`new_id` 必须指向当前存活请求。B3 再次合并时将所有指向被合并 ID 的别名同事务改到最终 ID，避免别名链和悬空目标。A1 的 schema 测试用 `sqlite_master` 断言17张表全部存在，并实际 INSERT/SELECT `collector_state` 与 `request_alias`；B3 再覆盖连续合并。
+`collector_state` 从A1就存在，供A3探针/费用同步进度和C2备份测试使用。`request_alias.old_id` 指已经移除且永不复用的请求，不对旧ID建外键；`new_id` 必须指向当前存活请求。B3再次合并时先将所有指向待删除ID的别名改到最终ID，再删除临时请求，以上操作同事务。C2主动淘汰元数据时则先删除所有 `new_id` 指向目标请求的别名；外键保留默认NO ACTION，不用级联删除掩盖顺序错误。
+
+A1的schema测试以 `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name` 取得业务表集合，与预期17个表名逐项比较；AUTOINCREMENT生成的sqlite_sequence不计入业务表，不能只断言全部表数为17。测试实际INSERT/SELECT collector_state与request_alias，并覆盖删除最大req_id后的新分配；B3再覆盖连续合并。
 
 `derive_queue.actor NOT NULL` 是已确认归属的队列约束。`request.actor=NULL, actor_state='unknown'` 的行不入队，不能改填共享的空串或 `'unknown'` 来规避约束；B4 在身份确认后入队。
 
@@ -179,7 +187,45 @@ commit();
 if (mode === 'after-commit') { process.stdout.write('READY\n'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); }
 ```
 
-正式测试将两行及游标放入上述事务，测试超时 5 秒就终止子进程并报错；不能用固定 sleep 猜测崩溃位置。此检查证明进程崩溃恢复，不证明断电耐久。
+正式测试将两行及游标放入上述事务，测试超时5秒就终止子进程并报错；不能用固定sleep猜测崩溃位置。此检查证明进程崩溃恢复，不证明断电耐久。
+
+增加以下身份回归测试。先生成1/2/3，合并并删除最大ID后再生成4，再次合并必须成功，旧别名仍指向旧请求。关闭重开后的下一次分配仍须大于已有序列，不以回滚过、尚未对外提交的ID是否跳号判失败。
+
+```ts
+// tests/store.test.ts；使用本任务已有fixture/expect/test导入。
+import { join } from 'node:path';
+import { openStore } from '../src/store';
+test('已提交并合并删除的请求ID不复用', () => {
+  const f = fixture();
+  try {
+    const insert = f.store.db.prepare("INSERT INTO request(started_ms,day,via,body_state,derive_version,have,created_at,updated_at) VALUES (1,'2026-10-20','hook','pending',0,1,1,1)");
+    expect(Number(insert.run().lastInsertRowid)).toBe(1);
+    expect(Number(insert.run().lastInsertRowid)).toBe(2);
+    expect(Number(insert.run().lastInsertRowid)).toBe(3);
+    f.store.write(db => {
+      db.run('INSERT INTO request_alias(old_id,new_id) VALUES (3,1)');
+      db.run('DELETE FROM request WHERE req_id=3');
+    });
+    const next = Number(insert.run().lastInsertRowid);
+    expect(next).toBe(4);
+    f.store.write(db => {
+      db.run('INSERT INTO request_alias(old_id,new_id) VALUES (?,2)', [next]);
+      db.run('DELETE FROM request WHERE req_id=?', [next]);
+    });
+    expect(f.store.read.query('SELECT old_id,new_id FROM request_alias ORDER BY old_id').all()).toEqual([
+      {old_id:3,new_id:1}, {old_id:4,new_id:2}
+    ]);
+    f.store.close();
+    const reopened = openStore(join(f.dir,'trace.db'));
+    try {
+      expect(Number(reopened.db.run("INSERT INTO request(started_ms,day,via,body_state,derive_version,have,created_at,updated_at) VALUES (1,'2026-10-20','hook','pending',0,1,1,1)").lastInsertRowid)).toBe(5);
+      expect(reopened.read.query('SELECT old_id,new_id FROM request_alias ORDER BY old_id').all()).toEqual([
+        {old_id:3,new_id:1}, {old_id:4,new_id:2}
+      ]);
+    } finally { reopened.close(); }
+  } finally { f.close(); }
+});
+```
 
 - [ ] **步骤 5：运行 `bun test tests/store.test.ts && bun run typecheck`，通过后提交。**
 
@@ -270,7 +316,9 @@ git commit -m "feat(ingest): track complete lines and rewritten source generatio
 - `redact(value: unknown, salt: Uint8Array, rules?: {path:string; pattern:string}[]): unknown`，B1 扩充测试，不改变签名。
 - `ingestLedger(store: Store, sourceName: string, batch: FileBatch, now: number, salt:Uint8Array): {accepted:number; invalid:number; duplicate:number}`。
 - `ingestRoute(store: Store, records: unknown[], now: number, salt:Uint8Array): void`。
-- `syncCosts(store:Store, period:string, baseUrl:string, now:number, salt:Uint8Array, fetcher?:typeof fetch): Promise<{pages:number;observations:number;matched:number;ambiguous:number}>`；period 必须是固定 `YYYY-MM-DD..YYYY-MM-DD` 日期窗口，未完成页与重试状态存 A1 的 `collector_state`。
+- `validateCostPeriod(period:string):void`，格式、真实日期或起止顺序非法时抛 `cost_period_invalid`；只接受队列生成的固定日期窗口。
+- `assertCostPagePeriod(page:unknown,expectedPeriod:string):void`，响应根对象period不等于业务队列的预期窗口时抛 `cost_api_period_mismatch`，不入库、不前移本页进度。
+- `syncCosts(store:Store, period:string, baseUrl:string, now:number, salt:Uint8Array, fetcher?:typeof fetch): Promise<{pages:number;observations:number;matched:number;ambiguous:number}>`；period必须是固定 `YYYY-MM-DD..YYYY-MM-DD` 日期窗口，启动本窗口前调用validateCostPeriod，未完成页与重试状态存A1的collector_state。参数now用于调度/重试，不固定为所有页面的observed_at；非法窗口以cost_period_invalid拒绝Promise，错窗以cost_api_period_mismatch拒绝，观测时间冲突以cost_observation_conflict拒绝；调用方记录固定诊断并退避，均不推进失败页。
 - `probeMagpie(baseUrl:string, versionFile:string, fetcher?:typeof fetch): Promise<{version:string|null; verified:boolean; reason:string|null}>`。
 - `classifyLedger(row: Record<string,unknown>): 'through'|'rejected'`；文件不推断 direct。
 
@@ -333,9 +381,134 @@ const salt = loadLocalSecret(config.dataDir, 'redaction.salt');
 
 - [ ] **步骤 4：按固定日期窗口分页补费用并验证四态。** 常态同步不使用 `route` 参数；请求示例为 `GET /v1/magpie/usage/requests?period=2026-10-20..2026-10-20&via=through&computer=this&offset=0&limit=500`。窗口日期按 magpie 主机时区解释，结束日包含全天；collector 使用同机时区并在健康状态中记录。只读取普通 loopback；认证失败记录 `cost_api_denied`，不退到 LAN 或读取用户密钥。
 
-首次回填按已保存账本涉及的日期排队，日窗口内从 offset=0 开始、每页最多500行，响应 `rows` 建本地 route 候选索引，再按原始response ID、时间、状态、handed_on和用量等实际字段确认归属。API 行不产生新顶层请求，route 不是费用观测唯一键。每页在一个事务内写脱敏后的 `cost_observation`、更新匹配结果与该窗口进度；`ref_key` 使用已证明唯一的本地账本证据键加费用投影摘要，未匹配/歧义行使用 `['cost-run',run_id,page_offset,row_index]` 观测键。相同本地证据的费用投影与最新已保存观测相同时不追加副本；与最新观测不同才保存变化，A→B→A的改价必须保留第三次观测，不能被历史相同值去重掉；未匹配观测按原始层7天清理，并记录清理计数，不能无限积累。
+发送前验证窗口；每页JSON解析后先检查根对象 `body.period === expectedPeriod`，再校验rows/offset并进入写事务。expectedPeriod来自已确定的队列日期，不能取响应值反向赋给请求期望。非法period在上游会静默回退30d，因此缺少period、回显30d、回显其他日期都记 `cost_api_period_mismatch`，中止本窗口，不写本页cost_observation、不推进本页进度；先前已提交且通过校验的页面保留。合法但写错的日期可能原样回显，必须由队列日期和真实日历校验约束，不能声称回显保证业务选期正确。
 
-分页以 `response.offset + rows.length` 前移，空页或少于500行结束；验证返回 offset 等于请求值、完整页的偏移严格增加。单次窗口运行固定 run_id、观察时间和起止日期；进度保存在 `collector_state`。进程重启后从窗口头重扫，已有匹配观测幂等跳过，未匹配观测复用未完成run_id。`total` 仅诊断，不当作固定水位；只读响应不能证明跨页快照一致。
+```ts
+// src/sources/magpie.ts
+export function validateCostPeriod(period: string): void {
+  const match = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(period);
+  if (!match || match[0] !== period) throw new Error('cost_period_invalid');
+  const [, from, to] = match;
+  for (const day of [from, to]) {
+    const date = new Date(`${day}T00:00:00Z`);
+    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0,10) !== day) {
+      throw new Error('cost_period_invalid');
+    }
+  }
+  if (from > to) throw new Error('cost_period_invalid');
+}
+export function assertCostPagePeriod(page: unknown, expectedPeriod: string): void {
+  if (page === null || typeof page !== 'object' ||
+      !('period' in page) || page.period !== expectedPeriod) {
+    throw new Error('cost_api_period_mismatch');
+  }
+}
+```
+
+窗口进度键固定为 `JSON.stringify(['cost-window',period])`，值至少包含run_id和next_offset；错误诊断与退避另存，不借失败响应改变next_offset。补以下mock测试，固定业务窗口后模拟上游回退和错窗：
+
+```ts
+// tests/magpie.test.ts
+import { expect, spyOn, test } from 'bun:test';
+import { fixture } from './fixtures';
+import { validateCostPeriod, assertCostPagePeriod, syncCosts } from '../src/sources/magpie';
+test('费用窗口只接受真实日历范围', () => {
+  for (const period of ['2026-02-30..2026-03-01','2026-10-21..2026-10-20',
+    '2026-10-20','2026-10-20T00:00:00Z..2026-10-21T00:00:00Z','30d']) {
+    expect(() => validateCostPeriod(period)).toThrow('cost_period_invalid');
+  }
+  validateCostPeriod('2024-02-29..2024-03-01');
+  validateCostPeriod('2026-12-31..2027-01-01');
+  assertCostPagePeriod({period:'2026-12-31..2027-01-01'},'2026-12-31..2027-01-01');
+});
+test('错窗费用响应不落盘且不推进页进度', async () => {
+  const period = '2026-10-20..2026-10-20';
+  for (const echo of [undefined,'30d','2026-10-19..2026-10-19']) {
+    const f = fixture();
+    const key = JSON.stringify(['cost-window',period]);
+    f.store.write(db => db.run('INSERT INTO collector_state VALUES (?,?)',
+      [key,JSON.stringify({run_id:'synthetic-run',next_offset:0})]));
+    const mock = spyOn(globalThis,'fetch').mockResolvedValue(
+      Response.json({period:echo,rows:[{priced:true,cost:1}],offset:0,total:1}));
+    try {
+      await expect(syncCosts(f.store,period,'http://127.0.0.1:8317',1,new Uint8Array(32)))
+        .rejects.toThrow('cost_api_period_mismatch');
+      expect(mock).toHaveBeenCalledTimes(1);
+      expect(f.store.read.query('SELECT count(*) AS n FROM cost_observation').get()).toEqual({n:0});
+      const state = f.store.read.query<{value_json:string},[string]>(
+        'SELECT value_json FROM collector_state WHERE key=?').get(key);
+      expect(JSON.parse(state!.value_json).next_offset).toBe(0);
+    } finally { mock.mockRestore(); f.close(); }
+  }
+});
+test('费用前页提交后错窗不能推进下一页', async () => {
+  const f = fixture();
+  const period = '2026-10-20..2026-10-20';
+  const key = JSON.stringify(['cost-window',period]);
+  const rows = Array.from({length:500},(_,i)=>({
+    t:'2026-10-20T00:00:00Z',route_id:i+1,agent:'synthetic',
+    provider:'synthetic',model:'m',status:200,priced:true,cost:1
+  }));
+  const mock = spyOn(globalThis,'fetch')
+    .mockResolvedValueOnce(Response.json({period,rows,offset:0,total:501}))
+    .mockResolvedValueOnce(Response.json({period:'30d',rows:[rows[0]],offset:500,total:501}));
+  try {
+    await expect(syncCosts(f.store,period,'http://127.0.0.1:8317',1,new Uint8Array(32)))
+      .rejects.toThrow('cost_api_period_mismatch');
+    expect(mock).toHaveBeenCalledTimes(2);
+    const state = f.store.read.query<{value_json:string},[string]>(
+      'SELECT value_json FROM collector_state WHERE key=?').get(key);
+    expect(JSON.parse(state!.value_json).next_offset).toBe(500);
+    expect(f.store.read.query('SELECT count(*) AS n FROM cost_observation').get()).toEqual({n:500});
+  } finally { mock.mockRestore(); f.close(); }
+});
+```
+
+首次回填按已保存账本涉及的日期排队，日窗口内从offset=0开始、每页最多500行，响应rows建本地route候选索引，再按原始response ID、时间、状态、handed_on和用量等实际字段确认归属。API行不产生新顶层请求，route不是费用观测唯一键。每页在一个事务内写脱敏后的cost_observation、更新匹配结果与该窗口进度。
+
+已匹配记录的 `ref_key` 只存已证明唯一的本地账本证据键，不含投影摘要；`projection_hash` 单独保存版本化费用投影的SHA-256。投影包含priced/cost与实际提供的定价标识，不包含抓取时间或随机run_id。未匹配/歧义行使用 `['cost-run',run_id,page_offset,row_index]` 暂存键，不与已匹配证据混用；按原始层7天清理并记录计数。每次用下面的精确等值查询取本地证据最新观测，禁止LIKE或前缀范围查询，也不以投影键字典序决定最新。
+
+```sql
+SELECT observed_at, projection_hash, payload_json, magpie_version, pricing_version
+FROM cost_observation
+WHERE ref_key = ?
+ORDER BY observed_at DESC
+LIMIT 1;
+```
+
+`PRIMARY KEY(ref_key,observed_at) WITHOUT ROWID` 可反向遍历，无需再建同列DESC索引。测试EXPLAIN QUERY PLAN应为精确ref_key SEARCH且无临时排序。与最新projection_hash相同则不追加；不同则保存新观测，A→B→A必须保留第三次，不能按历史曾出现该投影去重。observed_at取本页收到响应的epoch毫秒；不同投影的时间若不大于最新观测（同毫秒或系统时钟回退），报 `cost_observation_conflict`，回滚本页且不推进进度，留待后续扫描，不覆盖旧值、不伪造递增时间，也不用INSERT OR IGNORE吞掉冲突。冲突次数、最新阻塞时点和cost_clock_conflict健康状态存collector_state；实际时间再次超过该证据最新时点后重扫恢复。持续阻塞时operations指导先检查/校正系统时钟，再重扫窗口，不自动改写旧时间；在恢复前允许费用扫描停滞并明确展示，账本/正文摄入继续，不承诺时钟异常下费用仍可前进。
+
+最小观测历史回归放在 `tests/magpie.test.ts`，直接使用A1建表和事务；完整syncCosts测试再断言冲突页进度不变。
+
+```ts
+// tests/magpie.test.ts；使用上文已有fixture/expect/test导入。
+test('费用只去重最新投影且时间冲突不能覆盖历史', () => {
+  const f = fixture();
+  try {
+    const observe = (at:number,hash:string) => f.store.write(db => {
+      const latest = db.query<{observed_at:number;projection_hash:string},[string]>(
+        'SELECT observed_at,projection_hash FROM cost_observation WHERE ref_key=? ORDER BY observed_at DESC LIMIT 1'
+      ).get('synthetic-evidence');
+      if (latest?.projection_hash === hash) return false;
+      if (latest && at <= latest.observed_at) throw new Error('cost_observation_conflict');
+      db.run('INSERT INTO cost_observation(ref_key,observed_at,projection_hash,payload_json) VALUES (?,?,?,?)',
+        ['synthetic-evidence',at,hash,'{}']);
+      return true;
+    });
+    expect(observe(100,'A')).toBe(true);
+    expect(observe(101,'A')).toBe(false);
+    expect(observe(102,'B')).toBe(true);
+    expect(observe(103,'A')).toBe(true);
+    expect(() => observe(103,'C')).toThrow('cost_observation_conflict');
+    expect(() => observe(99,'C')).toThrow('cost_observation_conflict');
+    expect(f.store.read.query('SELECT observed_at,projection_hash FROM cost_observation ORDER BY observed_at').all()).toEqual([
+      {observed_at:100,projection_hash:'A'}, {observed_at:102,projection_hash:'B'}, {observed_at:103,projection_hash:'A'}
+    ]);
+  } finally { f.close(); }
+});
+```
+
+分页以 `response.offset + rows.length` 前移，空页或少于500行结束；验证返回 offset 等于请求值、完整页的偏移严格增加。单次窗口运行固定run_id和起止日期，每页分别记录响应观察时间；进度保存在 `collector_state`。进程重启后从窗口头重扫，已有匹配观测幂等跳过，未匹配观测复用未完成run_id。`total` 仅诊断，不当作固定水位；只读响应不能证明跨页快照一致。
 
 运行中每60秒重扫今天与昨天，重新从0开始以覆盖分页期间新增和跨午夜迟到；历史初次队列完成后，每24小时轮流复核一个更旧的已采集日期。日窗口只缩小扫描范围，不保证严格增量，也不保证所有更晚修正立即可见。错过页面、来源重写或上游记录已过期时明确费用尚未取得，不把一次扫描结束称为全量完成。
 
@@ -350,9 +523,9 @@ const costState = (row: { priced?: boolean; cost?: number } | null) => {
 
 测试 mock 返回 `priced=true,cost=0`、`priced=false,cost=0`、正金额、401、同 route 两条可区分尝试、两条不可区分候选、后来改价；保持原 token NULL，不把 cost API 的补零拷进 request。通过 `cost_observation` 保留取值时点与原始观测，定价版本未提供则 NULL。rejected 被 `via=through` 排除，保持 `absent/not_applicable` 原因，不额外拉 direct。
 
-费用扫描只允许一个HTTP请求在途，每页提交后让出事件循环，优先服务ingest；失败退避5s、30s、300s，上限300s，成功后继续页/窗口，不再按route逐秒排队。暂停中的磁盘写入不得因费用同步绕过C1保护。测试增加501行→两页、21,196行→43个数据页、空页、重复页/错误offset、第一页后新增行、重启重扫和改价；验证请求URL无route参数，本地token NULL不被API补零覆盖，歧义费用不强行合并。
+费用扫描只允许一个HTTP请求在途，每页提交后让出事件循环，优先服务ingest；失败退避5s、30s、300s，上限300s，成功后继续页/窗口，不再按route逐秒排队。暂停中的磁盘写入不得因费用同步绕过C1保护。测试增加501行→两页、21,196行→43个数据页、空页、重复页/错误offset、第一页后新增行、重启重扫和A→B→A改价；另插入投影6@19542、投影5@20542，精确证据键的最新查询必须返回后者。覆盖非法日期/倒序/裸日期/时间戳格式本地拒绝，响应缺period、30d或其他范围时本页不落盘且进度不动；合法跨年范围保留，仍然有效的日期笔误不能靠回显自动识别。验证请求URL无route参数，本地token NULL不被API补零覆盖，歧义费用不强行合并。
 
-源码边界：`开源源码@magpie-2374ffe` 的 `internal/usage/request_page.go:929`、`:990` 在构建分页结果时遍历候选记录并过滤route，route不是存储定位索引；`:289`、`:422`、`:621`有页缓存键、源状态失效和容量限制，`internal/usage/log_index.go:66`有日志快照。逐route查询会重复做候选遍历，但不能写成每次都全量读盘。`internal/usage/period_range.go:59`定义固定日期范围，offset仍不提供跨页快照。
+源码边界：`开源源码@magpie-2374ffe` 的 `internal/usage/request_page.go:929`、`:990` 在构建分页结果时遍历候选记录并过滤route，route不是存储定位索引；`:289`、`:422`、`:621`有页缓存键、源状态失效和容量限制，`internal/usage/log_index.go:66`有日志快照。逐route查询会重复做候选遍历，但不能写成每次都全量读盘。`internal/usage/period_range.go:59`定义固定日期范围，`internal/usageapi/usageapi.go:160`的PeriodOf对未知值回退 `usage.Month='30d'`，`:194`的响应Ledger在根对象返回period，`:274`保留有效范围字符串；这些都是固定提交源码事实，不代表本轮运行过网关。offset仍不提供跨页快照。
 
 - [ ] **步骤 5：运行 `bun test tests/reconcile.test.ts tests/magpie.test.ts tests/files.test.ts && bun run typecheck` 后提交。** 增补乱序文件、route 先到、缺 route、显式 rejected/status=200、坏行之后正常行和 7 天 raw 删除后重放用例。
 
@@ -440,7 +613,7 @@ git commit -m "feat(api): serve protected keyset queries and collector health" -
 
 ## A5：原型接入真实分页数据
 
-**Files:** Create `web/index.html`, `web/app.js`, `tests/web.test.ts`; Modify `src/http.ts`, `README.md`, `docs/README.md`。
+**Files:** Create `web/index.html`, `web/app.js`, `tests/web.test.ts`, `tests/reader-types.ts`; Modify `src/http.ts`, `README.md`, `docs/README.md`。
 
 **Interfaces:**
 - Consumes: A4 全部接口及 DTO。
@@ -475,7 +648,8 @@ test('较慢的旧详情不覆盖新选择', async () => {
 - [ ] **步骤 3：实现请求序号防止旧结果覆盖，并逐处替换同步假设。**
 
 ```js
-// web/app.js：JSDoc贴在实际导出函数上，TS消费者由这些类型检查调用。
+// @ts-check
+// web/app.js：首行指令使实现与JSDoc import参与检查，不能只检查TS消费者。
 /**
  * @typedef {import('../src/queries').RequestDetail} RequestDetail
  * @typedef {import('../src/queries').RequestRow} RequestRow
@@ -549,7 +723,25 @@ export function createReader(fetcher) {
 }
 ```
 
-API返回的DTO仍需按字段校验，渲染器消费上述缓存；JSON解析成功不表示形状合法。TypeScript消费者测试必须调用Reader全部方法，B5加入loadBody时同步扩展JSDoc和调用检查。
+API返回的DTO仍需按字段校验，渲染器消费上述缓存；JSON解析成功不表示形状合法。迁移后的整个web/app.js都须通过typecheck，render/escape等参数同样补JSDoc，不能只检查本段示例。新增只由 `bun run typecheck` 编译、不由Bun测试执行的类型探针，覆盖Reader全部方法和req_id关键叶子字段。正确DTO下预期错误被消费；字段退化为any时赋给string不再报错，TypeScript必须因TS2578拒绝通过。
+
+```ts
+// tests/reader-types.ts；仅供编译，不执行网络请求。
+import { createReader } from '../web/app.js';
+const reader = createReader(fetch);
+await reader.loadSessions();
+await reader.loadRequests();
+await reader.selectSession('synthetic-session');
+await reader.selectRequest(1);
+const request = reader.getState().request;
+if (request !== null) {
+  const id: number = request.req_id;
+  // @ts-expect-error req_id必须为number；退化为any时该指令应报TS2578。
+  const invalidId: string = request.req_id;
+}
+```
+
+验收时临时移走 `src/queries.ts`，再单独拼错JSDoc中的RequestDetail导出名，两次 `bun run typecheck` 都必须非零退出；恢复文件和名称后通过。故障注入只在临时副本或可立即恢复的工作树中进行，不能把损坏的引用提交。全局checkJs:false不能替代文件首行的检查指令；B5加入loadBody时同步扩展JSDoc和正文叶子字段探针。
 
 实际 reader 内包含上述 state 和 fetcher。导航失败保留明确 error，不回退演示值。空库不能读 `SESSIONS[0].key`；URL 中过期 req id 显示未找到。统一 `deltaOnly` 为 Set，不在 `ensureSelection()` 中设 false。
 
@@ -571,18 +763,18 @@ bun run typecheck
 - [ ] **步骤 5：通过后提交并进入阶段门槛。**
 
 ```bash
-git add web/index.html web/app.js tests/web.test.ts src/http.ts README.md docs/README.md
+git add web/index.html web/app.js tests/web.test.ts tests/reader-types.ts src/http.ts README.md docs/README.md
 git commit -m "feat(web): connect the trace reader to real paginated metadata" -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
 ## A 阶段验收
 
-- [ ] A1全部17张表和后续引用列已建，collector_state读写及request_alias外键/连续合并检查通过。
-- [ ] A5完整Reader接口和测试由TypeScript检查通过，JS导入、mock参数/resolver、nullable request均无隐式any或缺方法。
+- [ ] A1预期17个业务表及后续引用列已建，sqlite_sequence另行排除；request使用AUTOINCREMENT，删除最大ID再采集/合并不复用，重启保持序列；collector_state读写及request_alias外键/连续合并检查通过。
+- [ ] A5完整Reader接口和测试由TypeScript检查通过；web/app.js首行启用@ts-check，req_id叶子类型探针生效，DTO文件缺失或导出名错误时检查失败，恢复后通过。
 - [ ] 已证明同 route 多物理账本行、重复回放、事务中断、半行、跨午夜、gzip 替换与同 inode 重写。
 - [ ] `accepted + duplicate + invalid = 已读取完整物理行数`；raw 删除后的重放仍不重复计费。
 - [ ] 顶层请求计数与尝试计数分开，未归属请求各自独立，route-only 记录不额外增请求。
-- [ ] 费用四态与来源可解释，未拿到 API 或无法一对一匹配时明确缺失。
+- [ ] 费用四态与来源可解释，未拿到API或无法一对一匹配时明确缺失；非法窗口不发送，响应period不符不写本页、不推进进度；稳定证据键精确查询最新观测，A→B→A和同毫秒冲突均已覆盖。
 - [ ] Host/Origin/read-token 边界和敏感 DTO 排除测试通过，真实文件只读。
 - [ ] 1,825 笔合成会话分页无漏重，100 行暖查询本机目标 <100 ms。
 - [ ] 阶段 0 的物理收缩验证提前运行 C1 指定的临时库实验；未证明收缩前不把 A 标为持久化验证完成。

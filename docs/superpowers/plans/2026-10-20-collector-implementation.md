@@ -22,6 +22,7 @@
 - 正文预算默认 `10 GB`，总磁盘上限默认 `16 GB`；80% 停新正文、95% 停新证据，采集缺口必须可查。
 - 已验证 magpie 区间 `>=0.1.1294 <0.2.0`；越界仍启动并降级标记，持续做版本和形状探测。
 - 一笔客户端调用对应一条顶层请求；`handed_on` 保留为尝试明细，`kind` 不用于推断尝试。
+- `request.req_id` 使用 `INTEGER PRIMARY KEY AUTOINCREMENT`，生产插入省略ID；合并删除后的已提交ID不复用，旧URL仅经扁平化别名解析。
 - 缺字段保留为 `NULL`，不补 0；金额区分 `priced / zero / unpriced / absent`。
 - `have` 记录已经收到的证据，正文回收不清除位图。
 - hook 认证后再检查 `origin=local`；脱敏在所有内容落盘和哈希之前完成。
@@ -72,6 +73,10 @@
 
 在 `request` 增加 `sort_source`、`sort_key`；优先使用最终账本证据的来源与字节偏移，其次路由 ID，最后 hook ID。字节偏移用数值比较或固定宽度编码，不能按普通十进制字符串比较。排序是 `(started_ms, sort_source, sort_key)`；`req_id` 只用于页面 keyset 的同时间兜底，不参与消息前驱判定。
 
+`request.req_id` 在首次建库时使用AUTOINCREMENT，覆盖架构基础DDL的普通INTEGER PRIMARY KEY声明；不显式分配生产ID、运行期不重置sqlite_sequence，不用存活MAX推算下一ID。已提交ID删除后不得复用，尚未提交的事务回滚ID不承诺跳号。A1按表名集合检查17个业务表，sqlite_sequence是另行排除的内部表。旧声明创建的库拒绝继续写入，离线重建与序列只升不降的例外见A1；缺少已删除ID历史时不能证明全历史不复用，不自动迁移。
+
+B3连续合并时，在同事务内迁移引用、把所有new_id指向临时请求的别名改到canonical、增加本次old→canonical映射后再删临时请求；C2主动淘汰则先删除new_id指向精确淘汰集合的全部别名，再删请求。别名外键保留NO ACTION，其他存活请求的映射必须保留。
+
 内部会话键使用带类型的编码，例如 `JSON.stringify(['session', session])`、`JSON.stringify(['conv', conv])`，展示时仍可显示 `magpie-<conv>`。未知会话归属使用独立 `['request', stableKey]`，不能把所有NULL session聚到一起。hook未关联账本前没有可信subagent，长期保存 `actor=NULL, actor_state='unknown'`，不填公共哨兵；这类请求不入 `derive_queue`，不计算确定前驱或配工具。确认actor后再按新归属入队；原本已知的归属被撤回时，重算原组后继，本笔退回未知状态。
 
 派生重算按 `(conv_key, actor)` 分批，单批最多 100 笔；未处理完的起点存入 `derive_queue`，下批继续，禁止截断后继链后悄悄丢弃余项。
@@ -86,9 +91,11 @@
 
 ### 5. 费用与尝试
 
-through费用补齐属于A，不受direct开关控制。API按固定日期窗口分页批量取回，本地建立route候选索引并确认一对一关联；常态不按route逐条请求。初次回填账本涉及的历史日期，运行中重扫近期窗口并周期性复核旧窗口。offset没有跨页快照保证，重叠扫描与幂等只用于收敛，不能承诺一次扫描覆盖全部新增/修正。API只补费用，不替换文件token字段，也不把返回Row当新的顶层请求。
+through费用补齐属于A，不受direct开关控制。API按固定日期窗口分页批量取回，本地建立route候选索引并确认一对一关联；常态不按route逐条请求。请求前验证严格格式、真实日历与起止顺序；每页根对象period必须等于队列确定的预期窗口，缺失或不等时报cost_api_period_mismatch，本页不落盘、不推进进度。非法参数在上游可能回退30d；合法日期笔误可能原样回显，回显不证明业务选期正确。初次回填账本涉及的历史日期，运行中重扫近期窗口并周期性复核旧窗口。offset没有跨页快照保证，重叠扫描与幂等只用于收敛，不能承诺一次扫描覆盖全部新增/修正。API只补费用，不替换文件token字段，也不把返回Row当新的顶层请求。
 
 同一 route 出现多条账本和 API 行时，route 只用于寻找候选；还须比较原始 response ID、时间、status、handed_on 与用量等实际提供的字段。仅在可证明一对一时接受费用；候选仍重叠就保留 `absent` 和 `ambiguous_cost`，不能复制同一费用到每个尝试。最终费用与尝试费用分别计算，不能相加两次。
+
+费用记录的ref_key固定为已确认的本地账本证据键，projection_hash独立保存；按 `WHERE ref_key=? ORDER BY observed_at DESC LIMIT 1` 查询最新，现有复合主键可反向读取，不加同列DESC索引。只与最新投影去重，保留A→B→A；观测时间取实际收到页面的epoch毫秒，不同投影时间不大于最新值时回滚本页、保留进度重试，记录cost_clock_conflict与阻塞时点，校时后重新扫描，不伪造时间或覆盖旧观测。
 
 费用记录保存 `observed_at`、magpie 版本和 `pricing_version=NULL`。若 API 未提供定价版本，就明确 `pricing_version_unknown`；不能把采集时间或 magpie 版本伪装成定价版本。重新观察费用保留旧观测，当前展示选择最新确定观测。
 
@@ -132,7 +139,7 @@ through费用补齐属于A，不受direct开关控制。API按固定日期窗口
 | `src/retention.ts`, `src/maintenance.ts` | 预算、回收、缺口、备份/恢复/重建命令 | C1、C2 |
 | `scripts/verify-cutover.ts` | 并行统计与切换核对 | C3 |
 | `docs/operations.md` | 维护、恢复和本地凭证使用；C3补切换/回滚操作 | C2，C3扩展 |
-| `tests/*.test.ts`, `tests/fixtures.ts`, `tests/worker.ts` | 合成契约、子进程故障注入、受控时钟与文件 | 各任务 |
+| `tests/*.test.ts`, `tests/reader-types.ts`, `tests/fixtures.ts`, `tests/worker.ts` | 合成契约、仅编译的前端叶子类型探针、子进程故障注入、受控时钟与文件 | 各任务 |
 
 `prototypes/` 保留作为演示来源。生产页面不从演示 fixture 回退取值，不通过改造原型制造已接真实数据的错觉。
 
@@ -172,6 +179,8 @@ export type SessionRow = {
 
 `RequestDetail` 在 A4 定义，正文 DTO 在 B2 定义；列表永不包含 skeleton、消息或账户字段。SQL 列按架构定义创建，以上 DTO 只是对浏览器公开的子集。
 
+JS/TS边界由A1固定allowJs:true、checkJs:false与显式DOM lib；web/app.js首行用@ts-check参与实现和JSDoc import检查。A5/B5在tests/reader-types.ts调用全部Reader方法，以@ts-expect-error验证req_id、BodyPage.state/reason叶子类型不为any；缺DTO模块、拼错导出名或将叶子改为any时必须编译失败，恢复后通过。仅转译、仅正向赋值不够作为类型契约验收。
+
 ## 验收与执行规则
 
 每个任务先运行文中的单项失败测试，确认失败原因确实是缺行为，再补实现。同一任务通过单测和相关集成测试后提交，不反复跑无关全量测试。跨阶段执行 `bun test` 与 `bun run typecheck`；性能命令在独立临时库运行，不把机器抖动写成稳定承诺。
@@ -205,9 +214,13 @@ export type SessionRow = {
 
 2026-10-21 首轮检查确认了本地链接、围栏、36段示例语法及基础DDL可以合并；后续review指出，这些检查没有覆盖跨任务缺表和JS/TS消费类型，首轮检查不能据此宣布实施契约完整。
 
-本次修订在保持13个实施任务的基础上增加以下检查：A1明确创建全部17张表，collector_state与request_alias的读写、外键及连续合并可执行；A4会话分页命中专用索引且无临时排序；40段TS/JS/JSON示例通过转译或解析。A5导出完整Reader类型，B5扩展正文方法，两阶段的JS导出与TS消费者通过TypeScript 5.9.3；实际运行旧请求不覆盖新选择、已回收正文返回原因两项合成测试，2通过、0失败。未知actor不入NOT NULL队列，salt/read token在首次使用前初始化，FileBatch明确返回observedOff。
+第一轮修订在保持13个实施任务的基础上增加以下检查：A1明确创建17个业务表，collector_state与request_alias的读写、外键及连续合并可执行；A4会话分页命中专用索引且无临时排序；40段TS/JS/JSON示例通过转译或解析。A5导出完整Reader类型，B5扩展正文方法，两阶段的JS导出与TS消费者通过TypeScript 5.9.3；实际运行旧请求不覆盖新选择、已回收正文返回原因两项合成测试，2通过、0失败。未知actor不入NOT NULL队列，salt/read token在首次使用前初始化，FileBatch明确返回observedOff。这轮没有检查删除最大请求ID后的复用，也没有用缺模块/any退化故障验证JS类型约束；这些结论由第二轮补充，不能把第一轮通过视为已覆盖。
 
-这些检查覆盖计划示例的选定契约，不等于生产工程或所有任务测试已实现；未执行真实回调、线上费用同步、性能压测或恢复演练。生产模块尚未创建，任务复选框保持未完成。原架构正文未改；项目定位仅补限定旧契约失效的顶部说明。
+第二轮修订继续保持13个任务。按A1覆盖基础主键后提取SQL，得到17个业务表和sqlite_sequence；执行文档中的ID不复用/重开、别名淘汰/回滚和费用历史三项测试，3通过、0失败，另验证连续别名扁平化、直接删除被引用目标遭外键拒绝、同连接重复淘汰、对应费用随证据清理且无关观测保留。1,824条剩余合成请求的分页仍无漏重，查询命中i_req_session_time且无临时排序；47段TS/JS/JSON示例、本地链接、围栏和文档格式检查通过。
+
+从A5/B5提取实际JS示例（含正文渲染辅助函数）和仅编译探针，TypeScript 5.9.3正向检查通过；7种故障注入（缺queries模块、RequestDetail导出名错误、req_id变any、缺protocols模块、BodyPage导出名错误、state变any、reason变any）全部被拒绝，恢复后重新通过。原有两项reader合成测试仍为2通过、0失败。费用精确查询得到5@20542，EXPLAIN QUERY PLAN为 `SEARCH cost_observation USING PRIMARY KEY (ref_key=?)`，无额外索引或临时排序；合成观测验证最新投影去重、A→B→A及同毫秒/时钟回退冲突。提取的日期与回显守卫接受4组合法窗口、拒绝8组非法窗口；按先校验再提交的临时合成写入路径验证3种错窗均不写费用、不推进进度，正确回显才提交；前页已提交后遇错窗，既有观测与非零offset=500均保持。新增存储、别名和费用mock测试示例另以缓存Bun 1.4.0类型声明检查通过，其中syncCosts仅提供计划签名，不以此宣称其集成测试已执行。
+
+这些检查覆盖计划示例的选定契约，不等于生产工程或所有任务测试已实现；费用写入路径使用临时合成实现，完整syncCosts及文档中的集成mock仍待A3实现后执行。未执行真实回调、线上费用同步、性能压测或恢复演练。生产模块尚未创建，任务复选框保持未完成。原架构正文未改；项目定位仅在第一轮补限定旧契约失效的顶部说明。
 
 ## 评审处理记录
 
@@ -226,3 +239,13 @@ export type SessionRow = {
 | 9 | 新增会话时间索引，查询使用行值范围比较，检查EXPLAIN | A1、A4 |
 | 10 | 把既存docs索引改动纳入本次计划修订提交；不额外修改父仓gitlink | docs/README |
 | 11 | 保留report真实签名，拒绝把它当onResponse投递回报；使用本地安全诊断与幂等重试 | B3、安全共同契约 |
+
+第二轮对应用户提供的5项意见。最新费用查询采用主键反向读取，未采纳重复建DESC索引；别名淘汰原计划已有顺序约定，本轮补为精确SQL和可执行回归，没有改成级联删除。
+
+| 条号 | 处理 | 落点 |
+| --- | --- | --- |
+| 1 | request改AUTOINCREMENT，覆盖首次schema；验证最大ID删除、再次合并与重启；17表指业务集合 | A1、B3、稳定归属共同契约 |
+| 2 | app.js首行@ts-check，显式DOM lib；新增仅编译的Reader/正文叶子探针及缺模块/错名/any故障注入 | A1、A5、B5、共用类型约定 |
+| 3 | 请求前严格验证日期窗口，逐页校验根period；错窗不写本页、不推进进度，说明30d回退与合法日期笔误边界 | A3、费用共同契约 |
+| 4 | ref_key固定为本地证据身份，projection_hash独立；等值查询最新，保留A→B→A，时间冲突回滚重试 | A1、A3、费用共同契约 |
+| 5 | 保留NO ACTION；同事务按new_id精确删目标别名后删请求，证据删除前清对应费用；测试错误顺序、无关别名、重复批次及回滚 | A1、C2、稳定归属共同契约 |
