@@ -4,16 +4,56 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { openStore } from '../src/store';
-import { compareSequence, deriveTitle, drainDerive, enqueueDerive, pairToolCalls } from '../src/derive';
+import { compareSequence, deriveTitle, drainDerive, enqueueDerive, matchPredecessor, pairToolCalls } from '../src/derive';
+import { messageFingerprint } from '../src/fingerprint';
 import { persistBody } from '../src/body';
 import type { BodyInput } from '../src/body';
 
 test('重复消息仍按位置计新增', () => {
-  expect(compareSequence([1, 2], [1, 2, 1], true)).toEqual({ relation: 'confirmed', delta: [2] });
-  expect(compareSequence([1, 2], [2, 1], true)).toEqual({ relation: 'unknown', delta: null });
-  expect(compareSequence(null, [1, 2], true)).toEqual({ relation: 'unknown', delta: null });
-  expect(compareSequence(null, [1, 2], false)).toEqual({ relation: 'first', delta: [0, 1] });
-  expect(compareSequence([1], [1], true)).toEqual({ relation: 'confirmed', delta: [] });
+  expect(compareSequence(['a', 'b'], ['a', 'b', 'a'], true)).toEqual({ relation: 'confirmed', delta: [2] });
+  expect(compareSequence(['a', 'b'], ['b', 'a'], true)).toEqual({ relation: 'unknown', delta: null });
+  expect(compareSequence(null, ['a', 'b'], true)).toEqual({ relation: 'unknown', delta: null });
+  expect(compareSequence(null, ['a', 'b'], false)).toEqual({ relation: 'first', delta: [0, 1] });
+  expect(compareSequence(['a'], ['a'], true)).toEqual({ relation: 'confirmed', delta: [] });
+});
+
+test('前驱在链上任意祖先里找，不只看上一笔', () => {
+  // 分支：1 是根，2 续自 1。
+  const ancestors = [
+    { reqId: 1, fingerprints: ['u:hello'] },
+    { reqId: 2, fingerprints: ['u:hello', 'a:answer', 'u:more'] },
+  ];
+  // 本笔完整包含 req 2：真前驱是 2，不是紧挨着它的 1。
+  expect(matchPredecessor(ancestors, ['u:hello', 'a:answer', 'u:more', 'a:next']))
+    .toEqual({
+      parent: 2, relation: 'confirmed', delta: [3],
+      near: { reqId: 2, shared: 3 },
+    });
+  // 本笔从根重新分支：1 整条仍是前缀，所以前驱是 1 而不是"无前驱"。
+  expect(matchPredecessor(ancestors, ['u:hello', 'u:other']))
+    .toEqual({
+      parent: 1, relation: 'confirmed', delta: [1],
+      near: { reqId: 1, shared: 1 },
+    });
+  // 换了开头就对不上任何祖先：另起一支，但仍记下最接近的那一支。
+  const branch = matchPredecessor(ancestors, ['u:different', 'u:other']);
+  expect(branch.parent).toBeNull();
+  expect(branch.relation).toBe('branch');
+  expect(branch.delta).toBeNull();
+  expect(branch.near).toBeNull();
+});
+
+test('缓存断点移动不打断增量', () => {
+  // 同一段历史消息，只因 cache_control 位置不同而字节不同，指纹必须相同。
+  const withBreakpoint = { role: 'user', content: [{ type: 'text', text: '同一条消息', cache_control: { type: 'ephemeral' } }] };
+  const without = { role: 'user', content: [{ type: 'text', text: '同一条消息' }] };
+  expect(messageFingerprint(withBreakpoint)).toBe(messageFingerprint(without));
+  // 角色参与指纹：同样的文本换了角色就不能算同一条。
+  expect(messageFingerprint({ role: 'assistant', content: '同一条消息' }))
+    .not.toBe(messageFingerprint({ role: 'user', content: '同一条消息' }));
+  // 数组与裸字符串两种写法压成同一种。
+  expect(messageFingerprint({ role: 'user', content: [{ type: 'text', text: 'x' }] }))
+    .toBe(messageFingerprint({ role: 'user', content: 'x' }));
 });
 
 test('标题取首个新增用户文本并去掉 harness 包装', () => {
@@ -23,6 +63,21 @@ test('标题取首个新增用户文本并去掉 harness 包装', () => {
   ];
   const derived = deriveTitle(messages, [0, 1], 'model · 10:00');
   expect(derived).toEqual({ title: '修复登录错误', source: 'user_delta' });
+});
+
+test('会话外壳、技能注入与 harness 提示都不当标题', () => {
+  const fallback = 'model · 10:00';
+  const cases = [
+    ['<session>\n评估压缩机制文档\n/de-AI-writing\n</session>', '评估压缩机制文档'],
+    ['Base directory for this skill: /Users/pis/.claude/skills/x\n\n# 技能正文', fallback],
+    ['The user stepped away and is coming back. Recap in under 40 words.', fallback],
+    ['<command-name>/auto-mode-setup</command-name>\n<command-args></command-args>\n\n改', '改'],
+    ['<transcript>\n{"user":"历史"}\n</transcript>', fallback],
+  ];
+  for (const [text, expected] of cases) {
+    const derived = deriveTitle([{ role: 'user', content: [{ type: 'text', text }] }], [0], fallback);
+    expect(derived.title).toBe(expected);
+  }
 });
 
 test('没有用户增量时回落到模型时间', () => {

@@ -105,7 +105,7 @@ test('写入中途抛错时块、引用与状态一起回滚', () => {
   try {
     seedRequest(f.store, 1);
     expect(() => f.store.write(db => {
-      db.run('INSERT INTO block(hash,z,raw_size) VALUES (?,?,?)', [new Uint8Array(32), new Uint8Array([1]), 1]);
+      db.run('INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?)', [new Uint8Array(32), 'fp', new Uint8Array([1]), 1]);
       throw new Error('injected');
     })).toThrow('injected');
     expect(f.store.read.query('SELECT count(*) AS n FROM block').get()).toEqual({ n: 0 });

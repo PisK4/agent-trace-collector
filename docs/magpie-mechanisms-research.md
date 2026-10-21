@@ -165,6 +165,30 @@ magpie 已有可选的 `GatewayConversations` 本地录制。它在 middleware �
 
 因此要区分上游调用失败、回调报告失败、正文不可用和没有收到回调。账本能证明发生过的请求，不能因 hook 丢失而从请求统计里删除；hook 单独观察到的请求，也不能因暂时没连到账本而丢掉。这是 `推断`。
 
+### 会话续写怎样判定
+
+collector 的派生要回答"这一笔是不是上一笔的续写"。第一版拿正文块的字节哈希去比，在真实数据上几乎全判成"无法确认"：同一个 44 笔的会话里，42 笔可比请求一笔续写都没认出来。原因不在哈希本身，在拿字节当内容。`cache_control` 断点会随上下文增长挪位置，`content` 会在数组与裸字符串之间换形状，harness 每轮还会重写包装，同一段历史在相邻请求里就是不同的字节。
+
+magpie 也做同一件事——判断一个请求能不能接着某个已存在的 run 继续——但它的键从一开始就不是字节，是解析后的词。`turnKey` 把 owner、model、是否指定 effort、ThinkOff、ToolChoice、去掉计费行的 system、tools JSON、WebSearch、格式 schema、缓存身份和消息一起哈希，见 `internal/gateway/claude_subscription.go:1815`。消息部分走 `hashMessages` 与 `messageWords`（`:1886`、`:1904`），再往下是 `messageParts`（`internal/gateway/claude_lost_media.go:32`）。这几层做的事：
+
+- 文本先按空白折叠（`strings.Fields`），排版差异不进键。
+- 角色标记只在角色变化时写一次，所以客户端把一段回复拆成几条消息还是合成一条，落到键上是同一串字节。
+- thinking 与密封的推理块整段不进键（`messageParts` 的 `default` 分支直接跳过）。
+- 工具调用记名字与序号，`\x01call <name> #<n>`；参数（`Args`）不进键。工具结果记它回应的那次调用的序号和文本，`\x01result #<k> <text>`。调用 id 不进键——客户端可以自造 id，只要后续请求保持一致，会话还是同一个。
+- 图片与文件按媒体类型、字节长度、URL 记，不记内容。
+- 计费行由 `withoutBillingHeader` 单独剥掉（`:2853`）。它的字段（`cch`、`cc_prompt_id`、`cc_prev_req`）每轮都变，留着就没有一轮能找到自己的 run。
+- `cacheIdentity`（`internal/gateway/claude_cache.go:206`）对普通请求不加字节，只在客户端自带缓存标记或 lean prompt 时补一段。
+
+键的匹配面也不止"上一笔"。`conversationKeys`（`:1828`）对 owner 加消息，在每条 assistant 消息后各记一个键，得到"每个回复之后的会话状态"；请求只要与其中任一个对得上，就能接上。这与 collector 改成对全部祖先求最长完整前缀是同一件事。
+
+找不到 run 时，magpie 不猜：`whyNoRun`（`:3904`）输出诊断原因（run 在别的键下、停在更早的轮次、正忙、已结束及其原因），然后新开一个 run 并把整段会话重新告诉它。它对"是不是同一个会话"的答案只有能接上和接不上两种，不需要向用户解释中间状态。collector 要显示关系，所以把接不上再分成 `branch`（另起一支）和 `unknown`（前驱正文不可读，链断了）。这是 `推断`，属于展示层的取舍。
+
+magpie 另有几层容错，值得知道它们各自容忍什么：`looseTurn`（`:1051`、`:1112`）认"客户端重写了上一轮"，`lostMedia`（`internal/gateway/claude_lost_media.go:119`）认"客户端把图片从历史里拿掉了"。两者都是按形状判断，不按客户端的说明文字。区别在于 magpie 容忍的是**明确枚举过的改写**，其余一律当作新会话；它不是把任何差异都当相同。
+
+collector 按同样口径重做后，同一会话的续写判定从 0 笔变成 35 笔。随后在整库上试了三处与 magpie 的写法差异——工具调用 id 是否进指纹、thinking 是否进指纹、是否把连续同角色消息合成 run——四种组合里只有一笔请求的判定不同（`confirmed` 543 与 544），其余完全一致。这批数据上真正起作用的是两条：字节换成词，以及只比紧邻上一笔换成比全部祖先。其余差异留着没有坏处，但不能说成修复的原因。以上为 `实测`，样本为本机约 2.4 万笔请求；库在采集器运行中，重跑数字会小幅漂移。
+
+有一处 collector 有意不照搬：`turnKey` 把 model、effort、tools、system 都算进键，因为它们决定 magpie 能不能复用同一个进程；collector 的分组已经按 `(conv_key, actor)` 切开，链只表达"上下文是不是接着长出来的"，模型中途换掉不该把对话拆成两段。这是 `推断`，属于用途不同，不是遗漏。
+
 ## 可以集成到多深
 
 结论是优先进行进程外的数据集成。原始请求对象由 hook 提供，权威用量从账本取，路由与上下文结构从 trace 和历史文件取。collector 负责保存、关联和查询，不复制路由决策器。此节取舍均为 `推断`；对应源码事实见各行。
