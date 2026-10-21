@@ -9,6 +9,8 @@
 | [project-overview.md](project-overview.md) | 项目定位：按请求保存、按对话导航，右侧读Response参数；顶部注明版本/direct/实时trace三处旧约定，实施以架构与计划为准 |
 | [magpie-integration-research.md](magpie-integration-research.md) | magpie 0.1.1294 的 Agent 识别、session 与 conv 两套会话标识、四条可接入面及原采集结果；新增研究补充了部分机制边界，见文首说明 |
 | [magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 模型、路由与上下文容量的真实控制流，现成 prompt 分解、classifier、缓存亲和性、尝试与账本、会话续写判定与语义指纹、插件形态及直接集成或借鉴的取舍 |
+| [auto-mode-classifier-research.md](auto-mode-classifier-research.md) | Claude Code auto mode 分类器请求：两条拼接消息、`<block>` 判定、出现频率、页面折叠与派生错位；附未决的识别与呈现选项 |
+| [agent-request-kind-review.md](agent-request-kind-review.md) | Agent 语义层评审：现有 Feature 迁移范围、用途/输入解释/技能提取的职责划分、magpie 借鉴、分类证据与容量验收 |
 | [architecture-design.md](architecture-design.md) | 收敛型架构设计：账本物理记录身份与增量读取协议、三路证据收敛、SQLite 表结构与正文状态、内容去重与语义指纹、乱序重算、查询接口、正文预算与总磁盘硬上限、版本与形状探针、访问控制、AVA 下线顺序与分步落地判据；文末附两轮评审的逐条对照 |
 | [architecture-review.md](architecture-review.md) | 基于设计提交的落地前评审：账本身份、持久化与恢复、正文预算和回收、乱序派生、协议与费用来源、安全边界及合成验收条件；文末两轮结论已逐条落进设计文档 |
 | [operations.md](operations.md) | 运维手册：维护命令与错误码、备份与恢复流程、维护锁、掉电边界、费用时钟冲突诊断、容量门槛、切换核对与 AVA 下线/回滚步骤 |
@@ -26,9 +28,12 @@
 - 同一段对话的请求靠什么聚在一起。答案是两套标识：客户端声明的 `session` 和 magpie 对首条用户消息做的哈希 `conv`，两者互斥且覆盖的 Agent 群体互补。
 - 外部能调用的接口有哪些，各自的访问控制、分页上限、筛选语义。
 - 正文、元数据、路由决策适合从哪些通道取得，通道之间靠什么字段连接，以及缺失、截断和关联歧义的边界。
+- Claude Code auto mode 分类器请求长什么样、为什么会被页面当成普通对话、出现频率有多高。
 
 ## 尚未做的事
 
 C3 的真实并行观察、停 AVA 与回滚演练尚未执行，需要单独授权。magpie 与现有 AVA 保持未修改。
+
+agent 特有请求语义如何在派生阶段接入、分类器请求是否折叠展示，已有提案待评审；证据见[auto mode 分类器请求研究](auto-mode-classifier-research.md)，方案见[Agent Profile 与请求类别注册表](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)。
 
 仍在等待确认的问题列在架构文档末尾：超大请求的回调为什么丢失、direct 是否还会新增、分级保留的切分点、推理正文是否入库、路由摘要是否保留 prompt 分解、多实例标识、长期元数据的实际成本、direct 的稳定身份、是否开启请求归档、`handed_on` 行会不会真出现。
