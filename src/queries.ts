@@ -6,11 +6,14 @@ export type BodyState = 'pending' | 'available' | 'partial' | 'evicted' | 'unsup
 
 export type RequestRow = {
   req_id: number; conv_key: string; actor: string | null;
+  /** magpie 给的客户端标签（claude / omp 等）；与 actor（会话/子代理身份）不是一回事。 */
+  agent: string | null;
   actor_state: 'known' | 'unknown'; started_ms: number;
-  title: string; status: number | null; model_requested: string | null;
+  title: string; title_source: string | null; status: number | null; model_requested: string | null;
   model_served: string | null; in_tok: number | null; out_tok: number | null;
   cache_read: number | null; cache_write: number | null;
   cost: number | null; cost_state: CostState; have: number;
+  ms: number | null; ttft_ms: number | null; flow_ms: number | null;
   body_state: BodyState; miss_reason: string | null;
   /** 折叠行摘要：派生时写入，不读正文块。kind 说明摘要来自新增还是末轮输入。 */
   input_preview: string | null;
@@ -113,7 +116,9 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
                   WHERE r3.conv_key = request.conv_key AND r3.title IS NOT NULL
                   ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1)
                ) AS title,
-               GROUP_CONCAT(DISTINCT actor) AS agents
+               -- agents 取 magpie 的客户端标签（claude / omp 等）；actor 是会话/子代理身份，
+               -- 拿 actor 当 agents 会把 UUID 当成客户端名展示。
+               GROUP_CONCAT(DISTINCT agent) AS agents
         FROM request
         WHERE conv_key IS NOT NULL
         GROUP BY conv_key
@@ -132,7 +137,8 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
                     WHERE r3.conv_key = request.conv_key AND r3.title IS NOT NULL
                     ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1)
                  ) AS title,
-                 GROUP_CONCAT(DISTINCT actor) AS agents
+                 -- 同首查：agents 是 magpie 的客户端标签，不是 actor 身份。
+                 GROUP_CONCAT(DISTINCT agent) AS agents
           FROM request
           WHERE conv_key IS NOT NULL
           GROUP BY conv_key
@@ -160,8 +166,9 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
 
 type RequestDbRow = Omit<RequestRow, 'conv_key'> & { conv_key: string | null };
 
-const REQUEST_COLUMNS = `req_id, conv_key, actor, actor_state, started_ms, title, status, model_requested,
-  model_served, in_tok, out_tok, cache_read, cache_write, cost, cost_state, have, body_state, miss_reason,
+const REQUEST_COLUMNS = `req_id, conv_key, actor, agent, actor_state, started_ms, title, title_source,
+  status, model_requested, model_served, in_tok, out_tok, cache_read, cache_write, cost, cost_state, have,
+  ms, ttft_ms, flow_ms, body_state, miss_reason,
   input_preview, input_preview_kind, reply_preview`;
 
 export function listRequests(store: Store, key: string, limit = 100, cursor: string | null = null): Page<RequestRow> {
@@ -198,7 +205,7 @@ export function listRequests(store: Store, key: string, limit = 100, cursor: str
 }
 
 type DetailDbRow = {
-  req_id: number; conv_key: string | null; actor: string | null; actor_state: string;
+  req_id: number; conv_key: string | null; actor: string | null; agent: string | null; actor_state: string;
   started_ms: number; title: string | null; status: number | null;
   model_requested: string | null; model_served: string | null;
   in_tok: number | null; out_tok: number | null; cache_read: number | null; cache_write: number | null;
@@ -262,6 +269,7 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     req_id: row.req_id,
     conv_key: row.conv_key ?? '',
     actor: row.actor,
+    agent: row.agent,
     actor_state: row.actor_state === 'known' ? 'known' : 'unknown',
     started_ms: row.started_ms,
     title: row.title ?? '',
