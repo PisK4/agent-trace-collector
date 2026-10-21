@@ -620,7 +620,7 @@ git commit -m "feat(api): serve protected keyset queries and collector health" -
 - Produces: `createReader(fetcher: ReaderFetch): Reader`，从 `web/app.js` 导出供合成网络测试；`ReaderFetch = (url:string)=>Promise<Response>` 是页面实际需要的GET依赖，原生 `fetch` 可传入，测试不必实现完整fetch重载。
 - `ReaderState = { request:RequestDetail|null; requestState:'loading'|'error'|'empty'|'ready'; sessionKey:string|null; error:string|null; sessions:SessionRow[]; sessionsCursor:string|null; requests:RequestRow[]; requestsCursor:string|null }`；读取nullable request前先做显式空值检查。`Reader`暴露 `loadSessions(cursor?)`、`loadRequests(cursor?)`、`selectSession(key)`、`selectRequest(id)` 和 `getState()`，分页加载沿用当前选择。DOM初始化置于 `if (typeof document !== 'undefined')` 内，纯reader导入不会操作浏览器。
 
-- [ ] **步骤 1：从原型复制 HTML/CSS，剥离合成数据并写异步竞争测试。** 保留布局、主题、URL 键与事件委托。`TIMELINE/REQUESTS/EXTRA/SESSIONS` 演示常量不进入生产 JS；用 Map 缓存已加载请求，以 `loading/error/empty/ready` 区分网络状态和正文状态。
+- [x] **步骤 1：从原型复制 HTML/CSS，剥离合成数据并写异步竞争测试。** 保留布局、主题、URL 键与事件委托。`TIMELINE/REQUESTS/EXTRA/SESSIONS` 演示常量不进入生产 JS；用 Map 缓存已加载请求，以 `loading/error/empty/ready` 区分网络状态和正文状态。
 
 ```ts
 // tests/web.test.ts：完整TS测试，不把JS转译成功当成类型检查。
@@ -643,9 +643,9 @@ test('较慢的旧详情不覆盖新选择', async () => {
 });
 ```
 
-- [ ] **步骤 2：运行 `bun test tests/web.test.ts`，确认缺 reader 导出失败。**
+- [x] **步骤 2：运行 `bun test tests/web.test.ts`，确认缺 reader 导出失败。**
 
-- [ ] **步骤 3：实现请求序号防止旧结果覆盖，并逐处替换同步假设。**
+- [x] **步骤 3：实现请求序号防止旧结果覆盖，并逐处替换同步假设。**
 
 ```js
 // @ts-check
@@ -749,7 +749,7 @@ if (request !== null) {
 
 搜索限定已加载会话/请求并显示范围说明，Agent 筛选同样标明当前已加载范围；不宣称全库搜索。生产界面移除 DEMO 字样和合成完成率。内容写入 DOM 前使用原型的转义函数或 textContent，不插入未经转义的 route.error、title、tool 文本。
 
-- [ ] **步骤 4：执行空库与合成库浏览器验收。** `bun run start` 以临时 dataDir 和合成来源启动；用当时可用的 `ego-browser` 技能检查 1500px、900px、400px，浅/深主题，会话分页、请求分页、快速切换、后退/刷新、404、API 500、加载中。无生产正文的空白必须解释原因。合成 `<img src=x onerror=...>` 作为标题和 route error 时只显示文本，不能执行。
+- [x] **步骤 4：执行空库与合成库浏览器验收。** `bun run start` 以临时 dataDir 和合成来源启动；用当时可用的 `ego-browser` 技能检查 1500px、900px、400px，浅/深主题，会话分页、请求分页、快速切换、后退/刷新、404、API 500、加载中。无生产正文的空白必须解释原因。合成 `<img src=x onerror=...>` 作为标题和 route error 时只显示文本，不能执行。
 
 ```bash
 bun test tests/web.test.ts tests/http.test.ts tests/queries.test.ts
@@ -760,7 +760,7 @@ bun run typecheck
 
 `/tmp/collector-app-check.js` 仅为语法检查产物，不提交；浏览器验收记录写 README，区分合成验收与真实流量观察。随后只读连接真实账本/路由，确认首次追赶状态、请求数守恒、费用来源与时间范围；不保存真实正文截图。
 
-- [ ] **步骤 5：通过后提交并进入阶段门槛。**
+- [x] **步骤 5：通过后提交并进入阶段门槛。**
 
 ```bash
 git add web/index.html web/app.js tests/web.test.ts tests/reader-types.ts src/http.ts README.md docs/README.md
@@ -770,7 +770,7 @@ git commit -m "feat(web): connect the trace reader to real paginated metadata" -
 ## A 阶段验收
 
 - [ ] A1预期17个业务表及后续引用列已建，sqlite_sequence另行排除；request使用AUTOINCREMENT，删除最大ID再采集/合并不复用，重启保持序列；collector_state读写及request_alias外键/连续合并检查通过。
-- [ ] A5完整Reader接口和测试由TypeScript检查通过；web/app.js首行启用@ts-check，req_id叶子类型探针生效，DTO文件缺失或导出名错误时检查失败，恢复后通过。
+- [x] A5完整Reader接口和测试由TypeScript检查通过；web/app.js首行启用@ts-check，req_id叶子类型探针生效，DTO文件缺失或导出名错误时检查失败，恢复后通过。
 - [ ] 已证明同 route 多物理账本行、重复回放、事务中断、半行、跨午夜、gzip 替换与同 inode 重写。
 - [ ] `accepted + duplicate + invalid = 已读取完整物理行数`；raw 删除后的重放仍不重复计费。
 - [ ] 顶层请求计数与尝试计数分开，未归属请求各自独立，route-only 记录不额外增请求。
@@ -778,6 +778,6 @@ git commit -m "feat(web): connect the trace reader to real paginated metadata" -
 - [ ] Host/Origin/read-token 边界和敏感 DTO 排除测试通过，真实文件只读。
 - [ ] 1,825 笔合成会话分页无漏重，100 行暖查询本机目标 <100 ms。
 - [ ] 阶段 0 的物理收缩验证提前运行 C1 指定的临时库实验；未证明收缩前不把 A 标为持久化验证完成。
-- [ ] 页面可以查看真实元数据与路由，正文为空且原因准确；AVA 和 magpie 配置未变。
+- [x] 页面可以查看真实元数据与路由，正文为空且原因准确；AVA 和 magpie 配置未变。
 
 证据范围继承总入口；`route` API 参数、rejected 分类和 hook 缺 route ID 的源码依据均属于 `开源源码@magpie-2374ffe`，运行版仍以接入探针为准。

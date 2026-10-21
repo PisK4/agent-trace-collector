@@ -48,7 +48,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 type Verdict = 'ok' | 'host' | 'origin' | 'unauthorized';
 
-function checkAccess(req: Request, port: number, readToken: string): Verdict {
+function checkAccess(req: Request, port: number, readToken: string, isNavigation: boolean): Verdict {
   const host = req.headers.get('host');
   if (host === null || !allowedHosts(port).has(host)) return 'host';
   const origin = req.headers.get('origin');
@@ -60,6 +60,8 @@ function checkAccess(req: Request, port: number, readToken: string): Verdict {
       return 'ok';
     }
     if (site === 'same-origin') return 'ok';
+    // 正常顶层导航与直接打开书签不带 Origin，只信任浏览器的导航元数据。
+    if (isNavigation && site === 'none' && req.headers.get('sec-fetch-mode') === 'navigate') return 'ok';
     return 'unauthorized';
   }
   const expected = `http://${host}`;
@@ -89,7 +91,8 @@ async function serveStatic(path: string): Promise<Response> {
       'content-type': entry.type,
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+      // 页面样式是内联 <style> 与内联 style 属性；脚本仍只允许同源文件。
+      'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
     },
   });
 }
@@ -101,7 +104,8 @@ export function createHandler(
 ): (req: Request) => Promise<Response> {
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
-    const verdict = checkAccess(req, config.port, readToken);
+    const isNavigation = !url.pathname.startsWith('/api/');
+    const verdict = checkAccess(req, config.port, readToken, isNavigation);
     if (verdict !== 'ok') {
       return json({ error: verdict === 'unauthorized' ? 'unauthorized' : verdict }, verdict === 'unauthorized' ? 401 : 403);
     }

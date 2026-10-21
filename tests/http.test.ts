@@ -93,6 +93,26 @@ test('响应头包含no-store与nosniff且无CORS', async () => {
   }
 });
 
+test('页面CSP放行内联样式但仍禁止内联脚本', async () => {
+  const f = fixture();
+  try {
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
+    const response = await handler(new Request('http://127.0.0.1:8320/', {
+      headers: { host: '127.0.0.1:8320', origin: 'http://127.0.0.1:8320' },
+    }));
+    expect(response.status).toBe(200);
+    const csp = response.headers.get('content-security-policy') ?? '';
+    const styleSrc = csp.split(';').map(part => part.trim()).find(part => part.startsWith('style-src')) ?? '';
+    // 页面用内联 <style> 与内联 style 属性；script-src 不能因此放宽。
+    expect(styleSrc).toContain("'unsafe-inline'");
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toContain("script-src 'unsafe-inline'");
+    expect(csp).toContain("frame-ancestors 'none'");
+  } finally {
+    f.close();
+  }
+});
+
 test('非白名单静态路径返回404', async () => {
   const f = fixture();
   try {
