@@ -218,6 +218,35 @@ code,pre,.mono{font-family:var(--mono)}
 .conv-tools details summary:hover{color:var(--text)}
 .conv-tools details pre{margin-top:7px}
 
+/* 对话里的续接说明：这一笔没有新的用户消息时，说清输入从哪来 */
+.conv-cont{font-size:11px;color:var(--muted);line-height:1.65;padding-left:13px;max-width:74ch}
+.conv-cont.note{padding:8px 12px;border-top:1px solid var(--line);background:var(--inset)}
+
+/* 正文消息列表：固定行高，长预览单行截断 */
+.msg-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
+.msg{border-bottom:1px solid var(--line)}
+.msg:last-child{border-bottom:0}
+.msg-head{
+  display:grid;grid-template-columns:58px 34px minmax(0,1fr) auto;gap:8px;align-items:center;
+  width:100%;padding:6px 10px;font-size:12px;border-left:2px solid transparent;
+}
+.msg-head:hover{background:var(--hover)}
+.msg[aria-current="true"] .msg-head{background:var(--accent-soft);border-left-color:var(--accent)}
+.msg-ord{font:10px var(--mono);color:var(--muted);text-align:right}
+.msg-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.msg-new{font:9px var(--ui);color:var(--accent);white-space:nowrap}
+.msg-more{padding:8px 10px;text-align:center;border-top:1px solid var(--line)}
+.msg-thinking{margin:6px 0;border:1px dashed var(--line-strong);border-radius:4px;padding:0 9px}
+.msg-thinking summary{font-size:10.5px;color:var(--muted);padding:6px 0;cursor:pointer;list-style:none}
+.msg-thinking summary::-webkit-details-marker{display:none}
+.msg-thinking summary::before{content:"▸";margin-right:6px;font-size:9px}
+.msg-thinking[open] summary::before{content:"▾"}
+.msg-thinking pre{margin:0 0 8px}
+.bp-plain{white-space:pre-wrap}
+.tool-row{display:flex;flex-wrap:wrap;gap:5px;align-items:center;width:100%;padding:2px 0}
+.raw-group{margin-bottom:12px}
+.raw-group .label{margin-bottom:4px}
+
 /* ---------- 账本 ---------- */
 .ledger{position:relative;padding:10px 20px 28px 20px}
 .ledger::before{content:"";position:absolute;left:27px;top:12px;bottom:22px;width:1px;background:var(--line)}
@@ -488,6 +517,10 @@ pre.raw{
   .conv-req{grid-template-columns:1fr;gap:5px}
   .conv-gutter{text-align:left;font-size:9.5px}
   .conv-gutter em{display:inline;margin-left:5px}
+  /* 消息行在窄屏去掉角色文字宽度，改用序号做锚点，预览仍单行截断 */
+  .msg-head{grid-template-columns:36px 28px minmax(0,1fr);gap:6px}
+  .msg-new{grid-column:3;justify-self:start}
+  .conv-tools .mini-search{width:100%}
 }
 /* 主题切换会同时改变变量；background 过渡会把旧主题的颜色多留一帧，
    所以只给位移类交互加过渡，背景色直接切换。 */

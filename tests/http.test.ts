@@ -113,11 +113,29 @@ test('页面CSP放行内联样式但仍禁止内联脚本', async () => {
   }
 });
 
+test('页面模块白名单能取到阅读器依赖的脚本', async () => {
+  const f = fixture();
+  try {
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
+    // /app.js 会 import /body-view.js；它不在白名单里时页面会整块加载失败。
+    for (const [path, type] of [['/app.js', 'text/javascript'], ['/body-view.js', 'text/javascript']]) {
+      const response = await handler(new Request(`http://127.0.0.1:8320${path}`, {
+        headers: { host: '127.0.0.1:8320', origin: 'http://127.0.0.1:8320' },
+      }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain(type);
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    }
+  } finally {
+    f.close();
+  }
+});
+
 test('非白名单静态路径返回404', async () => {
   const f = fixture();
   try {
     const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
-    for (const path of ['/etc/passwd', '/../package.json', '/app.js.map', '/index.html']) {
+    for (const path of ['/etc/passwd', '/../package.json', '/app.js.map', '/index.html', '/src/http.ts']) {
       const response = await handler(new Request(`http://127.0.0.1:8320${path}`, {
         headers: { host: '127.0.0.1:8320', origin: 'http://127.0.0.1:8320' },
       }));

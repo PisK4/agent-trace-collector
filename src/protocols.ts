@@ -222,19 +222,22 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
   if (stateRow == null) return null;
 
   const state = stateRow.body_state as BodyState;
+  const readable = state === 'available' || state === 'partial';
   const page: BodyPage = {
     state,
     parse_state: stateRow.parse_state,
     reply_state: stateRow.reply_state,
     from,
     to,
-    total: state === 'pending' ? null : stateRow.msg_count,
+    // 只有能读的正文才谈得上"还有多少条"：回收与未到都没有可翻的区间，
+    // 留着 msg_count 会让页面显示出永远取不到的下一页。
+    total: readable ? stateRow.msg_count : null,
     messages: [],
     request_fields: null,
     reply: null,
     reason: state === 'evicted' ? stateRow.body_evict_reason : stateRow.miss_reason,
   };
-  if (state !== 'available' && state !== 'partial') return page;
+  if (!readable) return page;
   if (stateRow.skeleton_z == null) return page;
 
   const cache = new Map<number, unknown>();
@@ -251,7 +254,6 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
     SELECT ord, block FROM request_block WHERE req_id=? AND ord >= ? AND ord < ? ORDER BY ord`)
     .all(id, from, to);
   page.messages = rows.map(row => ({ ord: row.ord, value: decompressBlock(store, row.block, cache) }));
-  if (page.total === null) page.total = stateRow.msg_count;
   return page;
 }
 

@@ -22,3 +22,15 @@ if (session !== undefined) {
   void key;
   void invalidKey;
 }
+
+const body = await reader.loadBody(1, 0);
+const bodyState: import('../src/queries').BodyState = body.state;
+const bodyReason: string | null = body.reason;
+// @ts-expect-error state必须为BodyState；any退化时应报未使用指令。
+const invalidState: number = body.state;
+// @ts-expect-error reason必须为string|null；any退化时应报未使用指令。
+const invalidReason: number = body.reason;
+void bodyState;
+void bodyReason;
+void invalidState;
+void invalidReason;

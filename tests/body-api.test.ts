@@ -169,3 +169,24 @@ test('40条分页只解压对应块', () => {
     f.close();
   }
 });
+
+test('回收后不再给出可翻页的计数与回复', async () => {
+  const f = fixture();
+  try {
+    seed(f.store, 1, messagesBody(9));
+    f.store.write(db => db.run(
+      "UPDATE request SET body_state='evicted', body_evict_reason='budget', skeleton_z=NULL WHERE req_id=1",
+    ));
+    const page = await (await handlerFor(f)('/api/requests/1/body?from=0&to=40')).json() as Record<string, unknown>;
+    expect(page.state).toBe('evicted');
+    expect(page.reason).toBe('budget');
+    // 消息内容已被回收：既没有消息，也不能声称还有 9 条可翻。
+    expect(page.messages).toEqual([]);
+    expect(page.total).toBeNull();
+    // 回复对象也随正文一起回收，不能读成"上游没有提供回复"。
+    expect(page.reply).toBeNull();
+    expect(page.request_fields).toBeNull();
+  } finally {
+    f.close();
+  }
+});

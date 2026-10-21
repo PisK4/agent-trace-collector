@@ -5,10 +5,19 @@
  * @typedef {import('../src/queries').RequestRow} RequestRow
  * @typedef {import('../src/queries').SessionRow} SessionRow
  * @typedef {import('../src/queries').CostState} CostState
+ * @typedef {import('../src/protocols').BodyPage} BodyPage
+ * @typedef {ReturnType<typeof messageEntries>[number]} MessageEntry
  * @typedef {(url: string) => Promise<Response>} ReaderFetch
  * @typedef {{request: RequestDetail | null, requestState: 'loading' | 'error' | 'empty' | 'ready', sessionKey: string | null, error: string | null, sessions: SessionRow[], sessionsCursor: string | null, requests: RequestRow[], requestsCursor: string | null, requestsError: string | null}} ReaderState
- * @typedef {{loadSessions: (cursor?: string) => Promise<void>, loadRequests: (cursor?: string) => Promise<void>, selectSession: (key: string) => Promise<void>, selectRequest: (id: number) => Promise<void>, getState: () => ReaderState}} Reader
+ * @typedef {{loadSessions: (cursor?: string) => Promise<void>, loadRequests: (cursor?: string) => Promise<void>, selectSession: (key: string) => Promise<void>, selectRequest: (id: number) => Promise<void>, getState: () => ReaderState, loadBody: (id: number, from: number) => Promise<BodyPage>}} Reader
+ * @typedef {{page: BodyPage | null, entries: MessageEntry[], nextFrom: number, total: number | null, exhausted: boolean, error: string | null}} LoadedBody
  */
+
+import {
+  bodyNotice, deltaOrdinals, mdToHtml, messageEntries, roleTag,
+  renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools,
+  replyView, toolEntries,
+} from './body-view.js';
 
 /** @param {ReaderFetch} fetcher @returns {Reader} */
 export function createReader(fetcher) {
@@ -89,12 +98,38 @@ export function createReader(fetcher) {
     }
   }
 
-  return { loadSessions, loadRequests, selectSession, selectRequest, getState: () => state };
+  /**
+   * 正文按区间取：只拉当前要显示的一片，不保存全文。
+   * @param {number} id
+   * @param {number} from
+   * @returns {Promise<BodyPage>}
+   */
+  async function loadBody(id, from) {
+    return await readJSON(`/api/requests/${id}/body?from=${from}&to=${from + 40}`);
+  }
+
+  return { loadSessions, loadRequests, selectSession, selectRequest, getState: () => state, loadBody };
 }
 
 /* ------------------------------------------------------------------
    以下只在浏览器里执行；测试导入模块不会触碰 DOM。
    ------------------------------------------------------------------ */
+
+/**
+ * URL 里的 trace 属于哪种情况。合并过的旧 id 会被服务端解析成 canonical：
+ * 若 canonical 就在已加载页里，直接跳过去，不能报"未在已加载页"。
+ * @param {{req_id: number}[]} rows
+ * @param {number} requested
+ * @param {{req_id: number} | null} detail canonical 详情；null 表示库里不存在
+ * @returns {{kind: 'in-page' | 'canonical' | 'off-page' | 'missing', reqId: number | null}}
+ */
+export function resolveTraceTarget(rows, requested, detail) {
+  if (rows.some(row => row.req_id === requested)) return { kind: 'in-page', reqId: requested };
+  if (detail === null) return { kind: 'missing', reqId: null };
+  if (rows.some(row => row.req_id === detail.req_id)) return { kind: 'canonical', reqId: detail.req_id };
+  return { kind: 'off-page', reqId: null };
+}
+
 if (typeof document !== 'undefined') {
   /** @type {Record<string, string>} */
   const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -196,6 +231,13 @@ if (typeof document !== 'undefined') {
     return value == null ? '—' : JSON.stringify(value, null, 2);
   }
 
+  /** @param {string} text @param {number} max */
+  function clipText(text, max) {
+    const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
+    const chars = [...flat];
+    return chars.length <= max ? flat : `${chars.slice(0, max).join('')}…`;
+  }
+
   /* ---------------- 数据加载 ---------------- */
   async function ensureDetail(/** @type {number} */ id) {
     if (details.has(id)) return details.get(id) ?? null;
@@ -204,6 +246,9 @@ if (typeof document !== 'undefined') {
       if (!response.ok) return null;
       const detail = await response.json();
       details.set(id, detail);
+      // 服务端会把合并前的旧 id 解析成 canonical；按 canonical 也存一份，
+      // 免得同一笔在列表行（用 canonical id 查）与详情之间拿不到数据。
+      if (detail.req_id !== id) details.set(detail.req_id, detail);
       return detail;
     } catch {
       return null;
@@ -221,6 +266,72 @@ if (typeof document !== 'undefined') {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 正文按请求缓存已加载的消息片。列表切换不会触发任何正文下载：
+   * 只有对话视图、账本展开和右栏正文这三个显式阅读动作才调用 ensureBody。
+   * @type {Map<number, LoadedBody>}
+   */
+  const bodies = new Map();
+  /** @type {Map<number, Promise<LoadedBody | null>>} */
+  const bodyInflight = new Map();
+
+  /**
+   * @param {number} id
+   * @param {number} from
+   * @returns {Promise<LoadedBody | null>}
+   */
+  function ensureBody(id, from = 0) {
+    const cached = bodies.get(id);
+    if (cached !== undefined && (cached.exhausted || from < cached.nextFrom)) return Promise.resolve(cached);
+    const pending = bodyInflight.get(id);
+    if (pending !== undefined) return pending;
+    const promise = (async () => {
+      try {
+        const page = await reader.loadBody(id, from);
+        const isFirst = from === 0;
+        const entries = isFirst ? messageEntries(page) : [...(bodies.get(id)?.entries ?? []), ...messageEntries(page)];
+        const total = page.total;
+        const current = bodies.get(id);
+        const merged = {
+          page: isFirst ? page : { ...page, request_fields: current?.page?.request_fields ?? null, reply: current?.page?.reply ?? null },
+          entries,
+          nextFrom: from + page.messages.length,
+          total,
+          // 服务端没有更多消息时结束；区间空返回也必须停下来，否则会无限翻页。
+          exhausted: page.messages.length === 0 || (total !== null && from + page.messages.length >= total),
+          error: null,
+        };
+        bodies.set(id, merged);
+        return merged;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'body_failed';
+        const failed = { page: null, entries: [], nextFrom: from, total: null, exhausted: false, error: message };
+        // 失败不覆盖已加载的片，只让调用方看到错误。
+        if (!bodies.has(id)) bodies.set(id, failed);
+        return bodies.get(id) ?? failed;
+      } finally {
+        bodyInflight.delete(id);
+      }
+    })();
+    bodyInflight.set(id, promise);
+    return promise;
+  }
+
+  /** @param {number} id */
+  function bodyOf(id) {
+    return bodies.get(id) ?? null;
+  }
+
+  /** @param {number|null} reqId */
+  function relationTextOf(reqId) {
+    const detail = reqId === null ? null : details.get(reqId) ?? null;
+    if (detail === null) return '';
+    if (detail.prev_relation === 'unknown') return '无法确认与上一笔的新增关系';
+    if (detail.prev_relation === 'first') return '会话首笔';
+    if (detail.prev_relation === 'confirmed') return '增量已确认';
+    return '';
   }
 
   /* ---------------- 顶栏与左栏 ---------------- */
@@ -332,8 +443,8 @@ if (typeof document !== 'undefined') {
           <button data-view="ledger" aria-pressed="${state.view === 'ledger'}">请求账本</button>
         </div>
         <span class="hint">${state.view === 'conversation'
-          ? '正文通道尚未接入：这里只显示身份、读数与缺失原因。'
-          : '每行是一笔客户端请求；展开后读该笔的读数与路由。'}</span>
+          ? '按请求分组；只铺已确认新增的消息，正文按需读取。'
+          : '每行是一笔客户端请求；展开后读正文、读数与路由。'}</span>
       </div>
       ${unknown ? `<div class="session-note warn"><span>↳</span><span>链接里的会话 key 不在已加载的会话里：可能是已淘汰、从未记录，或者还在后面的会话页。下面没有用别的会话顶替。</span></div>` : ''}
       ${missing > 0 ? `<div class="session-note warn"><span>↳</span><span>已加载请求中有 ${missing} 笔正文未到或没有回调；它们保留身份与读数，不用更早的请求替代。</span></div>` : ''}
@@ -343,37 +454,119 @@ if (typeof document !== 'undefined') {
     </header>`;
   }
 
-  /** @param {string} emptyText */
+  /**
+   * 对话视图：按请求分组，只铺确定新增的用户消息。
+   * 关系未知的请求不给"新增"，而是给出原因和完整正文入口；
+   * 正文没加载的请求显示加载入口，不预先下载整条会话。
+   * @param {string} emptyText
+   */
   function renderConversation(emptyText) {
     const rows = currentRows();
     if (rows.length === 0) return `<div class="conv"><p class="sess-empty">${esc(emptyText)}</p></div>`;
-    return `<div class="conv">${rows.slice().reverse().map((r) => {
+    const ordered = rows.slice().reverse();
+    return `<div class="conv">${ordered.map((r) => {
       const detail = details.get(r.req_id) ?? null;
-      const failed = r.status !== null && r.status >= 400;
+      const loaded = bodyOf(r.req_id);
       const ordinal = String(ordinalOf(r.req_id)).padStart(2, '0');
+      const delta = deltaOrdinals(detail);
+      const relation = relationTextOf(r.req_id);
+      const userBlocks = loaded === null || delta === null
+        ? []
+        : loaded.entries.filter(entry => delta.has(entry.ord) && entry.isInput);
+      const inputNote = loaded === null ? ''
+        : userBlocks.length > 0 ? ''
+          : delta === null ? `<div class="conv-cont">${esc(relation || '还未派生增量关系')}：不拆分新增消息，右侧可读整笔请求正文。</div>`
+            : `<div class="conv-cont">这一笔没有新的用户消息，输入是上一笔的工具结果。</div>`;
       return `<section class="conv-req" data-req="${r.req_id}" data-current="${r.req_id === state.reqId}">
         <div class="conv-gutter"><b>${ordinal}</b><em>${esc(clock(r.started_ms))}</em></div>
         <div class="conv-main">
-          <div class="conv-user" data-select="${r.req_id}">
-            <div class="conv-who">REQUEST</div>
-            <div class="conv-user-body">${esc(r.title || '（无标题）')}</div>
-          </div>
-          <div class="conv-asst-card" data-select="${r.req_id}">
-            <div class="conv-asst-head">
-              <span class="conv-who">ASSISTANT</span>
-              <span class="mono muted" style="font-size:10px">${esc(r.model_served ?? r.model_requested ?? '模型名未报告')}</span>
-              <span class="grow"></span>
-              ${statusChip(r)}
-            </div>
-            ${failed
-              ? `<div class="conv-fail"><span>✕</span><span>这一笔返回 HTTP ${r.status}。失败尝试的用量仍保留在账本里，失败的读数不并入成功请求。</span></div>`
-              : `<div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>正文通道尚未接入。当前显示 ${esc(bodyStateText(r))}${r.miss_reason ? `（${esc(r.miss_reason)}）` : ''}；这里不生成推测内容。</span></div>`}
-            ${convStrip(r, detail)}
-            <button class="conv-jump" data-ledger="${r.req_id}">在账本中查看 Request ${ordinal} →</button>
-          </div>
+          ${userBlocks.map(entry => `<div class="conv-user" data-select="${r.req_id}">
+            <div class="conv-who">USER</div>
+            <div class="conv-user-body">${esc(entry.blocks.filter(b => b.kind === 'text').map(b => b.text).join('\n') || entry.preview)}</div>
+          </div>`).join('')}
+          ${inputNote}${toolDeltaNote(loaded, delta)}
+          ${convCard(r, detail, loaded)}
+          <button class="conv-jump" data-ledger="${r.req_id}">在账本中查看 Request ${ordinal} →</button>
         </div>
       </section>`;
     }).join('')}</div>`;
+  }
+
+  /**
+   * 这一笔新增的消息里若只有工具结果，说明输入来自上一轮的工具，不画成空白。
+   * @param {LoadedBody | null} loaded
+   * @param {Set<number> | null} delta
+   */
+  function toolDeltaNote(loaded, delta) {
+    if (loaded === null || delta === null) return '';
+    const fresh = loaded.entries.filter(entry => delta.has(entry.ord));
+    if (fresh.length === 0) return '';
+    const results = fresh.filter(entry => entry.blocks.some(block => block.kind === 'result'));
+    if (results.length === 0) return '';
+    return `<div class="conv-cont">这一笔新增 ${results.length} 条工具结果，来自上一轮调用；完整内容可在右侧或账本里读。</div>`;
+  }
+
+  /**
+   * 对话里的助手卡片：有正文就渲染回复，没有就说明原因并给加载入口。
+   * @param {RequestRow} r
+   * @param {RequestDetail | null} detail
+   * @param {LoadedBody | null} loaded
+   */
+  function convCard(r, detail, loaded) {
+    const failed = r.status !== null && r.status >= 400;
+    const head = `<div class="conv-asst-head">
+      <span class="conv-who">ASSISTANT</span>
+      <span class="mono muted" style="font-size:10px">${esc(r.model_served ?? r.model_requested ?? '模型名未报告')}</span>
+      <span class="grow"></span>
+      ${statusChip(r)}
+    </div>`;
+    if (loaded === null || loaded.page === null) {
+      const reason = loaded !== null && loaded.error !== null
+        ? `正文加载失败：${loaded.error}`
+        : bodyLabelText(r);
+      return `<div class="conv-asst-card" data-select="${r.req_id}">${head}
+        <div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>${esc(reason)}</span></div>
+        ${r.body_state === 'available' || r.body_state === 'partial'
+          ? `<div class="conv-tools"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}
+        ${convStrip(r, detail)}
+      </div>`;
+    }
+    const page = loaded.page;
+    const view = replyView(page);
+    const tools = toolEntries(detail, page);
+    const notice = bodyNotice(page);
+    if (failed) {
+      return `<div class="conv-asst-card" data-select="${r.req_id}">${head}
+        <div class="conv-fail"><span>✕</span><span>这一笔返回 HTTP ${r.status}。失败尝试的用量仍保留在账本里，失败的读数不并入成功请求。</span></div>
+        ${convStrip(r, detail)}
+      </div>`;
+    }
+    const body = view.state === 'ok' && view.text.length > 0
+      ? `<div class="conv-asst-body">${mdToHtml(view.text)}</div>`
+      : view.state === 'ok' && view.calls.length > 0
+        // 纯工具调用的回复常常只有推理块：显示出来，别读成"没有内容"。
+        ? `${view.thinking.length > 0
+          ? `<details class="msg-thinking" style="margin:8px 11px"><summary>推理块 · ${view.thinking.length} 段</summary>
+              <pre class="raw" tabindex="0">${esc(view.thinking.join('\n\n'))}</pre></details>`
+          : '<div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>本次回复只有工具调用，没有文本。</span></div>'}`
+        : view.state === 'ok'
+          ? '<div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>回复对象存在，但没有文本内容。</span></div>'
+          : `<div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>${esc(notice || '这一笔没有可读的回复。')}</span></div>`;
+    return `<div class="conv-asst-card" data-select="${r.req_id}">${head}
+      ${notice && view.state === 'ok' ? `<div class="conv-cont note">${esc(notice)}</div>` : ''}
+      ${body}
+      ${renderTools(tools)}
+      ${convStrip(r, detail)}
+    </div>`;
+  }
+
+  /** @param {RequestRow} r */
+  function bodyLabelText(r) {
+    if (r.body_state === 'available') return '正文可读，尚未读取；点开后才下载这一片。';
+    if (r.body_state === 'pending') return `正文未到${r.miss_reason ? `：${r.miss_reason}` : ''}`;
+    if (r.body_state === 'partial') return `正文不完整${r.miss_reason ? `：${r.miss_reason}` : ''}`;
+    if (r.body_state === 'evicted') return `正文已回收${r.miss_reason ? `：${r.miss_reason}` : ''}`;
+    return '原对象已保存，暂不支持结构化解析。';
   }
 
   /** @param {RequestRow} r @param {RequestDetail | null} detail */
@@ -420,6 +613,7 @@ if (typeof document !== 'undefined') {
   function requestBody(r) {
     const detail = details.get(r.req_id) ?? null;
     const route = routes.get(r.req_id) ?? null;
+    const loaded = bodyOf(r.req_id);
     const ordinal = ordinalOf(r.req_id);
     const meta = [
       `<span class="id">req ${r.req_id}</span>`,
@@ -435,18 +629,90 @@ if (typeof document !== 'undefined') {
         <span class="grow"></span>
         ${r.miss_reason ? `<span class="req-flag warn" title="${esc(r.miss_reason)}">${esc(r.miss_reason)}</span>` : ''}
       </div>
-      <section class="section">
-        <div class="section-head"><h3>读数</h3><span class="count">来自账本与路由</span></div>
-        <div class="reply-card"><div class="reply-empty">
-          <b>${esc(bodyStateText(r))}</b>
-          <span>正文通道尚未接入，这里只展示已保存的元数据；不会用相邻请求的内容代替。</span>
-        </div></div>
-      </section>
+      ${ledgerBodySection(r, detail, loaded)}
       <div class="disclosures">
         <details><summary>路由与尝试</summary><div class="d-body">${routeBlock(r, route)}</div></details>
         <details><summary>采集完整性与阅读边界</summary><div class="d-body">${completenessRows(r, detail)}</div></details>
+        <details><summary>原始脱敏对象</summary><div class="d-body">${
+          loaded !== null && loaded.page !== null
+            ? renderRaw(loaded.page)
+            : '<p class="note">这一片正文还没读取，展开正文后再看原始对象。</p>'
+        }</div></details>
       </div>
     </div>`;
+  }
+
+  /**
+   * 账本内的正文区：消息列表 + 本次回复，两者分开。
+   * 正文未加载时只给加载入口；回收、未到、不支持都写明原因，
+   * 不渲染成"没有对话"。
+   * @param {RequestRow} r
+   * @param {RequestDetail | null} detail
+   * @param {LoadedBody | null} loaded
+   */
+  function ledgerBodySection(r, detail, loaded) {
+    if (loaded === null || loaded.page === null) {
+      const message = loaded !== null && loaded.error !== null
+        ? `正文加载失败：${loaded.error}`
+        : bodyLabelText(r);
+      const canLoad = r.body_state === 'available' || r.body_state === 'partial';
+      return `<section class="section">
+        <div class="section-head"><h3>正文</h3><span class="count">按请求读取，不下载整条会话</span></div>
+        <div class="reply-card"><div class="reply-empty">
+          <b>${esc(bodyStateText(r))}</b>
+          <span>${esc(message)}</span>
+          ${canLoad ? `<span><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></span>` : ''}
+        </div></div>
+      </section>`;
+    }
+    const page = loaded.page;
+    // 回收与未到的正文没有可读区间：只给状态说明，不渲染消息列表、翻页和回复卡，
+    // 否则"0 / 9 条消息 + 加载下一片"会假装还有内容可取。
+    if (page.state !== 'available' && page.state !== 'partial') {
+      return `<section class="section">
+        <div class="section-head"><h3>正文</h3><span class="count">${esc(bodyStateText(r))}</span></div>
+        <div class="reply-card"><div class="reply-empty">
+          <b>${esc(bodyStateText(r))}</b>
+          <span>${esc(bodyNotice(page) || '这一笔没有可读的正文。')}</span>
+          <span>身份与读数不受影响；这里不生成推测内容，也不用相邻请求代替。</span>
+        </div></div>
+      </section>`;
+    }
+    const view = replyView(page);
+    const tools = toolEntries(detail, page);
+    const delta = deltaOrdinals(detail);
+    const relation = relationTextOf(r.req_id);
+    const notice = bodyNotice(page);
+    const rows = loaded.entries;
+    const unread = loaded.total !== null && rows.length < loaded.total;
+    const unsupported = page.parse_state === 'unsupported';
+    return `<section class="section">
+      <div class="section-head">
+        <h3>请求结构</h3>
+        <span class="count">${unsupported ? '原对象已保存' : loaded.total === null ? `${rows.length} 条消息` : `${rows.length} / ${loaded.total} 条消息`}</span>
+        ${delta !== null ? `<span class="count" style="color:var(--accent)">新增 ${delta.size}</span>` : ''}
+        <span class="grow"></span>
+      </div>
+      ${notice ? `<p class="note" style="margin-bottom:8px">${esc(notice)}</p>` : ''}
+      ${relation && delta === null ? `<div class="delta-note"><b>${esc(relation)}</b><span>不标记新增消息；下面按原顺序完整列出，避免把旧上下文误读成这一轮输入。</span></div>` : ''}
+      ${unsupported
+        ? '<p class="note">这个协议的原文已整份保存，但没有逐条消息视图；在下面「原始脱敏对象」里读完整请求与回复。</p>'
+        : rows.length > 0
+          // 每片只加载 40 条，已加载的就全部铺出来；再截断会让"加载下一片"白点。
+          ? renderMessages(rows, { delta, limit: rows.length, selectedOrd: state.selected?.req === r.req_id ? messageOrdOf(state.selected.path) : null })
+          : '<p class="note">这一笔没有消息正文。</p>'}
+      ${unread ? `<div class="conv-tools"><button class="chip-btn" data-body-more="${r.req_id}">加载下一片（已读 ${rows.length} / ${loaded.total}）</button></div>` : ''}
+    </section>
+    <section class="section">
+      <div class="section-head"><h3>本次回复</h3><span class="count">与请求上下文分开保存</span></div>
+      ${renderReply(view, tools)}
+    </section>`;
+  }
+
+  /** @param {string} path @returns {number | null} */
+  function messageOrdOf(path) {
+    const match = /^messages\[(\d+)\]$/.exec(path);
+    return match === null ? null : Number(match[1]);
   }
 
   /** @param {RequestRow} r @param {{state: string, summary: unknown} | null} route */
@@ -657,7 +923,43 @@ if (typeof document !== 'undefined') {
     const r = currentRows().find(row => row.req_id === state.reqId) ?? null;
     if (r === null) return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
     if (state.railTab === 'facts') return railFacts();
-    return `<div class="rail-empty"><b>正文通道尚未接入</b>${esc(bodyStateText(r))}${r.miss_reason ? `：${esc(r.miss_reason)}` : ''}。这一阶段只提供元数据，不合成内容。</div>`;
+    const loaded = bodyOf(r.req_id);
+    if (loaded === null || loaded.page === null) {
+      const canLoad = r.body_state === 'available' || r.body_state === 'partial';
+      const message = loaded !== null && loaded.error !== null ? `正文加载失败：${loaded.error}` : bodyLabelText(r);
+      return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(message)}
+        ${canLoad ? `<div style="margin-top:10px"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>`;
+    }
+    const detail = details.get(r.req_id) ?? null;
+    const page = loaded.page;
+    if (page.state !== 'available' && page.state !== 'partial') {
+      return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyNotice(page) || '这一笔没有可读的正文。')}</div>`;
+    }
+    const view = replyView(page);
+    const tools = toolEntries(detail, page);
+    const notice = bodyNotice(page);
+    const selected = state.selected !== null && state.selected.req === r.req_id ? state.selected.path : null;
+    const chosen = selected !== null && /^messages\[\d+\]$/.test(selected)
+      ? loaded.entries.find(entry => entry.ord === messageOrdOf(selected)) ?? null
+      : null;
+    const body = chosen !== null
+      ? renderMessageDetail(chosen)
+      : view.state === 'ok'
+        ? renderReplyDetail(view, tools)
+        : `<div class="rail-empty"><b>没有可读的回复</b>${esc(notice || '这一笔只有请求。')}</div>`;
+    const unread = loaded.total !== null && loaded.entries.length < loaded.total;
+    return `${notice && view.state === 'ok' ? `<p class="rail-note" style="margin-bottom:8px">${esc(notice)}</p>` : ''}
+      ${body}
+      <div class="conv-tools" style="padding:10px 0 0">
+        <span class="label">请求消息</span>
+        <button class="chip-btn" data-rail-reply="1" aria-pressed="${chosen === null}">本次回复</button>
+        ${loaded.entries.length > 0
+          ? `<select class="mini-search" data-rail-msg="${r.req_id}" aria-label="选择消息">
+              ${loaded.entries.slice(0, 300).map(entry => `<option value="${entry.ord}" ${chosen !== null && chosen.ord === entry.ord ? 'selected' : ''}>#${entry.ord} ${roleTag(entry.role)} · ${esc(clipText(entry.preview, 40))}</option>`).join('')}
+            </select>`
+          : '<span class="muted" style="font-size:10.5px">这一笔没有消息正文</span>'}
+      </div>
+      ${unread ? `<div style="margin-top:8px"><button class="chip-btn" data-body-more="${r.req_id}">加载下一片（已读 ${loaded.entries.length} / ${loaded.total}）</button></div>` : ''}`;
   }
 
   function renderRail() {
@@ -681,6 +983,45 @@ if (typeof document !== 'undefined') {
   async function prefetchDetails() {
     const rows = currentRows().slice(0, 30);
     await Promise.all(rows.map(async row => { await ensureDetail(row.req_id); }));
+  }
+
+  /**
+   * 对话视图只取可见范围内最新的若干笔首片正文，不下全量：
+   * 分页加载的请求可能很多，整页一次拉会同时占住内存与连接。
+   * 更早的请求保留"读取正文"入口，点开才算。
+   * 返回本次真正新加载的笔数；调用方据此决定要不要重绘，已缓存的不会触发循环。
+   */
+  const BODY_PREFETCH = 30;
+  const BODY_CONCURRENCY = 4;
+  async function prefetchBodies() {
+    const wanted = currentRows().slice(0, BODY_PREFETCH)
+      .filter(row => (row.body_state === 'available' || row.body_state === 'partial') && !bodies.has(row.req_id))
+      .map(row => row.req_id);
+    let loaded = 0;
+    for (let index = 0; index < wanted.length; index += BODY_CONCURRENCY) {
+      const chunk = wanted.slice(index, index + BODY_CONCURRENCY);
+      await Promise.all(chunk.map(async id => { await ensureBody(id); }));
+      loaded += chunk.length;
+    }
+    return loaded;
+  }
+
+  /**
+   * 渲染后再补正文。只重绘一次，并且只在当前屏幕上的东西真的变了的时候：
+   * 否则 prefetch 与 render 会来回触发。
+   */
+  async function loadVisibleBodies() {
+    const loaded = state.view === 'conversation'
+      ? await prefetchBodies()
+      : await (async () => {
+        const openIds = [...state.open].filter(id => currentRows().some(row => row.req_id === id) && !bodies.has(id));
+        await Promise.all(openIds.map(async id => { await ensureBody(id); }));
+        return openIds.length;
+      })();
+    if (loaded > 0) {
+      renderMain();
+      renderRail();
+    }
   }
 
   async function renderAll() {
@@ -716,19 +1057,26 @@ if (typeof document !== 'undefined') {
       state.open = new Set(state.reqId !== null ? [state.reqId] : []);
       state.selected = null;
     } else if (!rows.some(row => row.req_id === state.reqId)) {
-      // URL 里的 req id 不在已加载页里：可能已被淘汰、从未存在，或落在更早的页。
-      // 前两种要显式说明未找到；第三种只在更早的页里，不能拿最新一笔冒充。
-      const detail = await ensureDetail(state.reqId);
-      if (detail === null) {
-        state.missingReqId = state.reqId;
-        state.offPageReqId = null;
-      } else {
+      // URL 里的 req id 不在已加载页里：可能已被淘汰、从未存在、落在更早的页，
+      // 或者被合并到了另一个 canonical id（此时服务端会解析成后者）。
+      // 前两种要显式说明未找到；第三种只在更早的页里；第四种直接跳到 canonical。
+      const requested = state.reqId;
+      const detail = await ensureDetail(requested);
+      const target = resolveTraceTarget(rows, requested, detail);
+      if (target.kind === 'canonical' && target.reqId !== null) {
+        state.reqId = target.reqId;
+        state.open = new Set([target.reqId]);
         state.missingReqId = null;
-        state.offPageReqId = state.reqId;
+        state.offPageReqId = null;
+        state.selected = null;
+        details.set(requested, detail ?? details.get(requested) ?? null);
+      } else {
+        state.missingReqId = target.kind === 'missing' ? requested : null;
+        state.offPageReqId = target.kind === 'off-page' ? requested : null;
+        state.reqId = null;
+        state.open = new Set();
+        state.selected = null;
       }
-      state.reqId = null;
-      state.open = new Set();
-      state.selected = null;
     } else {
       state.missingReqId = null;
       state.offPageReqId = null;
@@ -740,6 +1088,8 @@ if (typeof document !== 'undefined') {
       await prefetchDetails();
       await Promise.all(currentRows().slice(0, 30).map(row => ensureRoute(row.req_id)));
     }
+    // 先出界面再补正文：正文是逐个请求的网络往返，不挡住首屏。
+    void loadVisibleBodies();
     renderCrumb();
     renderFilters();
     renderSessions();
@@ -774,6 +1124,8 @@ if (typeof document !== 'undefined') {
     await ensureRoute(id);
     renderCrumb();
     if (!same) {
+      // 换请求时清掉上一笔的消息选择，避免右栏展示另一笔的区间。
+      state.selected = null;
       renderMain();
       renderRail();
     }
@@ -786,6 +1138,7 @@ if (typeof document !== 'undefined') {
     state.open.add(id);
     state.selected = null;
     await ensureDetail(id);
+    await ensureBody(id);
     renderMain();
     renderRail();
     renderCrumb();
@@ -797,16 +1150,33 @@ if (typeof document !== 'undefined') {
   }
 
   async function toggleRequest(/** @type {number} */ id) {
+    const opening = !state.open.has(id);
     if (state.open.has(id)) state.open.delete(id);
     else state.open.add(id);
     state.reqId = id;
     state.selected = null;
     if (state.railTab === 'body' && !state.open.has(id)) state.railTab = 'facts';
     await ensureDetail(id);
+    // 展开账本行等于明确要读正文：只读这一笔的首片。
+    if (opening) await ensureBody(id);
     renderMain();
     renderRail();
     renderCrumb();
     updateURL();
+  }
+
+  /**
+   * 读取正文并重绘。epoch 守卫保证迟到的响应不会覆盖后来选中的请求：
+   * 写缓存的是请求自己的数据，界面只在当前选择仍匹配时才应用。
+   * @param {number} id
+   * @param {number} [from]
+   */
+  async function readBody(id, from = 0) {
+    const epoch = state.reqId;
+    await ensureBody(id, from);
+    if (state.reqId !== epoch && state.reqId !== id) return;
+    renderMain();
+    renderRail();
   }
 
   function applyTheme() {
@@ -819,7 +1189,49 @@ if (typeof document !== 'undefined') {
 
   document.addEventListener('click', (e) => {
     const t = /** @type {HTMLElement} */ (e.target);
+    // 折叠区标题与消息折叠按钮自己处理展开，不触发选中。
     if (t.closest('summary')) return;
+    const bodyLoad = t.closest('[data-body-load]');
+    if (bodyLoad) { void readBody(Number(/** @type {HTMLElement} */ (bodyLoad).dataset.bodyLoad)); return; }
+    const bodyMore = t.closest('[data-body-more]');
+    if (bodyMore) {
+      const id = Number(/** @type {HTMLElement} */ (bodyMore).dataset.bodyMore);
+      const loaded = bodyOf(id);
+      if (loaded !== null) void readBody(id, loaded.nextFrom);
+      return;
+    }
+    const msg = t.closest('[data-msg]');
+    if (msg) {
+      const owner = /** @type {HTMLElement} */ (msg).closest('[data-req]');
+      const reqId = owner !== null ? Number(/** @type {HTMLElement} */ (owner).dataset.req) : state.reqId;
+      if (reqId !== null && Number.isFinite(reqId)) {
+        state.selected = { req: reqId, path: `messages[${Number(/** @type {HTMLElement} */ (msg).dataset.msg)}]` };
+        state.railTab = 'body';
+        renderMain();
+        renderRail();
+        updateURL();
+      }
+      return;
+    }
+    const toolResult = t.closest('[data-tool-result]');
+    if (toolResult) {
+      const element = /** @type {HTMLElement} */ (toolResult);
+      const reqId = Number(element.dataset.toolResult);
+      state.selected = { req: reqId, path: `messages[${element.dataset.toolOrd ?? '0'}]` };
+      state.railTab = 'body';
+      void (async () => {
+        await ensureDetail(reqId);
+        await ensureBody(reqId);
+        state.reqId = reqId;
+        renderMain();
+        renderRail();
+        renderCrumb();
+        updateURL();
+      })();
+      return;
+    }
+    const railReply = t.closest('[data-rail-reply]');
+    if (railReply) { state.selected = null; renderRail(); return; }
     const sess = t.closest('[data-session]');
     if (sess) { void selectSession(/** @type {HTMLElement} */ (sess).dataset.session ?? ''); return; }
     const agent = t.closest('[data-agent]');
@@ -833,7 +1245,14 @@ if (typeof document !== 'undefined') {
     const toggle = t.closest('[data-toggle]');
     if (toggle) { void toggleRequest(Number(/** @type {HTMLElement} */ (toggle).dataset.toggle)); return; }
     const rail = t.closest('[data-rail]');
-    if (rail) { state.railTab = /** @type {HTMLElement} */ (rail).dataset.rail === 'body' ? 'body' : 'facts'; renderRail(); updateURL(); return; }
+    if (rail) {
+      state.railTab = /** @type {HTMLElement} */ (rail).dataset.rail === 'body' ? 'body' : 'facts';
+      // 切到正文页签是明确的阅读动作：只取这一笔首片。
+      if (state.railTab === 'body' && state.reqId !== null) void ensureBody(state.reqId).then(renderRail);
+      else renderRail();
+      updateURL();
+      return;
+    }
     if (t.closest('#load-more-sessions')) {
       void reader.loadSessions(reader.getState().sessionsCursor ?? undefined).then(() => { renderSessions(); });
       return;
@@ -843,6 +1262,15 @@ if (typeof document !== 'undefined') {
         .then(prefetchDetails)
         .then(renderAll);
     }
+  });
+
+  document.addEventListener('change', (e) => {
+    const target = /** @type {HTMLSelectElement} */ (e.target);
+    if (target.dataset.railMsg === undefined) return;
+    const reqId = Number(target.dataset.railMsg);
+    state.reqId = reqId;
+    state.selected = { req: reqId, path: `messages[${target.value}]` };
+    renderRail();
   });
 
   document.addEventListener('input', (e) => {

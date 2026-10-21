@@ -34,7 +34,7 @@
 - `BodyInput = { protocol:string; request:unknown; reply:unknown; redact_version:number }`。
 - `redact` 同值同类凭证在同一个 salt 下生成相同占位符；规则版本固定为数字 1，后续修改必须升版。
 
-- [ ] **步骤 1：写凭证不残留且字段不误伤的检查。**
+- [x] **步骤 1：写凭证不残留且字段不误伤的检查。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -309,7 +309,7 @@ git commit -m "feat(derive): converge actor-scoped deltas and tool relationships
 - Consumes: B2 `BodyPage`、A4 `RequestDetail`（增加工具配对数组 `tool_calls: {call_id:string;ord:number;result_req:number|null;result_ord:number|null;result_path:string|null;state:string}[]`）。
 - Produces: `loadBody(id:number,from:number):Promise<BodyPage>`；页面可按40条继续加载，详情和正文请求分别缓存。
 
-- [ ] **步骤 1：写回收/未支持状态不显示空对话测试。**
+- [x] **步骤 1：写回收/未支持状态不显示空对话测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -358,9 +358,9 @@ const invalidReason: number = body.reason;
 
 临时移走 `src/protocols.ts` 或拼错JSDoc中的BodyPage导出名，类型检查均须非零退出；恢复后通过。再将BodyPage的state、reason各自临时改成any，分别确认TS2578，避免仅Reader根类型正常却漏掉嵌套DTO退化。
 
-- [ ] **步骤 2：运行 `bun test tests/web.test.ts tests/body-api.test.ts`，确认正文加载尚未接入。**
+- [x] **步骤 2：运行 `bun test tests/web.test.ts tests/body-api.test.ts`，确认正文加载尚未接入。**
 
-- [ ] **步骤 3：替换原型派生和协议假设。** 删除生产代码中的 `hashMsg/previousOf/newSet` 和fixture `newMsgs`依赖，消费服务端 `prev_relation/delta_ordinals`。confirmed/first才展示确定新增；unknown显示完整请求入口和原因，不拼出假对话。按可见请求加载正文首片，点击工具结果再加载对应请求/消息区间，不为1,825笔一次下载全量。
+- [x] **步骤 3：替换原型派生和协议假设。** 删除生产代码中的 `hashMsg/previousOf/newSet` 和fixture `newMsgs`依赖，消费服务端 `prev_relation/delta_ordinals`。confirmed/first才展示确定新增；unknown显示完整请求入口和原因，不拼出假对话。按可见请求加载正文首片，点击工具结果再加载对应请求/消息区间，不为1,825笔一次下载全量。
 
 ```js
 /** @param {number|null} value */
@@ -380,7 +380,7 @@ function bodyLabel(page) {
 
 `requestBody/replyBlock/rawBlock/items` 支持 Anthropic块数组与Chat形状；保留协议路径。工具卡遍历所有call与result，不只展开第一个结果。unknown多模态/推理块以转义JSON展示。请求字段和reply保持脱敏原文，不能生成`demo-response-*`。所有可折叠行使用button、键盘可操作、aria-expanded，窄屏不溢出。
 
-- [ ] **步骤 4：合成浏览器验收。** Anthropic与Chat各覆盖：纯文本、工具往返、多工具、thinking/reasoning、空reply、partial、unsupported、unknown前驱、父子代理、body evicted。快速切换请求与加载下一片，迟到网络响应不能覆盖当前详情。刷新URL保持选择，合并后的旧req id能跳到canonical id。检查XSS载荷、40条分页、超大单条消息和400px布局。
+- [x] **步骤 4：合成浏览器验收。** Anthropic与Chat各覆盖：纯文本、工具往返、多工具、thinking/reasoning、空reply、partial、unsupported、unknown前驱、父子代理、body evicted。快速切换请求与加载下一片，迟到网络响应不能覆盖当前详情。刷新URL保持选择，合并后的旧req id能跳到canonical id。检查XSS载荷、40条分页、超大单条消息和400px布局。
 
 ```bash
 bun test tests/web.test.ts tests/body-api.test.ts tests/derive.test.ts
@@ -389,7 +389,7 @@ bun test
 bun run typecheck
 ```
 
-- [ ] **步骤 5：通过后提交。**
+- [x] **步骤 5：通过后提交。**
 
 ```bash
 git add web/app.js web/index.html src/queries.ts tests/web.test.ts tests/reader-types.ts tests/body-api.test.ts

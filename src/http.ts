@@ -26,6 +26,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  '/body-view.js': { file: 'body-view.js', type: 'text/javascript; charset=utf-8' },
 };
 
 export function loadReadToken(dataDir: string): string {

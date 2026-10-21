@@ -305,3 +305,88 @@ test('重复call_id标ambiguous不挑最近', () => {
     f.close();
   }
 });
+
+test('后续请求重发同一工具结果不把已确认配对降级', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'resend']);
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,sort_source,sort_key)
+         VALUES (1,?,'session','actor-a','known',1000,'2026-10-20','hook','pending',0,1,1,1,'t','model_time','ledger','ledger|0001'),
+                (2,?,'session','actor-a','known',2000,'2026-10-20','hook','pending',0,1,1,1,'t','model_time','ledger','ledger|0002'),
+                (3,?,'session','actor-a','known',3000,'2026-10-20','hook','pending',0,1,1,1,'t','model_time','ledger','ledger|0003')`,
+        [key, key, key],
+      );
+    });
+    const callMsg = { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_r', name: 'read', input: {} }] };
+    const resultMsg = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_r', content: 'done' }] };
+    const q1 = { role: 'user', content: [{ type: 'text', text: 'q1' }] };
+    const a1 = { role: 'assistant', content: [{ type: 'text', text: 'a1' }] };
+    persistBody(f.store, 1, {
+      protocol: 'anthropic', request: { messages: [q1] }, reply: { id: 'msg_1', content: [callMsg.content[0]] }, redact_version: 1,
+    });
+    // 第 2 笔带回了结果：这是确定增量，应该配对成功。
+    persistBody(f.store, 2, {
+      protocol: 'anthropic', request: { messages: [q1, callMsg, resultMsg] },
+      reply: { id: 'msg_2', content: [{ type: 'text', text: 'a2' }] }, redact_version: 1,
+    });
+    // 第 3 笔再次重发同一段历史，结果消息不在这一笔的新增里。
+    persistBody(f.store, 3, {
+      protocol: 'anthropic', request: { messages: [q1, callMsg, resultMsg, { role: 'assistant', content: [{ type: 'text', text: 'a2' }] }, a1] },
+      reply: { id: 'msg_3', content: [] }, redact_version: 1,
+    });
+    enqueueDerive(f.store, key, 'actor-a', '');
+    drainDerive(f.store);
+    pairToolCalls(f.store, key, 'actor-a');
+    const call = f.store.read.query<{ result_req: number; state: string }, []>(
+      "SELECT result_req, state FROM tool_call WHERE call_id='toolu_r'").get();
+    // 首次出现该结果的请求才是配对目标；后来的重发不能把它改回 pending。
+    expect(call).toEqual({ result_req: 2, state: 'resolved' });
+  } finally {
+    f.close();
+  }
+});
+
+test('先到的未确认结果不挡后来的确认配对', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'upgrade']);
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,sort_source,sort_key)
+         VALUES (1,?,'session','actor-a','known',1000,'2026-10-20','hook','pending',0,1,1,1,'t','model_time','ledger','ledger|0001'),
+                (2,?,'session','actor-a','known',2000,'2026-10-20','hook','pending',0,1,1,1,'t','model_time','ledger','ledger|0002')`,
+        [key, key],
+      );
+    });
+    const callMsg = { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_u', name: 'read', input: {} }] };
+    const resultMsg = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_u', content: 'done' }] };
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'q1' }] }] },
+      reply: { id: 'msg_1', content: [callMsg.content[0]] }, redact_version: 1,
+    });
+    persistBody(f.store, 2, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'q2' }] }, callMsg, resultMsg] },
+      reply: { id: 'msg_2', content: [] }, redact_version: 1,
+    });
+    // 第 2 笔与第 1 笔没有公共前缀：结果出现在确认不了的位置，只能记候选。
+    enqueueDerive(f.store, key, 'actor-a', '');
+    drainDerive(f.store);
+    pairToolCalls(f.store, key, 'actor-a');
+    const first = f.store.read.query<{ state: string }, []>("SELECT state FROM tool_call WHERE call_id='toolu_u'").get();
+    expect(first?.state).toBe('pending');
+
+    // 把第 2 笔改成与第 1 笔前缀一致：同一位置现在确认了，应升级为 resolved。
+    f.store.write(db => db.run(
+      "UPDATE request SET prev_relation='confirmed', delta_ordinals='[1,2]' WHERE req_id=2"));
+    pairToolCalls(f.store, key, 'actor-a');
+    const second = f.store.read.query<{ state: string; result_req: number }, []>(
+      "SELECT state, result_req FROM tool_call WHERE call_id='toolu_u'").get();
+    expect(second).toEqual({ state: 'resolved', result_req: 2 });
+  } finally {
+    f.close();
+  }
+});

@@ -382,8 +382,16 @@ export function pairToolCalls(store: Store, convKey: string, actor: string): { r
       const call = candidates[0]!;
       // 结果必须晚于调用；同一请求内的结果顺序不可靠，不配对。
       if (call.index >= result.index) continue;
+      // 后续请求会重发整段历史，同一结果会反复出现。已确认的配对是终态，
+      // 重发样本只可能把它降级成 pending，因此直接跳过。
+      const paired = db.query<{ state: string }, [number, number]>(
+        'SELECT state FROM tool_call WHERE req_id=? AND ord=?',
+      ).get(call.req_id, call.ord);
+      if (paired?.state === 'resolved') continue;
       if (!result.confirmed) {
-        // 增量关系未知：只建立候选，不标 resolved。
+        // 增量关系未知：只建立候选，不标 resolved。若这一格此前已有候选位置，
+        // 保留更早的那个位置——候选只记首次见到的地方。
+        if (paired?.state === 'pending') continue;
         db.run(
           `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='pending'
            WHERE req_id=? AND ord=?`,

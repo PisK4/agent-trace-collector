@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { createReader } from '../web/app.js';
+import { createReader, resolveTraceTarget } from '../web/app.js';
 
 test('较慢的旧详情不覆盖新选择', async () => {
   let finishFirst!: (response: Response) => void;
@@ -99,6 +99,45 @@ test('分页失败保留已加载行并记录错误', async () => {
   expect(state.requestsCursor).toBe('c1');
 });
 
+test('已回收正文显示原因而不是空对话', async () => {
+  const fake = async (url: string): Promise<Response> => Response.json(url.includes('/body')
+    ? {
+      state: 'evicted', parse_state: 'ok', reply_state: 'ok', from: 0, to: 0, total: 80,
+      messages: [], request_fields: null, reply: null, reason: 'budget',
+    }
+    : { req_id: 1, title: 'history', body_state: 'evicted', have: 7 });
+  const reader = createReader(fake);
+  await reader.selectRequest(1);
+  const page = await reader.loadBody(1, 0);
+  expect(page.state).toBe('evicted');
+  expect(page.reason).toBe('budget');
+});
+
+test('loadBody按40条请求区间且不改动当前选择', async () => {
+  const urls: string[] = [];
+  const fetcher = async (url: string): Promise<Response> => {
+    urls.push(url);
+    if (url.includes('/body')) {
+      return Response.json({
+        state: 'available', parse_state: 'ok', reply_state: 'ok', from: 40, to: 80,
+        total: 90, messages: [{ ord: 40, value: { role: 'user', content: 'm40' } }],
+        request_fields: null, reply: null, reason: null,
+      });
+    }
+    return Response.json({ req_id: 1, title: 't', body_state: 'available', have: 7 });
+  };
+  const reader = createReader(fetcher);
+  await reader.selectRequest(1);
+  const page = await reader.loadBody(1, 40);
+  expect(page.messages.map(m => m.ord)).toEqual([40]);
+  expect(urls).toContain('/api/requests/1/body?from=40&to=80');
+  // 正文只有显式调用才下载：选中会话与请求本身都不触发正文请求。
+  urls.length = 0;
+  await reader.selectSession('k');
+  await reader.selectRequest(2);
+  expect(urls.some(url => url.includes('/body'))).toBe(false);
+});
+
 test('换会话后清掉上一个会话的错误', async () => {
   const fetcher = async (url: string): Promise<Response> =>
     url.includes('bad') ? new Response('boom', { status: 500 })
@@ -109,4 +148,15 @@ test('换会话后清掉上一个会话的错误', async () => {
   await reader.selectSession('good');
   expect(reader.getState().requestsError).toBeNull();
   expect(reader.getState().requests.map(row => row.req_id)).toEqual([7]);
+});
+
+test('合并后的旧 id 跳到 canonical 而不是报未在已加载页', async () => {
+  const rows = [{ req_id: 5 }, { req_id: 9 }];
+  expect(resolveTraceTarget(rows, 9, { req_id: 9 })).toEqual({ kind: 'in-page', reqId: 9 });
+  // 旧 id 7 已合并到 9，且 9 就在已加载页里。
+  expect(resolveTraceTarget(rows, 7, { req_id: 9 })).toEqual({ kind: 'canonical', reqId: 9 });
+  // canonical 落在更早的页里：仍然只能提示继续加载。
+  expect(resolveTraceTarget(rows, 7, { req_id: 3 })).toEqual({ kind: 'off-page', reqId: null });
+  // 库里没有：未找到。
+  expect(resolveTraceTarget(rows, 7, null)).toEqual({ kind: 'missing', reqId: null });
 });
