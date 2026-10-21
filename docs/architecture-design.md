@@ -656,6 +656,10 @@ AVA 的骨架里，`request.summary` 与 `response.summary` 合计占骨架大�
 
 没有正文时回落到 `模型 · HH:MM`，`title_source` 记为 `model_time`。direct 行永远走回落，界面要能显示这个差别。
 
+harness 的 Title Generator 是旁路请求：Claude Code 与 OMP 的输入/回复形状不同，但回复都可以解析成 `<title>` 或 `{"title":…}`。这类请求记 `req_kind='title'`，不进入祖先集合，不参与用户标题推导；解析出的正式标题存 `model_title`。会话标题优先取最新一次生成的正式标题，没有才退回用户首句。
+
+链角色在每组派生末尾按树规模重算：后续请求最多的根是 `main`，其余真实分支是 `branch`；正文不可读的请求保持中性，不参与主链竞争。
+
 ### 新增消息
 
 按块序列比较，不按集合比较。

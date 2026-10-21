@@ -43,9 +43,19 @@ db.transaction(() => {
   if (!requestCols.includes('input_preview')) db.exec('ALTER TABLE request ADD COLUMN input_preview TEXT');
   if (!requestCols.includes('input_preview_kind')) db.exec('ALTER TABLE request ADD COLUMN input_preview_kind TEXT');
   if (!requestCols.includes('reply_preview')) db.exec('ALTER TABLE request ADD COLUMN reply_preview TEXT');
+  // v4：请求类别、链角色与 Title Generator 的正式标题。都是可重算的派生列。
+  if (!requestCols.includes('req_kind')) {
+    db.exec("ALTER TABLE request ADD COLUMN req_kind TEXT NOT NULL DEFAULT 'chat'");
+  }
+  if (!requestCols.includes('chain_role')) {
+    db.exec("ALTER TABLE request ADD COLUMN chain_role TEXT NOT NULL DEFAULT 'main'");
+  }
+  if (!requestCols.includes('model_title')) db.exec('ALTER TABLE request ADD COLUMN model_title TEXT');
+  db.exec(`CREATE INDEX IF NOT EXISTS i_req_model_title
+    ON request(conv_key, started_ms DESC, req_id DESC) WHERE req_kind = 'title'`);
 }).immediate();
 // PRAGMA user_version 在事务里不生效，必须在事务外写。
-db.exec('PRAGMA user_version=3');
+db.exec('PRAGMA user_version=4');
 
 // 2. 给每个块算指纹。只处理还没有指纹的，重复执行不会重算。
 const pending = db.query<{ id: number; z: Uint8Array }, []>(

@@ -211,4 +211,4 @@ AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按
 
 ## schema 版本
 
-当前 `user_version=2`。v1 升 v2 是就地加两张表（`retention_event`、`purged_evidence`），不改既有列。更高的未知版本直接拒绝打开（`schema_version_unsupported`），不猜兼容性；先备份再降级代码，不要手改 `user_version`。
+当前 `user_version=4`。v1→v2 是就地加两张表（`retention_event`、`purged_evidence`），v3 与 v4 都是派生列变更，用 `scripts/backfill-fingerprint.ts` 补齐并重跑派生。更高的未知版本直接拒绝打开（`schema_version_unsupported`），不猜兼容性；先备份再降级代码，不要手改 `user_version`。
