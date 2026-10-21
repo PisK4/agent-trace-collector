@@ -20,8 +20,9 @@ export type SessionRow = {
 };
 
 export type ToolCallRow = {
-  call_id: string; ord: number; result_req: number | null;
-  result_ord: number | null; result_path: string | null; state: string;
+  call_id: string; ord: number; tool_name: string | null;
+  result_req: number | null; result_ord: number | null;
+  result_path: string | null; state: string;
 };
 
 export type RequestDetail = RequestRow & {
@@ -225,7 +226,7 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     FROM request req WHERE req.req_id = ?`).get(canonical) as DetailDbRow | null;
   if (row == null) return null;
   const toolCalls = store.read.query<ToolCallRow, [number]>(`
-    SELECT call_id, ord, result_req, result_ord, result_path, state
+    SELECT call_id, ord, tool_name, result_req, result_ord, result_path, state
     FROM tool_call WHERE req_id = ? ORDER BY ord`).all(canonical);
   const routeState = row.route_id === null
     ? 'absent'

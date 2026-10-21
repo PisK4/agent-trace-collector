@@ -4,6 +4,7 @@ import { persistBodyTx } from './body';
 import type { BodyInput } from './body';
 import { redact } from './privacy';
 import { localDay, modelTimeTitle, normalizeResponseId } from './sources/magpie';
+import { enqueueDeriveTx } from './derive';
 
 /**
  * hook 回调的接收与证据关联。
@@ -311,6 +312,14 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
   // 6) 清掉临时请求与 pending 行。
   db.run('DELETE FROM pending_hook WHERE hook_id=?', [hookId]);
   db.run('DELETE FROM request WHERE req_id=?', [sourceId]);
+
+  // 7) 正文可能刚迁到目标请求，按目标已确认的归属重算这一组。
+  const target = db.query<{ conv_key: string | null; actor: string | null; actor_state: string }, [number]>(
+    'SELECT conv_key, actor, actor_state FROM request WHERE req_id=?',
+  ).get(targetId);
+  if (target?.conv_key != null && target.actor !== null && target.actor_state === 'known') {
+    enqueueDeriveTx(db, target.conv_key, target.actor, '');
+  }
 }
 
 /**

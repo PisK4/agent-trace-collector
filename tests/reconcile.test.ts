@@ -26,6 +26,35 @@ function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatc
 
 const salt = new Uint8Array(32).fill(7);
 
+test('已确认归属的账本请求进入派生队列', () => {
+  const f = fixture();
+  try {
+    const batch = batchOf([
+      { t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'synthetic-sess', in: 10, out: 5 },
+    ]);
+    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    expect(f.store.read.query('SELECT conv_key, actor FROM derive_queue').all()).toEqual([
+      { conv_key: JSON.stringify(['session', 'synthetic-sess']), actor: 'synthetic-sess' },
+    ]);
+  } finally {
+    f.close();
+  }
+});
+
+test('无会话身份的账本请求不入派生队列', () => {
+  const f = fixture();
+  try {
+    const batch = batchOf([
+      { t: '2026-10-20T00:00:00Z', agent: 'demo', model: 'm', provider: 'p', status: 400, rejected: true },
+    ]);
+    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 1 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM derive_queue').get()).toEqual({ n: 0 });
+  } finally {
+    f.close();
+  }
+});
+
 test('两条计费行只生成一个请求且保留 kind', () => {
   const f = fixture();
   try {

@@ -249,7 +249,7 @@ git commit -m "feat(hook): ingest authenticated callbacks and reconcile stable e
 - `deriveTitle(messages:unknown[],delta:number[]|null,fallback:string): {title:string;source:'user_delta'|'model_time'}`。
 - `rebuildDerived(store:Store,convKey:string): {queued:number;unavailable:number}`，C2 CLI 复用。
 
-- [ ] **步骤 1：写重复消息与未知前驱测试。**
+- [x] **步骤 1：写重复消息与未知前驱测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -262,9 +262,9 @@ test('重复消息仍按位置计新增', () => {
 });
 ```
 
-- [ ] **步骤 2：运行 `bun test tests/derive.test.ts`，确认缺序列比较失败。**
+- [x] **步骤 2：运行 `bun test tests/derive.test.ts`，确认缺序列比较失败。**
 
-- [ ] **步骤 3：实现前缀判定、可恢复批次和标题。**
+- [x] **步骤 3：实现前缀判定、可恢复批次和标题。**
 
 ```ts
 export function compareSequence(previous: readonly number[]|null,current:readonly number[],hasPredecessor:boolean) {
@@ -284,7 +284,7 @@ export function compareSequence(previous: readonly number[]|null,current:readonl
 
 `tool_call` 增加 `result_path TEXT`，因为同消息可有多个 tool_result；增加 `derive_version INTEGER NOT NULL DEFAULT 1`。反向到达的结果通过读取持久化正文重新派生，无需再建一套独立工具事件日志。raw过期不影响仍存的正文重算；正文回收后不删除既有工具关系。
 
-- [ ] **步骤 4：写顺序无关与队列恢复测试。** 合成A→B→C与A→C→B、迟到hook、归属变化得到同样的稳定键/标题/增量/工具链接（比较稳定证据键，不能比较自增req_id）。构造父P、子S1、子S2共享session且均使用call_x，结果只能在各actor内配对；hook未关联前不能先配父工具。构造250笔链，处理100后关闭重开，最后queue为空且250笔版本一致。另构造同session的两个actor=NULL请求，断言摄入无NOT NULL错误、derive_queue无未知分组、两笔都不确定前驱；分别补齐不同子代理身份后，各自入队，最终仍不串工具。
+- [x] **步骤 4：写顺序无关与队列恢复测试。** 合成A→B→C与A→C→B、迟到hook、归属变化得到同样的稳定键/标题/增量/工具链接（比较稳定证据键，不能比较自增req_id）。构造父P、子S1、子S2共享session且均使用call_x，结果只能在各actor内配对；hook未关联前不能先配父工具。构造250笔链，处理100后关闭重开，最后queue为空且250笔版本一致。另构造同session的两个actor=NULL请求，断言摄入无NOT NULL错误、derive_queue无未知分组、两笔都不确定前驱；分别补齐不同子代理身份后，各自入队，最终仍不串工具。
 
 ```ts
 // 三个输入序列的预期结果，与到达顺序无关。
@@ -294,7 +294,7 @@ expect(compareSequence(sequences[1],sequences[2],true).delta).toEqual([3]);
 // 集成测试分别按 [0,1,2]、[0,2,1] 摄入并排空 derive_queue，比较上述结果。
 ```
 
-- [ ] **步骤 5：运行 `bun test tests/derive.test.ts tests/hook.test.ts tests/protocols.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/derive.test.ts tests/hook.test.ts tests/protocols.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/derive.ts src/reconcile.ts src/hook.ts src/schema.sql src/main.ts src/queries.ts tests/derive.test.ts

@@ -12,6 +12,7 @@ import {
   optionalNumber,
 } from './sources/magpie';
 import type { LedgerFields, RouteFields } from './sources/magpie';
+import { enqueueDeriveTx } from './derive';
 
 export type IngestLedgerResult = { accepted: number; invalid: number; duplicate: number };
 
@@ -262,6 +263,14 @@ function applyLedgerAggregate(db: Database, reqId: number, routeId: number, now:
       reqId,
     ],
   );
+  // 身份确认后，这一组要重算前驱、增量与标题；未知归属不入队。
+  // 用本笔实际的 conv_key/actor 而不是局部变量：合并时 conv 可能来自既有行。
+  const settled = db.query<{ conv_key: string | null; actor: string | null; actor_state: string }, [number]>(
+    'SELECT conv_key, actor, actor_state FROM request WHERE req_id=?',
+  ).get(reqId);
+  if (settled?.conv_key != null && settled.actor !== null && settled.actor_state === 'known') {
+    enqueueDeriveTx(db, settled.conv_key, settled.actor, '');
+  }
 }
 
 function applyRouteToRequest(db: Database, reqId: number, route: RouteFields, now: number): void {

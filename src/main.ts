@@ -9,11 +9,13 @@ import { ingestLedger, ingestRoute } from './reconcile';
 import { probeMagpie, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
 import { reconcilePending } from './hook';
+import { drainDerive, pairToolCalls } from './derive';
 
 const LEDGER_INTERVAL_MS = 5000;
 const ROUTE_INTERVAL_MS = 2000;
 const COST_INTERVAL_MS = 60_000;
 const PROBE_INTERVAL_MS = 60_000;
+const DERIVE_INTERVAL_MS = 2000;
 
 function readCursor(store: Store, sourceKind: string, sourceName: string): FileCursor | null {
   const row = store.read.query<{
@@ -132,6 +134,14 @@ export async function startCollector(config: Config): Promise<{ port: number; st
     reconcilePending(store, Date.now());
   });
 
+  const deriveTick = guard('derive', () => {
+    const result = drainDerive(store);
+    // 只重配本批真正处理过的分组，不扫描全库。
+    for (const group of result.groups) {
+      pairToolCalls(store, group.conv_key, group.actor);
+    }
+  });
+
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: config.port,
@@ -145,10 +155,12 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   timers.push(setInterval(costTick, COST_INTERVAL_MS));
   timers.push(setInterval(probeTick, PROBE_INTERVAL_MS));
   timers.push(setInterval(pendingTick, LEDGER_INTERVAL_MS));
+  timers.push(setInterval(deriveTick, DERIVE_INTERVAL_MS));
   void ledgerTick();
   void routeTick();
   void probeTick();
   void pendingTick();
+  void deriveTick();
 
   const stop = async (): Promise<void> => {
     if (stopped) return;
