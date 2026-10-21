@@ -560,10 +560,12 @@ function messageAt(db: Database, reqId: number, ordinal: number): unknown | null
 
 /**
  * 主链判定。同一 (conv_key, actor) 里可能同时存在几条互不相接的真实请求链
- * （标题请求已在派生时排除）。后续请求最多的那条是主链，其余标 branch。
+ * （标题请求已在派生时排除）。会话的第一笔真实请求是主链根，其余根及其
+ * 后继标 branch——分支是相对"从第一笔开始的主线"而言，不是按后续请求数
+ * 重新选一次主线，否则一次后来的独立重跑会把真正的开头挤成分支。
  *
  * 严格前缀只能说明"这一笔是谁的续写"，不能说明"哪条是主线"；主线要等整组
- * 请求都到齐后再按树的规模选，所以每批派生末尾重算一次。
+ * 请求都到齐后再按根的时间顺序选，所以每批派生末尾重算一次。
  *
  * 正文不可读（prev_relation='unknown'）的请求不进森林：它们没有可比对象，
  * 既不能证明在主链上，也不能证明是分支，保持中性的 main，不误标分支。
@@ -590,28 +592,18 @@ function assignChainRoles(db: Database, convKey: string, actor: string): void {
     if (list === undefined) children.set(parent, [row.req_id]);
     else list.push(row.req_id);
   }
-  const subtree = (root: number): Set<number> => {
-    const seen = new Set<number>();
-    const stack = [root];
-    while (stack.length > 0) {
-      const id = stack.pop();
-      if (id === undefined || seen.has(id)) continue;
-      seen.add(id);
-      for (const child of children.get(id) ?? []) stack.push(child);
-    }
-    return seen;
-  };
   let trunkRoot = roots[0] ?? first.req_id;
-  let trunkSize = -1;
   for (const root of roots) {
-    const size = subtree(root).size;
-    if (size > trunkSize
-      || (size === trunkSize && (started.get(root) ?? 0) < (started.get(trunkRoot) ?? 0))) {
-      trunkSize = size;
-      trunkRoot = root;
-    }
+    if ((started.get(root) ?? 0) < (started.get(trunkRoot) ?? 0)) trunkRoot = root;
   }
-  const trunk = subtree(trunkRoot);
+  const trunk = new Set<number>();
+  const stack = [trunkRoot];
+  while (stack.length > 0) {
+    const id = stack.pop();
+    if (id === undefined || trunk.has(id)) continue;
+    trunk.add(id);
+    for (const child of children.get(id) ?? []) stack.push(child);
+  }
   const update = db.prepare('UPDATE request SET chain_role=? WHERE req_id=?');
   for (const row of rows) update.run(trunk.has(row.req_id) ? 'main' : 'branch', row.req_id);
 }

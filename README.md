@@ -117,7 +117,7 @@ Title Generator 是 harness 的旁路请求：Claude Code 用单块 `<session>�
 3. 任意一笔的用户首句；
 4. 原有时间兜底（模型名 · HH:MM）。
 
-每个 `(conv_key, actor)` 在派生末尾重算链角色：后续请求最多的根是主链（`chain_role='main'`），其余真实分支标 `branch`。正文不可读的请求保持中性，不误标分支；界面只有真正的次链显示「⎇ 分支」。
+每个 `(conv_key, actor)` 在派生末尾重算链角色：最早的一笔真实请求是主链根（`chain_role='main'`），其余互不相接的根及其后继标 `branch`。正文不可读的请求保持中性，不误标分支；界面只有真正的次链显示「⎇ 分支」。
 
 清洗名单补了 `<local-command-caveat>`、插话前缀 `The user sent a new message while you were working:` 及其尾部的 harness 说明。这几类此前会直接变成标题或摘要。
 
