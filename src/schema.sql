@@ -232,6 +232,18 @@ CREATE TABLE source_gap (
   PRIMARY KEY(source_kind, source_name, file_generation, from_off)
 ) WITHOUT ROWID;
 
+-- 主动淘汰的长期记录：先写事件再删行，purged_evidence 是重放时的墓碑。
+CREATE TABLE retention_event (
+  id INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, action TEXT NOT NULL,
+  first_day TEXT, last_day TEXT, request_count INTEGER NOT NULL,
+  reason TEXT NOT NULL, approval_id TEXT
+);
+
+CREATE TABLE purged_evidence (
+  source_kind TEXT NOT NULL, ref_key TEXT NOT NULL, purged_at INTEGER NOT NULL,
+  PRIMARY KEY(source_kind,ref_key)
+) WITHOUT ROWID;
+
 CREATE TABLE cost_observation (
   ref_key TEXT NOT NULL,
   observed_at INTEGER NOT NULL,

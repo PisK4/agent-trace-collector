@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
+import { Database } from 'bun:sqlite';
 import { fixture } from './fixtures';
 import { openStore } from '../src/store';
 
@@ -17,7 +18,7 @@ test('事务失败不留下证据或游标', () => {
   }
 });
 
-test('建库包含17个业务表且使用AUTOINCREMENT', () => {
+test('建库包含19个业务表且使用AUTOINCREMENT', () => {
   const f = fixture();
   try {
     const names = (f.store.read.query(
@@ -25,9 +26,9 @@ test('建库包含17个业务表且使用AUTOINCREMENT', () => {
     ).all() as { name: string }[]).map(row => row.name);
     expect(names).toEqual([
       'block', 'collector_state', 'cost_observation', 'derive_queue', 'ingest_issue',
-      'pending_hook', 'raw_hook', 'raw_ledger', 'raw_route', 'request', 'request_alias',
-      'request_block', 'request_evidence', 'route_summary', 'source_cursor', 'source_gap',
-      'tool_call',
+      'pending_hook', 'purged_evidence', 'raw_hook', 'raw_ledger', 'raw_route', 'request',
+      'request_alias', 'request_block', 'request_evidence', 'retention_event', 'route_summary',
+      'source_cursor', 'source_gap', 'tool_call',
     ]);
     const requestSql = f.store.read.query(
       "SELECT sql FROM sqlite_master WHERE type='table' AND name='request'",
@@ -213,6 +214,20 @@ test('auto_vacuum增量回收让物理文件收缩', () => {
     const after = size();
     expect(full).toBeGreaterThan(before);
     expect(after).toBeLessThan(full);
+  } finally {
+    f.close();
+  }
+});
+
+test('拒绝未知的高版本schema', () => {
+  const f = fixture();
+  const path = join(f.dir, 'trace.db');
+  try {
+    f.store.close();
+    const raw = new Database(path);
+    raw.exec('PRAGMA user_version=99');
+    raw.close();
+    expect(() => openStore(path)).toThrow('schema_version_unsupported');
   } finally {
     f.close();
   }

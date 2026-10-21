@@ -23,6 +23,7 @@ import {
   shrinkStorage,
 } from './retention';
 import { resumePausedLedger } from './reconcile';
+import { maintenanceLockPresent } from './maintenance';
 
 const LEDGER_INTERVAL_MS = 5000;
 const ROUTE_INTERVAL_MS = 2000;
@@ -52,6 +53,10 @@ function readCursor(store: Store, sourceKind: string, sourceName: string): FileC
 }
 
 export async function startCollector(config: Config): Promise<{ port: number; stop(): Promise<void> }> {
+  // 维护命令运行时不允许采集器起来：两边同时写会得到自相矛盾的快照。
+  // 陈旧锁不在这里自动清：把路径原样报出来，由操作者确认后删除。
+  const heldLock = maintenanceLockPresent(config.dataDir);
+  if (heldLock !== null) throw new Error(`maintenance_lock_present:${heldLock}`);
   const dbPath = join(config.dataDir, 'trace.db');
   const store = openStore(dbPath);
   const salt = loadLocalSecret(config.dataDir, 'redaction.salt');
@@ -107,7 +112,8 @@ export async function startCollector(config: Config): Promise<{ port: number; st
       }
       return;
     }
-    ingestLedger(store, 'usage.jsonl', batch, Date.now(), salt);
+    const result = ingestLedger(store, 'usage.jsonl', batch, Date.now(), salt);
+    if (result.purged_skip > 0) process.stderr.write(`purged_skip:${result.purged_skip}\n`);
   });
 
   const routeTick = guard('route', async () => {

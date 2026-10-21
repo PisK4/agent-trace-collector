@@ -13,9 +13,12 @@ import {
 } from './sources/magpie';
 import type { LedgerFields, RouteFields } from './sources/magpie';
 import { enqueueDeriveTx } from './derive';
+import { isPurgedEvidence } from './maintenance';
 import { closeSourceGapsTx, markStaleGapsTx, recordPausedBatchTx } from './retention';
 
-export type IngestLedgerResult = { accepted: number; invalid: number; duplicate: number };
+export type IngestLedgerResult = {
+  accepted: number; invalid: number; duplicate: number; purged_skip: number;
+};
 
 function evidenceRef(generation: string, offset: number): string {
   return JSON.stringify(['file', generation, offset]);
@@ -418,6 +421,7 @@ export function ingestLedger(
     let accepted = 0;
     let invalid = 0;
     let duplicate = 0;
+    let purged_skip = 0;
     for (const issue of batch.issues) {
       recordIssue(db, 'ledger', evidenceRef(batch.generation, issue.offset), issue.reason, now, issue.end - issue.offset);
       invalid += 1;
@@ -429,6 +433,11 @@ export function ingestLedger(
       ).get('ledger', refKey);
       if (owned != null) {
         duplicate += 1;
+        continue;
+      }
+      // 主动淘汰过的证据只留墓碑：来源再回放也不复活，计 purged_skip 而不是新证据。
+      if (isPurgedEvidence(db, 'ledger', refKey)) {
+        purged_skip += 1;
         continue;
       }
       if (line.text.trim() === '') {
@@ -479,7 +488,7 @@ export function ingestLedger(
     // 换代时旧代际的缺口一并判死，避免之后被当作可补区间重读。
     markStaleGapsTx(db, 'ledger', sourceName, now);
     closeSourceGapsTx(db, 'ledger', sourceName, batch.generation, 0, batch.committedOff, now);
-    return { accepted, invalid, duplicate };
+    return { accepted, invalid, duplicate, purged_skip };
   });
 }
 

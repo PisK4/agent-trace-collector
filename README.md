@@ -100,6 +100,20 @@ raw 层保留 7 天：先给对应证据标 `payload_state=expired` 再删原文
 
 真机验收（合成库，40 笔约 6.4 MB 随机正文，预算压到 2 MB）：启动即回收 40 笔，`block` 清零，`page_count` 1651 → 45，库文件 6.7 MB → 180 KB，`freelist_count` 回到 0。验收中修掉一个真实缺陷：`main.ts` 原先用一个全局 `running` 锁串行所有定时任务，启动时连续调用的几个 tick 只有第一个真正执行，其余被静默跳过——回收因此在启动阶段整轮失效。现在按任务名加锁，写操作本来就在同步事务里，不需要全局互斥。
 
+## 维护与恢复（C2）
+
+离线维护四条命令：`verify`、`backup`、`rebuild`、`purge-metadata`，用 `bun run maintain` 调用，都要求采集器已停。完整命令、错误码与恢复步骤见[运维手册](docs/operations.md)。
+
+维护期间数据目录下有一把 `maintenance.lock`（`wx` 原子创建，内容记 pid 与持有者）。采集器启动时看到它就拒绝启动，陈旧锁不自动覆盖，路径原样报出来由人确认后删除。
+
+备份走 `VACUUM INTO ?`（绑定参数），前置检查目标不存在、目录可写、余量够源库 1.1 倍，事后对备份再跑一次完整性校验，权限 0600。“源库是否已停”用 `locking_mode=EXCLUSIVE` 探测：只读连接跑不了 `wal_checkpoint`，看 `-wal` 大小也不可靠（TRUNCATE 之后在线库同样是 0 字节）。探测与复制共用同一个连接，不留中间窗口。
+
+元数据淘汰默认只预览，`--apply` 必须带 `--approval-id`。一个事务里按顺序删费用观测、写墓碑、删工具链接、删块引用与孤儿块、删证据与别名、删请求、清无引用的路由摘要；外键是 `NO ACTION`，顺序错了整体回滚。墓碑按证据键记录，同一天只淘汰一部分也能精确处理；来源回放命中墓碑计 `purged_skip`，不复活。
+
+`rebuild` 只重算正文仍可读的请求，并报告不可用数量与原因（`body_evicted_raw_present` / `body_evicted_raw_expired`）。正文已回收的请求保留旧标题与已确认的工具配对，不重写成时间兜底或空。
+
+本轮修掉两个真实缺陷。一是 `openStore` 切到 WAL 后，第一次写事务之前不会创建 `-wal`/`-shm`，此时只读连接打不开库（`SQLITE_CANTOPEN`）——打开一个没有新写入的旧库就会踩到；现在开库时补一个空写事务把它们落下来。二是费用时钟冲突原先只抛错误、不落状态，`/api/stats` 无从显示费用停滞；现在冲突整页回滚后记 `cost_health`（计数、阻塞时点、证据键、窗口）。
+
 ## 文档
 
 - [项目文档索引](docs/README.md)
@@ -107,3 +121,4 @@ raw 层保留 7 天：先给对应证据标 `payload_state=expired` 再删原文
 - [持久化与真实页面](docs/superpowers/plans/2026-10-20-collector-foundation.md)
 - [正文与关联派生](docs/superpowers/plans/2026-10-20-collector-body.md)
 - [保留恢复与切换](docs/superpowers/plans/2026-10-20-collector-retention.md)
+- [运维手册](docs/operations.md)

@@ -239,7 +239,12 @@ export function drainDerive(store: Store, limit = 100): {
         const fallback = row.title ?? `${row.model_served ?? '模型'} · ${clock(row.started_ms)}`;
         let title = fallback;
         let source: 'user_delta' | 'model_time' = 'model_time';
-        if (delta !== null && delta.length > 0) {
+        if (currentBlocks === null && row.title !== null
+          && (row.title_source === 'user_delta' || row.title_source === 'model_time')) {
+          // 正文已回收：旧标题是当时按正文算出来的，没有正文重算只会把它降级成时间兜底。
+          title = row.title;
+          source = row.title_source;
+        } else if (delta !== null && delta.length > 0) {
           // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
           const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
           const derived = deriveTitle(messages, delta.map((_, index) => index), fallback);
@@ -316,9 +321,12 @@ export function pairToolCalls(store: Store, convKey: string, actor: string): { r
     if (rows.length === 0) return { resolved: 0, ambiguous: 0, pending: 0 };
 
     // 先清空本组旧配对，再按当前数据重建；配对是可变状态，重算比增量修补更不容易漂移。
+    // 正文已回收的请求不在重算范围内：它们的块已经不在，从空数据重配只会把原有关系抹掉，
+    // 所以只删正文仍可读的那部分，其余行保持原样。
     db.run(`
       DELETE FROM tool_call WHERE req_id IN (
-        SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known')`,
+        SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known'
+          AND body_state IN ('available','partial'))`,
     [convKey, actor]);
 
     type Call = { req_id: number; ord: number; call_id: string; name: string; index: number };
@@ -416,25 +424,71 @@ export function pairToolCalls(store: Store, convKey: string, actor: string): { r
   });
 }
 
-/** 维护命令：整条链重排一次；正文不可用的请求保持未知。 */
-export function rebuildDerived(store: Store, convKey: string): { queued: number; unavailable: number } {
+export type RebuildReport = {
+  queued: number;
+  unavailable: number;
+  /** 按原因分类的不可用请求数；只有正文可读的请求会被真正重算。 */
+  reasons: Record<string, number>;
+};
+
+/** 这笔请求的证据在 raw 层是否还有原文（hook 或账本文件那一段）。 */
+function hasRawEvidence(db: Database, reqId: number): boolean {
+  const rows = db.query<{ source_kind: string; ref_key: string }, [number]>(
+    'SELECT source_kind, ref_key FROM request_evidence WHERE req_id=?').all(reqId);
+  for (const row of rows) {
+    if (row.source_kind === 'hook') {
+      if (db.query('SELECT 1 FROM raw_hook WHERE hook_id=?').get(row.ref_key) !== null) return true;
+      continue;
+    }
+    if (row.source_kind !== 'ledger') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.ref_key);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed) || parsed[0] !== 'file' || typeof parsed[1] !== 'string' || typeof parsed[2] !== 'number') continue;
+    if (db.query('SELECT 1 FROM raw_ledger WHERE source_kind=? AND file_generation=? AND byte_offset=?')
+      .get('file', parsed[1], parsed[2]) !== null) return true;
+  }
+  return false;
+}
+
+/**
+ * 维护命令：整条链重排一次；正文不可用的请求保持未知。
+ *
+ * 返回不可用的数量与原因，调用方据此决定要不要继续处理：正文和 raw 都没了的
+ * 请求没法重算，旧标题与工具关系也不该被重写成空。
+ */
+export function rebuildDerived(store: Store, convKey: string): RebuildReport {
   return store.write(db => {
     const actors = db.query<{ actor: string }, [string]>(`
       SELECT DISTINCT actor FROM request
       WHERE conv_key=? AND actor IS NOT NULL AND actor_state='known'`).all(convKey);
     let unavailable = 0;
+    const reasons: Record<string, number> = {};
+    const bump = (reason: string): void => {
+      reasons[reason] = (reasons[reason] ?? 0) + 1;
+    };
     for (const { actor } of actors) {
-      const missing = db.query<{ n: number }, [string, string]>(`
-        SELECT COUNT(*) AS n FROM request
+      const missing = db.query<{ req_id: number; body_state: string }, [string, string]>(`
+        SELECT req_id, body_state FROM request
         WHERE conv_key=? AND actor=? AND actor_state='known'
-          AND body_state NOT IN ('available','partial')`).get(convKey, actor);
-      unavailable += missing?.n ?? 0;
+          AND body_state NOT IN ('available','partial')`).all(convKey, actor);
+      unavailable += missing.length;
+      for (const row of missing) {
+        if (row.body_state !== 'evicted') {
+          bump(`body_${row.body_state}`);
+        } else {
+          bump(hasRawEvidence(db, row.req_id) ? 'body_evicted_raw_present' : 'body_evicted_raw_expired');
+        }
+      }
       db.run(
         `INSERT INTO derive_queue(conv_key,actor,from_sort) VALUES (?,?,?)
          ON CONFLICT(conv_key,actor) DO UPDATE SET from_sort=''`,
         [convKey, actor, ''],
       );
     }
-    return { queued: actors.length, unavailable };
+    return { queued: actors.length, unavailable, reasons };
   });
 }

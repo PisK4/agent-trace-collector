@@ -135,7 +135,7 @@ git commit -m "feat(retention): enforce storage budgets and preserve replayable 
 - `purgeMetadata(store:Store,beforeDay:string,approvalId:string): {deleted:number}`，仅CLI显式`--apply --approval-id`调用，不挂后台定时器。
 - `runMaintenance(args:string[]): Promise<number>`，命令 `verify|backup|rebuild|purge-metadata`。
 
-- [ ] **步骤 1：写备份保留原库且恢复库可读测试。**
+- [x] **步骤 1：写备份保留原库且恢复库可读测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -161,9 +161,9 @@ test('备份包含已提交状态且不覆盖已有目标', () => {
 
 A1 `Store.close()` 实现为幂等，重复调用不报错；`collector_state`由A1的明确DDL创建，本例补充打开恢复库检查collector_state.probe为原值。
 
-- [ ] **步骤 2：运行 `bun test tests/maintenance.test.ts`，确认缺命令失败。**
+- [x] **步骤 2：运行 `bun test tests/maintenance.test.ts`，确认缺命令失败。**
 
-- [ ] **步骤 3：实现离线维护与恢复验证。** CLI 先确认常驻服务未运行、端口未被collector持有，再取得独占维护锁（数据目录下文件用`wx`，内容为pid与启动标识）。生产启动也检查该锁；陈旧锁只能在确认原pid不存在且用户看到具体路径后移除，不能自动覆盖未知活动锁。`backup`先校验目标不存在和余量，使用SQLite `VACUUM INTO`到新路径，参数通过SQL绑定传递；不复制一个正在变化的裸DB而漏WAL。
+- [x] **步骤 3：实现离线维护与恢复验证。** CLI 先确认常驻服务未运行、端口未被collector持有，再取得独占维护锁（数据目录下文件用`wx`，内容为pid与启动标识）。生产启动也检查该锁；陈旧锁只能在确认原pid不存在且用户看到具体路径后移除，不能自动覆盖未知活动锁。`backup`先校验目标不存在和余量，使用SQLite `VACUUM INTO`到新路径，参数通过SQL绑定传递；不复制一个正在变化的裸DB而漏WAL。
 
 ```ts
 const result = db.query('PRAGMA integrity_check').all() as {integrity_check:string}[];
@@ -208,7 +208,7 @@ CREATE TABLE purged_evidence (
 
 默认每证据保留小型tombstone，安全优先；记录它本身仍增长，不能据此声称长期元数据能永远停在固定体积。若达到需要压缩tombstone的规模，按可证明连续的物理偏移区间另做迁移，不在第一版加通用归档系统。
 
-- [ ] **步骤 4：写维护失败矩阵并记录操作命令。** 测试目标已存在、磁盘余量不足、活动writer、损坏备份、未知schema高版本、raw过期但正文仍在、正文也已回收、purge默认无副作用、apply后重放不复活、共享route保留。新增带alias目标的淘汰用例：先直接删除canonical请求确认外键拒绝，再走purge确认目标与其全部alias删除，其他存活请求的alias保留；故障注入确认整个批次回滚。最小顺序回归如下，完整purge测试还须调用本任务的purgeMetadata覆盖相同结果，并断言只清理目标证据的费用观测。
+- [x] **步骤 4：写维护失败矩阵并记录操作命令。** 测试目标已存在、磁盘余量不足、活动writer、损坏备份、未知schema高版本、raw过期但正文仍在、正文也已回收、purge默认无副作用、apply后重放不复活、共享route保留。新增带alias目标的淘汰用例：先直接删除canonical请求确认外键拒绝，再走purge确认目标与其全部alias删除，其他存活请求的alias保留；故障注入确认整个批次回滚。最小顺序回归如下，完整purge测试还须调用本任务的purgeMetadata覆盖相同结果，并断言只清理目标证据的费用观测。
 
 ```ts
 // tests/maintenance.test.ts；沿用本任务已有fixture/expect/test导入。
@@ -258,7 +258,7 @@ bun run maintain purge-metadata --db '/path/to/stopped/trace.db' --before 2026-0
 
 路径和会话键是CLI参数示意，执行者必须换成已检查的目标；文档不包含真实账号/凭证。`package.json`增加`"maintain":"bun src/maintenance.ts"`。启动与维护锁释放在finally中，SIGKILL留下的锁有明确恢复操作。
 
-- [ ] **步骤 5：运行 `bun test tests/maintenance.test.ts tests/retention.test.ts tests/derive.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/maintenance.test.ts tests/retention.test.ts tests/derive.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/maintenance.ts tests/maintenance.test.ts docs/operations.md package.json src/derive.ts src/schema.sql src/store.ts

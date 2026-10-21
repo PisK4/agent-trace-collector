@@ -328,6 +328,8 @@ export type Stats = {
   requests: number;
   body_states: { state: string; count: number }[];
   open_gaps: number;
+  /** 费用扫描因系统时钟回退停住时的计数与阻塞时点；正常时为 null。 */
+  cost_health: unknown;
   probe: unknown;
 };
 
@@ -351,6 +353,9 @@ export function getStats(store: Store): Stats {
   const probe = store.read.query<{ value_json: string }, [string]>(
     'SELECT value_json FROM collector_state WHERE key=?',
   ).get(JSON.stringify(['magpie', 'probe']));
+  const costHealth = store.read.query<{ value_json: string }, [string]>(
+    'SELECT value_json FROM collector_state WHERE key=?',
+  ).get(JSON.stringify(['cost', 'clock_conflict']));
   return {
     cursors,
     issues,
@@ -359,6 +364,7 @@ export function getStats(store: Store): Stats {
     requests: requests.n,
     body_states: bodyStates,
     open_gaps: openGaps.n,
+    cost_health: costHealth == null ? null : parseJsonOrNull(costHealth.value_json),
     probe: probe == null ? null : parseJsonOrNull(probe.value_json),
   };
 }

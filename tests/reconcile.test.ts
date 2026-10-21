@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
 import type { FileBatch } from '../src/sources/files';
 import { ingestLedger, ingestRoute, resumePausedLedger } from '../src/reconcile';
+import { purgeMetadata } from '../src/maintenance';
 
 function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatch {
   let offset = startOffset;
@@ -63,8 +64,8 @@ test('两条计费行只生成一个请求且保留 kind', () => {
       { t: '2026-10-20T00:00:01Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, in: 20, out: 5, kind: 'web_search', session: 's' },
     ];
     const batch = batchOf(rows);
-    expect(ingestLedger(f.store, 'usage.jsonl', batch, 1, salt)).toEqual({ accepted: 2, invalid: 0, duplicate: 0 });
-    expect(ingestLedger(f.store, 'usage.jsonl', batch, 2, salt)).toEqual({ accepted: 0, invalid: 0, duplicate: 2 });
+    expect(ingestLedger(f.store, 'usage.jsonl', batch, 1, salt)).toEqual({ accepted: 2, invalid: 0, duplicate: 0, purged_skip: 0 });
+    expect(ingestLedger(f.store, 'usage.jsonl', batch, 2, salt)).toEqual({ accepted: 0, invalid: 0, duplicate: 2, purged_skip: 0 });
     expect(f.store.read.query('SELECT status,attempt_in,attempt_billed,cache_write FROM request').all()).toEqual([
       { status: 200, attempt_in: 30, attempt_billed: 2, cache_write: null },
     ]);
@@ -157,7 +158,7 @@ test('坏完整行记录issue并推进游标，后续正常行入库', () => {
   const f = fixture();
   try {
     const batch = batchOf(['not json', { t: '2026-10-20T00:00:00Z', route_id: 9, agent: 'demo', model: 'm', provider: 'p', status: 200, in: 1 }]);
-    expect(ingestLedger(f.store, 'usage.jsonl', batch, 1, salt)).toEqual({ accepted: 1, invalid: 1, duplicate: 0 });
+    expect(ingestLedger(f.store, 'usage.jsonl', batch, 1, salt)).toEqual({ accepted: 1, invalid: 1, duplicate: 0, purged_skip: 0 });
     expect(f.store.read.query('SELECT committed_off FROM source_cursor').get()).toEqual({ committed_off: batch.committedOff });
     expect(f.store.read.query('SELECT reason FROM ingest_issue').all()).toEqual([{ reason: 'ledger_invalid_json' }]);
     expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 1 });
@@ -174,7 +175,7 @@ test('原始层删除后的重放不重复计费', () => {
     ]);
     ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
     f.store.write(db => db.run('DELETE FROM raw_ledger'));
-    expect(ingestLedger(f.store, 'usage.jsonl', batch, 2, salt)).toEqual({ accepted: 0, invalid: 0, duplicate: 1 });
+    expect(ingestLedger(f.store, 'usage.jsonl', batch, 2, salt)).toEqual({ accepted: 0, invalid: 0, duplicate: 1, purged_skip: 0 });
     expect(f.store.read.query('SELECT attempt_in,attempt_billed FROM request').get()).toEqual({ attempt_in: 12, attempt_billed: 1 });
     expect(f.store.read.query('SELECT count(*) AS n FROM raw_ledger').get()).toEqual({ n: 0 });
   } finally {
@@ -294,6 +295,28 @@ test('暂停后文件继续追加，重启恢复得到与从未暂停一致的�
       { route_id: 7 }, { route_id: 8 }, { route_id: 9 },
     ]);
     expect(f.store.read.query('SELECT state FROM source_gap').all()).toEqual([{ state: 'filled' }]);
+  } finally {
+    f.close();
+  }
+});
+
+test('已主动淘汰的证据在来源回放时计purged_skip而不复活', () => {
+  const f = fixture();
+  try {
+    const batch = batchOf([{
+      t: '2026-10-20T00:00:00Z', route_id: 11, agent: 'demo', model: 'm', provider: 'p',
+      status: 200, session: 'synthetic-replay', in: 10, out: 5,
+    }]);
+    expect(ingestLedger(f.store, 'usage.jsonl', batch, 1, salt).accepted).toBe(1);
+    expect(purgeMetadata(f.store, '2026-10-21', 'approval-synthetic-replay').deleted).toBe(1);
+
+    const replay = ingestLedger(f.store, 'usage.jsonl', batch, 2, salt);
+    expect(replay.accepted).toBe(0);
+    expect(replay.purged_skip).toBe(1);
+    // 证据、请求都不回来；墓碑本身保留。
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM request_evidence').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM purged_evidence').get()).toEqual({ n: 1 });
   } finally {
     f.close();
   }

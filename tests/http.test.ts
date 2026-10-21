@@ -88,8 +88,9 @@ test('响应头包含no-store与nosniff且无CORS', async () => {
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
     const body = await response.json() as Record<string, unknown>;
     // open_gaps 单独给出未了缺口数：gaps 是明细，前端统计不必自己数状态。
+    // cost_health 是费用时钟冲突的计数与阻塞时点，正常时为 null。
     expect(Object.keys(body).sort()).toEqual([
-      'body_states', 'cursors', 'gaps', 'issues', 'open_gaps', 'pending_hooks', 'probe', 'requests',
+      'body_states', 'cost_health', 'cursors', 'gaps', 'issues', 'open_gaps', 'pending_hooks', 'probe', 'requests',
     ]);
   } finally {
     f.close();

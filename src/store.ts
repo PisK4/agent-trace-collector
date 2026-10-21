@@ -10,7 +10,7 @@ export type Store = {
 };
 
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -37,6 +37,21 @@ function migrate(db: Database): void {
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
+  if (version === 1) {
+    // v2 只新增两张保留墓碑表，不改既有列；老库就地升版。
+    db.transaction(() => {
+      db.exec(`CREATE TABLE IF NOT EXISTS retention_event (
+        id INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, action TEXT NOT NULL,
+        first_day TEXT, last_day TEXT, request_count INTEGER NOT NULL,
+        reason TEXT NOT NULL, approval_id TEXT
+      );
+      CREATE TABLE IF NOT EXISTS purged_evidence (
+        source_kind TEXT NOT NULL, ref_key TEXT NOT NULL, purged_at INTEGER NOT NULL,
+        PRIMARY KEY(source_kind,ref_key)
+      ) WITHOUT ROWID;`);
+      db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+    }).immediate();
+  }
   const requestSql = db.query(
     "SELECT sql FROM sqlite_master WHERE type='table' AND name='request'",
   ).get() as { sql: string } | null;
@@ -64,6 +79,11 @@ export function openStore(path: string): Store {
 
   migrate(db);
   db.exec('PRAGMA journal_mode=WAL');
+  // 切到 WAL 不等于文件已就位：第一次写事务之前不会创建 -wal/-shm，
+  // 而只读连接打不开这两个文件缺失的库（SQLITE_CANTOPEN）。
+  // 开一个空写事务把它们落下来，否则“打开一个没有新写入的旧库”时只读连接会直接失败。
+  db.exec('BEGIN IMMEDIATE');
+  db.exec('ROLLBACK');
   db.exec('PRAGMA synchronous=NORMAL');
   db.exec('PRAGMA foreign_keys=ON');
   db.exec('PRAGMA busy_timeout=1000');

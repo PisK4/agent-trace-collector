@@ -318,6 +318,41 @@ export async function probeMagpie(
 
 type CostWindowState = { run_id: string; next_offset: number; done: boolean };
 
+/** 费用时钟冲突的健康状态：计数与最新阻塞时点，读出来就知道扫描停在哪儿。 */
+export const COST_HEALTH_KEY = JSON.stringify(['cost', 'clock_conflict']);
+
+type CostHealth = { count: number; blocked_at: number; ref_key: string; period: string };
+
+function readCostHealth(store: Store): CostHealth | null {
+  const row = store.read.query<{ value_json: string }, [string]>(
+    'SELECT value_json FROM collector_state WHERE key=?',
+  ).get(COST_HEALTH_KEY);
+  if (row == null) return null;
+  try {
+    const parsed = JSON.parse(row.value_json) as unknown;
+    return isRecord(parsed) && typeof parsed.count === 'number' ? parsed as CostHealth : null;
+  } catch {
+    return null;
+  }
+}
+
+function recordCostConflict(
+  store: Store,
+  period: string,
+  refKey: string,
+  blockedAt: number,
+  now: number,
+): void {
+  // 冲突会让整页回滚，所以这条记录单独写：它必须活下来，否则下次还是看不出为什么停住。
+  const previous = readCostHealth(store);
+  store.write(db => db.run(
+    'INSERT INTO collector_state(key,value_json) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+    [COST_HEALTH_KEY, JSON.stringify({
+      count: (previous?.count ?? 0) + 1, blocked_at: blockedAt, ref_key: refKey, period, at: now,
+    })],
+  ));
+}
+
 function readCostWindow(store: Store, period: string): CostWindowState | null {
   const row = store.read.query<{ value_json: string }, [string]>(
     'SELECT value_json FROM collector_state WHERE key=?',
@@ -374,7 +409,15 @@ function appendObservation(
     'SELECT observed_at, projection_hash FROM cost_observation WHERE ref_key=? ORDER BY observed_at DESC LIMIT 1',
   ).get(refKey);
   if (latest != null && latest.projection_hash === projection) return false;
-  if (latest != null && observedAt <= latest.observed_at) throw new Error('cost_observation_conflict');
+  if (latest != null && observedAt <= latest.observed_at) {
+    // 带上证据键与最新时点：调用方要能记下“停在哪条证据、等哪个时刻过去”。
+    const error = new Error('cost_observation_conflict') as Error & {
+      ref_key?: string; blocked_at?: number;
+    };
+    error.ref_key = refKey;
+    error.blocked_at = latest.observed_at;
+    throw error;
+  }
   db.run(
     'INSERT INTO cost_observation(ref_key,observed_at,projection_hash,payload_json,magpie_version,pricing_version) VALUES (?,?,?,?,?,?)',
     [refKey, observedAt, projection, payloadJson, magpieVersion, pricingVersion],
@@ -473,57 +516,68 @@ export async function syncCosts(
       if (routeId !== null) pageCounts.set(routeId, (pageCounts.get(routeId) ?? 0) + 1);
     }
 
-    const pageResult = store.write(db => {
-      let observations = 0;
-      let matched = 0;
-      let ambiguous = 0;
-      for (let index = 0; index < rows.length; index++) {
-        const raw = rows[index];
-        const row = isRecord(raw) ? raw : {};
-        const routeId = optionalNumber(row, 'route_id');
-        const match = routeId === null || pageCounts.get(routeId) !== 1
-          ? (routeId !== null && (pageCounts.get(routeId) ?? 0) > 1 ? 'ambiguous' as const : null)
-          : matchCostRow(db, row, routeId);
-        const refKey = typeof match === 'object' && match !== null
-          ? match.refKey
-          : JSON.stringify(['cost-run', state!.run_id, offset, index]);
-        const projection = projectionHash(row, pricingVersion);
-        const inserted = appendObservation(
-          db,
-          refKey,
-          observedAt,
-          projection,
-          JSON.stringify(redact(row, salt)),
-          magpieVersion,
-          pricingVersion,
-        );
-        if (inserted) observations += 1;
-        if (typeof match === 'object' && match !== null) {
-          applyRequestCost(db, match.reqId, row, observedAt, pricingVersion);
-          matched += 1;
-        } else if (match === 'ambiguous') {
-          ambiguous += 1;
-          if (routeId !== null) {
-            const candidates = db.query<{ req_id: number }, [number]>(
-              "SELECT req_id FROM request WHERE route_id=? AND via!='rejected'",
-            ).all(routeId);
-            for (const candidate of candidates) {
-              db.run(
-                "UPDATE request SET cost_reason=CASE WHEN cost_state='absent' THEN 'ambiguous_cost' ELSE cost_reason END WHERE req_id=?",
-                [candidate.req_id],
-              );
+    let pageResult: { observations: number; matched: number; ambiguous: number; done: boolean };
+    try {
+      pageResult = store.write(db => {
+        let observations = 0;
+        let matched = 0;
+        let ambiguous = 0;
+        for (let index = 0; index < rows.length; index++) {
+          const raw = rows[index];
+          const row = isRecord(raw) ? raw : {};
+          const routeId = optionalNumber(row, 'route_id');
+          const match = routeId === null || pageCounts.get(routeId) !== 1
+            ? (routeId !== null && (pageCounts.get(routeId) ?? 0) > 1 ? 'ambiguous' as const : null)
+            : matchCostRow(db, row, routeId);
+          const refKey = typeof match === 'object' && match !== null
+            ? match.refKey
+            : JSON.stringify(['cost-run', state!.run_id, offset, index]);
+          const projection = projectionHash(row, pricingVersion);
+          const inserted = appendObservation(
+            db,
+            refKey,
+            observedAt,
+            projection,
+            JSON.stringify(redact(row, salt)),
+            magpieVersion,
+            pricingVersion,
+          );
+          if (inserted) observations += 1;
+          if (typeof match === 'object' && match !== null) {
+            applyRequestCost(db, match.reqId, row, observedAt, pricingVersion);
+            matched += 1;
+          } else if (match === 'ambiguous') {
+            ambiguous += 1;
+            if (routeId !== null) {
+              const candidates = db.query<{ req_id: number }, [number]>(
+                "SELECT req_id FROM request WHERE route_id=? AND via!='rejected'",
+              ).all(routeId);
+              for (const candidate of candidates) {
+                db.run(
+                  "UPDATE request SET cost_reason=CASE WHEN cost_state='absent' THEN 'ambiguous_cost' ELSE cost_reason END WHERE req_id=?",
+                  [candidate.req_id],
+                );
+              }
             }
           }
         }
-      }
-      const done = rows.length === 0 || rows.length < 500;
-      saveCostWindow(db, period, {
-        run_id: state!.run_id,
-        next_offset: done ? 0 : offset + rows.length,
-        done,
+        const done = rows.length === 0 || rows.length < 500;
+        saveCostWindow(db, period, {
+          run_id: state!.run_id,
+          next_offset: done ? 0 : offset + rows.length,
+          done,
+        });
+        return { observations, matched, ambiguous, done };
       });
-      return { observations, matched, ambiguous, done };
-    });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'cost_observation_conflict') {
+        // 整页已回滚，进度没动；把冲突记下来再抛出，采集侧据此显示费用停滞。
+        const conflict = error as Error & { ref_key?: string; blocked_at?: number };
+        recordCostConflict(store, period, conflict.ref_key ?? '', conflict.blocked_at ?? 0, Date.now());
+        throw error;
+      }
+      throw error;
+    }
 
     result.pages += 1;
     result.observations += pageResult.observations;

@@ -13,6 +13,7 @@ import {
   syncCosts,
   validateCostPeriod,
 } from '../src/sources/magpie';
+import { getStats } from '../src/queries';
 
 const salt = new Uint8Array(32).fill(7);
 
@@ -432,4 +433,46 @@ test('classifyLedger与四态费用判定', () => {
   expect(costState({ priced: false, cost: 0 })).toBe('unpriced');
   expect(costState({ priced: true })).toBe('absent');
   expect(costState(null)).toBe('absent');
+});
+
+test('时钟回退时整页回滚并记录冲突计数与阻塞时点', async () => {
+  const f = fixture();
+  const period = '2026-10-20..2026-10-20';
+  try {
+    insertRouteRequest(f, 55, 10);
+    const page = (cost: number) => Response.json({
+      period, rows: [{ route_id: 55, status: 200, in: 10, priced: true, cost }], offset: 0, total: 1,
+      pricing_version: 'pricing-v1',
+    });
+    let mock = spyOn(globalThis, 'fetch').mockResolvedValue(page(1));
+    try {
+      await syncCosts(f.store, period, 'http://127.0.0.1:8317', 1, salt);
+    } finally {
+      mock.mockRestore();
+    }
+    await Bun.sleep(3);
+    const latest = f.store.read.query<{ observed_at: number }, []>(
+      'SELECT observed_at FROM cost_observation ORDER BY observed_at DESC LIMIT 1').get()!;
+
+    // 把观测时点推到未来，下一次不同的投影必然撞上“时间不大于最新观测”。
+    const clockMock = spyOn(Date, 'now').mockReturnValue(latest.observed_at);
+    const fetchMock = spyOn(globalThis, 'fetch').mockResolvedValue(page(2));
+    try {
+      await expect(syncCosts(f.store, period, 'http://127.0.0.1:8317', 1, salt))
+        .rejects.toThrow('cost_observation_conflict');
+    } finally {
+      fetchMock.mockRestore();
+      clockMock.mockRestore();
+    }
+    // 整页回滚：只留着第一次观测，进度仍指向本页起点。
+    expect(f.store.read.query('SELECT count(*) AS n FROM cost_observation').get()).toEqual({ n: 1 });
+    const health = f.store.read.query<{ value_json: string }, [string]>(
+      'SELECT value_json FROM collector_state WHERE key=?').get(JSON.stringify(['cost', 'clock_conflict']));
+    expect(JSON.parse(health!.value_json)).toMatchObject({
+      count: 1, blocked_at: latest.observed_at, period, ref_key: 'synthetic-ledger-55-1',
+    });
+    expect(getStats(f.store).cost_health).toMatchObject({ count: 1 });
+  } finally {
+    f.close();
+  }
 });
