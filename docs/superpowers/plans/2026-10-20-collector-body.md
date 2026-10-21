@@ -34,7 +34,7 @@
 - `BodyInput = { protocol:string; request:unknown; reply:unknown; redact_version:number }`。
 - `redact` 同值同类凭证在同一个 salt 下生成相同占位符；规则版本固定为数字 1，后续修改必须升版。
 
-- [ ] **步骤 1：写凭证不残留且字段不误伤的检查。**
+- [x] **步骤 1：写凭证不残留且字段不误伤的检查。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -91,7 +91,7 @@ expect(store.read.query('SELECT count(*) AS n FROM request_block').get()).toEqua
 
 建立请求的 SQL 使用 A1 `request` 必需列：`req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at`，值分别为测试 id、1、`2026-10-20`、`hook`、`pending`、0、1、1、1。另测试同内容但不同 cache_control 产生不同块；Responses/Gemini 原对象无损还原；中途 throw 不留下孤儿块或错误 available。检查 SQLite 文件/WAL 的可解压内容和 API 输出不含合成凭证，不能只检查内存函数结果。
 
-- [ ] **步骤 5：运行 `bun test tests/privacy.test.ts tests/body.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/privacy.test.ts tests/body.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/body.ts src/privacy.ts src/config.ts tests/body.test.ts tests/privacy.test.ts
@@ -154,7 +154,7 @@ expect(parsed.calls[0].id).toBe('call_y');
 expect(parsed.calls[0].input).toBe('{"path":"demo"}');
 ```
 
-- [ ] **步骤 5：运行 `bun test tests/protocols.test.ts tests/body.test.ts tests/http.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/protocols.test.ts tests/body.test.ts tests/http.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/protocols.ts src/body.ts src/queries.ts src/http.ts tests/protocols.test.ts tests/http.test.ts
@@ -213,7 +213,7 @@ HTTP handler 先精确 Host/Origin 与常量时间令牌比较，再 origin 过�
 
 持久化时同事务生成 hook 请求、保存 raw_hook 头、脱敏分块、写证据和 pending；已有关联 ledger 时复用请求。body_omitted 标 partial 和真实原因，have 仍含 hook 位。raw 副本清空后用长期 reply_state 判定缺回复。
 
-- [ ] **步骤 4：实现 response ID 候选关联与原子迁移。**
+- [x] **步骤 4：实现 response ID 候选关联与原子迁移。**
 
 ```ts
 const prefixes: Record<string,string[]> = {
@@ -231,7 +231,7 @@ const prefixes: Record<string,string[]> = {
 
 测试两个证据顺序、重复 envelope、提交后响应丢失重试、规范ID碰撞、无ID、late ledger，以及 6 MiB request+3 MiB reply、合法4 MiB JSON、超64 MiB、null reply、非local、伪造origin但无token。合并前后守恒：hook证据总数不变、逻辑请求减少1、块引用按同笔正文去重而不丢消息位置。
 
-- [ ] **步骤 5：运行 `bun test tests/hook.test.ts tests/reconcile.test.ts tests/privacy.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/hook.test.ts tests/reconcile.test.ts tests/privacy.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add plugins/collector.hooks.ts src/hook.ts src/http.ts src/reconcile.ts src/schema.sql package.json tests/hook.test.ts
@@ -249,7 +249,7 @@ git commit -m "feat(hook): ingest authenticated callbacks and reconcile stable e
 - `deriveTitle(messages:unknown[],delta:number[]|null,fallback:string): {title:string;source:'user_delta'|'model_time'}`。
 - `rebuildDerived(store:Store,convKey:string): {queued:number;unavailable:number}`，C2 CLI 复用。
 
-- [ ] **步骤 1：写重复消息与未知前驱测试。**
+- [x] **步骤 1：写重复消息与未知前驱测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -262,9 +262,9 @@ test('重复消息仍按位置计新增', () => {
 });
 ```
 
-- [ ] **步骤 2：运行 `bun test tests/derive.test.ts`，确认缺序列比较失败。**
+- [x] **步骤 2：运行 `bun test tests/derive.test.ts`，确认缺序列比较失败。**
 
-- [ ] **步骤 3：实现前缀判定、可恢复批次和标题。**
+- [x] **步骤 3：实现前缀判定、可恢复批次和标题。**
 
 ```ts
 export function compareSequence(previous: readonly number[]|null,current:readonly number[],hasPredecessor:boolean) {
@@ -284,7 +284,7 @@ export function compareSequence(previous: readonly number[]|null,current:readonl
 
 `tool_call` 增加 `result_path TEXT`，因为同消息可有多个 tool_result；增加 `derive_version INTEGER NOT NULL DEFAULT 1`。反向到达的结果通过读取持久化正文重新派生，无需再建一套独立工具事件日志。raw过期不影响仍存的正文重算；正文回收后不删除既有工具关系。
 
-- [ ] **步骤 4：写顺序无关与队列恢复测试。** 合成A→B→C与A→C→B、迟到hook、归属变化得到同样的稳定键/标题/增量/工具链接（比较稳定证据键，不能比较自增req_id）。构造父P、子S1、子S2共享session且均使用call_x，结果只能在各actor内配对；hook未关联前不能先配父工具。构造250笔链，处理100后关闭重开，最后queue为空且250笔版本一致。另构造同session的两个actor=NULL请求，断言摄入无NOT NULL错误、derive_queue无未知分组、两笔都不确定前驱；分别补齐不同子代理身份后，各自入队，最终仍不串工具。
+- [x] **步骤 4：写顺序无关与队列恢复测试。** 合成A→B→C与A→C→B、迟到hook、归属变化得到同样的稳定键/标题/增量/工具链接（比较稳定证据键，不能比较自增req_id）。构造父P、子S1、子S2共享session且均使用call_x，结果只能在各actor内配对；hook未关联前不能先配父工具。构造250笔链，处理100后关闭重开，最后queue为空且250笔版本一致。另构造同session的两个actor=NULL请求，断言摄入无NOT NULL错误、derive_queue无未知分组、两笔都不确定前驱；分别补齐不同子代理身份后，各自入队，最终仍不串工具。
 
 ```ts
 // 三个输入序列的预期结果，与到达顺序无关。
@@ -294,7 +294,7 @@ expect(compareSequence(sequences[1],sequences[2],true).delta).toEqual([3]);
 // 集成测试分别按 [0,1,2]、[0,2,1] 摄入并排空 derive_queue，比较上述结果。
 ```
 
-- [ ] **步骤 5：运行 `bun test tests/derive.test.ts tests/hook.test.ts tests/protocols.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/derive.test.ts tests/hook.test.ts tests/protocols.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/derive.ts src/reconcile.ts src/hook.ts src/schema.sql src/main.ts src/queries.ts tests/derive.test.ts
@@ -309,7 +309,7 @@ git commit -m "feat(derive): converge actor-scoped deltas and tool relationships
 - Consumes: B2 `BodyPage`、A4 `RequestDetail`（增加工具配对数组 `tool_calls: {call_id:string;ord:number;result_req:number|null;result_ord:number|null;result_path:string|null;state:string}[]`）。
 - Produces: `loadBody(id:number,from:number):Promise<BodyPage>`；页面可按40条继续加载，详情和正文请求分别缓存。
 
-- [ ] **步骤 1：写回收/未支持状态不显示空对话测试。**
+- [x] **步骤 1：写回收/未支持状态不显示空对话测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -358,9 +358,9 @@ const invalidReason: number = body.reason;
 
 临时移走 `src/protocols.ts` 或拼错JSDoc中的BodyPage导出名，类型检查均须非零退出；恢复后通过。再将BodyPage的state、reason各自临时改成any，分别确认TS2578，避免仅Reader根类型正常却漏掉嵌套DTO退化。
 
-- [ ] **步骤 2：运行 `bun test tests/web.test.ts tests/body-api.test.ts`，确认正文加载尚未接入。**
+- [x] **步骤 2：运行 `bun test tests/web.test.ts tests/body-api.test.ts`，确认正文加载尚未接入。**
 
-- [ ] **步骤 3：替换原型派生和协议假设。** 删除生产代码中的 `hashMsg/previousOf/newSet` 和fixture `newMsgs`依赖，消费服务端 `prev_relation/delta_ordinals`。confirmed/first才展示确定新增；unknown显示完整请求入口和原因，不拼出假对话。按可见请求加载正文首片，点击工具结果再加载对应请求/消息区间，不为1,825笔一次下载全量。
+- [x] **步骤 3：替换原型派生和协议假设。** 删除生产代码中的 `hashMsg/previousOf/newSet` 和fixture `newMsgs`依赖，消费服务端 `prev_relation/delta_ordinals`。confirmed/first才展示确定新增；unknown显示完整请求入口和原因，不拼出假对话。按可见请求加载正文首片，点击工具结果再加载对应请求/消息区间，不为1,825笔一次下载全量。
 
 ```js
 /** @param {number|null} value */
@@ -380,7 +380,7 @@ function bodyLabel(page) {
 
 `requestBody/replyBlock/rawBlock/items` 支持 Anthropic块数组与Chat形状；保留协议路径。工具卡遍历所有call与result，不只展开第一个结果。unknown多模态/推理块以转义JSON展示。请求字段和reply保持脱敏原文，不能生成`demo-response-*`。所有可折叠行使用button、键盘可操作、aria-expanded，窄屏不溢出。
 
-- [ ] **步骤 4：合成浏览器验收。** Anthropic与Chat各覆盖：纯文本、工具往返、多工具、thinking/reasoning、空reply、partial、unsupported、unknown前驱、父子代理、body evicted。快速切换请求与加载下一片，迟到网络响应不能覆盖当前详情。刷新URL保持选择，合并后的旧req id能跳到canonical id。检查XSS载荷、40条分页、超大单条消息和400px布局。
+- [x] **步骤 4：合成浏览器验收。** Anthropic与Chat各覆盖：纯文本、工具往返、多工具、thinking/reasoning、空reply、partial、unsupported、unknown前驱、父子代理、body evicted。快速切换请求与加载下一片，迟到网络响应不能覆盖当前详情。刷新URL保持选择，合并后的旧req id能跳到canonical id。检查XSS载荷、40条分页、超大单条消息和400px布局。
 
 ```bash
 bun test tests/web.test.ts tests/body-api.test.ts tests/derive.test.ts
@@ -389,7 +389,7 @@ bun test
 bun run typecheck
 ```
 
-- [ ] **步骤 5：通过后提交。**
+- [x] **步骤 5：通过后提交。**
 
 ```bash
 git add web/app.js web/index.html src/queries.ts tests/web.test.ts tests/reader-types.ts tests/body-api.test.ts

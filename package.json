@@ -1,0 +1,16 @@
+{
+  "name": "agent-trace-collector",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/main.ts",
+    "maintain": "bun src/maintenance.ts",
+    "verify-cutover": "bun scripts/verify-cutover.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "typescript": "^5.9.3"
+  }
+}

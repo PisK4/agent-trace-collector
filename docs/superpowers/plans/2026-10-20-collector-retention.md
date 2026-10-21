@@ -36,7 +36,7 @@
 - `pruneRaw(store:Store,beforeMs:number,limit?:number): {ledger:number;route:number;hook:number}`，默认每表最多100行。
 - `resumeSourceGaps(store:Store,sourceName:string): {recoverable:number;unrecoverable:number}`。
 
-- [ ] **步骤 1：写共享块不误删、元数据不变的测试。**
+- [x] **步骤 1：写共享块不误删、元数据不变的测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -63,9 +63,9 @@ test('回收旧请求保留共享块和历史读数', () => {
 });
 ```
 
-- [ ] **步骤 2：运行 `bun test tests/retention.test.ts`，确认缺回收行为失败。**
+- [x] **步骤 2：运行 `bun test tests/retention.test.ts`，确认缺回收行为失败。**
 
-- [ ] **步骤 3：实现候选集事务和逻辑/物理双计量。** 候选优先最旧day，再按started_ms/req_id；状态与非空骨架、raw残留正文联合判断。先取候选req对应block id，再删引用，再对候选block反连接删除，无全库扫描。事务内清skeleton、raw副本、更新body_prev_state/evicted_at/reason；已evicted不覆盖原状态。
+- [x] **步骤 3：实现候选集事务和逻辑/物理双计量。** 候选优先最旧day，再按started_ms/req_id；状态与非空骨架、raw残留正文联合判断。先取候选req对应block id，再删引用，再对候选block反连接删除，无全库扫描。事务内清skeleton、raw副本、更新body_prev_state/evicted_at/reason；已evicted不覆盖原状态。
 
 ```sql
 -- 候选请求和候选块使用 TEMP 表；每批清空，ID用绑定参数插入。
@@ -89,7 +89,7 @@ WHERE req_id IN (SELECT req_id FROM evict_requests);
 
 每批后 `PRAGMA incremental_vacuum(256)`；低负载且读事务结束后 `PRAGMA wal_checkpoint(TRUNCATE)`。checkpoint返回busy时退出本轮、计入健康并再试，不紧循环。不要在线执行全库VACUUM。原始清理先标evidence payload_state=expired，再删raw；长期sort/parse/reply/attempt字段与summary先已保存。没有完成关联的hook原文仍须迁到骨架，不能按7天到期直接丢失仍标unsupported的正文。
 
-- [ ] **步骤 4：运行 A 阶段也需要的物理收缩实验与预算测试。**
+- [x] **步骤 4：运行 A 阶段也需要的物理收缩实验与预算测试。**
 
 ```ts
 // 独立测试库：建表前 INCREMENTAL，再 WAL。
@@ -117,7 +117,7 @@ A 阶段可把这段实验放 `tests/store.test.ts`，C1创建后迁到retention
 
 注入回收中断，在删引用后、标状态前SIGKILL，重开后应整体回滚。正常提交后检查：悬空引用0、幸存正文可还原、历史请求数和用量不变、没有已evicted却残留可回收副本。模拟暂停后文件追加、进程重启、恢复补采、上游文件消失；前三者最终集合一致，最后者永久缺口可查询。
 
-- [ ] **步骤 5：运行 `bun test tests/retention.test.ts tests/files.test.ts tests/hook.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/retention.test.ts tests/files.test.ts tests/hook.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/retention.ts src/store.ts src/schema.sql src/main.ts src/hook.ts src/reconcile.ts src/queries.ts tests/retention.test.ts tests/files.test.ts
@@ -135,7 +135,7 @@ git commit -m "feat(retention): enforce storage budgets and preserve replayable 
 - `purgeMetadata(store:Store,beforeDay:string,approvalId:string): {deleted:number}`，仅CLI显式`--apply --approval-id`调用，不挂后台定时器。
 - `runMaintenance(args:string[]): Promise<number>`，命令 `verify|backup|rebuild|purge-metadata`。
 
-- [ ] **步骤 1：写备份保留原库且恢复库可读测试。**
+- [x] **步骤 1：写备份保留原库且恢复库可读测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -161,9 +161,9 @@ test('备份包含已提交状态且不覆盖已有目标', () => {
 
 A1 `Store.close()` 实现为幂等，重复调用不报错；`collector_state`由A1的明确DDL创建，本例补充打开恢复库检查collector_state.probe为原值。
 
-- [ ] **步骤 2：运行 `bun test tests/maintenance.test.ts`，确认缺命令失败。**
+- [x] **步骤 2：运行 `bun test tests/maintenance.test.ts`，确认缺命令失败。**
 
-- [ ] **步骤 3：实现离线维护与恢复验证。** CLI 先确认常驻服务未运行、端口未被collector持有，再取得独占维护锁（数据目录下文件用`wx`，内容为pid与启动标识）。生产启动也检查该锁；陈旧锁只能在确认原pid不存在且用户看到具体路径后移除，不能自动覆盖未知活动锁。`backup`先校验目标不存在和余量，使用SQLite `VACUUM INTO`到新路径，参数通过SQL绑定传递；不复制一个正在变化的裸DB而漏WAL。
+- [x] **步骤 3：实现离线维护与恢复验证。** CLI 先确认常驻服务未运行、端口未被collector持有，再取得独占维护锁（数据目录下文件用`wx`，内容为pid与启动标识）。生产启动也检查该锁；陈旧锁只能在确认原pid不存在且用户看到具体路径后移除，不能自动覆盖未知活动锁。`backup`先校验目标不存在和余量，使用SQLite `VACUUM INTO`到新路径，参数通过SQL绑定传递；不复制一个正在变化的裸DB而漏WAL。
 
 ```ts
 const result = db.query('PRAGMA integrity_check').all() as {integrity_check:string}[];
@@ -208,7 +208,7 @@ CREATE TABLE purged_evidence (
 
 默认每证据保留小型tombstone，安全优先；记录它本身仍增长，不能据此声称长期元数据能永远停在固定体积。若达到需要压缩tombstone的规模，按可证明连续的物理偏移区间另做迁移，不在第一版加通用归档系统。
 
-- [ ] **步骤 4：写维护失败矩阵并记录操作命令。** 测试目标已存在、磁盘余量不足、活动writer、损坏备份、未知schema高版本、raw过期但正文仍在、正文也已回收、purge默认无副作用、apply后重放不复活、共享route保留。新增带alias目标的淘汰用例：先直接删除canonical请求确认外键拒绝，再走purge确认目标与其全部alias删除，其他存活请求的alias保留；故障注入确认整个批次回滚。最小顺序回归如下，完整purge测试还须调用本任务的purgeMetadata覆盖相同结果，并断言只清理目标证据的费用观测。
+- [x] **步骤 4：写维护失败矩阵并记录操作命令。** 测试目标已存在、磁盘余量不足、活动writer、损坏备份、未知schema高版本、raw过期但正文仍在、正文也已回收、purge默认无副作用、apply后重放不复活、共享route保留。新增带alias目标的淘汰用例：先直接删除canonical请求确认外键拒绝，再走purge确认目标与其全部alias删除，其他存活请求的alias保留；故障注入确认整个批次回滚。最小顺序回归如下，完整purge测试还须调用本任务的purgeMetadata覆盖相同结果，并断言只清理目标证据的费用观测。
 
 ```ts
 // tests/maintenance.test.ts；沿用本任务已有fixture/expect/test导入。
@@ -258,7 +258,7 @@ bun run maintain purge-metadata --db '/path/to/stopped/trace.db' --before 2026-0
 
 路径和会话键是CLI参数示意，执行者必须换成已检查的目标；文档不包含真实账号/凭证。`package.json`增加`"maintain":"bun src/maintenance.ts"`。启动与维护锁释放在finally中，SIGKILL留下的锁有明确恢复操作。
 
-- [ ] **步骤 5：运行 `bun test tests/maintenance.test.ts tests/retention.test.ts tests/derive.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/maintenance.test.ts tests/retention.test.ts tests/derive.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/maintenance.ts tests/maintenance.test.ts docs/operations.md package.json src/derive.ts src/schema.sql src/store.ts
@@ -275,7 +275,7 @@ git commit -m "feat(maintenance): verify backups and make recovery and retention
 - `CoverageReport = {denominator:number;collector_available:number;ava_available:number;collector_only:string[];ava_only:string[];missing_both:string[];ambiguous_ids:string[];null_id_counts:{ledger:number;collector:number;ava:number};window:{from:number;to:number}}`。
 - CLI `bun run verify-cutover --from <epoch-ms> --to <epoch-ms> --collector <db> --ava <readonly-db> --out <local-report.json>`。
 
-- [ ] **步骤 1：写窗口、NULL ID与歧义计数测试。**
+- [x] **步骤 1：写窗口、NULL ID与歧义计数测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -289,9 +289,9 @@ test('两边都缺失不能藏在集合交集中', () => {
 });
 ```
 
-- [ ] **步骤 2：运行 `bun test tests/cutover.test.ts`，确认缺核对逻辑失败。**
+- [x] **步骤 2：运行 `bun test tests/cutover.test.ts`，确认缺核对逻辑失败。**
 
-- [ ] **步骤 3：实现只读导出与守恒报告。** 使用collector已保存的ledger作为分母；窗口以epoch毫秒左闭右开，固定through/agent/status筛选，两边完全相同。原始ID集合和版本1规范ID集合各出一份报告；规范化碰撞单列ambiguous，不将多条真实请求合成1条计数。NULL ID单列，不能丢掉后宣称100%覆盖。计数保留行数、唯一ID数与重复候选数，满足：分母=有正文+无正文+无法唯一判断（在定义的筛选范围内）。
+- [x] **步骤 3：实现只读导出与守恒报告。** 使用collector已保存的ledger作为分母；窗口以epoch毫秒左闭右开，固定through/agent/status筛选，两边完全相同。原始ID集合和版本1规范ID集合各出一份报告；规范化碰撞单列ambiguous，不将多条真实请求合成1条计数。NULL ID单列，不能丢掉后宣称100%覆盖。计数保留行数、唯一ID数与重复候选数，满足：分母=有正文+无正文+无法唯一判断（在定义的筛选范围内）。
 
 AVA schema在执行时只读检查`sqlite_master`和`PRAGMA table_info`，按实际字段写本地查询；本计划不猜AVA表名。若表字段与历史研究不同，先记录映射再修改脚本，不读取正文做全库dump。脚本只抽取response ID、时间、状态、大小和可用性元数据，SQLite以readonly打开，日志不写正文/账号/cwd。报告在仓库外、0600权限，不提交真实ID清单；仓库只留合成报告示例。
 
@@ -332,7 +332,7 @@ AVA schema在执行时只读检查`sqlite_master`和`PRAGMA table_info`，按实
 
 完成回滚演练后恢复最终选定状态，记录起止时间、任何正文缺口与最终服务状态到本地报告。`docs/operations.md`只保存通用步骤和无敏感汇总。真实运行涉及等待，不可用合成测试结果替代24小时观察，更不能在本次文档交付中勾选通过。
 
-- [ ] **步骤 6：运行 `bun test tests/cutover.test.ts && bun run typecheck`，文档检查通过后提交。** `package.json`增加`"verify-cutover":"bun scripts/verify-cutover.ts"`。脚本用`if (import.meta.main)`保护CLI入口，测试import不会访问真实库。
+- [x] **步骤 6：运行 `bun test tests/cutover.test.ts && bun run typecheck`，文档检查通过后提交。** `package.json`增加`"verify-cutover":"bun scripts/verify-cutover.ts"`。脚本用`if (import.meta.main)`保护CLI入口，测试import不会访问真实库。
 
 ```bash
 git add scripts/verify-cutover.ts tests/cutover.test.ts docs/operations.md README.md docs/README.md package.json
