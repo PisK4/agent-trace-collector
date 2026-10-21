@@ -7,7 +7,8 @@
     "maintain": "bun src/maintenance.ts",
     "verify-cutover": "bun scripts/verify-cutover.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:notes": "node scripts/verify-agent-note-format.mjs && node scripts/verify-archived-agent-notes.mjs"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",

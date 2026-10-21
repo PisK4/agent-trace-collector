@@ -2,7 +2,7 @@
 
 本机 magpie 请求记录器。账本、路由与 hook 三路证据进入同一个 SQLite 库，查询走独立只读连接；浏览器页面复用 `prototypes/` 里的三栏布局和原生 JavaScript。
 
-当前处于实施阶段，生产代码按 [实施总入口](docs/superpowers/plans/2026-10-20-collector-implementation.md) 推进。已落地的是存储基座，采集、查询与页面随后补上；计划里的复选框逐项完成后才会更新为可用状态。
+第一版已落地：存储、采集、派生、查询与阅读界面可用，实施记录见 [实施总入口](docs/superpowers/plans/2026-10-20-collector-implementation.md)。C3 的真实并行观察、停 AVA 与回滚演练尚未执行。
 
 ## 运行
 
@@ -151,6 +151,8 @@ raw 层保留 7 天：先给对应证据标 `payload_state=expired` 再删原文
 ## 文档
 
 - [项目文档索引](docs/README.md)
+- [项目常备规则](AGENTS.md)
+- [Agent Note 规则与决策记录](.agents/notes/README.md)
 - [架构设计](docs/architecture-design.md)
 - [持久化与真实页面](docs/superpowers/plans/2026-10-20-collector-foundation.md)
 - [正文与关联派生](docs/superpowers/plans/2026-10-20-collector-body.md)
