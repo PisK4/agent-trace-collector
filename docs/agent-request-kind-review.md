@@ -1,6 +1,6 @@
 # 请求类别与 Agent 适配评审
 
-评审日期：2026-10-22。对象为 [Agent Profile 与请求类别注册表提案](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)。本轮核对 ATC 工作树、交接方案和固定提交的 magpie 源码，仅运行合成逻辑检查；没有读取真实请求正文或配置，没有调用模型、修改 magpie、执行回填或切换服务。
+评审日期：2026-10-22。对象为 [Agent Profile 与请求类别注册表提案](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)及[字段保真与 magpie 对标提案](../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)。本轮核对 ATC 工作树、交接方案和固定提交的 magpie 源码，仅运行合成逻辑检查；没有读取真实请求正文或配置，没有调用模型、修改 magpie、执行回填或切换服务。
 
 建议修订后实施。保留派生阶段的静态分类 Module、纯匹配器、未知 Agent 的通用处理，以及页面消费持久化分类的方向。实施前补齐分类门槛、用途与链角色的区别、上游用途信号、证据缺失与重算规则。容量提升需要独立验收，不能从新增注册表推导。
 
@@ -123,6 +123,75 @@ Profile 负责选择规则，协议 Adapter 提供已归一的文本与结构，
 
 现有 `tests/body-view.test.ts:222` 至 `:315` 同时测试工具字段解析、两类技能格式与渲染。迁移应将语义断言移到对应 Module，把 HTML/转义断言留页面测试。输入解释需覆盖包装中仍有真实用户文本、普通用户合法使用相同标签、未知 Agent、插话、嵌套和不完整标签；按已保存 ord 核对对话视图，避免只验摘要。
 
+## 与字段保真方案的联合评估
+
+[字段保真提案](../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)的优先方向成立：先准确读取上游事实，再让 Feature 解释它们。它补充来源字段与读模型，类别提案补充用途解释，两者共同依赖可追溯的输入与可重跑的派生。以下 ATC 与 magpie 源码结论属于 `版本锁定`，采用范围属于 `推断`；新提案引用的 `采集@2026-10-22` 数量没有在本轮重新查询，不作为本轮实测。
+
+### 字段修复必须同时覆盖收敛与历史回填
+
+`req`、`cost`、`err` 与布尔 `counted` 的核对方向正确。magpie 的 `usage.Record.Requested` 使用 `json:"req,omitempty"`，`OwnCost` 使用 `json:"cost,omitempty"`，错误文本与类型分别是 `err`、`err_type`（`internal/usage/usage.go:56`、`:198`、`:136`）；ATC 却分别读取 requested、own_cost/ownCost，且没有映射错误文本（`src/sources/magpie.ts:164`、`:199`、`:194`）。这属于来源 Adapter 的字段错误，不能由 Agent Feature 修补。
+
+但改 mapper 后，请求模型仍会失真。`insertRequest` 与 `applySingleLedger` 直接将 fields.model 写入 model_requested（`src/reconcile.ts:165`、`:196`）；聚合路径使用 `final?.model ?? final?.requested`（`:289`）。三条写入路径都需修正。建议严格区分客户端请求值 req、provider 模型标识 model、回复声明 served；缺少 req 时保留未知，不用 model 冒充请求值。现有 model_served 的 served→model 备用也应让读者能区分回复声明与路由模型，不能显示成 vendor 已确认。
+
+普通派生重算只更新链、标题与摘要，不能恢复模型、费用或新上浮字段（`src/derive.ts:716`）。账本重复证据又会提前跳过（`src/reconcile.ts:431`、`:478`），重新投递同一文件不能保证执行新的映射。提案第 88、147 行的按会话重算需要扩展成明确的离线流程：先按已脱敏 payload 重映射 raw，再按既有证据 owner 重新收敛 request/route_summary，最后重跑 Agent 语义、链与工具关联。req_id、正文引用、费用观测、游标与墓碑都应保留，不能通过清空证据来触发重摄入。
+
+raw 七天回收限制可修复范围。payload 尚在的字段可以恢复；raw 过期而长期摘要仍有的字段按摘要恢复；两者都没有的字段保持未知并报告不可恢复数量。已有错误备用值若继续保留，需标记其来源与旧口径，不能继续作为可信请求值参与统计。模型差异比例只是诊断，不能以比例非零或看起来合理作为验收；应以合成证据中确切的预期值、来源和请求守恒为准。账本 cost 对应客户端自报费用，不应覆盖现有用量 API 的定价结果。
+
+### counted 需要保留证据存在性
+
+magpie 的 `Prompt.Counted` 为 `bool` 且带 omitempty，true 表示用 vendor 总量校准；合法 Prompt 对象里缺省表示未校准（`internal/gateway/prompt.go:43` 至 `:53`）。ATC 用 optionalNumber 读布尔，true 会丢失。提案一面把缺键解释为本地估计，一面又称历史 NULL 无法回填，混淆了上游省略与 ATC 解析丢失。
+
+建议只有在识别到合法的 Prompt 对象及 tokens 等必要结构时，将 true 映射为 1、false/省略映射为 0；Prompt 缺失、形状不受支持或字段类型非法时保持未知。仅有 route 证据位也不能证明 Prompt 完整。有可用 raw_route 的历史 NULL 可重新解释；没有证据的 NULL 不补 0。上下文比例沿用 magpie 的 prompt_tokens/prompt_window，说明总量是否校准，窗口未知或非正时不画比例；75%/90% 只是阅读提示，不证明 Agent 将在该阈值压缩。
+
+### 统一字段集合不等于所有字段都放 request
+
+两份方案宜共用一轮有可执行脚本的 schema 变更，但先定义字段归属与来源优先级。共同必要项包括长期保留来源 kind、用途分类依据和显式算法版本；将全部候选字段加入 request 并不是 classifier 的前置条件。来源原值与派生 req_kind 分开保存，ledger/route 的 kind 冲突按确定规则处理，并保留来源，不能采用最后到达者覆盖。
+
+| 字段族 | 建议归属与语义 |
+| --- | --- |
+| req、native_session、客户端 tier_asked | 请求侧事实，缺失不借用实际模型或当前配置补齐；native_session 不替换现有 conv_key/actor |
+| host、account、effort、tier_sent、tier_served、err | 可能随尝试变化。request 可保存最终选定尝试的摘要，但必须定义最终行、全部失败和 pending_final 的选择方式；其它尝试保留在尝试证据中，不用首个非空值拼出不存在的一次调用 |
+| route.kind、folder、effort、error | 属于来源决策。是否加索引列由实际查询决定；不因上浮就同时复制进 request、显式列和压缩 JSON |
+| kind、分类依据、算法版本 | 是字段保真与 Feature 的共同接点；上游报告与 ATC 解释分离，依赖变化后重新入队 |
+
+schema 策略需准确引用[既有升级决策](../.agents/notes/implemented/architecture/2026-10-20-schema-v3-rejects-in-place-upgrade.md)：拒绝的是 openStore 启动时自动升级，既有 backfill 本身会显式补列并重算，且保住正文。第 92 行不能被解释成删库或只提升 user_version。联合变更需支持失败后续跑，并让未完成的迁移状态可见，避免结构版本已更新就被误认为全部回填完成。
+
+route_summary.z 也不能被当成完整 raw_route 的压缩备份。`saveRouteSummary` 只压缩自己选择的 summary（`src/reconcile.ts:508`），其中有 error，但没有 kind、folder、effort 或 prompt；原始层过期后不能从 z 补出这些字段。已有 order/tries 等信息是否继续同时存显式列与 z，可以按读取成本评估，但不能拿解压 z 代替保存它从未包含的字段。容量估算应按每笔请求对应的路由/尝试数量及新增字节计算；既有每笔约 2 KB 的元数据估计不等于 route_summary 单行实测大小。
+
+### 脱敏要覆盖结构化列与摘要
+
+新提案只从脱敏 payload 取值的要求值得保留，但当前实现并非全部字段都遵守。账本先对 parsed 调用 mapLedgerRow，再仅给 payload_json 脱敏，结构化列仍使用此前 fields（`src/reconcile.ts:461` 至 `:476`）。mapper 从 providerAccount 提取 account（`src/sources/magpie.ts:162`），而隐私规则会将 payload 中的 providerAccount 替换成稳定占位符（`src/privacy.ts:9`、`:83`）。因此两条存储路径当前可能保存不同的隐私形态；直接把 raw_ledger.account 上浮会延续这个差异。
+
+建议在建立新列之前统一提取与脱敏顺序，并明确 account 采用已有稳定占位符；旧结构化列应有相应修复范围及无法复核的处理。路由的 order/tries 也由脱敏前 route 对象写入 summary（`src/reconcile.ts:539`、`:556` 至 `:572`），展示 vendor 原话时需一起核对。已有 redact 会替换已知凭据模式，但不是对任意错误正文的完全匿名化；截断与 HTML 转义也不能代替脱敏。
+
+[架构设计的安全约定](architecture-design.md#安全边界)规定账号、key ID 与 host 默认不经接口返回。把它们存入 request 不代表允许列表、搜索与复制功能自动带出。默认响应应保持最小字段集；若需要在本地详情展示，先明确新的字段披露约定及测试。该修订涉及统一采集路径，不能让 Profile 自行放宽规则。
+
+### 页面纠错、阅读增强与新来源分别验收
+
+| 提案项目 | 联合评估 |
+| --- | --- |
+| 六类 prompt part 映射 | 可先修。采用 magpie 的 system/tools/memory/files/results/chat，并保留未知 kind 的名称与有效备用颜色；只替换六个已知标签不能解决未来未知值 |
+| part 分布的解释 | 第 17、68 行的前三类都未映射与所列数字矛盾：前三为 files、results、system，其中 files/system 已有映射。缺映射的是 results/chat/memory。沿用提案数字的算术约占 44.4%，不是本轮查询结果 |
+| 分页方向 | 现有查询 ASC 加大于游标，序号也从最早请求开始。可以直接把更早文案纠正为更晚；首屏改为最近 N 笔是另一个阅读行为决策，无需阻塞纠错 |
+| flags 与尝试链 | flags 恒空是读模型未供给结果；按失败、缺正文、待确认的确定聚合规则接通。尝试链复用已有结构，缺少时间证据就不补造重试间隔；未知 fail 码保留原值 |
+| 上下文提示、滚动保持、复制 | 属于读取与交互增强，可以分别实施；不进入 Agent Feature，也不作为字段修复或 classifier 的前置条件 |
+| 服务端全文搜索 | 第 102 行改变了[现行查询范围](architecture-design.md#查询接口)，应另立决策。先区分长期元数据/摘要搜索与仍保留正文的全文搜索，后者需索引预算、回收/删除同步、共享块到请求映射及未覆盖状态；一次 0 命中不能证明历史不存在 |
+| direct | 同一 usage API 增加 direct 查询，仍是新增的观测与逻辑身份路径。来源标签或 session 不能充当逐调用唯一键；不参与当前统一迁移的必需范围 |
+
+magpie 的 direct 来自本地会话调用的内存派生行（`internal/usage/direct.go:40`、`:55`）；这一点不能推导成来源不是会话文件。需纠正的是 direct 已写入 usage.jsonl 的说法，并明确 ATC 通过 magpie API 读取，不直接扫描 Agent 文件。`gatewayMatches` 要求 ID，或 native session、等 token、两秒窗口且双向唯一，歧义保留可见（`internal/usage/ledger.go:364`）。native_session 因而只是关联信号，不能保证防重；数组位置也不能证明跨扫描稳定身份。
+
+建议 direct 维持另案。观测态若读入未配对数据，应与正式请求计数和费用汇总分开，避免不合并反而重复累计。另需区分 magpie Record.Via 的转手机器含义与 API 的 through/direct 来源筛选，避免因字段同名就复用 ATC 现有 via 判定。新增来源状态变化后的配对撤销、跨分页变化、重复扫描与重启恢复，都应在接入前有明确结果。
+
+### 合并后的实施次序
+
+1. 修正两份 proposed 方案的事实与范围，确定模型三种值、Prompt 完整性、字段归属和脱敏输出。保留本评审作为证据与建议，不把提案改写成已交付。
+2. 先做无需新增列的来源读取、模型写入路径、part 未知兜底与分页文案纠错；历史回填另有报告，不以新数据正确代替旧数据已修复。
+3. 对已确认需要长期保留的字段做一次结构变更，覆盖来源用途、分类依据/版本及确有消费者的字段；执行顺序为脱敏后重映射、收敛、语义/链重派生。按证据可用性报告恢复范围。
+4. 迁入 title、增加 classifier 并贯通消费者；统一输入解释、技能提取与尝试链阅读分别推进。classifier 不等待 account 展示、全文搜索或 direct。
+5. 按机器流量目标独立验收采集、派生与查询；direct、正文全文搜索及 Agent 专有指纹分别评审，避免把它们混进同一 schema 上线条件。
+
+联合验收除既有分类用例外，应覆盖三种模型值各不相同与 req 缺失、客户端自报 cost 为 0、err 与 err_type 不同、合法 Prompt 的 true/false/省略及非法/缺失形状、多尝试切换端点/账号/档位、来源冲突和乱序、raw 过期、同物理证据重复到达、回填中断续跑。核对请求数、req_id、正文引用和费用观测保持一致；迁移再次执行结果应收敛。新提案不会完全取代现有 implemented 记录，本轮无需归档。
+
 ## 机器流量的容量工作
 
 源码已显示下列随规模增长的工作量；本轮没有运行吞吐测试，无法声称它们已经导致超时。
@@ -155,4 +224,4 @@ ATC 源码基准为 `a9df065c92de5f986602be2a1b0fa402c328f14e`；评审时工作
 
 本文中的源码机制属于 `版本锁定`：针对特定客户端版本或特定源码快照逆向得到的实现事实，包括本地文件布局、落盘结构与源码控制流；任何版本发布都可能改变。修订建议属于 `推断`：从以上事实外推的解析或判定规则，不是事实；不稳定，仅供参考。分类器真实形状与频率仅引用 [auto mode 分类器研究](auto-mode-classifier-research.md) 声明的 `采集@2026-10-21-atc`，没有重新查询，不能外推到其它 Agent 或更长时间范围。
 
-本轮执行了双信号误判的合成反例，以及建议请求门槛的三个合成断言。它们只验证文中逻辑，不代表生产实现、真实流量验收或吞吐测试。完整迁移评估另核对了现有前端合成用例，但没有运行这些用例。文档本地链接、源码引用行号范围及禁用引号检查通过，`git diff --check` 通过；既有 `verify:notes` 检查通过后未因纯评审补充重复执行。未执行全量测试、真实库重派生和线上负载测试。
+本轮执行了双信号误判的合成反例，以及建议请求门槛的三个合成断言。它们只验证文中逻辑，不代表生产实现、真实流量验收或吞吐测试。完整迁移评估另核对了现有前端合成用例，但没有运行这些用例。字段保真联合评审另用合成输入复现 mapLedgerRow 丢失 req/cost、mapRouteRow 丢失布尔 counted，以及 account 结构化列与脱敏 payload 的差异；检查通过表示复现当前缺陷，不表示已经修复。文档本地链接、源码引用行号范围及禁用引号检查通过，`git diff --check` 通过；Agent Note 检查通过。未执行全量测试、真实库重派生和线上负载测试。
