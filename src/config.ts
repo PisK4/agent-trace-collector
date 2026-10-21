@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -47,4 +49,35 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   };
   if (config.bodyBudget >= config.diskLimit) throw new Error('body_budget_not_below_disk_limit');
   return config;
+}
+
+function readLocalSecret(path: string): Uint8Array {
+  const info = lstatSync(path);
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error('local_secret_invalid_file');
+  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+    throw new Error('local_secret_owner_mismatch');
+  }
+  if ((info.mode & 0o077) !== 0) throw new Error('local_secret_permissions');
+  if (info.size !== 32) throw new Error('local_secret_length');
+  const bytes = readFileSync(path);
+  if (bytes.length !== 32) throw new Error('local_secret_length');
+  return new Uint8Array(bytes);
+}
+
+export function loadLocalSecret(dataDir: string, fileName: 'redaction.salt' | 'read.token'): Uint8Array {
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const path = join(dataDir, fileName);
+  try {
+    return readLocalSecret(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const generated = randomBytes(32);
+  try {
+    writeFileSync(path, generated, { flag: 'wx', mode: 0o600 });
+    return new Uint8Array(generated);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return readLocalSecret(path);
+    throw error;
+  }
 }
