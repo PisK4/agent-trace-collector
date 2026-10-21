@@ -579,7 +579,6 @@ function assignChainRoles(db: Database, convKey: string, actor: string): void {
   const first = rows[0];
   if (first === undefined) return;
   const ids = new Set(rows.map(row => row.req_id));
-  const started = new Map(rows.map(row => [row.req_id, row.started_ms]));
   const children = new Map<number, number[]>();
   const roots: number[] = [];
   for (const row of rows) {
@@ -592,10 +591,8 @@ function assignChainRoles(db: Database, convKey: string, actor: string): void {
     if (list === undefined) children.set(parent, [row.req_id]);
     else list.push(row.req_id);
   }
-  let trunkRoot = roots[0] ?? first.req_id;
-  for (const root of roots) {
-    if ((started.get(root) ?? 0) < (started.get(trunkRoot) ?? 0)) trunkRoot = root;
-  }
+  // rows 已按 started_ms 排序，roots 的第一个就是时间最早的根。
+  const trunkRoot = roots[0] ?? first.req_id;
   const trunk = new Set<number>();
   const stack = [trunkRoot];
   while (stack.length > 0) {

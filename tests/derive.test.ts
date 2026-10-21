@@ -241,9 +241,13 @@ test('前驱正文缺失时本轮记为unknown且不算增量', () => {
     f.store.write(db => db.run("UPDATE request SET body_state='pending', skeleton_z=NULL WHERE req_id=1"));
     enqueueDerive(f.store, JSON.stringify(['session', 'chain']), 'actor-a', '');
     drainDerive(f.store);
-    const second = f.store.read.query<{ prev_relation: string; delta_ordinals: string | null }, [number]>(
-      'SELECT prev_relation, delta_ordinals FROM request WHERE req_id=?').get(2);
-    expect(second).toEqual({ prev_relation: 'unknown', delta_ordinals: null });
+    const rows = f.store.read.query<{
+      req_id: number; prev_relation: string; delta_ordinals: string | null; chain_role: string;
+    }, []>('SELECT req_id, prev_relation, delta_ordinals, chain_role FROM request ORDER BY req_id').all();
+    expect(rows).toEqual([
+      { req_id: 1, prev_relation: 'unknown', delta_ordinals: null, chain_role: 'main' },
+      { req_id: 2, prev_relation: 'unknown', delta_ordinals: null, chain_role: 'main' },
+    ]);
   } finally {
     f.close();
   }
@@ -422,7 +426,7 @@ test('标题请求的回复只留标题文本', () => {
   }
 });
 
-test('标题生成请求不占主链，后续请求最多的链才是主链', () => {
+test('标题生成请求不占主链，时间最早的链才是主链', () => {
   const f = fixture();
   try {
     const key = JSON.stringify(['session', 'title-and-branch']);
