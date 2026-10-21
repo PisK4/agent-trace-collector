@@ -2,6 +2,8 @@
 
 Status: proposed
 
+本提案作为 Agent 语义问题的输入材料保留；下一轮统筹范围与顺序见[架构演进方案 v2](../../../../docs/architecture-evolution-v2.md)，具体规则修正见[联合评审](../../../../docs/agent-request-kind-review.md)。本文尚未修订的 Interface、匹配门槛与迁移验收不直接作为执行依据。
+
 ## Problem
 
 ATC 要成为本机所有 agent 的唯一 trace 入口。它的记录单位是请求，阅读入口是会话：每一笔经过 magpie 的请求留一条记录，账本保存请求本身，派生字段再把请求组织成可读的会话。这个选择来自两个前身：AVA 自己判定会话归属，判不准；ATA 的事件账本要先还原成请求，才能知道模型当时看到了什么（[项目定位](../../../../docs/project-overview.md)）。本项目的回答是不再自己发明归属，直接用 magpie 已经输出的请求、agent 与 session，把事实记下来，视图从事实派生。
