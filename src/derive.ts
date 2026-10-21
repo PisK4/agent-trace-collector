@@ -74,7 +74,7 @@ function anthropicRequestResults(request: unknown): { id: string; ord: number; p
  * 不配工具、标题回落到模型时间。身份确认后才入队，避免跨子代理串数据。
  */
 
-export type SequenceRelation = 'first' | 'confirmed' | 'unknown';
+export type SequenceRelation = 'first' | 'confirmed' | 'unknown' | 'branch';
 
 export type SequenceResult = {
   relation: SequenceRelation;
@@ -82,12 +82,15 @@ export type SequenceResult = {
 };
 
 /**
- * 比较两笔请求的消息块序列。只有上一笔的序列是本笔的完整前缀时才确认增量；
- * 压缩、裁剪、分支或结构指令变化一律未知，不猜。
+ * 比较两笔请求的消息序列。只有前驱的序列是本笔的完整前缀时才确认增量；
+ * 压缩、裁剪或结构指令变化一律未知，不猜。
+ *
+ * 传入的是语义指纹而不是块哈希：块哈希带 cache_control，缓存断点一移动
+ * 同一段历史就换哈希，会把完整的链读成互不相干的请求。
  */
 export function compareSequence(
-  previous: readonly number[] | null,
-  current: readonly number[],
+  previous: readonly string[] | null,
+  current: readonly string[],
   hasPredecessor: boolean,
 ): SequenceResult {
   if (!hasPredecessor) return { relation: 'first', delta: current.map((_, index) => index) };
@@ -101,9 +104,112 @@ export function compareSequence(
   };
 }
 
+/** 两条序列的公共前缀长度。 */
+function commonPrefix(left: readonly string[], right: readonly string[]): number {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) index += 1;
+  return index;
+}
+
+export type PredecessorMatch = {
+  /** 完整前缀匹配到的祖先；null 表示本笔另起一支。 */
+  parent: number | null;
+  relation: SequenceRelation;
+  delta: number[] | null;
+  /** 找到的最长部分前缀祖先与它的公共长度，用于说明"最接近的一支"。 */
+  near: { reqId: number; shared: number } | null;
+};
+
+/**
+ * 在链上所有已知祖先里找本笔的前驱。
+ *
+ * 只看立即前驱不够：一个会话里会并行开出子代理、重放历史、从更早的上下文
+ * 分叉。本笔的上下文完整包含了某笔祖先时，那才是真正的前驱，哪怕中间还
+ * 夹着别的请求。
+ *
+ * 判据仍然严格：只有"祖先序列是本笔的完整前缀"才算确认。找不到就另起一支，
+ * 并记下最接近的那一支，界面据此说明，而不是只丢一句"无法确认"。
+ *
+ * @param ancestors 已按时间正序处理过的请求，携带各自的指纹序列
+ * @param current 本笔的指纹序列
+ * @param hasEarlier 本笔之前还有请求（哪怕它的正文不可读）
+ */
+export function matchPredecessor(
+  ancestors: readonly { reqId: number; fingerprints: readonly string[] }[],
+  current: readonly string[],
+  hasEarlier = ancestors.length > 0,
+): PredecessorMatch {
+  let best: { reqId: number; shared: number } | null = null;
+  let parent: { reqId: number; length: number } | null = null;
+
+  for (const ancestor of ancestors) {
+    const shared = commonPrefix(ancestor.fingerprints, current);
+    if (shared > 0 && (best === null || shared > best.shared)) {
+      best = { reqId: ancestor.reqId, shared };
+    }
+    // 完整前缀：祖先整条都在本笔里。取最长的那条，即最深的祖先。
+    if (shared === ancestor.fingerprints.length && shared <= current.length
+      && (parent === null || ancestor.fingerprints.length > parent.length)) {
+      parent = { reqId: ancestor.reqId, length: ancestor.fingerprints.length };
+    }
+  }
+
+  if (parent !== null) {
+    const delta = current.slice(parent.length).map((_, offset) => offset + parent.length);
+    return {
+      parent: parent.reqId,
+      relation: parent.length === 0 ? 'first' : 'confirmed',
+      delta,
+      near: best,
+    };
+  }
+  // 本组第一笔：没有更早的请求可比，整笔都是新增。
+  if (!hasEarlier) {
+    return { parent: null, relation: 'first', delta: current.map((_, index) => index), near: null };
+  }
+  return { parent: null, relation: 'branch', delta: null, near: best };
+}
+
 const SYSTEM_TAG = /^\s*<(?:system-reminder|command-[a-z-]+)>[\s\S]*?<\/(?:system-reminder|command-[a-z-]+)>\s*/i;
 const CWD_WRAPPER = /^\s*(?:工作目录|working directory|cwd)[:：][^\n]*\n?/i;
 const TITLE_UNICODE_LIMIT = 60;
+
+/**
+ * harness 注入的包装：不是用户说的话，不能拿来当标题。
+ *
+ * `<session>` 是 Claude Code 给会话首轮套的外壳，里面才是用户输入，所以只剥
+ * 标签、留内容。其余几种是回显或机器输出，整段丢掉：`<transcript>` 是历史重放，
+ * `<command-name>` / `<command-args>` / `<local-command-stdout>` 是斜杠命令的
+ * 回显与输出，技能注入以 "Base directory for this skill:" 开头，harness 的
+ * "The user stepped away..." 也是它自己生成的。
+ */
+const UNWRAP_WRAPPERS = [
+  // 不能锚定行尾：`</session>` 之后常跟着 harness 追加的一句指令。
+  /^\s*<session>([\s\S]*?)<\/session>\s*/i,
+];
+const DROP_WRAPPERS = [
+  /^\s*<transcript>[\s\S]*?<\/transcript>\s*/i,
+  /^\s*<local-command-stdout>[\s\S]*?<\/local-command-stdout>\s*/i,
+  /^\s*<command-name>[\s\S]*?<\/command-name>\s*/i,
+  /^\s*<command-message>[\s\S]*?<\/command-message>\s*/i,
+  /^\s*<command-args>[\s\S]*?<\/command-args>\s*/i,
+  /^\s*Base directory for this skill:[\s\S]*$/i,
+  /^\s*The user stepped away and is coming back\.[\s\S]*$/i,
+];
+
+/** 反复剥到不再变化：一次请求里可能连着套好几层包装。 */
+function stripHarnessWrappers(text: string): string {
+  let current = text.replace(SYSTEM_TAG, '').replace(CWD_WRAPPER, '');
+  for (let round = 0; round < 6; round++) {
+    const before = current;
+    for (const pattern of UNWRAP_WRAPPERS) current = current.replace(pattern, '$1');
+    for (const pattern of DROP_WRAPPERS) current = current.replace(pattern, '');
+    current = current.replace(SYSTEM_TAG, '').replace(CWD_WRAPPER, '').trim();
+    if (current === before) break;
+  }
+  return current;
+}
 
 /** 取第一个确定新增 USER 文本的首行；没有可用增量时回落到模型时间。 */
 export function deriveTitle(
@@ -115,9 +221,8 @@ export function deriveTitle(
   for (const ordinal of delta) {
     const text = userText(messages[ordinal]);
     if (text === null) continue;
-    const cleaned = text
-      .replace(SYSTEM_TAG, '')
-      .replace(CWD_WRAPPER, '')
+    // 先剥包装再取首行：首行往往正好是被包起来的那一行。
+    const cleaned = stripHarnessWrappers(text)
       .split('\n')[0]
       ?.replace(/\s+/g, ' ')
       .trim();
@@ -175,6 +280,7 @@ type ChainRow = {
   sort_source: string | null; sort_key: string | null;
   prev_req_id: number | null; prev_relation: string | null;
   title_source: string | null; title: string | null; model_served: string | null;
+  input_preview: string | null; input_preview_kind: string | null; reply_preview: string | null;
 };
 
 function blocksOf(db: Database, reqId: number): number[] | null {
@@ -185,6 +291,107 @@ function blocksOf(db: Database, reqId: number): number[] | null {
   return db.query<{ block: number }, [number]>(
     'SELECT block FROM request_block WHERE req_id=? ORDER BY ord',
   ).all(reqId).map(row => row.block);
+}
+
+/**
+ * 本笔的语义指纹序列。正文不可读时返回 null，调用方据此判成未知，
+ * 不拿空序列去冒充"这一笔没有消息"。
+ */
+function fingerprintsOf(db: Database, reqId: number): string[] | null {
+  const body = db.query<{ body_state: string }, [number]>(
+    'SELECT body_state FROM request WHERE req_id=?',
+  ).get(reqId);
+  if (body == null || (body.body_state !== 'available' && body.body_state !== 'partial')) return null;
+  return db.query<{ fingerprint: string }, [number]>(`
+    SELECT b.fingerprint AS fingerprint FROM request_block rb JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? ORDER BY rb.ord`).all(reqId).map(row => row.fingerprint);
+}
+
+/** 摘要长度按 Unicode 字符算，避免把中文截成半个字。 */
+const PREVIEW_UNICODE_LIMIT = 90;
+
+function clip(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const chars = [...flat];
+  return chars.length <= PREVIEW_UNICODE_LIMIT ? flat : `${chars.slice(0, PREVIEW_UNICODE_LIMIT).join('')}…`;
+}
+
+/** 折叠行摘要：本轮新增的用户输入，剥掉 harness 包装后取首段。 */
+function previewOf(messages: readonly (unknown | null)[]): string | null {
+  for (const message of messages) {
+    const text = userText(message);
+    if (text === null) continue;
+    const cleaned = stripHarnessWrappers(text).trim();
+    if (cleaned.length > 0) return clip(cleaned);
+  }
+  return null;
+}
+
+/**
+ * 关系未知时折叠行的兜底摘要：正文里最后一条用户文本。
+ *
+ * 这不是"新增"——界面不能把它标成新增，否则会把旧上下文读成本轮输入。
+ * 但折叠行空着同样有害：读者无从判断这笔请求在做什么。
+ */
+function tailUserPreview(db: Database, reqId: number): string | null {
+  const rows = db.query<{ z: Uint8Array }, [number]>(`
+    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord DESC LIMIT 5`).all(reqId);
+  for (const row of rows) {
+    let message: unknown;
+    try {
+      message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
+    } catch {
+      continue;
+    }
+    const text = userText(message);
+    if (text === null) continue;
+    const cleaned = stripHarnessWrappers(text).trim();
+    if (cleaned.length > 0) return clip(cleaned);
+  }
+  return null;
+}
+
+/** 折叠行摘要：这一笔的回复文本首段。 */function replyPreviewOf(db: Database, reqId: number): string | null {
+  const row = db.query<{ skeleton_z: Uint8Array | null }, [number]>(
+    'SELECT skeleton_z FROM request WHERE req_id=?').get(reqId);
+  if (row == null || row.skeleton_z == null) return null;
+  let skeleton: unknown;
+  try {
+    skeleton = JSON.parse(zstdDecompressSync(row.skeleton_z).toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (skeleton === null || typeof skeleton !== 'object') return null;
+  const reply = (skeleton as Record<string, unknown>).reply;
+  const text = assistantText(reply);
+  return text === null ? null : clip(text);
+}
+
+/** 两种协议里的回复文本；只取第一段非空文本，不拼工具调用。 */
+function assistantText(reply: unknown): string | null {
+  if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return null;
+  const record = reply as Record<string, unknown>;
+  const fromBlocks = (blocks: unknown): string | null => {
+    if (!Array.isArray(blocks)) return null;
+    for (const block of blocks) {
+      if (block === null || typeof block !== 'object') continue;
+      const value = (block as Record<string, unknown>).text;
+      if (typeof value === 'string' && value.trim().length > 0) return value;
+    }
+    return null;
+  };
+  const direct = fromBlocks(record.content);
+  if (direct !== null) return direct;
+  const choices = record.choices;
+  if (!Array.isArray(choices) || choices.length === 0) return null;
+  const first = choices[0];
+  if (first === null || typeof first !== 'object') return null;
+  const message = (first as Record<string, unknown>).message;
+  if (message === null || typeof message !== 'object') return null;
+  const content = (message as Record<string, unknown>).content;
+  if (typeof content === 'string') return content.trim().length > 0 ? content : null;
+  return fromBlocks(content);
 }
 
 function messageAt(db: Database, reqId: number, ordinal: number): unknown | null {
@@ -215,53 +422,83 @@ export function drainDerive(store: Store, limit = 100): {
     for (const group of groups) {
       const rows = db.query<ChainRow, [string, string]>(`
         SELECT req_id, actor, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
-               title_source, title, model_served
+               title_source, title, model_served, input_preview, input_preview_kind, reply_preview
         FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
       const ordered = [...rows].sort((left, right) =>
         sortKeyOf(left).localeCompare(sortKeyOf(right)));
-      let previous: ChainRow | null = null;
-      let previousBlocks: number[] | null = null;
+      // 本组已处理过的请求，供后面每一笔在链上找前驱。按正序推进，
+      // 所以这里只会看到"早于本笔"的祖先。
+      const ancestors: { reqId: number; fingerprints: readonly string[] }[] = [];
+      // 有正文不可读的祖先时，链是断的：后面那些请求即使对不上已知祖先，
+      // 也只能算"没法比"，不能断言成"另起一支"。
+      let sawEarlier = false;
+      let unreadableEarlier = false;
       for (const row of ordered) {
-        const currentBlocks = blocksOf(db, row.req_id);
-        const comparable = previous !== null && previousBlocks !== null && currentBlocks !== null;
-        const result = compareSequence(
-          previousBlocks,
-          currentBlocks ?? [],
-          previous !== null,
-        );
-        const relation: SequenceRelation = comparable && currentBlocks !== null
-          ? result.relation
-          : previous === null ? 'first' : 'unknown';
-        const delta = relation === 'first' ? result.delta
-          : relation === 'confirmed' ? result.delta
-            : null;
+        const current = fingerprintsOf(db, row.req_id);
+        let match: PredecessorMatch;
+        if (current === null) {
+          // 本笔正文不可读：没法比，但也不能把上一笔的结论照抄过来。
+          match = { parent: null, relation: 'unknown', delta: null, near: null };
+        } else {
+          const found = matchPredecessor(ancestors, current, sawEarlier);
+          match = found.relation === 'branch' && unreadableEarlier
+            ? { ...found, relation: 'unknown' }
+            : found;
+        }
+        sawEarlier = true;
+        if (current === null) unreadableEarlier = true;
+
+        const relation: SequenceRelation = match.relation;
+        const delta = match.delta;
 
         const fallback = row.title ?? `${row.model_served ?? '模型'} · ${clock(row.started_ms)}`;
         let title = fallback;
         let source: 'user_delta' | 'model_time' = 'model_time';
-        if (currentBlocks === null && row.title !== null
-          && (row.title_source === 'user_delta' || row.title_source === 'model_time')) {
-          // 正文已回收：旧标题是当时按正文算出来的，没有正文重算只会把它降级成时间兜底。
-          title = row.title;
-          source = row.title_source;
+        let inputPreview: string | null = null;
+        let inputKind: 'delta' | 'tail' | 'tool_result' | null = null;
+        let replyPreview: string | null = null;
+        if (current === null) {
+          // 正文已回收：旧标题与旧摘要都是当时按正文算出来的，没有正文重算
+          // 只会把它们降级成时间兜底，所以原样保留。
+          title = row.title ?? fallback;
+          source = (row.title_source === 'user_delta' || row.title_source === 'model_time')
+            ? row.title_source : 'model_time';
+          inputPreview = row.input_preview;
+          inputKind = row.input_preview_kind === 'delta' || row.input_preview_kind === 'tail'
+            || row.input_preview_kind === 'tool_result' ? row.input_preview_kind : null;
+          replyPreview = row.reply_preview;
         } else if (delta !== null && delta.length > 0) {
           // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
           const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
           const derived = deriveTitle(messages, delta.map((_, index) => index), fallback);
           title = derived.title;
           source = derived.source;
+          // 增量里常常只有工具结果或系统消息，没有用户文本。此时摘要退回
+          // "末轮输入"，界面用标签区分，不冒充新增。
+          const fresh = previewOf(messages);
+          inputPreview = fresh ?? tailUserPreview(db, row.req_id);
+          inputKind = fresh !== null ? 'delta' : inputPreview !== null ? 'tail' : null;
+        } else if (delta !== null) {
+          // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
+          inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
+          inputKind = 'tool_result';
+        } else {
+          // 关系未知或另起一支：没有"新增"可言，但折叠行仍要有东西可读。
+          // 取正文里最后一条用户消息，界面会把它标成"末轮输入"而不是"新增"。
+          inputPreview = tailUserPreview(db, row.req_id);
+          inputKind = inputPreview !== null ? 'tail' : null;
         }
+        if (current !== null) replyPreview = replyPreviewOf(db, row.req_id);
         db.run(
           `UPDATE request SET prev_req_id=?, prev_relation=?, delta_ordinals=?, title=?, title_source=?,
-             derive_version=derive_version+1 WHERE req_id=?`,
+             input_preview=?, input_preview_kind=?, reply_preview=?, derive_version=derive_version+1 WHERE req_id=?`,
           [
-            previous?.req_id ?? null, relation,
+            match.parent, relation,
             delta === null ? null : JSON.stringify(delta),
-            title, source, row.req_id,
+            title, source, inputPreview, inputKind, replyPreview, row.req_id,
           ],
         );
-        previous = row;
-        previousBlocks = currentBlocks;
+        if (current !== null) ancestors.push({ reqId: row.req_id, fingerprints: current });
         processed += 1;
       }
       db.run('DELETE FROM derive_queue WHERE conv_key=? AND actor=?', [group.conv_key, group.actor]);
@@ -339,7 +576,9 @@ export function pairToolCalls(store: Store, convKey: string, actor: string): { r
       // 结果是否落在确定增量的 ord 上；unknown/first 的规则不同。
       const delta = row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[];
       const ordinalConfirmed = (ord: number): boolean =>
-        row.prev_relation === 'first' ? true : delta !== null && delta.includes(ord);
+        row.prev_relation === 'first' || row.prev_relation === 'confirmed'
+          ? (row.prev_relation === 'first' ? true : delta !== null && delta.includes(ord))
+          : false;
       for (const block of anthropicReplyCalls(body.reply)) {
         calls.push({ req_id: row.req_id, ord: block.ord, call_id: block.id, name: block.name, index });
       }

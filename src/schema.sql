@@ -124,6 +124,12 @@ CREATE TABLE request (
   prev_relation    TEXT,
   delta_ordinals   TEXT,
   title TEXT, title_source TEXT,
+  -- 折叠行摘要：派生时写入，列表接口直接返回，不碰正文块。
+  -- kind 说明摘要是什么：delta（本轮新增）/ tail（末轮输入，非新增）/
+  -- tool_result（本轮没有用户消息，输入是工具结果）。
+  input_preview    TEXT,
+  input_preview_kind TEXT,
+  reply_preview    TEXT,
   derive_version   INTEGER NOT NULL,
   have             INTEGER NOT NULL,
   miss_reason      TEXT,
@@ -175,9 +181,13 @@ CREATE TABLE pending_hook (
 CREATE TABLE block (
   id       INTEGER PRIMARY KEY,
   hash     BLOB NOT NULL UNIQUE,
+  -- 语义指纹：忽略 cache_control 等传输标记后的规范化消息。
+  -- 派生比对用它，不能拿 hash 比：缓存断点移动会让同一内容换哈希。
+  fingerprint TEXT NOT NULL,
   z        BLOB NOT NULL,
   raw_size INTEGER NOT NULL
 );
+CREATE INDEX i_block_fp ON block(fingerprint);
 
 CREATE TABLE request_block (
   req_id INTEGER NOT NULL,

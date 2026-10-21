@@ -10,7 +10,7 @@ export type Store = {
 };
 
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -37,21 +37,9 @@ function migrate(db: Database): void {
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
-  if (version === 1) {
-    // v2 只新增两张保留墓碑表，不改既有列；老库就地升版。
-    db.transaction(() => {
-      db.exec(`CREATE TABLE IF NOT EXISTS retention_event (
-        id INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, action TEXT NOT NULL,
-        first_day TEXT, last_day TEXT, request_count INTEGER NOT NULL,
-        reason TEXT NOT NULL, approval_id TEXT
-      );
-      CREATE TABLE IF NOT EXISTS purged_evidence (
-        source_kind TEXT NOT NULL, ref_key TEXT NOT NULL, purged_at INTEGER NOT NULL,
-        PRIMARY KEY(source_kind,ref_key)
-      ) WITHOUT ROWID;`);
-      db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
-    }).immediate();
-  }
+  // v3 改了块指纹与摘要列，没有原地升级路径：旧库里的派生结果本身就不可信，
+  // 就地改写只会把错误固化下来。要求删库重建，由来源重放补齐。
+  if (version < SCHEMA_VERSION) throw new Error('schema_rebuild_required');
   const requestSql = db.query(
     "SELECT sql FROM sqlite_master WHERE type='table' AND name='request'",
   ).get() as { sql: string } | null;

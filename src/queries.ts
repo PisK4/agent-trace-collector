@@ -12,6 +12,10 @@ export type RequestRow = {
   cache_read: number | null; cache_write: number | null;
   cost: number | null; cost_state: CostState; have: number;
   body_state: BodyState; miss_reason: string | null;
+  /** 折叠行摘要：派生时写入，不读正文块。kind 说明摘要来自新增还是末轮输入。 */
+  input_preview: string | null;
+  input_preview_kind: 'delta' | 'tail' | 'tool_result' | null;
+  reply_preview: string | null;
 };
 
 export type SessionRow = {
@@ -27,7 +31,7 @@ export type ToolCallRow = {
 
 export type RequestDetail = RequestRow & {
   prev_req_id: number | null;
-  prev_relation: 'confirmed' | 'unknown' | 'first' | null;
+  prev_relation: 'confirmed' | 'unknown' | 'first' | 'branch' | null;
   delta_ordinals: number[] | null;
   parse_state: string | null;
   reply_state: string | null;
@@ -97,7 +101,19 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
   const rows = (bound === null
     ? store.read.query<SessionDbRow, [number]>(`
         SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
-               MAX(title) AS title, GROUP_CONCAT(DISTINCT actor) AS agents
+               -- 会话标题取最早一笔真正派生出来的用户标题；没有才退回最早一笔的标题。
+               -- MAX(title) 是字典序最大值，会把 group/... 之类的模型名排在前面，
+               -- 会话就被命名成一个和内容无关的字符串。
+               COALESCE(
+                 (SELECT r2.title FROM request r2
+                  WHERE r2.conv_key = request.conv_key AND r2.title_source = 'user_delta'
+                    AND r2.title IS NOT NULL
+                  ORDER BY r2.started_ms ASC, r2.req_id ASC LIMIT 1),
+                 (SELECT r3.title FROM request r3
+                  WHERE r3.conv_key = request.conv_key AND r3.title IS NOT NULL
+                  ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1)
+               ) AS title,
+               GROUP_CONCAT(DISTINCT actor) AS agents
         FROM request
         WHERE conv_key IS NOT NULL
         GROUP BY conv_key
@@ -107,7 +123,16 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
     : store.read.query<SessionDbRow, [number, string, number]>(`
         SELECT conv_key, last_ms, request_count, title, agents FROM (
           SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
-                 MAX(title) AS title, GROUP_CONCAT(DISTINCT actor) AS agents
+                 COALESCE(
+                   (SELECT r2.title FROM request r2
+                    WHERE r2.conv_key = request.conv_key AND r2.title_source = 'user_delta'
+                      AND r2.title IS NOT NULL
+                    ORDER BY r2.started_ms ASC, r2.req_id ASC LIMIT 1),
+                   (SELECT r3.title FROM request r3
+                    WHERE r3.conv_key = request.conv_key AND r3.title IS NOT NULL
+                    ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1)
+                 ) AS title,
+                 GROUP_CONCAT(DISTINCT actor) AS agents
           FROM request
           WHERE conv_key IS NOT NULL
           GROUP BY conv_key
@@ -136,7 +161,8 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
 type RequestDbRow = Omit<RequestRow, 'conv_key'> & { conv_key: string | null };
 
 const REQUEST_COLUMNS = `req_id, conv_key, actor, actor_state, started_ms, title, status, model_requested,
-  model_served, in_tok, out_tok, cache_read, cache_write, cost, cost_state, have, body_state, miss_reason`;
+  model_served, in_tok, out_tok, cache_read, cache_write, cost, cost_state, have, body_state, miss_reason,
+  input_preview, input_preview_kind, reply_preview`;
 
 export function listRequests(store: Store, key: string, limit = 100, cursor: string | null = null): Page<RequestRow> {
   const size = checkLimit(limit, 200);
@@ -152,13 +178,13 @@ export function listRequests(store: Store, key: string, limit = 100, cursor: str
     ? store.read.query<RequestDbRow, [string, number]>(`
         SELECT ${REQUEST_COLUMNS} FROM request
         WHERE conv_key = ?
-        ORDER BY started_ms DESC, req_id DESC
+        ORDER BY started_ms ASC, req_id ASC
         LIMIT ?`)
       .all(key, size + 1)
     : store.read.query<RequestDbRow, [string, number, number, number]>(`
         SELECT ${REQUEST_COLUMNS} FROM request
-        WHERE conv_key = ? AND (started_ms, req_id) < (?, ?)
-        ORDER BY started_ms DESC, req_id DESC
+        WHERE conv_key = ? AND (started_ms, req_id) > (?, ?)
+        ORDER BY started_ms ASC, req_id ASC
         LIMIT ?`)
       .all(key, bound.startedMs, bound.reqId, size + 1)) as RequestDbRow[];
 
@@ -178,6 +204,7 @@ type DetailDbRow = {
   in_tok: number | null; out_tok: number | null; cache_read: number | null; cache_write: number | null;
   cost: number | null; cost_state: string | null; have: number; body_state: string;
   miss_reason: string | null; prev_req_id: number | null; prev_relation: string | null;
+  input_preview: string | null; input_preview_kind: string | null; reply_preview: string | null;
   delta_ordinals: string | null; parse_state: string | null; reply_state: string | null;
   ms: number | null; ttft_ms: number | null; flow_ms: number | null; first_text_ms: number | null;
   reasoning: number | null; prompt_tokens: number | null; prompt_counted: number | null;
@@ -250,6 +277,9 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     have: row.have,
     body_state: row.body_state as BodyState,
     miss_reason: row.miss_reason,
+    input_preview: row.input_preview,
+    input_preview_kind: row.input_preview_kind as RequestRow['input_preview_kind'],
+    reply_preview: row.reply_preview,
     prev_req_id: row.prev_req_id,
     prev_relation: row.prev_relation as RequestDetail['prev_relation'],
     delta_ordinals: Array.isArray(parseJsonOrNull(row.delta_ordinals)) ? parseJsonOrNull(row.delta_ordinals) as number[] : null,
