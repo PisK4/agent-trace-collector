@@ -2,7 +2,7 @@
 
 评审日期：2026-10-22。对象为 [Agent Profile 与请求类别注册表提案](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)及[字段保真与 magpie 对标提案](../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)。本轮核对 ATC 工作树、交接方案和固定提交的 magpie 源码，仅运行合成逻辑检查；没有读取真实请求正文或配置，没有调用模型、修改 magpie、执行回填或切换服务。
 
-建议修订后实施。保留派生阶段的静态分类 Module、纯匹配器、未知 Agent 的通用处理，以及页面消费持久化分类的方向。实施前补齐分类门槛、用途与链角色的区别、上游用途信号、证据缺失与重算规则。容量提升需要独立验收，不能从新增注册表推导。
+建议修订后实施。保留派生阶段的静态分类 Module、纯匹配器、未知 Agent 的通用处理，以及页面消费持久化分类的方向。实施前补齐分类门槛、用途与链角色的区别、上游用途信号、证据缺失与重算规则。容量提升需要独立验收，不能从新增注册表推导。下一轮范围与职责的统筹入口见[架构演进方案 v2](architecture-evolution-v2.md)，本文保留具体反例与源码核对。
 
 ## magpie 的兼容机制怎样借鉴
 
