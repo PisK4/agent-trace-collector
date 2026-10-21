@@ -201,15 +201,22 @@ if (typeof document !== 'undefined') {
     return reader.getState().requests;
   }
   /**
-   * 已加载请求按开始时间倒序存放，编号按时间正序给：最早的一笔是 Request 01。
-   * 对话视图、账本、面包屑与右栏都用同一个序号，避免同一笔在不同位置换号。
+   * 请求序号按时间正序给：最早的一笔是 Request 01。
+   *
+   * 序号不能拿"已加载页长度 - 下标"算：继续加载更早的请求后整页会变长，
+   * 同一笔请求会当场换号，URL 里的 trace 也跟着指向别的位置。这里改成
+   * 按 (started_ms, req_id) 的排名，并保证它只随真实数据变化。
+   *
+   * 已加载行是正序的（最早的在前），所以下标 + 1 就是排名。分页追加的是
+   * 更早的请求，追加后需要整体重算——所以这里每次都从当前行重新数，
+   * 而不是缓存一个序号。
    * @param {number} reqId
    * @returns {number} 1 起的序号；未加载时返回 0
    */
   function ordinalOf(reqId) {
     const rows = currentRows();
     const index = rows.findIndex(row => row.req_id === reqId);
-    return index < 0 ? 0 : rows.length - index;
+    return index < 0 ? 0 : index + 1;
   }
   function currentDetail() {
     const id = state.reqId;
@@ -328,9 +335,10 @@ if (typeof document !== 'undefined') {
   function relationTextOf(reqId) {
     const detail = reqId === null ? null : details.get(reqId) ?? null;
     if (detail === null) return '';
-    if (detail.prev_relation === 'unknown') return '无法确认与上一笔的新增关系';
     if (detail.prev_relation === 'first') return '会话首笔';
-    if (detail.prev_relation === 'confirmed') return '增量已确认';
+    if (detail.prev_relation === 'confirmed') return '续自上一笔';
+    if (detail.prev_relation === 'branch') return '另起一支';
+    if (detail.prev_relation === 'unknown') return '前驱正文不可读，无法比对';
     return '';
   }
 
@@ -343,6 +351,9 @@ if (typeof document !== 'undefined') {
         : idx > 0 ? `Request ${String(idx).padStart(2, '0')}` : '未选择请求';
     el('crumb').innerHTML =
       `<span>${esc(row ? row.title : '未选择会话')}</span><span class="sep">/</span><b>${esc(here)}</b>`;
+    // 标签页标题跟着当前位置走：同时开着几个标签时，全是 "Trace Collector" 分不出谁是谁。
+    document.title = row ? `${here === '未选择请求' ? row.title : `${here} · ${row.title}`} — Trace Collector`
+      : 'Trace Collector';
   }
 
   function renderFilters() {
@@ -463,7 +474,8 @@ if (typeof document !== 'undefined') {
   function renderConversation(emptyText) {
     const rows = currentRows();
     if (rows.length === 0) return `<div class="conv"><p class="sess-empty">${esc(emptyText)}</p></div>`;
-    const ordered = rows.slice().reverse();
+    // 行已经是时间正序：最早一笔在顶部，往下推进。与账本、序号同一方向。
+    const ordered = rows;
     return `<div class="conv">${ordered.map((r) => {
       const detail = details.get(r.req_id) ?? null;
       const loaded = bodyOf(r.req_id);
@@ -473,7 +485,16 @@ if (typeof document !== 'undefined') {
       const userBlocks = loaded === null || delta === null
         ? []
         : loaded.entries.filter(entry => delta.has(entry.ord) && entry.isInput);
-      const inputNote = loaded === null ? ''
+      // 正文还没读时用派生摘要占位：对话视图不能因为"按需加载"就整屏空壳。
+      const previewTag = r.input_preview_kind === 'tail' ? '<span class="tag">末轮输入</span>'
+        : r.input_preview_kind === 'tool_result' ? '<span class="tag">工具结果</span>' : '';
+      const inputNote = loaded === null
+        ? (r.input_preview !== null
+          ? `<div class="conv-user" data-select="${r.req_id}">
+              <div class="conv-who">USER ${previewTag}</div>
+              <div class="conv-user-body preview">${esc(r.input_preview)}</div>
+            </div>`
+          : `<div class="conv-cont muted">${esc(r.body_state === 'available' ? '这一笔还没有派生摘要' : bodyStateText(r))}</div>`)
         : userBlocks.length > 0 ? ''
           : delta === null ? `<div class="conv-cont">${esc(relation || '还未派生增量关系')}：不拆分新增消息，右侧可读整笔请求正文。</div>`
             : `<div class="conv-cont">这一笔没有新的用户消息，输入是上一笔的工具结果。</div>`;
@@ -524,7 +545,12 @@ if (typeof document !== 'undefined') {
       const reason = loaded !== null && loaded.error !== null
         ? `正文加载失败：${loaded.error}`
         : bodyLabelText(r);
+      // 摘要先顶上：卡片折叠时也要能读到这一笔回复了什么。
+      const preview = r.reply_preview !== null
+        ? `<div class="conv-asst-body preview">${esc(r.reply_preview)}</div>`
+        : '';
       return `<div class="conv-asst-card" data-select="${r.req_id}">${head}
+        ${preview}
         <div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>${esc(reason)}</span></div>
         ${r.body_state === 'available' || r.body_state === 'partial'
           ? `<div class="conv-tools"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}
@@ -582,7 +608,11 @@ if (typeof document !== 'undefined') {
     return `<div class="conv-strip">${parts.length ? parts.map(p => `<span>${p}</span>`).join('<span class="sep">·</span>') : '<span class="muted">没有可显示的读数</span>'}</div>`;
   }
 
-  /** @param {RequestRow} r */
+  /**
+   * 账本一行。折叠状态下必须能回答"这一笔说了什么"，所以标题下面直接给
+   * 两行摘要：本轮输入与本次回复。摘要来自派生层，不读正文块。
+   * @param {RequestRow} r
+   */
   function ledgerRow(r) {
     const open = state.open.has(r.req_id);
     const flag = r.status !== null && r.status >= 400 ? '<span class="req-flag bad">失败</span>'
@@ -590,12 +620,29 @@ if (typeof document !== 'undefined') {
         : r.body_state !== 'available' ? `<span class="req-flag mute">${esc(bodyStateText(r))}</span>`
           : '';
     const status = r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success';
+    const ordinal = ordinalOf(r.req_id);
+    // 摘要是"末轮输入"而不是"本轮新增"时必须打标签，否则旧上下文会被读成本轮输入。
+    // 只有 delta 才是真正的新增；tail / tool_result 都不是。
+    const tag = r.input_preview_kind === 'tail' ? '<span class="tag">末轮输入</span>'
+      : r.input_preview_kind === 'tool_result' ? '<span class="tag">工具结果</span>'
+        : '';
+    // 折叠行摘要。没有摘要时给出原因，不留空行——空白会让人以为这笔没有内容。
+    const inputPreview = r.input_preview !== null
+      ? `<span class="req-preview">${tag}${esc(r.input_preview)}</span>`
+      : `<span class="req-preview muted">${esc(r.body_state === 'available'
+        ? '这一笔还没有派生摘要'
+        : bodyStateText(r))}</span>`;
+    const replyPreview = r.reply_preview !== null
+      ? `<span class="req-preview reply"><span class="tag">回复</span>${esc(r.reply_preview)}</span>`
+      : '';
     return `<article class="req" data-req="${r.req_id}" data-status="${status}" data-open="${open}" aria-current="${r.req_id === state.reqId}">
       <button class="req-head" data-toggle="${r.req_id}" aria-expanded="${open}">
         <span class="req-node" aria-hidden="true"></span>
         <span class="req-time num">${esc(clock(r.started_ms))}</span>
         <span class="req-line">
-          <span class="req-title">${esc(r.title || '（无标题）')}</span>
+          <span class="req-title"><span class="req-ord num">${String(ordinal).padStart(2, '0')}</span>${esc(r.title || '（无标题）')}</span>
+          ${inputPreview}
+          ${replyPreview}
           <span class="req-sub">${flag}<span>${esc(viaText(r))} · ${esc(bodyStateText(r))}${r.miss_reason ? ` · ${esc(r.miss_reason)}` : ''}</span></span>
         </span>
         <span class="req-metrics">
@@ -986,39 +1033,48 @@ if (typeof document !== 'undefined') {
   }
 
   /**
-   * 对话视图只取可见范围内最新的若干笔首片正文，不下全量：
+   * 对话视图只取当前页最前面的若干笔首片正文，不下全量：
    * 分页加载的请求可能很多，整页一次拉会同时占住内存与连接。
-   * 更早的请求保留"读取正文"入口，点开才算。
-   * 返回本次真正新加载的笔数；调用方据此决定要不要重绘，已缓存的不会触发循环。
+   *
+   * 按批加载，每批完成就重绘一次。早先的实现等全部批跑完才重绘，中途任何
+   * 一次 renderAll（比如切换视图）都会把 state.busy 置上，后续批次不再推进，
+   * 页面就永远停在前几笔。现在每批都落一次屏，并检查本轮是否已被新的选择取代。
+   *
+   * @param {number} epoch 发起时的选择代次；代次变了就停手
+   * @returns {Promise<number>} 本次真正新加载的笔数
    */
+  /** 预取代次：换会话时自增，作废还在跑的上一轮预取。 */
+  let bodyEpoch = 0;
   const BODY_PREFETCH = 30;
   const BODY_CONCURRENCY = 4;
-  async function prefetchBodies() {
+  /** @param {number} epoch */
+  async function prefetchBodies(epoch) {
     const wanted = currentRows().slice(0, BODY_PREFETCH)
       .filter(row => (row.body_state === 'available' || row.body_state === 'partial') && !bodies.has(row.req_id))
       .map(row => row.req_id);
     let loaded = 0;
     for (let index = 0; index < wanted.length; index += BODY_CONCURRENCY) {
+      if (epoch !== bodyEpoch) return loaded;
       const chunk = wanted.slice(index, index + BODY_CONCURRENCY);
       await Promise.all(chunk.map(async id => { await ensureBody(id); }));
       loaded += chunk.length;
+      // 每批落一次屏，用户能看见内容逐步出现；不等全部跑完。
+      if (epoch === bodyEpoch) renderMain();
     }
     return loaded;
   }
 
   /**
-   * 渲染后再补正文。只重绘一次，并且只在当前屏幕上的东西真的变了的时候：
-   * 否则 prefetch 与 render 会来回触发。
+   * 渲染后再补正文。每批自己重绘，所以这里只在换会话时作废在跑的预取。
    */
   async function loadVisibleBodies() {
-    const loaded = state.view === 'conversation'
-      ? await prefetchBodies()
-      : await (async () => {
-        const openIds = [...state.open].filter(id => currentRows().some(row => row.req_id === id) && !bodies.has(id));
-        await Promise.all(openIds.map(async id => { await ensureBody(id); }));
-        return openIds.length;
-      })();
-    if (loaded > 0) {
+    if (state.view === 'conversation') {
+      await prefetchBodies(bodyEpoch);
+      return;
+    }
+    const openIds = [...state.open].filter(id => currentRows().some(row => row.req_id === id) && !bodies.has(id));
+    await Promise.all(openIds.map(async id => { await ensureBody(id); }));
+    if (openIds.length > 0) {
       renderMain();
       renderRail();
     }
@@ -1053,8 +1109,10 @@ if (typeof document !== 'undefined') {
     }
     const rows = currentRows();
     if (state.reqId === null) {
+      // 默认选中最早一笔，但不自动展开：一展开就是上千像素的正文，
+      // 会把整页请求挤到屏幕外。选中只决定右栏，展开是明确的阅读动作。
       state.reqId = rows[0] ? rows[0].req_id : null;
-      state.open = new Set(state.reqId !== null ? [state.reqId] : []);
+      state.open = new Set();
       state.selected = null;
     } else if (!rows.some(row => row.req_id === state.reqId)) {
       // URL 里的 req id 不在已加载页里：可能已被淘汰、从未存在、落在更早的页，
@@ -1065,7 +1123,7 @@ if (typeof document !== 'undefined') {
       const target = resolveTraceTarget(rows, requested, detail);
       if (target.kind === 'canonical' && target.reqId !== null) {
         state.reqId = target.reqId;
-        state.open = new Set([target.reqId]);
+        state.open = new Set();
         state.missingReqId = null;
         state.offPageReqId = null;
         state.selected = null;
@@ -1082,7 +1140,6 @@ if (typeof document !== 'undefined') {
       state.offPageReqId = null;
     }
     if (state.reqId !== null) {
-      if (state.open.size === 0) state.open.add(state.reqId);
       await ensureDetail(state.reqId);
       await ensureRoute(state.reqId);
       await prefetchDetails();
@@ -1099,6 +1156,8 @@ if (typeof document !== 'undefined') {
   }
 
   async function selectSession(/** @type {string} */ key) {
+    // 作废上一轮预取：否则旧会话的正文会继续往新会话的界面上落。
+    bodyEpoch += 1;
     state.session = key;
     state.reqId = null;
     state.missingReqId = null;

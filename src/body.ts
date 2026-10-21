@@ -4,11 +4,17 @@ import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
 import { resolveRequestId } from './queries';
 import { ADAPTER_VERSION, parseProtocol } from './protocols';
+import { fingerprintHash, messageFingerprint } from './fingerprint';
 
 /**
  * 可还原的脱敏正文。调用方负责先脱敏再调用 persist，本模块只认已脱敏对象。
- * 块按完整消息字节哈希去重，不剥 cache_control：同一段内容在不同请求里
- * 只有在字节完全相同时才共用一块，还原时才不需要另存差异。
+ *
+ * 块按完整消息字节哈希去重：同一段内容在不同请求里只有在字节完全相同时
+ * 才共用一块，还原时才不需要另存差异。哈希只服务于去重与还原。
+ *
+ * 派生比对另走 fingerprint：Anthropic 的 cache_control 断点会随上下文增长
+ * 移动位置，同一段历史消息因此换哈希。拿 hash 判断"这一笔是不是上一笔的
+ * 续写"会把整条链读断，所以比对必须忽略这类传输标记。
  */
 
 export type BodyInput = {
@@ -97,8 +103,8 @@ export function persistBodyTx(db: Database, reqId: number, body: BodyInput): voi
   db.run('DELETE FROM request_block WHERE req_id=?', [reqId]);
 
   const findBlock = db.query<{ id: number }, [Uint8Array]>('SELECT id FROM block WHERE hash=?');
-  const insertBlock = db.query<{ id: number }, [Uint8Array, Uint8Array, number]>(
-    'INSERT INTO block(hash,z,raw_size) VALUES (?,?,?) RETURNING id',
+  const insertBlock = db.query<{ id: number }, [Uint8Array, string, Uint8Array, number]>(
+    'INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?) RETURNING id',
   );
   const insertRef = db.query('INSERT INTO request_block(req_id,ord,role,block) VALUES (?,?,?,?)');
 
@@ -107,12 +113,13 @@ export function persistBodyTx(db: Database, reqId: number, body: BodyInput): voi
   for (let ord = 0; ord < (messages?.length ?? 0); ord++) {
     const raw = serialize(messages![ord]);
     const hash = createHash('sha256').update(raw).digest();
+    const fingerprint = fingerprintHash(messageFingerprint(messages![ord]));
     const existing = findBlock.get(hash);
     let blockId: number;
     if (existing != null) {
       blockId = existing.id;
     } else {
-      const inserted = insertBlock.get(hash, compress(raw), raw.length);
+      const inserted = insertBlock.get(hash, fingerprint, compress(raw), raw.length);
       if (inserted == null) throw new Error('body_block_insert_failed');
       blockId = inserted.id;
     }
