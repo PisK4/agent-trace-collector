@@ -8,11 +8,15 @@ import { persistBody } from '../src/body';
 function insertRequests(store: ReturnType<typeof fixture>['store'], convKey: string, count: number, sameMs: boolean): void {
   store.write(db => {
     const insert = db.prepare(
-      `INSERT INTO request(conv_key,conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,status,cost_state)
-       VALUES (?,?,?,?,?,?,'through','pending',0,3,1,1,?,?,'absent')`,
+      `INSERT INTO request(conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,status,cost_state,ms,ttft_ms,flow_ms)
+       VALUES (?,?,?,?,?,?,?,'through','pending',0,3,1,1,?,?,'absent',?,?,?)`,
     );
     for (let i = 0; i < count; i++) {
-      insert.run(convKey, 'session', 'actor-a', 'known', sameMs ? 1_700_000_000_000 : 1_700_000_000_000 + i, '2026-10-20', `t-${i}`, 200);
+      insert.run(
+        convKey, 'session', 'actor-a', 'claude', 'known',
+        sameMs ? 1_700_000_000_000 : 1_700_000_000_000 + i, '2026-10-20', `t-${i}`, 200,
+        1000 + i, 100 + i, 900 + i,
+      );
     }
   });
 }
@@ -42,8 +46,27 @@ test('会话聚合按最后时间倒序且请求数正确', () => {
     insertRequests(f.store, JSON.stringify(['session', 'b']), 2, false);
     const page = listSessions(f.store, 50, null);
     expect(page.items.map(row => row.request_count)).toEqual([4, 2]);
-    expect(page.items.every(row => row.agents.includes('actor-a'))).toBe(true);
+    expect(page.items.every(row => row.agents.includes('claude'))).toBe(true);
+    // agents 是 magpie 的客户端标签，不能拿 actor（会话 UUID）冒充。
+    expect(page.items.some(row => row.agents.includes('actor-a'))).toBe(false);
     expect(page.next_cursor).toBeNull();
+  } finally {
+    f.close();
+  }
+});
+
+test('请求列表暴露真实agent与耗时字段', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'fields']);
+    insertRequests(f.store, key, 2, false);
+    const page = listRequests(f.store, key, 10, null);
+    expect(page.items.map(row => ({
+      agent: row.agent, ms: row.ms, ttft_ms: row.ttft_ms, flow_ms: row.flow_ms,
+    }))).toEqual([
+      { agent: 'claude', ms: 1000, ttft_ms: 100, flow_ms: 900 },
+      { agent: 'claude', ms: 1001, ttft_ms: 101, flow_ms: 901 },
+    ]);
   } finally {
     f.close();
   }

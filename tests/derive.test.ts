@@ -327,6 +327,100 @@ test('工具调用按同actor配对，跨请求不串', () => {
   }
 });
 
+test('工具结果轮次不重复末轮用户输入，纯工具调用回复有摘要', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'tool-preview']);
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,sort_source,sort_key)
+         VALUES (1,?,'session','actor-a','known',1000,'2026-10-20','hook','pending',0,1,1,1,'t','model_time','ledger','ledger|0001'),
+                (2,?,'session','actor-a','known',2000,'2026-10-20','hook','pending',0,1,1,1,'t','model_time','ledger','ledger|0002')`,
+        [key, key],
+      );
+    });
+    const question = { role: 'user', content: [{ type: 'text', text: '最初的问题' }] };
+    const callMsg = {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', id: 'toolu_b1', name: 'bash', input: {} },
+        { type: 'tool_use', id: 'toolu_b2', name: 'bash', input: {} },
+      ],
+    };
+    const resultMsg = {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'toolu_b1', content: 'one' },
+        { type: 'tool_result', tool_use_id: 'toolu_b2', content: 'two' },
+      ],
+    };
+    // 第一笔：用户提问，回复是纯工具调用。
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [question] },
+      reply: { id: 'msg_1', content: callMsg.content },
+      redact_version: 1,
+    });
+    // 第二笔：增量只有回传的工具结果，没有新的用户文本。
+    persistBody(f.store, 2, {
+      protocol: 'anthropic',
+      request: { messages: [question, callMsg, resultMsg] },
+      reply: { id: 'msg_2', content: [{ type: 'text', text: 'done' }] },
+      redact_version: 1,
+    });
+    enqueueDerive(f.store, key, 'actor-a', '');
+    drainDerive(f.store);
+    const rows = f.store.read.query<{
+      req_id: number; input_preview: string | null; input_preview_kind: string | null; reply_preview: string | null;
+    }, []>(
+      'SELECT req_id, input_preview, input_preview_kind, reply_preview FROM request ORDER BY req_id').all();
+
+    expect(rows[0]?.reply_preview?.startsWith('工具调用 ·')).toBe(true);
+    expect(rows[1]?.input_preview_kind).toBe('tool_result');
+    expect(rows[1]?.input_preview?.startsWith('工具结果 ·')).toBe(true);
+    // 关键回归：第二笔不能显示第一轮那句用户输入。
+    expect(rows[1]?.input_preview).not.toBe('最初的问题');
+  } finally {
+    f.close();
+  }
+});
+
+test('标题请求的回复只留标题文本', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'title-reply']);
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,sort_source,sort_key)
+         VALUES (1,?,'session','actor-a','known',1000,'2026-10-20','hook','pending',0,1,1,1,'t','model_time','ledger','ledger|0001'),
+                (2,?,'session','actor-a','known',2000,'2026-10-20','hook','pending',0,1,1,1,'t','model_time','ledger','ledger|0002')`,
+        [key, key],
+      );
+    });
+    const question = { role: 'user', content: [{ type: 'text', text: '问一句' }] };
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [question] },
+      reply: { id: 'msg_1', content: [{ type: 'text', text: '<title nf="nf-md-git" emoji="🗂️">压缩机制选型</title>' }] },
+      redact_version: 1,
+    });
+    persistBody(f.store, 2, {
+      protocol: 'anthropic',
+      request: { messages: [question] },
+      reply: { id: 'msg_2', content: [{ type: 'text', text: '{"title":"Compaction 工程选型"}' }] },
+      redact_version: 1,
+    });
+    enqueueDerive(f.store, key, 'actor-a', '');
+    drainDerive(f.store);
+    const rows = f.store.read.query<{ reply_preview: string | null }, []>(
+      'SELECT reply_preview FROM request ORDER BY req_id').all();
+    expect(rows[0]?.reply_preview).toBe('标题 · 压缩机制选型');
+    expect(rows[1]?.reply_preview).toBe('标题 · Compaction 工程选型');
+  } finally {
+    f.close();
+  }
+});
+
 test('重复call_id标ambiguous不挑最近', () => {
   const f = fixture();
   try {
