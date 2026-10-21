@@ -74,7 +74,7 @@ function anthropicRequestResults(request: unknown): { id: string; ord: number; p
  * 不配工具、标题回落到模型时间。身份确认后才入队，避免跨子代理串数据。
  */
 
-export type SequenceRelation = 'first' | 'confirmed' | 'unknown' | 'branch';
+export type SequenceRelation = 'first' | 'confirmed' | 'unknown' | 'branch' | 'aux';
 
 export type SequenceResult = {
   relation: SequenceRelation;
@@ -173,6 +173,12 @@ export function matchPredecessor(
 
 const SYSTEM_TAG = /^\s*<(?:system-reminder|command-[a-z-]+)>[\s\S]*?<\/(?:system-reminder|command-[a-z-]+)>\s*/i;
 const CWD_WRAPPER = /^\s*(?:工作目录|working directory|cwd)[:：][^\n]*\n?/i;
+/**
+ * 会话进行中用户插话时 harness 加的前缀。后面紧跟的才是用户真正说的话，
+ * 所以只剥这句提示，不整行丢弃。
+ */
+const MIDTURN_PREFIX = /^\s*The user sent a new message while you were working:\s*/i;
+const MIDTURN_NOTICE = /This is how Claude Code surfaces messages[\s\S]*$/i;
 const TITLE_UNICODE_LIMIT = 60;
 
 /**
@@ -191,6 +197,7 @@ const UNWRAP_WRAPPERS = [
 const DROP_WRAPPERS = [
   /^\s*<transcript>[\s\S]*?<\/transcript>\s*/i,
   /^\s*<local-command-stdout>[\s\S]*?<\/local-command-stdout>\s*/i,
+  /^\s*<local-command-caveat>[\s\S]*?<\/local-command-caveat>\s*/i,
   /^\s*<command-name>[\s\S]*?<\/command-name>\s*/i,
   /^\s*<command-message>[\s\S]*?<\/command-message>\s*/i,
   /^\s*<command-args>[\s\S]*?<\/command-args>\s*/i,
@@ -209,7 +216,12 @@ function stripHarnessWrappers(text: string): string {
     const before = current;
     for (const pattern of UNWRAP_WRAPPERS) current = current.replace(pattern, '$1');
     for (const pattern of DROP_WRAPPERS) current = current.replace(pattern, '');
-    current = current.replace(SYSTEM_TAG, '').replace(CWD_WRAPPER, '').trim();
+    current = current
+      .replace(SYSTEM_TAG, '')
+      .replace(CWD_WRAPPER, '')
+      .replace(MIDTURN_PREFIX, '')
+      .replace(MIDTURN_NOTICE, '')
+      .trim();
     if (current === before) break;
   }
   return current;
@@ -284,6 +296,7 @@ type ChainRow = {
   sort_source: string | null; sort_key: string | null;
   prev_req_id: number | null; prev_relation: string | null;
   title_source: string | null; title: string | null; model_served: string | null;
+  req_kind: string | null; model_title: string | null;
   input_preview: string | null; input_preview_kind: string | null; reply_preview: string | null;
 };
 
@@ -343,6 +356,26 @@ function tailUserPreview(db: Database, reqId: number): string | null {
   const rows = db.query<{ z: Uint8Array }, [number]>(`
     SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord DESC LIMIT 5`).all(reqId);
+  for (const row of rows) {
+    let message: unknown;
+    try {
+      message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
+    } catch {
+      continue;
+    }
+    const text = userText(message);
+    if (text === null) continue;
+    const cleaned = stripHarnessWrappers(text).trim();
+    if (cleaned.length > 0) return clip(cleaned);
+  }
+  return null;
+}
+
+/** 标题生成请求的输入里只有被 harness 包起来的用户文本；取第一段可读的。 */
+function firstUserPreview(db: Database, reqId: number): string | null {
+  const rows = db.query<{ z: Uint8Array }, [number]>(`
+    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord ASC LIMIT 5`).all(reqId);
   for (const row of rows) {
     let message: unknown;
     try {
@@ -465,24 +498,26 @@ function titleOfReply(text: string): string | null {
   }
 }
 
-/** 折叠行摘要：这一笔的回复文本首段；没有文本时退回工具调用摘要。 */
-function replyPreviewOf(db: Database, reqId: number): string | null {
+/** 折叠行摘要：回复文本首段；标题回复只留标题，并单独返回给会话标题用。 */
+type ReplyInfo = { preview: string | null; modelTitle: string | null };
+
+function replyInfoOf(db: Database, reqId: number): ReplyInfo {
   const row = db.query<{ skeleton_z: Uint8Array | null }, [number]>(
     'SELECT skeleton_z FROM request WHERE req_id=?').get(reqId);
-  if (row == null || row.skeleton_z == null) return null;
+  if (row == null || row.skeleton_z == null) return { preview: null, modelTitle: null };
   let skeleton: unknown;
   try {
     skeleton = JSON.parse(zstdDecompressSync(row.skeleton_z).toString('utf8'));
   } catch {
-    return null;
+    return { preview: null, modelTitle: null };
   }
-  if (skeleton === null || typeof skeleton !== 'object') return null;
+  if (skeleton === null || typeof skeleton !== 'object') return { preview: null, modelTitle: null };
   const reply = (skeleton as Record<string, unknown>).reply;
   const text = assistantText(reply) ?? replyToolSummary(reply);
-  if (text === null) return null;
+  if (text === null) return { preview: null, modelTitle: null };
   const title = titleOfReply(text);
-  if (title !== null) return clip(`标题 · ${title}`);
-  return clip(text);
+  if (title !== null) return { preview: clip(`标题 · ${title}`), modelTitle: title };
+  return { preview: clip(text), modelTitle: null };
 }
 
 /** 两种协议里的回复文本；只取第一段非空文本，不拼工具调用。 */
@@ -524,6 +559,60 @@ function messageAt(db: Database, reqId: number, ordinal: number): unknown | null
 }
 
 /**
+ * 主链判定。同一 (conv_key, actor) 里可能同时存在几条互不相接的真实请求链
+ * （标题请求已在派生时排除）。后续请求最多的那条是主链，其余标 branch。
+ *
+ * 严格前缀只能说明"这一笔是谁的续写"，不能说明"哪条是主线"；主线要等整组
+ * 请求都到齐后再按树的规模选，所以每批派生末尾重算一次。
+ */
+function assignChainRoles(db: Database, convKey: string, actor: string): void {
+  const rows = db.query<{ req_id: number; prev_req_id: number | null; started_ms: number }, [string, string]>(`
+    SELECT req_id, prev_req_id, started_ms FROM request
+    WHERE conv_key=? AND actor=? AND actor_state='known' AND req_kind='chat'
+    ORDER BY started_ms ASC, req_id ASC`).all(convKey, actor);
+  const first = rows[0];
+  if (first === undefined) return;
+  const ids = new Set(rows.map(row => row.req_id));
+  const started = new Map(rows.map(row => [row.req_id, row.started_ms]));
+  const children = new Map<number, number[]>();
+  const roots: number[] = [];
+  for (const row of rows) {
+    const parent = row.prev_req_id !== null && ids.has(row.prev_req_id) ? row.prev_req_id : null;
+    if (parent === null) {
+      roots.push(row.req_id);
+      continue;
+    }
+    const list = children.get(parent);
+    if (list === undefined) children.set(parent, [row.req_id]);
+    else list.push(row.req_id);
+  }
+  const subtree = (root: number): Set<number> => {
+    const seen = new Set<number>();
+    const stack = [root];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (id === undefined || seen.has(id)) continue;
+      seen.add(id);
+      for (const child of children.get(id) ?? []) stack.push(child);
+    }
+    return seen;
+  };
+  let trunkRoot = roots[0] ?? first.req_id;
+  let trunkSize = -1;
+  for (const root of roots) {
+    const size = subtree(root).size;
+    if (size > trunkSize
+      || (size === trunkSize && (started.get(root) ?? 0) < (started.get(trunkRoot) ?? 0))) {
+      trunkSize = size;
+      trunkRoot = root;
+    }
+  }
+  const trunk = subtree(trunkRoot);
+  const update = db.prepare('UPDATE request SET chain_role=? WHERE req_id=?');
+  for (const row of rows) update.run(trunk.has(row.req_id) ? 'main' : 'branch', row.req_id);
+}
+
+/**
  * 处理队列里的一批分组。每个分组按稳定顺序从头重算整条链：
  * 这样乱序到达、迟到正文与归属变化都收敛到同一个结果，与到达顺序无关。
  * 返回本批处理过的分组，供调用方只重配这些分组的工具往返。
@@ -539,7 +628,8 @@ export function drainDerive(store: Store, limit = 100): {
     for (const group of groups) {
       const rows = db.query<ChainRow, [string, string]>(`
         SELECT req_id, actor, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
-               title_source, title, model_served, input_preview, input_preview_kind, reply_preview
+               title_source, title, model_served, req_kind, model_title,
+               input_preview, input_preview_kind, reply_preview
         FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
       const ordered = [...rows].sort((left, right) =>
         sortKeyOf(left).localeCompare(sortKeyOf(right)));
@@ -552,8 +642,17 @@ export function drainDerive(store: Store, limit = 100): {
       let unreadableEarlier = false;
       for (const row of ordered) {
         const current = fingerprintsOf(db, row.req_id);
+        const replyInfo = current === null
+          ? { preview: row.reply_preview, modelTitle: null }
+          : replyInfoOf(db, row.req_id);
+        // 回复是 <title> 或 {"title":…} 的请求就是 harness 的 Title Generator。
+        // 它是旁路：不参与主链，也不能拿它的输入当用户标题。
+        const isTitleRequest = replyInfo.modelTitle !== null || row.req_kind === 'title';
+        const modelTitle = replyInfo.modelTitle ?? row.model_title;
         let match: PredecessorMatch;
-        if (current === null) {
+        if (isTitleRequest) {
+          match = { parent: null, relation: 'aux', delta: null, near: null };
+        } else if (current === null) {
           // 本笔正文不可读：没法比，但也不能把上一笔的结论照抄过来。
           match = { parent: null, relation: 'unknown', delta: null, near: null };
         } else {
@@ -562,28 +661,36 @@ export function drainDerive(store: Store, limit = 100): {
             ? { ...found, relation: 'unknown' }
             : found;
         }
-        sawEarlier = true;
-        if (current === null) unreadableEarlier = true;
+        if (!isTitleRequest) {
+          // 标题请求是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
+          sawEarlier = true;
+          if (current === null) unreadableEarlier = true;
+        }
 
         const relation: SequenceRelation = match.relation;
         const delta = match.delta;
 
         const fallback = row.title ?? `${row.model_served ?? '模型'} · ${clock(row.started_ms)}`;
         let title = fallback;
-        let source: 'user_delta' | 'model_time' = 'model_time';
+        let source: 'user_delta' | 'model_time' | 'model_title' = 'model_time';
         let inputPreview: string | null = null;
-        let inputKind: 'delta' | 'tail' | 'tool_result' | null = null;
-        let replyPreview: string | null = null;
-        if (current === null) {
+        let inputKind: 'delta' | 'tail' | 'tool_result' | 'title' | null = null;
+        if (isTitleRequest) {
+          // 标题请求不产生用户标题；它自己的标题来自回复里的正式标题。
+          title = modelTitle ?? fallback;
+          source = modelTitle !== null ? 'model_title' : 'model_time';
+          inputPreview = firstUserPreview(db, row.req_id) ?? '生成会话标题';
+          inputKind = 'title';
+        } else if (current === null) {
           // 正文已回收：旧标题与旧摘要都是当时按正文算出来的，没有正文重算
           // 只会把它们降级成时间兜底，所以原样保留。
           title = row.title ?? fallback;
-          source = (row.title_source === 'user_delta' || row.title_source === 'model_time')
-            ? row.title_source : 'model_time';
+          source = (row.title_source === 'user_delta' || row.title_source === 'model_time'
+            || row.title_source === 'model_title') ? row.title_source : 'model_time';
           inputPreview = row.input_preview;
           inputKind = row.input_preview_kind === 'delta' || row.input_preview_kind === 'tail'
-            || row.input_preview_kind === 'tool_result' ? row.input_preview_kind : null;
-          replyPreview = row.reply_preview;
+            || row.input_preview_kind === 'tool_result' || row.input_preview_kind === 'title'
+            ? row.input_preview_kind : null;
         } else if (delta !== null && delta.length > 0) {
           // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
           const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
@@ -611,19 +718,25 @@ export function drainDerive(store: Store, limit = 100): {
           inputPreview = tailUserPreview(db, row.req_id);
           inputKind = inputPreview !== null ? 'tail' : null;
         }
-        if (current !== null) replyPreview = replyPreviewOf(db, row.req_id);
+        const replyPreview = current === null ? row.reply_preview : replyInfo.preview;
         db.run(
           `UPDATE request SET prev_req_id=?, prev_relation=?, delta_ordinals=?, title=?, title_source=?,
+             req_kind=?, chain_role=?, model_title=?,
              input_preview=?, input_preview_kind=?, reply_preview=?, derive_version=derive_version+1 WHERE req_id=?`,
           [
             match.parent, relation,
             delta === null ? null : JSON.stringify(delta),
-            title, source, inputPreview, inputKind, replyPreview, row.req_id,
+            title, source,
+            isTitleRequest ? 'title' : 'chat',
+            isTitleRequest ? 'aux' : 'main',
+            isTitleRequest ? modelTitle : null,
+            inputPreview, inputKind, replyPreview, row.req_id,
           ],
         );
-        if (current !== null) ancestors.push({ reqId: row.req_id, fingerprints: current });
+        if (!isTitleRequest && current !== null) ancestors.push({ reqId: row.req_id, fingerprints: current });
         processed += 1;
       }
+      assignChainRoles(db, group.conv_key, group.actor);
       db.run('DELETE FROM derive_queue WHERE conv_key=? AND actor=?', [group.conv_key, group.actor]);
       touched.push(group);
     }

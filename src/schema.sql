@@ -124,9 +124,16 @@ CREATE TABLE request (
   prev_relation    TEXT,
   delta_ordinals   TEXT,
   title TEXT, title_source TEXT,
+  -- 请求类别：chat 是正常对话请求，title 是 harness 的 Title Generator 请求。
+  -- 标题请求不参与主链，它生成的正式标题另存 model_title。
+  req_kind         TEXT NOT NULL DEFAULT 'chat',
+  -- 链角色：main 主链、branch 次链、aux 辅助请求（标题生成）。
+  -- 同 (conv_key, actor) 内按后续请求数选主链，其余标 branch。
+  chain_role       TEXT NOT NULL DEFAULT 'main',
+  model_title      TEXT,
   -- 折叠行摘要：派生时写入，列表接口直接返回，不碰正文块。
   -- kind 说明摘要是什么：delta（本轮新增）/ tail（末轮输入，非新增）/
-  -- tool_result（本轮没有用户消息，输入是工具结果）。
+  -- tool_result（本轮没有用户消息，输入是工具结果）/ title（标题生成请求）。
   input_preview    TEXT,
   input_preview_kind TEXT,
   reply_preview    TEXT,
@@ -157,6 +164,7 @@ CREATE INDEX i_req_resp ON request(response_id_norm);
 CREATE INDEX i_req_day  ON request(day);
 CREATE INDEX i_req_body ON request(body_state) WHERE body_state != 'available';
 CREATE INDEX i_req_fail ON request(started_ms DESC) WHERE status >= 400;
+CREATE INDEX i_req_model_title ON request(conv_key, started_ms DESC, req_id DESC) WHERE req_kind = 'title';
 
 CREATE TABLE request_evidence (
   req_id      INTEGER NOT NULL,
