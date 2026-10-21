@@ -14,8 +14,8 @@
  */
 
 import {
-  bodyNotice, deltaOrdinals, mdToHtml, messageEntries, roleTag,
-  renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools,
+  bodyNotice, capabilitySummary, deltaOrdinals, mdToHtml, messageEntries, roleTag,
+  renderCapabilities, renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools,
   replyView, toolEntries,
 } from './body-view.js';
 
@@ -145,8 +145,32 @@ if (typeof document !== 'undefined') {
   const clock = (ms) => new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   /** @param {number} ms */
   const dayTime = (ms) => new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  // agent 是 magpie 给的客户端标签，只做显示别名；底层值原样保留，不当作身份凭证。
+  const AGENT_LABELS = /** @type {Record<string, string>} */ ({ claude: 'Claude Code', omp: 'OMP' });
   /** @param {string} v */
-  const agentOf = (v) => v.replace(/^magpie-/, 'conv ');
+  const agentLabel = (v) => AGENT_LABELS[v] ?? v;
+
+  /**
+   * 会话 key 是 JSON 数组：["session", id] 或 ["conv", fingerprint]。
+   * 直接铺 JSON 会占掉一行还难读；这里只给短形式，完整值留在 title 里。
+   * @param {string} key
+   */
+  function sessionKeyLabel(key) {
+    try {
+      const parsed = JSON.parse(key);
+      if (Array.isArray(parsed) && parsed.length >= 2) {
+        const value = String(parsed[1]);
+        return parsed[0] === 'session' ? `session ${value.slice(0, 8)}…` : `${String(parsed[0])} ${value}`;
+      }
+    } catch { /* 不是 JSON 时原样显示 */ }
+    return key;
+  }
+
+  /** UUID 之类的长身份只展示前缀；完整值放进 title。
+   * @param {string} value */
+  function shortId(value) {
+    return value.length > 12 ? `${value.slice(0, 8)}…` : value;
+  }
 
   const PART_NAME = /** @type {Record<string,string>} */ ({ system: '系统提示', tools: '工具定义', history: '历史消息', user: '本轮输入', files: '文件引用', other: '其它' });
   const PARTS_ORDER = ['system', 'tools', 'history', 'user', 'files', 'other'];
@@ -357,10 +381,20 @@ if (typeof document !== 'undefined') {
   }
 
   function renderFilters() {
-    const agents = new Set(reader.getState().sessions.flatMap(s => s.agents));
-    const list = ['all', ...agents].slice(0, 8);
+    // agents 是真实客户端标签（claude / omp），不是会话 UUID。按请求量排序：
+    // 一次性探针（curl、ava-probe 等）会话数可能不少，但请求量只有个位数，
+    // 不该占筛选栏；除非它正被选中。
+    const counts = new Map();
+    for (const s of reader.getState().sessions) {
+      for (const agent of s.agents) counts.set(agent, (counts.get(agent) ?? 0) + s.request_count);
+    }
+    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1])
+      .filter(([agent, count]) => count >= 50 || agent === state.agent)
+      .map(([agent]) => agent)
+      .slice(0, 7);
+    const list = ['all', ...ranked];
     el('agent-filters').innerHTML = list.map(a =>
-      `<button class="chip-btn" data-agent="${esc(a)}" aria-pressed="${state.agent === a}">${a === 'all' ? '全部 Agent' : esc(a)}</button>`,
+      `<button class="chip-btn" data-agent="${esc(a)}" aria-pressed="${state.agent === a}" title="${esc(a)}">${a === 'all' ? '全部 Agent' : esc(agentLabel(a))}</button>`,
     ).join('');
   }
 
@@ -369,7 +403,7 @@ if (typeof document !== 'undefined') {
     if (state.agent !== 'all' && !s.agents.includes(state.agent)) return false;
     if (!state.query) return true;
     const q = state.query.toLowerCase();
-    return [s.title, ...s.agents].join(' ').toLowerCase().includes(q);
+    return [s.title, ...s.agents, ...s.agents.map(agentLabel)].join(' ').toLowerCase().includes(q);
   }
 
   function renderSessions() {
@@ -386,7 +420,7 @@ if (typeof document !== 'undefined') {
         <span class="sess-time num">${esc(clock(s.last_ms))}</span>
         <span class="sess-meta">
           <span class="dot" style="background:${flag.color}"></span>
-          <span class="who">${esc(s.agents.length > 0 ? s.agents.join(' · ') : '归属未知')}</span><span class="sep">·</span>
+          <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')}</span><span class="sep">·</span>
           <span>${s.request_count} 笔</span>
           ${flag.text ? `<span class="sep">·</span><span style="color:${flag.color}">${flag.text}</span>` : ''}
         </span>
@@ -398,13 +432,28 @@ if (typeof document !== 'undefined') {
   }
 
   /* ---------------- 中栏 ---------------- */
+  /**
+   * 状态用色点承担；成功不再写 "HTTP 200"/"完成"，只有异常才带文字。
+   * @param {RequestRow} r
+   */
+  function statusOf(r) {
+    if (r.status === null) return { cls: 'mute', label: '状态待确认', title: '上游没有报告状态码' };
+    if (r.status >= 400) return { cls: 'bad', label: `HTTP ${r.status}`, title: `HTTP ${r.status}` };
+    return { cls: 'ok', label: '', title: `HTTP ${r.status}` };
+  }
+
+  /** @param {RequestRow} r */
+  function statusDot(r) {
+    const status = statusOf(r);
+    return `<span class="status-dot ${status.cls}" title="${esc(status.title)}"></span>`;
+  }
+
   /** @param {RequestRow} r */
   function statusChip(r) {
-    const failed = r.status !== null && r.status >= 400;
-    const [cls, text] = failed ? ['bad', `HTTP ${r.status}`]
-      : r.status === null ? ['mute', '状态待确认']
-        : ['ok', '完成'];
-    return `<span class="state-chip ${cls}"><span class="d"></span>${text}</span>`;
+    const status = statusOf(r);
+    return status.label === ''
+      ? ''
+      : `<span class="state-chip ${status.cls}"><span class="d"></span>${status.label}</span>`;
   }
 
   /** @param {RequestRow} r */
@@ -423,27 +472,60 @@ if (typeof document !== 'undefined') {
     return '账本 + 回调';
   }
 
+  /**
+   * 已加载请求的耗时汇总。只覆盖有报告的笔数，不把缺失当 0。
+   * @param {RequestRow[]} rows
+   */
+  function timingSummary(rows) {
+    const ttfts = rows.map(r => r.ttft_ms).filter(v => v !== null).sort((a, b) => a - b);
+    const durations = rows.map(r => r.ms).filter(v => v !== null);
+    const median = ttfts.length === 0 ? null : ttfts[Math.floor(ttfts.length / 2)] ?? null;
+    const average = durations.length === 0 ? null : durations.reduce((a, v) => a + v, 0) / durations.length;
+    // 生成窗口优先用账本的 flow_ms；缺了就按 总时长 - 首字 推导，仍缺的笔不参与。
+    const genMs = rows.reduce((a, r) => {
+      if (r.flow_ms !== null) return a + r.flow_ms;
+      if (r.ms !== null && r.ttft_ms !== null) return a + Math.max(0, r.ms - r.ttft_ms);
+      return a;
+    }, 0);
+    const outTok = rows.reduce((a, r) => a + (r.out_tok ?? 0), 0);
+    return {
+      median,
+      average,
+      speed: genMs > 0 && outTok > 0 ? Math.round(outTok / (genMs / 1000)) : null,
+    };
+  }
+
   function sessionHead() {
     const row = sessionRow(state.session ?? '');
     const rows = currentRows();
     // URL 指定了会话、但会话列表里没有它：这不是"未选择"，要分开说，否则读者会以为空库。
     const unknown = state.session !== null && row === null;
-    const latest = rows[0] ?? null;
-    const first = rows[rows.length - 1] ?? null;
+    // 行按 started_ms 正序：最早在 rows[0]，最新在末尾。
+    const first = rows[0] ?? null;
+    const latest = rows[rows.length - 1] ?? null;
     const totalIn = rows.reduce((a, r) => a + (r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0), 0);
     const totalOut = rows.reduce((a, r) => a + (r.out_tok ?? 0), 0);
     const priced = rows.filter(r => r.cost_state === 'priced' || r.cost_state === 'zero');
     const totalCost = priced.reduce((a, r) => a + (r.cost ?? 0), 0);
     const hasUsage = rows.some(r => r.in_tok !== null || r.out_tok !== null);
     const missing = rows.filter(r => r.body_state === 'pending' || !(r.have & 1)).length;
+    const failures = rows.filter(r => r.status !== null && r.status >= 400).length;
+    const timing = timingSummary(rows);
+    const timingParts = [
+      timing.median !== null ? `首字 p50 ${secs(timing.median)}` : null,
+      timing.average !== null ? `平均时长 ${secs(timing.average)}` : null,
+      timing.speed !== null ? `输出 ${timing.speed} tok/s` : null,
+    ].filter(Boolean);
     return `<header class="session-head">
       <div class="eyebrow">${state.session !== null && state.session.startsWith('[\"session\"') ? 'Session' : 'Unassigned'}</div>
       <h1>${esc(row ? row.title || '（无标题）' : unknown ? '这个会话不在已加载列表里' : '未选择会话')}</h1>
       <div class="session-facts">
-        ${row && row.agents.length > 0 ? row.agents.map(a => `<span><b>${esc(a)}</b></span>`).join('') : '<span class="muted">归属未知</span>'}
-        <span class="mono">${esc(state.session ?? '')}</span>
+        ${row && row.agents.length > 0 ? row.agents.map(a => `<span><b title="${esc(a)}">${esc(agentLabel(a))}</b></span>`).join('') : '<span class="muted">归属未知</span>'}
+        <span class="mono" title="${esc(state.session ?? '')}">${esc(state.session === null ? '' : sessionKeyLabel(state.session))}</span>
         <span>已加载 <b>${rows.length}</b> 笔 Request</span>
         ${first && latest ? `<span>${esc(dayTime(first.started_ms))}–${esc(clock(latest.started_ms))}</span>` : ''}
+        ${timingParts.length > 0 ? `<span class="sum">${timingParts.join(' · ')}</span>` : ''}
+        ${failures > 0 ? `<span style="color:var(--bad)">${failures} 笔失败</span>` : ''}
         ${hasUsage
           ? `<span class="sum">已加载相加：${kk(totalIn)} 提示 · ${kk(totalOut)} 输出 · $${totalCost.toFixed(4)}${priced.length < rows.length ? ` · ${rows.length - priced.length} 笔未取得费用` : ''}</span>`
           : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
@@ -466,6 +548,57 @@ if (typeof document !== 'undefined') {
   }
 
   /**
+   * harness 自动发的标题请求不是用户说的话，对话视图里不画成 USER 气泡；
+   * 标题请求的回复也只是一个 <title> 标签，只展示里面的标题文本。
+   * @param {string} text
+   */
+  function isAuxTitleRequest(text) {
+    return text.trimStart().startsWith('<title-request>');
+  }
+  const TITLE_REPLY = /^<title\b[^>]*>([\s\S]*?)<\/title>\s*$/i;
+
+  /** 标题请求的回复：`<title>` 标签或 {"title":"…"} JSON。
+   * @param {string} text */
+  function titleOfReplyText(text) {
+    const tagged = TITLE_REPLY.exec(text.trim())?.[1]?.trim();
+    if (tagged !== undefined && tagged.length > 0) return tagged;
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('{')) return null;
+    try {
+      const value = JSON.parse(trimmed);
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+      if (Object.keys(value).length !== 1 || typeof value.title !== 'string') return null;
+      return value.title.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  // 与服务端 derive 的剥壳规则对齐：正文是原始消息，harness 注入的通知、回顾、
+  // 斜杠命令回显都不是用户说的话，对话视图不把它们铺进 USER 气泡。
+  const HARNESS_BLOCKS = [
+    /<system-reminder>[\s\S]*?<\/system-reminder>/gi,
+    /<system-notice>[\s\S]*?<\/system-notice>/gi,
+    /<recap>[\s\S]*?<\/recap>/gi,
+    /<transcript>[\s\S]*?<\/transcript>/gi,
+    /<command-name>[\s\S]*?<\/command-name>/gi,
+    /<command-message>[\s\S]*?<\/command-message>/gi,
+    /<command-args>[\s\S]*?<\/command-args>/gi,
+    /<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi,
+  ];
+
+  /** @param {string} text */
+  function cleanUserText(text) {
+    let out = text;
+    for (const pattern of HARNESS_BLOCKS) out = out.replace(pattern, '');
+    out = out.replace(/<\/?session>/gi, '').trim();
+    // 没有标签包裹的 harness 文本：技能注入正文与"用户离开又回来"的系统提示。
+    if (/^Base directory for this skill:/i.test(out)) return '';
+    if (/^The user stepped away and is coming back\b/i.test(out)) return '';
+    return out;
+  }
+
+  /**
    * 对话视图：按请求分组，只铺确定新增的用户消息。
    * 关系未知的请求不给"新增"，而是给出原因和完整正文入口；
    * 正文没加载的请求显示加载入口，不预先下载整条会话。
@@ -476,36 +609,62 @@ if (typeof document !== 'undefined') {
     if (rows.length === 0) return `<div class="conv"><p class="sess-empty">${esc(emptyText)}</p></div>`;
     // 行已经是时间正序：最早一笔在顶部，往下推进。与账本、序号同一方向。
     const ordered = rows;
+    // 上下文构成没变时不重复铺同一行计数。
+    /** @type {string | null} */
+    let prevContextKey = null;
     return `<div class="conv">${ordered.map((r) => {
       const detail = details.get(r.req_id) ?? null;
       const loaded = bodyOf(r.req_id);
       const ordinal = String(ordinalOf(r.req_id)).padStart(2, '0');
       const delta = deltaOrdinals(detail);
       const relation = relationTextOf(r.req_id);
-      const userBlocks = loaded === null || delta === null
+      // 正文是原始消息：先剥掉 harness 注入的块，再去掉空块。
+      // 回复是标题的那些请求是标题生成调用，不铺输入。
+      const auxReply = r.reply_preview !== null && r.reply_preview.startsWith('标题 · ');
+      const rawUserBlocks = auxReply || loaded === null || delta === null
         ? []
         : loaded.entries.filter(entry => delta.has(entry.ord) && entry.isInput);
+      const userTexts = rawUserBlocks
+        .map(entry => cleanUserText(entry.blocks.filter(b => b.kind === 'text').map(b => b.text).join('\n') || entry.preview))
+        .filter(text => text.length > 0);
       // 正文还没读时用派生摘要占位：对话视图不能因为"按需加载"就整屏空壳。
-      const previewTag = r.input_preview_kind === 'tail' ? '<span class="tag">末轮输入</span>'
-        : r.input_preview_kind === 'tool_result' ? '<span class="tag">工具结果</span>' : '';
+      const auxPreview = auxReply || (r.input_preview !== null && isAuxTitleRequest(r.input_preview));
+      const previewTag = r.input_preview_kind === 'tail' ? '<span class="tag">末轮上下文</span>'
+        : auxPreview ? '<span class="tag">辅助请求</span>' : '';
       const inputNote = loaded === null
         ? (r.input_preview !== null
-          ? `<div class="conv-user" data-select="${r.req_id}">
-              <div class="conv-who">USER ${previewTag}</div>
-              <div class="conv-user-body preview">${esc(r.input_preview)}</div>
-            </div>`
+          ? auxPreview
+            // 标题请求是 harness 的辅助调用，不是用户说的话。
+            ? `<div class="conv-cont" data-select="${r.req_id}">${previewTag}生成会话标题</div>`
+            : r.input_preview_kind === 'tool_result'
+              // 工具结果不是用户说的话，不能画成 USER 气泡；摘要自带"工具结果 ·"前缀。
+              ? `<div class="conv-cont" data-select="${r.req_id}">${esc(r.input_preview)}</div>`
+              : `<div class="conv-user" data-select="${r.req_id}">
+                <div class="conv-who">USER ${previewTag}</div>
+                <div class="conv-user-body preview">${esc(r.input_preview)}</div>
+              </div>`
           : `<div class="conv-cont muted">${esc(r.body_state === 'available' ? '这一笔还没有派生摘要' : bodyStateText(r))}</div>`)
-        : userBlocks.length > 0 ? ''
-          : delta === null ? `<div class="conv-cont">${esc(relation || '还未派生增量关系')}：不拆分新增消息，右侧可读整笔请求正文。</div>`
-            : `<div class="conv-cont">这一笔没有新的用户消息，输入是上一笔的工具结果。</div>`;
+        : auxReply ? `<div class="conv-cont" data-select="${r.req_id}"><span class="tag">辅助请求</span>生成会话标题</div>`
+          : userTexts.length > 0 ? ''
+            : rawUserBlocks.length > 0
+              ? '<div class="conv-cont">这一笔没有新的用户可见消息：输入是技能注入或系统提示。</div>'
+              : delta === null ? `<div class="conv-cont">${esc(relation || '还未派生增量关系')}：不拆分新增消息，右侧可读整笔请求正文。</div>`
+                : r.input_preview_kind === 'tool_result' && r.input_preview !== null
+                  ? `<div class="conv-cont">${esc(r.input_preview)}</div>`
+                  : `<div class="conv-cont">这一笔没有新的用户消息，输入是上一笔的工具结果。</div>`;
+      const context = contextInfo(loaded);
+      const contextHtml = context !== null && context.key !== prevContextKey ? context.html : '';
+      if (context !== null) prevContextKey = context.key;
       return `<section class="conv-req" data-req="${r.req_id}" data-current="${r.req_id === state.reqId}">
         <div class="conv-gutter"><b>${ordinal}</b><em>${esc(clock(r.started_ms))}</em></div>
         <div class="conv-main">
-          ${userBlocks.map(entry => `<div class="conv-user" data-select="${r.req_id}">
-            <div class="conv-who">USER</div>
-            <div class="conv-user-body">${esc(entry.blocks.filter(b => b.kind === 'text').map(b => b.text).join('\n') || entry.preview)}</div>
-          </div>`).join('')}
-          ${inputNote}${toolDeltaNote(loaded, delta)}
+          ${userTexts.map(text => isAuxTitleRequest(text)
+            ? `<div class="conv-cont" data-select="${r.req_id}"><span class="tag">辅助请求</span>生成会话标题</div>`
+            : `<div class="conv-user" data-select="${r.req_id}">
+                <div class="conv-who">USER</div>
+                <div class="conv-user-body">${esc(text)}</div>
+              </div>`).join('')}
+          ${inputNote}${contextHtml}
           ${convCard(r, detail, loaded)}
           <button class="conv-jump" data-ledger="${r.req_id}">在账本中查看 Request ${ordinal} →</button>
         </div>
@@ -514,17 +673,31 @@ if (typeof document !== 'undefined') {
   }
 
   /**
-   * 这一笔新增的消息里若只有工具结果，说明输入来自上一轮的工具，不画成空白。
+   * 每轮一行上下文摘要。完整的工具与技能清单放在账本详情里，
+   * 对话视图只给计数：30 笔一起铺 schema 会把 DOM 撑大几个数量级。
    * @param {LoadedBody | null} loaded
-   * @param {Set<number> | null} delta
    */
-  function toolDeltaNote(loaded, delta) {
-    if (loaded === null || delta === null) return '';
-    const fresh = loaded.entries.filter(entry => delta.has(entry.ord));
-    if (fresh.length === 0) return '';
-    const results = fresh.filter(entry => entry.blocks.some(block => block.kind === 'result'));
-    if (results.length === 0) return '';
-    return `<div class="conv-cont">这一笔新增 ${results.length} 条工具结果，来自上一轮调用；完整内容可在右侧或账本里读。</div>`;
+  function contextInfo(loaded) {
+    if (loaded === null || loaded.page === null) return null;
+    const capability = capabilitySummary(loaded.page, loaded.entries);
+    const systems = loaded.entries.filter(entry => entry.role === 'system').length;
+    return {
+      key: `${systems}/${capability.tools.length}/${capability.skills.length}`,
+      html: `<div class="conv-context">上下文 · 系统 ${systems} 条 · ${capability.tools.length} 工具 · ${capability.skills.length} 技能</div>`,
+    };
+  }
+
+  /** @param {RequestRow} r */
+  function convMetrics(r) {
+    const parts = [
+      r.ttft_ms !== null ? `首字 <b>${secs(r.ttft_ms)}</b>` : null,
+      r.ms !== null ? `时长 <b>${secs(r.ms)}</b>` : null,
+      r.in_tok !== null ? `↓ <b>${n((r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0))}</b>` : null,
+      r.out_tok !== null ? `↑ <b>${n(r.out_tok)}</b>` : null,
+      r.cost_state === 'priced' && r.cost !== null ? `$${r.cost}`
+        : r.cost_state === 'unpriced' ? '未定价' : null,
+    ].filter(Boolean);
+    return parts.length === 0 ? '' : `<span class="conv-metrics">${parts.join('<span class="sep">·</span>')}</span>`;
   }
 
   /**
@@ -533,12 +706,14 @@ if (typeof document !== 'undefined') {
    * @param {RequestDetail | null} detail
    * @param {LoadedBody | null} loaded
    */
-  function convCard(r, detail, loaded) {
-    const failed = r.status !== null && r.status >= 400;
+  function convCard(r, detail, loaded) {    const failed = r.status !== null && r.status >= 400;
+    const agent = r.agent === null ? '' : `<span class="agent-tag" title="${esc(r.agent)}">${esc(agentLabel(r.agent))}</span>`;
     const head = `<div class="conv-asst-head">
       <span class="conv-who">ASSISTANT</span>
       <span class="mono muted" style="font-size:10px">${esc(r.model_served ?? r.model_requested ?? '模型名未报告')}</span>
+      ${agent}
       <span class="grow"></span>
+      ${convMetrics(r)}
       ${statusChip(r)}
     </div>`;
     if (loaded === null || loaded.page === null) {
@@ -554,7 +729,6 @@ if (typeof document !== 'undefined') {
         <div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>${esc(reason)}</span></div>
         ${r.body_state === 'available' || r.body_state === 'partial'
           ? `<div class="conv-tools"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}
-        ${convStrip(r, detail)}
       </div>`;
     }
     const page = loaded.page;
@@ -564,17 +738,21 @@ if (typeof document !== 'undefined') {
     if (failed) {
       return `<div class="conv-asst-card" data-select="${r.req_id}">${head}
         <div class="conv-fail"><span>✕</span><span>这一笔返回 HTTP ${r.status}。失败尝试的用量仍保留在账本里，失败的读数不并入成功请求。</span></div>
-        ${convStrip(r, detail)}
       </div>`;
     }
-    const body = view.state === 'ok' && view.text.length > 0
+    // 标题请求的回复就是标题本身，只取标题文本。
+    const titleText = view.state === 'ok' ? titleOfReplyText(view.text) : null;
+    const body = titleText !== null
+      ? `<div class="conv-cont"><span class="tag">辅助回复</span>标题 · ${esc(titleText)}</div>`
+      : view.state === 'ok' && view.text.length > 0
       ? `<div class="conv-asst-body">${mdToHtml(view.text)}</div>`
       : view.state === 'ok' && view.calls.length > 0
-        // 纯工具调用的回复常常只有推理块：显示出来，别读成"没有内容"。
+        // 纯工具调用的回复常常只有推理块：推理块值得展开，工具本身下面会列出来，
+        // 不再逐条重复"只有工具调用，没有文本"。
         ? `${view.thinking.length > 0
           ? `<details class="msg-thinking" style="margin:8px 11px"><summary>推理块 · ${view.thinking.length} 段</summary>
               <pre class="raw" tabindex="0">${esc(view.thinking.join('\n\n'))}</pre></details>`
-          : '<div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>本次回复只有工具调用，没有文本。</span></div>'}`
+          : ''}`
         : view.state === 'ok'
           ? '<div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>回复对象存在，但没有文本内容。</span></div>'
           : `<div class="conv-fail" style="color:var(--muted)"><span>◇</span><span>${esc(notice || '这一笔没有可读的回复。')}</span></div>`;
@@ -582,7 +760,6 @@ if (typeof document !== 'undefined') {
       ${notice && view.state === 'ok' ? `<div class="conv-cont note">${esc(notice)}</div>` : ''}
       ${body}
       ${renderTools(tools)}
-      ${convStrip(r, detail)}
     </div>`;
   }
 
@@ -595,65 +772,83 @@ if (typeof document !== 'undefined') {
     return '原对象已保存，暂不支持结构化解析。';
   }
 
-  /** @param {RequestRow} r @param {RequestDetail | null} detail */
-  function convStrip(r, detail) {
-    const parts = [
-      detail && detail.ms !== null ? `时长 <b>${secs(detail.ms)}</b>` : null,
-      detail && detail.ttft_ms !== null ? `首字 <b>${secs(detail.ttft_ms)}</b>` : null,
-      r.in_tok !== null ? `↓ <b>${n(r.in_tok)}</b>` : null,
-      r.out_tok !== null ? `↑ <b>${n(r.out_tok)}</b>` : null,
-      r.cost_state === 'priced' && r.cost !== null ? `$${r.cost}` : r.cost_state === 'unpriced' ? '未定价' : null,
-      detail && detail.attempt_count !== null && detail.attempt_count > 1 ? `<b>${detail.attempt_count}</b> 次尝试` : null,
-    ].filter(Boolean);
-    return `<div class="conv-strip">${parts.length ? parts.map(p => `<span>${p}</span>`).join('<span class="sep">·</span>') : '<span class="muted">没有可显示的读数</span>'}</div>`;
-  }
-
   /**
-   * 账本一行。折叠状态下必须能回答"这一笔说了什么"，所以标题下面直接给
-   * 两行摘要：本轮输入与本次回复。摘要来自派生层，不读正文块。
+   * 账本一行。折叠状态下只留两行：这一笔的主要内容和它的回复。
+   *
+   * 主文本按信息量取：本轮新增 → 工具结果 → 用户标题 → 回复摘要 → 时间兜底。
+   * 连续的"末轮上下文"如果和上一行相同就不重复铺，避免同一句话刷满整屏。
    * @param {RequestRow} r
+   * @param {{kind: string | null, text: string} | null} previous 上一行的主内容，用于去重
    */
-  function ledgerRow(r) {
+  function ledgerRow(r, previous) {
     const open = state.open.has(r.req_id);
-    const flag = r.status !== null && r.status >= 400 ? '<span class="req-flag bad">失败</span>'
-      : !(r.have & 2) ? '<span class="req-flag warn">待关联</span>'
-        : r.body_state !== 'available' ? `<span class="req-flag mute">${esc(bodyStateText(r))}</span>`
-          : '';
     const status = r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success';
     const ordinal = ordinalOf(r.req_id);
-    // 摘要是"末轮输入"而不是"本轮新增"时必须打标签，否则旧上下文会被读成本轮输入。
-    // 只有 delta 才是真正的新增；tail / tool_result 都不是。
-    const tag = r.input_preview_kind === 'tail' ? '<span class="tag">末轮输入</span>'
-      : r.input_preview_kind === 'tool_result' ? '<span class="tag">工具结果</span>'
-        : '';
-    // 折叠行摘要。没有摘要时给出原因，不留空行——空白会让人以为这笔没有内容。
-    const inputPreview = r.input_preview !== null
-      ? `<span class="req-preview">${tag}${esc(r.input_preview)}</span>`
-      : `<span class="req-preview muted">${esc(r.body_state === 'available'
-        ? '这一笔还没有派生摘要'
-        : bodyStateText(r))}</span>`;
-    const replyPreview = r.reply_preview !== null
-      ? `<span class="req-preview reply"><span class="tag">回复</span>${esc(r.reply_preview)}</span>`
-      : '';
+    // 折叠行只在异常时出声。正常行不再常驻"账本 + 回调 · 正文可读"。
+    const anomaly = r.status !== null && r.status >= 400 ? '<span class="req-flag bad">失败</span>'
+      : !(r.have & 2) ? '<span class="req-flag warn">待关联</span>'
+        : r.body_state === 'pending' ? '<span class="req-flag mute">正文未到</span>'
+          : r.body_state === 'evicted' ? '<span class="req-flag mute">正文已回收</span>'
+            : r.body_state === 'partial' ? '<span class="req-flag mute">正文不完整</span>'
+              : r.body_state === 'unsupported' ? '<span class="req-flag mute">协议不支持</span>' : '';
+
+    const primary = primaryOf(r);
+    const sameAsPrevious = previous !== null && primary.kind === 'tail'
+      && previous.kind === 'tail' && previous.text === primary.text;
+    // 标题请求的输入是一整段 harness 指令；回复形如标题时，折叠行只说明它在做什么。
+    const auxiliary = primary.kind !== 'tool_result'
+      && (primary.text.startsWith('<title-request>')
+        || (r.reply_preview !== null && r.reply_preview.startsWith('标题 · ')));
+    const tag = auxiliary ? '<span class="tag">辅助请求</span>'
+      : primary.kind === 'tail' ? '<span class="tag">末轮上下文</span>'
+        : primary.kind === 'tool_result' ? '<span class="tag">工具结果</span>'
+          : primary.kind === 'reply' ? '<span class="tag">回复</span>' : '';
+    // 标题请求的输入是一整段 harness 指令；折叠行只说明它在做什么。
+    const primaryText = auxiliary ? '生成会话标题' : sameAsPrevious ? '同上' : primary.text;
+    const primaryLine = `<span class="req-preview${primary.muted ? ' muted' : ''}">${tag}<span class="req-preview-text">${esc(primaryText)}</span></span>`;
+    // 主内容已经是回复时不再重复第二行。
+    const replyLine = primary.kind !== 'reply' && r.reply_preview !== null
+      ? `<span class="req-preview reply"><span class="tag">回复</span><span class="req-preview-text">${esc(r.reply_preview)}</span></span>` : '';
+    const metrics = [
+      r.status !== null && r.status >= 400 ? `<span class="num bad-text">HTTP ${r.status}</span>` : '',
+      r.ttft_ms !== null ? `<span class="num opt">首字 ${secs(r.ttft_ms)}</span>` : '',
+      r.ms !== null ? `<span class="num opt">${secs(r.ms)}</span>` : '',
+      r.in_tok !== null ? `<span class="num opt">↓ ${kk((r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0))}</span>` : '',
+      r.out_tok !== null ? `<span class="num opt">↑ ${kk(r.out_tok)}</span>` : '',
+    ].join('');
     return `<article class="req" data-req="${r.req_id}" data-status="${status}" data-open="${open}" aria-current="${r.req_id === state.reqId}">
       <button class="req-head" data-toggle="${r.req_id}" aria-expanded="${open}">
         <span class="req-node" aria-hidden="true"></span>
         <span class="req-time num">${esc(clock(r.started_ms))}</span>
         <span class="req-line">
-          <span class="req-title"><span class="req-ord num">${String(ordinal).padStart(2, '0')}</span>${esc(r.title || '（无标题）')}</span>
-          ${inputPreview}
-          ${replyPreview}
-          <span class="req-sub">${flag}<span>${esc(viaText(r))} · ${esc(bodyStateText(r))}${r.miss_reason ? ` · ${esc(r.miss_reason)}` : ''}</span></span>
+          <span class="req-title"><span class="req-ord num">${String(ordinal).padStart(2, '0')}</span>${anomaly}${primaryLine}</span>
+          ${replyLine}
         </span>
         <span class="req-metrics">
-          ${r.status !== null ? `<span class="num">HTTP ${r.status}</span>` : ''}
-          <span class="num opt">${r.in_tok !== null ? '↓' + kk((r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0)) : '↓ 未报告'}</span>
-          ${r.out_tok !== null ? `<span class="num opt">↑ ${kk(r.out_tok)}</span>` : ''}
+          ${metrics}
           <span class="req-open-mark" aria-hidden="true"><svg width="9" height="9" viewBox="0 0 10 10" fill="none"><path d="M3 1.5L7 5l-4 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         </span>
       </button>
       ${open ? requestBody(r) : ''}
     </article>`;
+  }
+
+  /**
+   * 折叠行的主内容。按信息量排序，避免把 model_time 标题或重复的末轮上下文当成主题。
+   * @param {RequestRow} r
+   * @returns {{kind: string, text: string, muted: boolean}}
+   */
+  function primaryOf(r) {
+    if (r.input_preview !== null) {
+      return { kind: r.input_preview_kind ?? 'delta', text: r.input_preview, muted: false };
+    }
+    if (r.title_source === 'user_delta' && r.title.length > 0) {
+      return { kind: 'title', text: r.title, muted: false };
+    }
+    if (r.reply_preview !== null) {
+      return { kind: 'reply', text: r.reply_preview, muted: false };
+    }
+    return { kind: 'title', text: r.title || '（无标题）', muted: r.title_source === 'model_time' };
   }
 
   /** @param {RequestRow} r */
@@ -664,14 +859,16 @@ if (typeof document !== 'undefined') {
     const ordinal = ordinalOf(r.req_id);
     const meta = [
       `<span class="id">req ${r.req_id}</span>`,
+      r.agent === null ? '<span class="muted">Agent 未知</span>'
+        : `<span>${esc(agentLabel(r.agent))}</span>`,
       `<span class="muted">${esc(viaText(r))}</span>`,
-      r.actor ? `<span class="muted">${esc(r.actor)}</span>` : '<span class="muted">归属未知</span>',
+      r.actor ? `<span class="muted" title="会话 / 子代理：${esc(r.actor)}">actor ${esc(shortId(r.actor))}</span>` : '<span class="muted">会话身份未知</span>',
       detail && detail.attempt_count !== null ? `<span class="muted">${detail.attempt_count} 次尝试 · ${detail.attempt_billed ?? '—'} 次计费</span>` : '',
     ].filter(Boolean).join('');
     return `<div class="req-body">
       <div class="body-top">
         <span class="num muted" style="font-size:10.5px">Request ${String(ordinal).padStart(2, '0')}</span>
-        ${statusChip(r)}
+        ${statusDot(r)}${statusChip(r)}
         ${meta}
         <span class="grow"></span>
         ${r.miss_reason ? `<span class="req-flag warn" title="${esc(r.miss_reason)}">${esc(r.miss_reason)}</span>` : ''}
@@ -733,7 +930,8 @@ if (typeof document !== 'undefined') {
     const rows = loaded.entries;
     const unread = loaded.total !== null && rows.length < loaded.total;
     const unsupported = page.parse_state === 'unsupported';
-    return `<section class="section">
+    return `${renderCapabilities(page, rows)}
+    <section class="section">
       <div class="section-head">
         <h3>请求结构</h3>
         <span class="count">${unsupported ? '原对象已保存' : loaded.total === null ? `${rows.length} 条消息` : `${rows.length} / ${loaded.total} 条消息`}</span>
@@ -798,6 +996,22 @@ if (typeof document !== 'undefined') {
       ${r.miss_reason ? `缺失原因：${esc(r.miss_reason)}。` : ''}</p>`;
   }
 
+  /**
+   * 账本行的去重只看"末轮上下文"：这类摘要本来就是把同一段历史重复铺开，
+   * 连续两行完全相同时第二行写"同上"。其余类型各说各的，不做合并。
+   * @param {RequestRow[]} rows
+   */
+  function ledgerRows(rows) {
+    /** @type {{kind: string, text: string} | null} */
+    let previous = null;
+    return rows.map(r => {
+      const html = ledgerRow(r, previous);
+      const primary = primaryOf(r);
+      previous = { kind: primary.kind, text: primary.text };
+      return html;
+    }).join('');
+  }
+
   function renderMain() {
     const main = el('main');
     const keep = main.scrollTop;
@@ -820,7 +1034,7 @@ if (typeof document !== 'undefined') {
       // 加载失败时不能渲染成"这个会话没有请求"，那会把网络故障读成空库。
       ? `<div class="conv"><p class="sess-empty">请求列表加载失败：${esc(failed)}。点左侧会话可重试。</p></div>`
       : state.view === 'ledger'
-        ? `<div class="ledger">${rows.map(r => ledgerRow(r)).join('') || `<p class="sess-empty">${esc(emptyText)}</p>`}</div>`
+        ? `<div class="ledger">${ledgerRows(rows) || `<p class="sess-empty">${esc(emptyText)}</p>`}</div>`
         : renderConversation(emptyText));
     main.scrollTop = keep;
     el('load-more-requests').hidden = reader.getState().requestsCursor === null;
@@ -830,11 +1044,16 @@ if (typeof document !== 'undefined') {
   /** @param {RequestRow} r */
   function bigNumbers(r) {
     const d = currentDetail();
-    const speed = d && d.flow_ms && r.out_tok ? r.out_tok / (d.flow_ms / 1000) : null;
+    // 列表接口现在也带耗时，详情还没回来时先用列表值，不显示空占位。
+    const ttft = d?.ttft_ms ?? r.ttft_ms;
+    const ms = d?.ms ?? r.ms;
+    const flow = d?.flow_ms ?? r.flow_ms
+      ?? (ms !== null && ttft !== null ? Math.max(0, ms - ttft) : null);
+    const speed = flow && r.out_tok ? r.out_tok / (flow / 1000) : null;
     const cells = [
-      ['首字', d && d.ttft_ms !== null ? (d.ttft_ms / 1000).toFixed(2) : '—', d && d.ttft_ms !== null ? 's' : '', 'TTFT：到第一个内容'],
-      ['时长', d && d.ms !== null ? (d.ms / 1000).toFixed(2) : '—', d && d.ms !== null ? 's' : '', '从请求到回复结束'],
-      ['输出速度', speed ? String(Math.round(speed)) : '—', speed ? 'tok/s' : '', '输出 token ÷ 生成耗时'],
+      ['首字', ttft !== null ? (ttft / 1000).toFixed(2) : '—', ttft !== null ? 's' : '', 'TTFT：到第一个内容'],
+      ['时长', ms !== null ? (ms / 1000).toFixed(2) : '—', ms !== null ? 's' : '', '从请求到回复结束'],
+      ['输出速度', speed ? String(Math.round(speed)) : '—', speed ? 'tok/s' : '', '输出 token ÷ 生成耗时（缺 flow 时按总时长减首字推导）'],
     ];
     return `<div class="rail-big">${cells.map(([k, v, u, title]) => `<div title="${esc(title)}">
       <div class="k">${k}</div><div class="v">${v}${u ? `<small>${u}</small>` : ''}</div></div>`).join('')}</div>`;
@@ -843,7 +1062,9 @@ if (typeof document !== 'undefined') {
   function railHead() {
     const r = currentRows().find(row => row.req_id === state.reqId) ?? null;
     if (r === null) return '<div class="rail-id">未选择请求</div>';
-    return `<div class="rail-id"><span>req ${r.req_id}</span><span class="muted">·</span><span>${esc(dayTime(r.started_ms))}</span><span class="grow"></span>${statusChip(r)}</div>
+    return `<div class="rail-id"><span>req ${r.req_id}</span><span class="muted">·</span><span>${esc(dayTime(r.started_ms))}</span>
+      ${r.agent === null ? '' : `<span class="muted">·</span><span>${esc(agentLabel(r.agent))}</span>`}
+      <span class="grow"></span>${statusDot(r)}${statusChip(r)}</div>
       <div class="rail-title">${esc(r.title || '（无标题）')}</div>
       ${bigNumbers(r)}
       <div class="rail-tabs" role="tablist">
@@ -878,21 +1099,24 @@ if (typeof document !== 'undefined') {
   /** @param {RequestRow} r */
   function timingSection(r) {
     const d = currentDetail();
-    if (d === null || d.ms === null) {
+    const ms = d?.ms ?? r.ms;
+    const ttft = d?.ttft_ms ?? r.ttft_ms;
+    if (ms === null) {
       return `<section class="rail-section"><h3>时间构成</h3>
         <p class="rail-note">${(r.have & 2) ? '上游没有报告本笔耗时。' : '这笔记录还没有关联到账本，没有网关计时。'}</p></section>`;
     }
-    const waitPct = d.ttft_ms !== null ? Math.min(100, d.ttft_ms / d.ms * 100) : 100;
-    const tickPct = d.first_text_ms !== null && d.ms > 0 ? Math.min(100, d.first_text_ms / d.ms * 100) : null;
-    const speed = d.flow_ms && r.out_tok ? Math.round(r.out_tok / (d.flow_ms / 1000)) : null;
+    const waitPct = ttft !== null ? Math.min(100, ttft / ms * 100) : 100;
+    const tickPct = d?.first_text_ms != null && ms > 0 ? Math.min(100, d.first_text_ms / ms * 100) : null;
+    const flow = d?.flow_ms ?? r.flow_ms ?? (ttft !== null ? Math.max(0, ms - ttft) : null);
+    const speed = flow && r.out_tok ? Math.round(r.out_tok / (flow / 1000)) : null;
     const rows = [
-      d.ttft_ms !== null
-        ? `<span class="k"><i class="sw" style="background:var(--line-strong)"></i>首字前（排队 + 网络 + 首 token）</span><span class="v">${secs(d.ttft_ms)}</span>`
+      ttft !== null
+        ? `<span class="k"><i class="sw" style="background:var(--line-strong)"></i>首字前（排队 + 网络 + 首 token）</span><span class="v">${secs(ttft)}</span>`
         : `<span class="k"><i class="sw" style="background:var(--line-strong)"></i>首字前</span><span class="v">未报告</span>`,
-      d.ttft_ms !== null
-        ? `<span class="k"><i class="sw" style="background:var(--accent);opacity:.62"></i>首字后生成</span><span class="v">${secs(d.ms - d.ttft_ms)}</span>`
+      ttft !== null
+        ? `<span class="k"><i class="sw" style="background:var(--accent);opacity:.62"></i>首字后生成</span><span class="v">${secs(ms - ttft)}</span>`
         : '',
-      `<span class="k"><i class="sw" style="background:var(--text);width:2px;height:9px;border-radius:1px"></i>首个文本</span><span class="v">${d.first_text_ms !== null ? secs(d.first_text_ms) : '未报告'}</span>`,
+      `<span class="k"><i class="sw" style="background:var(--text);width:2px;height:9px;border-radius:1px"></i>首个文本</span><span class="v">${d?.first_text_ms != null ? secs(d.first_text_ms) : '未报告'}</span>`,
       speed ? `<span class="k">输出速度</span><span class="v">${speed} tok/s</span>` : '',
     ].filter(Boolean).join('');
     return `<section class="rail-section">
