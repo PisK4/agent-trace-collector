@@ -142,6 +142,73 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 
 回收在单个事务里删引用、删孤儿块、清骨架、改状态，`have` 与历史读数不动，`body_prev_state` 保留原状态。raw 层保留 7 天，到期只删原文、给证据标 `payload_state=expired`；仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。
 
+## 切换核对与 AVA 下线
+
+`scripts/verify-cutover.ts` 只读比较 collector 与 AVA 的正文覆盖，用来判断能不能停 AVA。
+
+```bash
+bun run verify-cutover --from <epoch-ms> --to <epoch-ms> \
+  --collector '<dataDir>/trace.db' --ava '<AVA 库路径>' --out '<仓库外路径>/report.json'
+```
+
+分母是 collector 已保存的账本（`raw_ledger`，固定 `via=through`），窗口左闭右开。两边用同一窗口、同一筛选，`--status` 可再收窄。报告分两份：`normalized` 用规范化后的 ID（`request.response_id_norm`），`raw` 用原始 ID（`raw_ledger.response_id`）。规范化会把不同上游 ID 折成一个，两份报告的歧义数之差就是折叠量。两份各自都要满足守恒关系：
+
+```
+分母 = 有正文 + 无正文 + 无法唯一判断
+```
+
+`无法唯一判断` 包括 NULL response ID 与规范化后重复的 ID；它们单列在 `null_id_counts` 与 `ambiguous_ids` 里，不丢弃、也不把多条真实请求压成一条计数。`missing_both` 是两边都没有正文的 ID——这类差异不能靠“集合交集”藏起来。
+
+AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按字段名挑唯一可用的映射。挑不出来时报 `ava_schema_unrecognized` / `ava_schema_ambiguous` / `ava_body_column_unknown`，并把看到的表与字段打印出来；此时**先记录映射再改脚本**，不要随便指一张表去读。时间列是秒还是毫秒必须显式给 `--ava-time-unit s`，脚本不猜。
+
+只抽取 response ID、时间、状态、大小与可用性元数据，不读正文。报告里有真实 ID 清单，因此强制写在仓库外、权限 0600；写进仓库会以 `report_inside_repository` 退出。终端只打印计数，不打印清单。
+
+分桶给出 `protocol`、`status`、`size`、`miss_reason` 四组覆盖数。没有请求大小的行留在 `unknown`，不编造“超过某个上限”的原因。覆盖率按运行窗口看，不沿用旧样本里某个固定条数。
+
+### 安装 collector 插件
+
+以下步骤需要**明确授权**；写在这里不等于已经执行。每一步先读实际目标，注册是合并条目，不能整份覆盖 `plugins.json`，也不能移除其他插件。
+
+1. 记录现状：magpie 插件文件路径、AVA 的服务定义（label、启动命令、工作目录、端口）。备份到本地受限目录，备份内容不打印到终端、不进仓库。
+2. 令牌：32 随机字节，写本机 0600 配置文件。hook 令牌不能复用 `<dataDir>/read.token`，脱敏盐也不能当令牌用。
+3. 生成注册片段供核对，结构如下（`spec` 用绝对路径，collector 用固定 Bun 绝对路径启动，不依赖交互 shell 的 PATH）：
+
+```json
+{
+  "spec": "/absolute/collector/plugins/collector.hooks.ts",
+  "options": {
+    "endpoint": "http://127.0.0.1:8320/hook/ingest",
+    "token": "<本机生成的 hook 令牌>",
+    "gatewayTimeoutMs": 2000
+  }
+}
+```
+
+4. 生成 launchd plist（`~/Library/LaunchAgents`，label `local.agent-trace-collector`），设 `WorkingDirectory`、`ProgramArguments`、`KeepAlive` 与受限日志路径，先 `plutil -lint`。
+5. 启动 collector，确认健康接口带 Host 保护、`/api/stats` 可读。
+6. 按 magpie 官方入口 `magpie plugin add <本地 hook 路径>` 添加，核对生成的配置只多了这一条。
+7. **保持 AVA 继续运行**，用自然发生的流量观察至少 24 小时。观察窗口必须覆盖一次 collector 重启和一个带大请求的会话；达不到就延长，不人为发大模型请求补样本。
+
+### 上线门槛
+
+| 项目 | 必须有的结果 |
+| --- | --- |
+| 来源追赶 | ledger/route 追平；没有未解释的解析失败或长时间 pending 堆积 |
+| 正文覆盖 | 同窗口集合差已逐类解释；不低于 AVA 的可解释范围；额外缺口有明确原因 |
+| 请求守恒 | 尝试不增顶层请求；重复投递不增引用与费用；歧义没被强合并 |
+| 压力 | 大 envelope 与真实峰值下 hook 确认延迟有余量；95% 暂停可观察 |
+| 回收 | 幸存正文可还原、共享块不误删、历史元数据不变、DB/WAL 确实收缩 |
+| 恢复 | `SIGKILL`、备份恢复、缺口补采测试通过；掉电边界已写明 |
+| 回滚 | AVA 实际启动命令、插件条目、launchd label 与备份都可用 |
+
+### 停 AVA 与回滚
+
+先停 AVA 服务，再从 `plugins.json` 移除 AVA 条目，撤掉它的常驻与开机启动，**保留 AVA 库只读**。每一步之后确认 collector 仍在采到新的自然请求，ledger/route 游标继续前移。
+
+回滚：重新启用备份里的 AVA 条目与原服务，再停用 collector 的 hook。collector 库保留供排查，不删除、不覆盖。配置回滚按条目合并，不能拿整份旧 `plugins.json` 覆盖并行窗口里别人新增的配置。
+
+完成演练后恢复最终选定状态，把起止时间、任何正文缺口与最终服务状态记进本地报告。真实运行需要等待，不能用合成测试结果替代 24 小时观察。
+
 ## schema 版本
 
 当前 `user_version=2`。v1 升 v2 是就地加两张表（`retention_event`、`purged_evidence`），不改既有列。更高的未知版本直接拒绝打开（`schema_version_unsupported`），不猜兼容性；先备份再降级代码，不要手改 `user_version`。

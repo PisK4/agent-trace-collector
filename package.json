@@ -5,6 +5,7 @@
   "scripts": {
     "start": "bun src/main.ts",
     "maintain": "bun src/maintenance.ts",
+    "verify-cutover": "bun scripts/verify-cutover.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

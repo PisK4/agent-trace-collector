@@ -114,6 +114,14 @@ raw 层保留 7 天：先给对应证据标 `payload_state=expired` 再删原文
 
 本轮修掉两个真实缺陷。一是 `openStore` 切到 WAL 后，第一次写事务之前不会创建 `-wal`/`-shm`，此时只读连接打不开库（`SQLITE_CANTOPEN`）——打开一个没有新写入的旧库就会踩到；现在开库时补一个空写事务把它们落下来。二是费用时钟冲突原先只抛错误、不落状态，`/api/stats` 无从显示费用停滞；现在冲突整页回滚后记 `cost_health`（计数、阻塞时点、证据键、窗口）。
 
+## 切换核对（C3）
+
+`bun run verify-cutover` 只读比较 collector 与 AVA 的正文覆盖，用来判断能不能停 AVA。分母是 collector 已保存的账本，窗口左闭右开，两边同一筛选；AVA 的表名不猜，先读 `sqlite_master` 与 `PRAGMA table_info` 按字段名挑唯一映射，挑不出来就停下报告看到的表与字段。
+
+守恒关系是 `分母 = 有正文 + 无正文 + 无法唯一判断`，`normalized`（规范化 ID）与 `raw`（原始 ID）两份报告各自成立。NULL response ID 与规范化后重复的 ID 单列，不丢弃也不压成一条；两边都缺失的 ID 单列在 `missing_both`，不藏在集合交集中。报告只含 ID、时间、状态、大小与可用性元数据，不含正文，强制写在仓库外、权限 0600。
+
+安装、24 小时并行观察、停 AVA 与回滚的步骤写在[运维手册](docs/operations.md)。**本轮没有执行任何外部配置变更**：没有注册 magpie 插件、没有停 AVA、没有改动 launchd。真实运行需要等待，合成测试不能替代观察窗口。
+
 ## 文档
 
 - [项目文档索引](docs/README.md)

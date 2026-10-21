@@ -275,7 +275,7 @@ git commit -m "feat(maintenance): verify backups and make recovery and retention
 - `CoverageReport = {denominator:number;collector_available:number;ava_available:number;collector_only:string[];ava_only:string[];missing_both:string[];ambiguous_ids:string[];null_id_counts:{ledger:number;collector:number;ava:number};window:{from:number;to:number}}`。
 - CLI `bun run verify-cutover --from <epoch-ms> --to <epoch-ms> --collector <db> --ava <readonly-db> --out <local-report.json>`。
 
-- [ ] **步骤 1：写窗口、NULL ID与歧义计数测试。**
+- [x] **步骤 1：写窗口、NULL ID与歧义计数测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -289,9 +289,9 @@ test('两边都缺失不能藏在集合交集中', () => {
 });
 ```
 
-- [ ] **步骤 2：运行 `bun test tests/cutover.test.ts`，确认缺核对逻辑失败。**
+- [x] **步骤 2：运行 `bun test tests/cutover.test.ts`，确认缺核对逻辑失败。**
 
-- [ ] **步骤 3：实现只读导出与守恒报告。** 使用collector已保存的ledger作为分母；窗口以epoch毫秒左闭右开，固定through/agent/status筛选，两边完全相同。原始ID集合和版本1规范ID集合各出一份报告；规范化碰撞单列ambiguous，不将多条真实请求合成1条计数。NULL ID单列，不能丢掉后宣称100%覆盖。计数保留行数、唯一ID数与重复候选数，满足：分母=有正文+无正文+无法唯一判断（在定义的筛选范围内）。
+- [x] **步骤 3：实现只读导出与守恒报告。** 使用collector已保存的ledger作为分母；窗口以epoch毫秒左闭右开，固定through/agent/status筛选，两边完全相同。原始ID集合和版本1规范ID集合各出一份报告；规范化碰撞单列ambiguous，不将多条真实请求合成1条计数。NULL ID单列，不能丢掉后宣称100%覆盖。计数保留行数、唯一ID数与重复候选数，满足：分母=有正文+无正文+无法唯一判断（在定义的筛选范围内）。
 
 AVA schema在执行时只读检查`sqlite_master`和`PRAGMA table_info`，按实际字段写本地查询；本计划不猜AVA表名。若表字段与历史研究不同，先记录映射再修改脚本，不读取正文做全库dump。脚本只抽取response ID、时间、状态、大小和可用性元数据，SQLite以readonly打开，日志不写正文/账号/cwd。报告在仓库外、0600权限，不提交真实ID清单；仓库只留合成报告示例。
 
@@ -332,7 +332,7 @@ AVA schema在执行时只读检查`sqlite_master`和`PRAGMA table_info`，按实
 
 完成回滚演练后恢复最终选定状态，记录起止时间、任何正文缺口与最终服务状态到本地报告。`docs/operations.md`只保存通用步骤和无敏感汇总。真实运行涉及等待，不可用合成测试结果替代24小时观察，更不能在本次文档交付中勾选通过。
 
-- [ ] **步骤 6：运行 `bun test tests/cutover.test.ts && bun run typecheck`，文档检查通过后提交。** `package.json`增加`"verify-cutover":"bun scripts/verify-cutover.ts"`。脚本用`if (import.meta.main)`保护CLI入口，测试import不会访问真实库。
+- [x] **步骤 6：运行 `bun test tests/cutover.test.ts && bun run typecheck`，文档检查通过后提交。** `package.json`增加`"verify-cutover":"bun scripts/verify-cutover.ts"`。脚本用`if (import.meta.main)`保护CLI入口，测试import不会访问真实库。
 
 ```bash
 git add scripts/verify-cutover.ts tests/cutover.test.ts docs/operations.md README.md docs/README.md package.json
