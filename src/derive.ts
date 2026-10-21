@@ -564,11 +564,15 @@ function messageAt(db: Database, reqId: number, ordinal: number): unknown | null
  *
  * 严格前缀只能说明"这一笔是谁的续写"，不能说明"哪条是主线"；主线要等整组
  * 请求都到齐后再按树的规模选，所以每批派生末尾重算一次。
+ *
+ * 正文不可读（prev_relation='unknown'）的请求不进森林：它们没有可比对象，
+ * 既不能证明在主链上，也不能证明是分支，保持中性的 main，不误标分支。
  */
 function assignChainRoles(db: Database, convKey: string, actor: string): void {
   const rows = db.query<{ req_id: number; prev_req_id: number | null; started_ms: number }, [string, string]>(`
     SELECT req_id, prev_req_id, started_ms FROM request
     WHERE conv_key=? AND actor=? AND actor_state='known' AND req_kind='chat'
+      AND (prev_relation IS NULL OR prev_relation != 'unknown')
     ORDER BY started_ms ASC, req_id ASC`).all(convKey, actor);
   const first = rows[0];
   if (first === undefined) return;
