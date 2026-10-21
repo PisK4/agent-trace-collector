@@ -28,3 +28,7 @@ Status: implemented
 - 固定列宽在 1240px 以下压缩读数列、620px 以下隐藏整列；分支标记在窄屏不可见是已知取舍。
 - 两行标签槽位即使没有回复也保留 18px，换来全表对齐。
 - 版式没有自动化几何测试；验证使用元素几何与计算样式，本机 CDP 截图超时。
+
+## Related
+
+- 读数列的两行排布与异常标志位置由 [2026-10-21-ledger-readings-overflow.md](../bug-fix/2026-10-21-ledger-readings-overflow.md) 部分取代。
