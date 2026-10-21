@@ -809,9 +809,13 @@ if (typeof document !== 'undefined') {
           : kind === 'reply' ? '回复' : '用户';
     const primaryText = isTitle ? '生成会话标题' : sameAsPrevious ? '同上' : primary.text;
     // 第二行始终保留：没有回复时留空，保持所有折叠行等高、主文本起点一致。
-    const replyRow = primary.kind !== 'reply' && r.reply_preview !== null
-      ? `<span class="req-row reply"><span class="type-tag reply">回复</span><span class="req-text">${esc(r.reply_preview)}</span></span>`
-      : '<span class="req-row reply" aria-hidden="true"><span></span><span></span></span>';
+    const hasReply = primary.kind !== 'reply' && r.reply_preview !== null;
+    const replyTag = hasReply
+      ? '<span class="type-tag reply">回复</span>'
+      : '<span class="type-tag" aria-hidden="true"></span>';
+    const replyRow = hasReply
+      ? `<span class="req-row reply"><span class="req-text">${esc(r.reply_preview)}</span></span>`
+      : '<span class="req-row reply" aria-hidden="true"></span>';
     const chainFlag = r.chain_role === 'branch'
       ? '<span class="req-flag mute" title="与主链不相接，按后续请求数判定为次链">⎇ 分支</span>' : '';
     const metrics = [
@@ -826,10 +830,13 @@ if (typeof document !== 'undefined') {
     return `<article class="req" data-req="${r.req_id}" data-status="${status}" data-open="${open}" aria-current="${r.req_id === state.reqId}">
       <button class="req-head" data-toggle="${r.req_id}" aria-expanded="${open}">
         <span class="req-node" aria-hidden="true"></span>
+        <span class="req-tags">
+          <span class="type-tag ${kind}">${label}</span>
+          ${replyTag}
+        </span>
         <span class="req-time num">${esc(clock(r.started_ms))}</span>
         <span class="req-line">
           <span class="req-row">
-            <span class="type-tag ${kind}">${label}</span>
             <span class="req-text${primary.muted ? ' muted' : ''}"><span class="req-ord num">${String(ordinal).padStart(2, '0')}</span>${esc(primaryText)}</span>
           </span>
           ${replyRow}
