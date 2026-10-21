@@ -87,7 +87,10 @@ test('响应头包含no-store与nosniff且无CORS', async () => {
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
     const body = await response.json() as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(['body_states', 'cursors', 'gaps', 'issues', 'pending_hooks', 'probe', 'requests']);
+    // open_gaps 单独给出未了缺口数：gaps 是明细，前端统计不必自己数状态。
+    expect(Object.keys(body).sort()).toEqual([
+      'body_states', 'cursors', 'gaps', 'issues', 'open_gaps', 'pending_hooks', 'probe', 'requests',
+    ]);
   } finally {
     f.close();
   }

@@ -13,6 +13,7 @@ import {
 } from './sources/magpie';
 import type { LedgerFields, RouteFields } from './sources/magpie';
 import { enqueueDeriveTx } from './derive';
+import { closeSourceGapsTx, markStaleGapsTx, recordPausedBatchTx } from './retention';
 
 export type IngestLedgerResult = { accepted: number; invalid: number; duplicate: number };
 
@@ -63,6 +64,40 @@ function upsertCursor(db: Database, sourceKind: string, sourceName: string, batc
       batch.observedOff,
     ],
   );
+}
+
+/**
+ * 暂停期间的一批读取结果。
+ *
+ * 只更新 observed_off 与缺口：committed_off 保持不动，下一轮仍从原位置重读，
+ * 所以暂停期间的证据不会因为游标前移而永久漏掉；换代时由 resumeSourceGaps 判成不可补。
+ */
+export function resumePausedLedger(
+  store: Store,
+  sourceName: string,
+  batch: FileBatch,
+  now: number,
+): { recorded: boolean; from_off: number; to_off: number; pendingLines: number } {
+  return store.write(db => {
+    const cursor = db.query<{ file_generation: string; committed_off: number }, [string, string]>(
+      'SELECT file_generation, committed_off FROM source_cursor WHERE source_kind=? AND source_name=?',
+    ).get('ledger', sourceName);
+    const from = cursor !== null && cursor.file_generation === batch.generation
+      ? cursor.committed_off
+      : batch.committedOff;
+    const gap = recordPausedBatchTx(db, {
+      source_kind: 'ledger', source_name: sourceName, generation: batch.generation,
+      from_off: from, to_off: batch.observedOff,
+    }, now);
+    if (from < batch.observedOff) {
+      db.run(
+        `UPDATE source_cursor SET observed_off=MAX(observed_off,?), seen_size=?
+         WHERE source_kind=? AND source_name=? AND file_generation=?`,
+        [batch.observedOff, batch.seenSize, 'ledger', sourceName, batch.generation],
+      );
+    }
+    return { ...gap, pendingLines: batch.lines.length };
+  });
 }
 
 function sumOrNull(rows: Record<string, unknown>[], column: string): number | null {
@@ -440,6 +475,10 @@ export function ingestLedger(
       accepted += 1;
     }
     upsertCursor(db, 'ledger', sourceName, batch, now);
+    // 本轮真正提交的区间若覆盖了此前的暂停缺口，就在这里关闭它；
+    // 换代时旧代际的缺口一并判死，避免之后被当作可补区间重读。
+    markStaleGapsTx(db, 'ledger', sourceName, now);
+    closeSourceGapsTx(db, 'ledger', sourceName, batch.generation, 0, batch.committedOff, now);
     return { accepted, invalid, duplicate };
   });
 }

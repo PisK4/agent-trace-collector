@@ -36,7 +36,7 @@
 - `pruneRaw(store:Store,beforeMs:number,limit?:number): {ledger:number;route:number;hook:number}`，默认每表最多100行。
 - `resumeSourceGaps(store:Store,sourceName:string): {recoverable:number;unrecoverable:number}`。
 
-- [ ] **步骤 1：写共享块不误删、元数据不变的测试。**
+- [x] **步骤 1：写共享块不误删、元数据不变的测试。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -63,9 +63,9 @@ test('回收旧请求保留共享块和历史读数', () => {
 });
 ```
 
-- [ ] **步骤 2：运行 `bun test tests/retention.test.ts`，确认缺回收行为失败。**
+- [x] **步骤 2：运行 `bun test tests/retention.test.ts`，确认缺回收行为失败。**
 
-- [ ] **步骤 3：实现候选集事务和逻辑/物理双计量。** 候选优先最旧day，再按started_ms/req_id；状态与非空骨架、raw残留正文联合判断。先取候选req对应block id，再删引用，再对候选block反连接删除，无全库扫描。事务内清skeleton、raw副本、更新body_prev_state/evicted_at/reason；已evicted不覆盖原状态。
+- [x] **步骤 3：实现候选集事务和逻辑/物理双计量。** 候选优先最旧day，再按started_ms/req_id；状态与非空骨架、raw残留正文联合判断。先取候选req对应block id，再删引用，再对候选block反连接删除，无全库扫描。事务内清skeleton、raw副本、更新body_prev_state/evicted_at/reason；已evicted不覆盖原状态。
 
 ```sql
 -- 候选请求和候选块使用 TEMP 表；每批清空，ID用绑定参数插入。
@@ -89,7 +89,7 @@ WHERE req_id IN (SELECT req_id FROM evict_requests);
 
 每批后 `PRAGMA incremental_vacuum(256)`；低负载且读事务结束后 `PRAGMA wal_checkpoint(TRUNCATE)`。checkpoint返回busy时退出本轮、计入健康并再试，不紧循环。不要在线执行全库VACUUM。原始清理先标evidence payload_state=expired，再删raw；长期sort/parse/reply/attempt字段与summary先已保存。没有完成关联的hook原文仍须迁到骨架，不能按7天到期直接丢失仍标unsupported的正文。
 
-- [ ] **步骤 4：运行 A 阶段也需要的物理收缩实验与预算测试。**
+- [x] **步骤 4：运行 A 阶段也需要的物理收缩实验与预算测试。**
 
 ```ts
 // 独立测试库：建表前 INCREMENTAL，再 WAL。
@@ -117,7 +117,7 @@ A 阶段可把这段实验放 `tests/store.test.ts`，C1创建后迁到retention
 
 注入回收中断，在删引用后、标状态前SIGKILL，重开后应整体回滚。正常提交后检查：悬空引用0、幸存正文可还原、历史请求数和用量不变、没有已evicted却残留可回收副本。模拟暂停后文件追加、进程重启、恢复补采、上游文件消失；前三者最终集合一致，最后者永久缺口可查询。
 
-- [ ] **步骤 5：运行 `bun test tests/retention.test.ts tests/files.test.ts tests/hook.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/retention.test.ts tests/files.test.ts tests/hook.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/retention.ts src/store.ts src/schema.sql src/main.ts src/hook.ts src/reconcile.ts src/queries.ts tests/retention.test.ts tests/files.test.ts

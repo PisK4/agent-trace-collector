@@ -13,7 +13,7 @@ import {
 } from './queries';
 import { PAGE_MAX, getBodyPage } from './protocols';
 import { acceptHook } from './hook';
-import type { HookEnvelope } from './hook';
+import type { HookAdmission, HookEnvelope } from './hook';
 
 const WEB_ROOT = new URL('../web/', import.meta.url);
 const MAX_ENVELOPE_BYTES = 64 * 1024 * 1024;
@@ -126,7 +126,7 @@ async function handleHookIngest(
   req: Request,
   store: Store,
   config: Config,
-  hook: { token: string; salt: Uint8Array } | undefined,
+  hook: { token: string; salt: Uint8Array; admission?: () => HookAdmission } | undefined,
 ): Promise<Response> {
   if (hook === undefined) return json({ error: 'hook_unavailable' }, 404);
   const host = req.headers.get('host');
@@ -164,7 +164,7 @@ async function handleHookIngest(
     if (envelope.origin !== 'local') return json({ error: 'origin' }, 403);
 
     try {
-      const result = acceptHook(store, envelope, Date.now(), hook.salt);
+      const result = acceptHook(store, envelope, Date.now(), hook.salt, { admission: hook.admission });
       return json(result, 200);
     } catch (error) {
       const code = error instanceof Error ? error.message : 'unknown';
@@ -200,7 +200,7 @@ export function createHandler(
   store: Store,
   config: Config,
   readToken: string,
-  hook?: { token: string; salt: Uint8Array },
+  hook?: { token: string; salt: Uint8Array; admission?: () => HookAdmission },
 ): (req: Request) => Promise<Response> {
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url);

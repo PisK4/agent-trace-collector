@@ -42,6 +42,17 @@ export type HookEnvelope = {
 
 export type AcceptHookResult = { req_id: number; duplicate: boolean };
 
+/**
+ * 写前准入结果。`paused` 由 HTTP 层转成 507，本层不决定状态码；
+ * `metadata_only` 只跳过正文，证据与关联照常落库。
+ */
+export type HookAdmission = { mode: 'normal' | 'metadata_only' | 'paused'; reason: string | null };
+
+export type AcceptOptions = {
+  /** 缺省视为 normal：测试与离线重放不需要真实磁盘预算。 */
+  admission?: () => HookAdmission;
+};
+
 const MiB = 1024 * 1024;
 const MAX_BODY_BYTES = 32 * MiB;
 const MAX_ENVELOPE_BYTES = 64 * MiB;
@@ -166,7 +177,12 @@ export function acceptHook(
   envelope: HookEnvelope,
   now: number,
   salt: Uint8Array,
+  options: AcceptOptions = {},
 ): AcceptHookResult {
+  const admission = options.admission?.() ?? { mode: 'normal', reason: null };
+  // 暂停时不写任何东西：收下却存不进正文只会多一条误导性的"成功"记录。
+  if (admission.mode === 'paused') throw new Error('disk_full');
+
   return store.write(db => {
     if (typeof envelope.hook_id !== 'string' || envelope.hook_id.length === 0) {
       throw new Error('hook_id_missing');
@@ -207,12 +223,22 @@ export function acceptHook(
       reply: redactedReply,
       redact_version: 1,
     };
-    const current = db.query<{ body_state: string }, [number]>(
-      'SELECT body_state FROM request WHERE req_id=?',
+    const current = db.query<{ body_state: string; skeleton_z: Uint8Array | null }, [number]>(
+      'SELECT body_state, skeleton_z FROM request WHERE req_id=?',
     ).get(reqId);
-    const hasBody = current?.body_state === 'available' || current?.body_state === 'partial';
-    if (omission === null) {
+    // partial 且没有骨架才算"真的没正文"；只有骨架的 partial 仍能读请求字段。
+    const hasBody = current?.skeleton_z != null;
+    if (omission === null && admission.mode === 'metadata_only') {
+      if (!hasBody) {
+        db.run(
+          `UPDATE request SET body_state='partial', miss_reason='disk_body_paused', updated_at=? WHERE req_id=?`,
+          [now, reqId],
+        );
+      }
+    } else if (omission === null) {
       persistBodyTx(db, reqId, body);
+      // persistBodyTx 不碰 miss_reason；暂停期间留下的原因要在这里清掉。
+      db.run('UPDATE request SET miss_reason=NULL WHERE req_id=?', [reqId]);
     } else if (!hasBody) {
       // 只有本来就没正文时才降级；已有正文的请求不因一次超限回调被抹掉。
       db.run(

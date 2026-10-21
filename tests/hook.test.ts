@@ -367,3 +367,93 @@ test('正文超32MiB时发metadata envelope', async () => {
     globalThis.fetch = original;
   }
 });
+
+test('磁盘暂停时hook拒收并返回507', async () => {
+  const f = fixture();
+  try {
+    const handler = createHandler(f.store, loadConfig({}), 'read-token', {
+      token: 'hook-token',
+      salt,
+      admission: () => ({ mode: 'paused', reason: 'disk_budget' }),
+    });
+    const response = await handler(new Request('http://127.0.0.1:8320/hook/ingest', {
+      method: 'POST',
+      headers: {
+        host: '127.0.0.1:8320',
+        authorization: 'Bearer hook-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(envelope()),
+    }));
+    expect(response.status).toBe(507);
+    expect(await response.json()).toEqual({ error: 'insufficient_storage' });
+    // 拒收不留下半截请求。
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM raw_hook').get()).toEqual({ n: 0 });
+  } finally {
+    f.close();
+  }
+});
+
+test('只接元数据时保留证据位并把正文标为暂停原因', () => {
+  const f = fixture();
+  try {
+    const result = acceptHook(f.store, envelope(), 5, salt, {
+      admission: () => ({ mode: 'metadata_only', reason: 'disk_budget' }),
+    });
+    const row = f.store.read.query<{
+      body_state: string; miss_reason: string | null; have: number; skeleton_z: Uint8Array | null;
+    }, [number]>('SELECT body_state, miss_reason, have, skeleton_z FROM request WHERE req_id=?').get(result.req_id);
+    expect(row).toEqual({
+      body_state: 'partial', miss_reason: 'disk_body_paused', have: 1, skeleton_z: null,
+    });
+    // 证据、raw 元数据与 response ID 仍完整，回来补正文时还能关联。
+    expect(f.store.read.query("SELECT count(*) AS n FROM request_evidence WHERE source_kind='hook'").get()).toEqual({ n: 1 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM raw_hook').get()).toEqual({ n: 1 });
+    expect(f.store.read.query('SELECT response_id_norm FROM request WHERE req_id=?', ).get(result.req_id))
+      .toEqual({ response_id_norm: 'synthetic_1' });
+  } finally {
+    f.close();
+  }
+});
+
+test('只接元数据不覆盖已有正文', () => {
+  const f = fixture();
+  try {
+    const first = acceptHook(f.store, envelope({ hook_id: 'hook-body-1' }), 5, salt);
+    expect(restoreBody(f.store, first.req_id)).not.toBeNull();
+    // 同一请求再来一次（不同 hook_id、同一 response ID）处在暂停模式：正文仍可还原。
+    acceptHook(f.store, envelope({ hook_id: 'hook-body-2' }), 6, salt, {
+      admission: () => ({ mode: 'metadata_only', reason: 'disk_budget' }),
+    });
+    expect(restoreBody(f.store, first.req_id)).not.toBeNull();
+  } finally {
+    f.close();
+  }
+});
+
+test('准入恢复后同一请求可以补上正文', () => {
+  const f = fixture();
+  try {
+    // 账本请求先到，正文缺位并留下暂停原因（暂停期间 hook 只落元数据的常态）。
+    f.store.write(db => db.run(
+      `INSERT INTO request(req_id,route_id,response_id_norm,agent,session,conv_key,conv_source,actor,actor_state,
+         started_ms,day,via,status,body_state,miss_reason,derive_version,have,created_at,updated_at,title,title_source)
+       VALUES (1,202,'synthetic_1','alpha','synthetic-session',?,'session','synthetic-session','known',
+         1700000000000,'2026-10-20','through',200,'partial','disk_body_paused',0,2,1,1,'t','model_time')`,
+      [JSON.stringify(['session', 'synthetic-session'])],
+    ));
+    // 空间恢复后 hook 带着正文到了：应该并进这笔账本请求并把正文补上。
+    const later = acceptHook(f.store, envelope({ hook_id: 'hook-late-2' }), 6, salt, {
+      admission: () => ({ mode: 'normal', reason: null }),
+    });
+    expect(later.req_id).toBe(1);
+    const row = f.store.read.query<{ body_state: string; miss_reason: string | null }, []>(
+      'SELECT body_state, miss_reason FROM request WHERE req_id=1').get();
+    expect(row).toEqual({ body_state: 'available', miss_reason: null });
+    expect(restoreBody(f.store, 1)?.protocol).toBe('anthropic');
+    expect(f.store.read.query<{ have: number }, []>('SELECT have FROM request WHERE req_id=1').get()).toEqual({ have: 3 });
+  } finally {
+    f.close();
+  }
+});

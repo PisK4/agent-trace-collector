@@ -327,6 +327,7 @@ export type Stats = {
   pending_hooks: number;
   requests: number;
   body_states: { state: string; count: number }[];
+  open_gaps: number;
   probe: unknown;
 };
 
@@ -345,6 +346,8 @@ export function getStats(store: Store): Stats {
   const bodyStates = store.read.query(`
     SELECT body_state AS state, COUNT(*) AS count FROM request GROUP BY body_state ORDER BY body_state`)
     .all() as Stats['body_states'];
+  const openGaps = store.read.query(
+    "SELECT COUNT(*) AS n FROM source_gap WHERE state IN ('open','resumable')").get() as { n: number };
   const probe = store.read.query<{ value_json: string }, [string]>(
     'SELECT value_json FROM collector_state WHERE key=?',
   ).get(JSON.stringify(['magpie', 'probe']));
@@ -355,6 +358,7 @@ export function getStats(store: Store): Stats {
     pending_hooks: pending.n,
     requests: requests.n,
     body_states: bodyStates,
+    open_gaps: openGaps.n,
     probe: probe == null ? null : parseJsonOrNull(probe.value_json),
   };
 }

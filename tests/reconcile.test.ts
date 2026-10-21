@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
 import type { FileBatch } from '../src/sources/files';
-import { ingestLedger, ingestRoute } from '../src/reconcile';
+import { ingestLedger, ingestRoute, resumePausedLedger } from '../src/reconcile';
 
 function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatch {
   let offset = startOffset;
@@ -206,6 +206,94 @@ test('缺字段保持NULL而不是补零', () => {
     ]), 1, salt);
     expect(f.store.read.query('SELECT cache_read,cache_write,reasoning,cost,cost_state FROM request').get())
       .toEqual({ cache_read: null, cache_write: null, reasoning: null, cost: null, cost_state: 'absent' });
+  } finally {
+    f.close();
+  }
+});
+
+test('暂停时只记缺口与observed_off，游标停在原处', () => {
+  const f = fixture();
+  try {
+    const first = batchOf([{ t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 10, out: 5 }]);
+    ingestLedger(f.store, 'usage.jsonl', first, 1, salt);
+    const committed = f.store.read.query<{ committed_off: number }, []>('SELECT committed_off FROM source_cursor').get();
+    expect(committed?.committed_off).toBe(first.committedOff);
+
+    // 新一批到了但准入暂停：不写证据，只把看到的区间记成缺口。
+    const paused = batchOf(
+      [{ t: '2026-10-20T00:00:01Z', route_id: 8, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 1, out: 1 }],
+      first.generation,
+      first.committedOff,
+    );
+    resumePausedLedger(f.store, 'usage.jsonl', paused, 2);
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 1 });
+    expect(f.store.read.query('SELECT committed_off, observed_off FROM source_cursor').get()).toEqual({
+      committed_off: first.committedOff, observed_off: paused.observedOff,
+    });
+    expect(f.store.read.query('SELECT from_off,to_off,state FROM source_gap').all()).toEqual([
+      { from_off: first.committedOff, to_off: paused.observedOff, state: 'open' },
+    ]);
+
+    // 恢复后重读同一区间：证据入库，缺口关闭。
+    const resumed = batchOf(
+      [{ t: '2026-10-20T00:00:01Z', route_id: 8, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 1, out: 1 }],
+      first.generation,
+      first.committedOff,
+    );
+    ingestLedger(f.store, 'usage.jsonl', resumed, 3, salt);
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 2 });
+    expect(f.store.read.query('SELECT from_off, state FROM source_gap').all()).toEqual([
+      { from_off: first.committedOff, state: 'filled' },
+    ]);
+    expect(f.store.read.query('SELECT observed_off FROM source_cursor').get()).toEqual({ observed_off: resumed.observedOff });
+  } finally {
+    f.close();
+  }
+});
+
+test('换代后暂停缺口标unrecoverable且不被后续读取改写', () => {
+  const f = fixture();
+  try {
+    const first = batchOf([{ t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 10, out: 5 }]);
+    ingestLedger(f.store, 'usage.jsonl', first, 1, salt);
+    const paused = batchOf([], first.generation, first.committedOff);
+    paused.observedOff = first.committedOff + 40;
+    resumePausedLedger(f.store, 'usage.jsonl', paused, 2);
+
+    // 文件被原地重写：游标换代，旧区间无法再按偏移重读。
+    const rewritten = batchOf([{ t: '2026-10-20T00:00:09Z', route_id: 9, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-b', in: 1, out: 1 }], 'g:1', 0);
+    ingestLedger(f.store, 'usage.jsonl', rewritten, 3, salt);
+    expect(f.store.read.query('SELECT state FROM source_gap').all()).toEqual([{ state: 'unrecoverable' }]);
+  } finally {
+    f.close();
+  }
+});
+
+test('暂停后文件继续追加，重启恢复得到与从未暂停一致的集合', () => {
+  const f = fixture();
+  try {
+    const base = batchOf([{ t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 10, out: 5 }]);
+    ingestLedger(f.store, 'usage.jsonl', base, 1, salt);
+
+    // 暂停期间上游又写了两行：只记缺口。
+    const paused = batchOf([
+      { t: '2026-10-20T00:00:01Z', route_id: 8, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 1, out: 1 },
+      { t: '2026-10-20T00:00:02Z', route_id: 9, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 2, out: 2 },
+    ], base.generation, base.committedOff);
+    resumePausedLedger(f.store, 'usage.jsonl', paused, 2);
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 1 });
+
+    // 重启后重读同一游标：两行都补上，缺口关闭，结果与从未暂停相同。
+    const resumed = batchOf([
+      { t: '2026-10-20T00:00:01Z', route_id: 8, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 1, out: 1 },
+      { t: '2026-10-20T00:00:02Z', route_id: 9, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 2, out: 2 },
+    ], base.generation, base.committedOff);
+    const result = ingestLedger(f.store, 'usage.jsonl', resumed, 3, salt);
+    expect(result.accepted).toBe(2);
+    expect(f.store.read.query('SELECT route_id FROM request ORDER BY route_id').all()).toEqual([
+      { route_id: 7 }, { route_id: 8 }, { route_id: 9 },
+    ]);
+    expect(f.store.read.query('SELECT state FROM source_gap').all()).toEqual([{ state: 'filled' }]);
   } finally {
     f.close();
   }

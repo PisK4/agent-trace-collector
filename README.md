@@ -81,6 +81,25 @@ bun run typecheck
 本轮截图接口在本机 CDP 上不可用（连 `example.com` 也超时），版式验收改用元素几何测量（`scrollWidth`、`getBoundingClientRect`、`gridTemplateColumns`）代替像素截图。
 
 
+## 保留与容量（C1）
+
+正文预算 `10 GB`、总盘 `16 GB`（十进制字节），用 `ATC_BODY_BUDGET`、`ATC_DISK_LIMIT` 覆盖。三道门槛都带滞回，模式变化才写 `collector_state`，重启后接着上次的模式算：
+
+| 触发 | 效果 | 恢复条件 |
+| --- | --- | --- |
+| 正文占用 ≥ 预算 | 回收最旧正文到 90% 预算 | 回到 90% 以下 |
+| 总盘 ≥ 80% | 只接元数据：证据、关联、raw 元数据照写，正文标 `partial` / `disk_body_paused` | 跌回 75% 以下 |
+| 总盘 ≥ 95% | hook 一律 507，什么都不写 | 跌回 90% 以下 |
+| 剩余空间 < `max(256 MiB, 2 × 本批上界)` | 暂停 | 余量回到门槛以上 |
+
+回收按 `day`、`started_ms`、`req_id` 从旧到新，单批最多 100 笔、10,000 条块引用；删引用、删孤儿块、清骨架、改状态在同一个事务里，`have` 与历史读数不动，`body_prev_state` 保留原状态。共享块只在最后一个引用消失时删除。每批后 `incremental_vacuum(256)`，再 `wal_checkpoint(TRUNCATE)`；不做在线全库 VACUUM。
+
+账本暂停时 `committed_off` 不动、只推进 `observed_off`，重读还能拿到那一段；同一来源代际的连续区间合并成一条 `source_gap`，补齐后标 `filled`，文件换代补不回来的标 `unrecoverable` 并一直可见。`/api/stats` 的 `open_gaps` 是未了缺口数。
+
+raw 层保留 7 天：先给对应证据标 `payload_state=expired` 再删原文，attempt 字段、`route_summary`、解析状态与正文都不依赖 raw 层。仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。
+
+真机验收（合成库，40 笔约 6.4 MB 随机正文，预算压到 2 MB）：启动即回收 40 笔，`block` 清零，`page_count` 1651 → 45，库文件 6.7 MB → 180 KB，`freelist_count` 回到 0。验收中修掉一个真实缺陷：`main.ts` 原先用一个全局 `running` 锁串行所有定时任务，启动时连续调用的几个 tick 只有第一个真正执行，其余被静默跳过——回收因此在启动阶段整轮失效。现在按任务名加锁，写操作本来就在同步事务里，不需要全局互斥。
+
 ## 文档
 
 - [项目文档索引](docs/README.md)

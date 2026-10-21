@@ -10,12 +10,27 @@ import { probeMagpie, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
 import { reconcilePending } from './hook';
 import { drainDerive, pairToolCalls } from './derive';
+import {
+  DISK_METADATA_RATIO,
+  EVICT_TARGET_RATIO,
+  RAW_TTL_MS,
+  createAdmissionGate,
+  evictOldestBodyBatch,
+  measureBodyBytes,
+  measureStorage,
+  pruneRaw,
+  resumeSourceGaps,
+  shrinkStorage,
+} from './retention';
+import { resumePausedLedger } from './reconcile';
 
 const LEDGER_INTERVAL_MS = 5000;
 const ROUTE_INTERVAL_MS = 2000;
 const COST_INTERVAL_MS = 60_000;
 const PROBE_INTERVAL_MS = 60_000;
 const DERIVE_INTERVAL_MS = 2000;
+const RETENTION_INTERVAL_MS = 30_000;
+const RAW_PRUNE_INTERVAL_MS = 60 * 60_000;
 
 function readCursor(store: Store, sourceKind: string, sourceName: string): FileCursor | null {
   const row = store.read.query<{
@@ -42,28 +57,47 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   const salt = loadLocalSecret(config.dataDir, 'redaction.salt');
   const readToken = loadReadToken(config.dataDir);
   const hookToken = Buffer.from(loadLocalSecret(config.dataDir, 'hook.token')).toString('base64url');
+  // 准入闸门在每个写入点共用：模式变了才落库，量测按 TTL 缓存。
+  const gate = createAdmissionGate(store, config.dataDir, {
+    bodyBudget: config.bodyBudget,
+    diskLimit: config.diskLimit,
+  });
   let handler: (req: Request) => Promise<Response> = () => Promise.resolve(new Response('starting', { status: 503 }));
 
   const timers: ReturnType<typeof setInterval>[] = [];
-  let running = false;
+  const running = new Set<string>();
   let stopped = false;
 
+  /**
+   * 每个任务各自防重入，不用一个全局锁。
+   *
+   * 全局锁会让启动时连续调用的几个 tick 只有第一个真正执行，其余被静默跳过；
+   * 而写操作都在同步的 store.write 事务里完成，不会真正并行，按任务名加锁就够了。
+   */
   const guard = (name: string, task: () => Promise<void> | void) => async () => {
-    if (stopped || running) return;
-    running = true;
+    if (stopped || running.has(name)) return;
+    running.add(name);
     try {
       await task();
     } catch (error) {
+      // 停止过程中关闭数据库会让在途的异步任务失败；那不是采集故障，不该写进日志。
+      if (stopped) return;
       const code = error instanceof Error ? error.message : 'unknown';
       process.stderr.write(`${name}_failed:${code}\n`);
     } finally {
-      running = false;
+      running.delete(name);
     }
   };
 
   const ledgerTick = guard('ledger', async () => {
     const cursor = readCursor(store, 'ledger', 'usage.jsonl');
     const batch = await readBatch(config.ledgerPath, cursor);
+    // 暂停时只记缺口、不动游标：下一轮仍从 committed_off 重读，证据不会漏。
+    const admission = gate.check(batch.observedOff - batch.committedOff);
+    if (admission.mode === 'paused' && batch.observedOff > batch.committedOff) {
+      resumePausedLedger(store, 'usage.jsonl', batch, Date.now());
+      return;
+    }
     if (batch.lines.length === 0 && batch.issues.length === 0 && batch.committedOff === (cursor?.committedOff ?? 0)) {
       if (cursor !== null && batch.observedOff !== cursor.committedOff) {
         store.write(db => db.run(
@@ -134,6 +168,38 @@ export async function startCollector(config: Config): Promise<{ port: number; st
     reconcilePending(store, Date.now());
   });
 
+  const retentionTick = guard('retention', () => {
+    // 正文到了预算就收到 90%；盘占用到了 80% 也提前回收，不为空着等正文顶满。
+    const usage = measureStorage(store, config.dataDir);
+    const bodyFull = usage.body_bytes >= config.bodyBudget * EVICT_TARGET_RATIO;
+    const diskTight = usage.total_bytes >= config.diskLimit * DISK_METADATA_RATIO;
+    if (!bodyFull && !diskTight) return;
+    const target = config.bodyBudget * EVICT_TARGET_RATIO;
+    let evicted = 0;
+    for (let batch = 0; batch < 20; batch++) {
+      if (measureBodyBytes(store) <= target && evicted > 0) break;
+      const result = evictOldestBodyBatch(store, Date.now());
+      if (result.requests === 0) break;
+      evicted += result.requests;
+    }
+    if (evicted > 0) {
+      shrinkStorage(store);
+      gate.invalidate();
+      process.stderr.write(`retention_evicted:${evicted}\n`);
+    }
+  });
+
+  const rawPruneTick = guard('raw_prune', () => {
+    const now = Date.now();
+    const pruned = pruneRaw(store, now - RAW_TTL_MS);
+    if (pruned.ledger + pruned.route + pruned.hook > 0) shrinkStorage(store);
+  });
+
+  const gapTick = guard('gap', () => {
+    const result = resumeSourceGaps(store, 'usage.jsonl');
+    if (result.unrecoverable > 0) process.stderr.write(`source_gap_unrecoverable:${result.unrecoverable}\n`);
+  });
+
   const deriveTick = guard('derive', () => {
     const result = drainDerive(store);
     // 只重配本批真正处理过的分组，不扫描全库。
@@ -148,7 +214,11 @@ export async function startCollector(config: Config): Promise<{ port: number; st
     fetch: (req: Request) => handler(req),
   });
   const boundPort = server.port ?? config.port;
-  handler = createHandler(store, { ...config, port: boundPort }, readToken, { token: hookToken, salt });
+  handler = createHandler(store, { ...config, port: boundPort }, readToken, {
+    token: hookToken,
+    salt,
+    admission: () => gate.check(0),
+  });
 
   timers.push(setInterval(ledgerTick, LEDGER_INTERVAL_MS));
   timers.push(setInterval(routeTick, ROUTE_INTERVAL_MS));
@@ -156,11 +226,17 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   timers.push(setInterval(probeTick, PROBE_INTERVAL_MS));
   timers.push(setInterval(pendingTick, LEDGER_INTERVAL_MS));
   timers.push(setInterval(deriveTick, DERIVE_INTERVAL_MS));
+  timers.push(setInterval(retentionTick, RETENTION_INTERVAL_MS));
+  timers.push(setInterval(rawPruneTick, RAW_PRUNE_INTERVAL_MS));
+  timers.push(setInterval(gapTick, LEDGER_INTERVAL_MS));
   void ledgerTick();
   void routeTick();
   void probeTick();
   void pendingTick();
   void deriveTick();
+  void gapTick();
+  // 启动时就评估一次：上一个进程可能是在暂停状态下退出的，不必等一个周期。
+  void retentionTick();
 
   const stop = async (): Promise<void> => {
     if (stopped) return;

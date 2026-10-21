@@ -3,6 +3,7 @@ import { fixture } from './fixtures';
 import { loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
 import { getStats, listRequests, listSessions } from '../src/queries';
+import { persistBody } from '../src/body';
 
 function insertRequests(store: ReturnType<typeof fixture>['store'], convKey: string, count: number, sameMs: boolean): void {
   store.write(db => {
@@ -61,6 +62,8 @@ test('stats暴露游标、issue与正文状态分布', () => {
     expect(stats.issues).toEqual([{ source_kind: 'ledger', reason: 'ledger_invalid_json', count: 1 }]);
     expect(stats.gaps.length).toBe(1);
     expect(stats.body_states).toEqual([{ state: 'pending', count: 2 }]);
+    // 那条 unrecoverable 缺口不算未了，未了缺口单独计数。
+    expect(stats.open_gaps).toBe(0);
   } finally {
     f.close();
   }
@@ -115,6 +118,47 @@ test('SIGTERM停止后不再响应请求', async () => {
     await expect(fetch(`http://127.0.0.1:${collector.port}/api/stats`, {
       headers: { origin: `http://127.0.0.1:${collector.port}` },
     })).rejects.toThrow();
+  } finally {
+    f.close();
+  }
+});
+
+test('启动时逐项运行各任务，回收不受其它任务占锁影响', async () => {
+  const f = fixture();
+  try {
+    const config = {
+      ...loadConfig({}),
+      port: 0,
+      dataDir: f.dir,
+      ledgerPath: `${f.dir}/missing.jsonl`,
+      routingDir: `${f.dir}/missing-routing`,
+      // 预算压到 100 字节（这两段重复文本压缩后约 370 B）：启动时那一轮回收必须真的执行，
+      // 而不是被前一个 tick 的锁挡住。
+      bodyBudget: 100,
+      diskLimit: 16_000_000_000,
+    };
+    for (const id of [1, 2]) {
+      f.store.db.run(
+        "INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at) VALUES (?,?,?,'hook','pending',0,1,1,1)",
+        [id, id, '2026-10-20'],
+      );
+      persistBody(f.store, id, {
+        protocol: 'anthropic',
+        request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(4096) + id }] }] },
+        reply: { id: `msg_${id}`, content: [] },
+        redact_version: 1,
+      });
+    }
+    const collector = await startCollector(config);
+    try {
+      // 启动那一轮是同步发起的；给事件循环一个机会跑完。
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const states = f.store.read.query<{ body_state: string }, []>(
+        'SELECT body_state FROM request ORDER BY req_id').all();
+      expect(states).toEqual([{ body_state: 'evicted' }, { body_state: 'evicted' }]);
+    } finally {
+      await collector.stop();
+    }
   } finally {
     f.close();
   }
