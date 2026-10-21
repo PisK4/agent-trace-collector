@@ -135,6 +135,7 @@ CREATE TABLE request (
   actor_state TEXT NOT NULL DEFAULT 'unknown',
   parse_state TEXT,
   reply_state TEXT,
+  adapter_version INTEGER,
   redact_version INTEGER,
   match_version INTEGER,
   pricing_version TEXT,

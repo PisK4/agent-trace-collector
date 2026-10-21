@@ -91,7 +91,7 @@ expect(store.read.query('SELECT count(*) AS n FROM request_block').get()).toEqua
 
 建立请求的 SQL 使用 A1 `request` 必需列：`req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at`，值分别为测试 id、1、`2026-10-20`、`hook`、`pending`、0、1、1、1。另测试同内容但不同 cache_control 产生不同块；Responses/Gemini 原对象无损还原；中途 throw 不留下孤儿块或错误 available。检查 SQLite 文件/WAL 的可解压内容和 API 输出不含合成凭证，不能只检查内存函数结果。
 
-- [ ] **步骤 5：运行 `bun test tests/privacy.test.ts tests/body.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/privacy.test.ts tests/body.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/body.ts src/privacy.ts src/config.ts tests/body.test.ts tests/privacy.test.ts
@@ -154,7 +154,7 @@ expect(parsed.calls[0].id).toBe('call_y');
 expect(parsed.calls[0].input).toBe('{"path":"demo"}');
 ```
 
-- [ ] **步骤 5：运行 `bun test tests/protocols.test.ts tests/body.test.ts tests/http.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/protocols.test.ts tests/body.test.ts tests/http.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add src/protocols.ts src/body.ts src/queries.ts src/http.ts tests/protocols.test.ts tests/http.test.ts

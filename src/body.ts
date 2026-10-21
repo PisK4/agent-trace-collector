@@ -3,6 +3,7 @@ import { constants, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
 import { resolveRequestId } from './queries';
+import { ADAPTER_VERSION, parseProtocol } from './protocols';
 
 /**
  * 可还原的脱敏正文。调用方负责先脱敏再调用 persist，本模块只认已脱敏对象。
@@ -90,6 +91,8 @@ export function persistBodyTx(db: Database, reqId: number, body: BodyInput): voi
   const messages = messagesOf(body.request);
   const skeleton = skeletonOf(body, messages);
   const skeletonZ = compress(serialize(skeleton));
+  // 解析状态跟着正文一起写：读取端只查 request 的一行就能同时拿到两者。
+  const parsed = parseProtocol(body.protocol, body.request, body.reply);
 
   db.run('DELETE FROM request_block WHERE req_id=?', [reqId]);
 
@@ -125,8 +128,11 @@ export function persistBodyTx(db: Database, reqId: number, body: BodyInput): voi
   db.run(
     `UPDATE request SET skeleton_z=?, body_state='available', body_prev_state=NULL,
        body_evicted_at=NULL, body_evict_reason=NULL, body_bytes=?, msg_count=?,
-       redact_version=?, updated_at=? WHERE req_id=?`,
-    [skeletonZ, blockBytes, messages === null ? null : messages.length, body.redact_version, Date.now(), reqId],
+       redact_version=?, parse_state=?, reply_state=?, adapter_version=?, updated_at=? WHERE req_id=?`,
+    [
+      skeletonZ, blockBytes, messages === null ? null : messages.length, body.redact_version,
+      parsed.parse_state, parsed.reply_state, ADAPTER_VERSION, Date.now(), reqId,
+    ],
   );
 }
 

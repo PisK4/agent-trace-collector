@@ -9,7 +9,9 @@ import {
   getStats,
   listRequests,
   listSessions,
+  resolveRequestId,
 } from './queries';
+import { PAGE_MAX, getBodyPage } from './protocols';
 
 const WEB_ROOT = new URL('../web/', import.meta.url);
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
@@ -73,6 +75,13 @@ function parseLimit(url: URL, fallback: number): number {
   const raw = url.searchParams.get('limit');
   if (raw === null) return fallback;
   if (!/^\d+$/.test(raw)) throw new QueryInputError('invalid_limit');
+  return Number(raw);
+}
+
+function parseIndex(url: URL, name: string, fallback: number): number {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return fallback;
+  if (!/^\d+$/.test(raw)) throw new QueryInputError('invalid_body_range');
   return Number(raw);
 }
 
@@ -143,6 +152,18 @@ export function createHandler(
         const id = Number(routeMatch[1]);
         if (getRequest(store, id) === null) return json({ error: 'not_found' }, 404);
         return json(getRoute(store, id));
+      }
+
+      const bodyMatch = /^\/api\/requests\/(\d+)\/body$/.exec(path);
+      if (bodyMatch !== null) {
+        const canonical = resolveRequestId(store, Number(bodyMatch[1]));
+        if (canonical === null) return json({ error: 'not_found' }, 404);
+        const from = parseIndex(url, 'from', 0);
+        const to = parseIndex(url, 'to', from + PAGE_MAX);
+        if (to < from || to - from > PAGE_MAX) return json({ error: 'invalid_body_range' }, 400);
+        const page = getBodyPage(store, canonical, from, to);
+        if (page === null) return json({ error: 'not_found' }, 404);
+        return json(page);
       }
 
       return json({ error: 'not_found' }, 404);
