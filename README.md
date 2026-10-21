@@ -15,6 +15,17 @@ bun run typecheck
 
 默认数据库为 `~/Library/Application Support/agent-trace-collector/trace.db`。可用 `ATC_DATA_DIR`、`ATC_PORT`、`ATC_LEDGER_PATH`、`ATC_ROUTING_DIR`、`ATC_MAGPIE_URL`、`ATC_BODY_BUDGET`、`ATC_DISK_LIMIT` 覆盖；监听地址固定为回环，不接受配置成通配地址。
 
+### hook 回调
+
+`plugins/collector.hooks.ts` 是给 magpie 的薄插件：请求期生成 `hook_id`，完成期把完整请求与回复 POST 到 `/hook/ingest`。它不改正文、不做关联。注册前需要两件事：
+
+1. 读取令牌与 hook 令牌是两个独立文件（`read.token`、`hook.token`），都在数据目录下，首次启动自动生成、权限 0600。插件只拿 hook 令牌。
+2. 插件入口文件名必须带 `.hooks.ts`；插件由 magpie 侧配置加载，本仓库不自动安装。
+
+投递预算固定：总 1500 ms，单次 600 ms，最多两次，只对网络错误与 408/429/5xx 重试；4xx 直接放弃。回调丢失按 best-effort 处理，不承诺补投。回调超限时发送 metadata envelope（正文置空、带原始字节数与原因码），不截断 JSON。
+
+合并没有完成时，hook 请求留在 `pending_hook`，collector 每 5 秒按 response ID 重试一次；候选唯一才合并，多候选标 ambiguous，没有 ID 的长期 pending。
+
 ## 数据边界
 
 运行数据不进仓库：数据库、WAL、日志和本地密钥都在数据目录，文件权限为 0600，目录为 0700。测试只用合成数据；真实请求正文、账号、令牌和用户配置不复制进 fixture、日志或提交。

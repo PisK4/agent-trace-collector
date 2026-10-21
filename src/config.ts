@@ -11,6 +11,8 @@ export type Config = {
   magpieUrl: string;
   bodyBudget: number;
   diskLimit: number;
+  /** hook 回调的总投递预算；上限来自计划，不随环境放大。 */
+  gatewayTimeoutMs: number;
 };
 
 export const GB = 1_000_000_000;
@@ -46,6 +48,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     magpieUrl: env.ATC_MAGPIE_URL?.trim() || 'http://127.0.0.1:3425',
     bodyBudget: env.ATC_BODY_BUDGET === undefined ? 10 * GB : parseSize('body_budget', env.ATC_BODY_BUDGET),
     diskLimit: env.ATC_DISK_LIMIT === undefined ? 16 * GB : parseSize('disk_limit', env.ATC_DISK_LIMIT),
+    gatewayTimeoutMs: 2000,
   };
   if (config.bodyBudget >= config.diskLimit) throw new Error('body_budget_not_below_disk_limit');
   return config;
@@ -64,7 +67,9 @@ function readLocalSecret(path: string): Uint8Array {
   return new Uint8Array(bytes);
 }
 
-export function loadLocalSecret(dataDir: string, fileName: 'redaction.salt' | 'read.token'): Uint8Array {
+export type LocalSecretName = 'redaction.salt' | 'read.token' | 'hook.token';
+
+export function loadLocalSecret(dataDir: string, fileName: LocalSecretName): Uint8Array {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const path = join(dataDir, fileName);
   try {

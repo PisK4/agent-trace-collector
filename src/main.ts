@@ -8,6 +8,7 @@ import type { FileCursor } from './sources/files';
 import { ingestLedger, ingestRoute } from './reconcile';
 import { probeMagpie, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
+import { reconcilePending } from './hook';
 
 const LEDGER_INTERVAL_MS = 5000;
 const ROUTE_INTERVAL_MS = 2000;
@@ -38,6 +39,7 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   const store = openStore(dbPath);
   const salt = loadLocalSecret(config.dataDir, 'redaction.salt');
   const readToken = loadReadToken(config.dataDir);
+  const hookToken = Buffer.from(loadLocalSecret(config.dataDir, 'hook.token')).toString('base64url');
   let handler: (req: Request) => Promise<Response> = () => Promise.resolve(new Response('starting', { status: 503 }));
 
   const timers: ReturnType<typeof setInterval>[] = [];
@@ -126,21 +128,27 @@ export async function startCollector(config: Config): Promise<{ port: number; st
     ));
   });
 
+  const pendingTick = guard('pending', () => {
+    reconcilePending(store, Date.now());
+  });
+
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: config.port,
     fetch: (req: Request) => handler(req),
   });
   const boundPort = server.port ?? config.port;
-  handler = createHandler(store, { ...config, port: boundPort }, readToken);
+  handler = createHandler(store, { ...config, port: boundPort }, readToken, { token: hookToken, salt });
 
   timers.push(setInterval(ledgerTick, LEDGER_INTERVAL_MS));
   timers.push(setInterval(routeTick, ROUTE_INTERVAL_MS));
   timers.push(setInterval(costTick, COST_INTERVAL_MS));
   timers.push(setInterval(probeTick, PROBE_INTERVAL_MS));
+  timers.push(setInterval(pendingTick, LEDGER_INTERVAL_MS));
   void ledgerTick();
   void routeTick();
   void probeTick();
+  void pendingTick();
 
   const stop = async (): Promise<void> => {
     if (stopped) return;

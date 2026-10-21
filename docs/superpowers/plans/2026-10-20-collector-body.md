@@ -213,7 +213,7 @@ HTTP handler 先精确 Host/Origin 与常量时间令牌比较，再 origin 过�
 
 持久化时同事务生成 hook 请求、保存 raw_hook 头、脱敏分块、写证据和 pending；已有关联 ledger 时复用请求。body_omitted 标 partial 和真实原因，have 仍含 hook 位。raw 副本清空后用长期 reply_state 判定缺回复。
 
-- [ ] **步骤 4：实现 response ID 候选关联与原子迁移。**
+- [x] **步骤 4：实现 response ID 候选关联与原子迁移。**
 
 ```ts
 const prefixes: Record<string,string[]> = {
@@ -231,7 +231,7 @@ const prefixes: Record<string,string[]> = {
 
 测试两个证据顺序、重复 envelope、提交后响应丢失重试、规范ID碰撞、无ID、late ledger，以及 6 MiB request+3 MiB reply、合法4 MiB JSON、超64 MiB、null reply、非local、伪造origin但无token。合并前后守恒：hook证据总数不变、逻辑请求减少1、块引用按同笔正文去重而不丢消息位置。
 
-- [ ] **步骤 5：运行 `bun test tests/hook.test.ts tests/reconcile.test.ts tests/privacy.test.ts && bun run typecheck` 后提交。**
+- [x] **步骤 5：运行 `bun test tests/hook.test.ts tests/reconcile.test.ts tests/privacy.test.ts && bun run typecheck` 后提交。**
 
 ```bash
 git add plugins/collector.hooks.ts src/hook.ts src/http.ts src/reconcile.ts src/schema.sql package.json tests/hook.test.ts

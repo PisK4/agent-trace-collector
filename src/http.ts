@@ -12,8 +12,17 @@ import {
   resolveRequestId,
 } from './queries';
 import { PAGE_MAX, getBodyPage } from './protocols';
+import { acceptHook } from './hook';
+import type { HookEnvelope } from './hook';
 
 const WEB_ROOT = new URL('../web/', import.meta.url);
+const MAX_ENVELOPE_BYTES = 64 * 1024 * 1024;
+/** 同时只接收一份大 envelope；模块级计数在单进程 collector 内有效。 */
+let ingesting = false;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
@@ -106,13 +115,97 @@ async function serveStatic(path: string): Promise<Response> {
   });
 }
 
+/**
+ * hook 接收端点。
+ *
+ * 顺序固定：Host → 精确 Origin → 常量时间令牌 → 来源 → 流式计字节 → 解析。
+ * 同时在读的 envelope 只允许一份，额外请求直接 429，避免多份大 JSON 撑爆内存。
+ */
+async function handleHookIngest(
+  req: Request,
+  store: Store,
+  config: Config,
+  hook: { token: string; salt: Uint8Array } | undefined,
+): Promise<Response> {
+  if (hook === undefined) return json({ error: 'hook_unavailable' }, 404);
+  const host = req.headers.get('host');
+  if (host === null || !allowedHosts(config.port).has(host)) return json({ error: 'host' }, 403);
+  // 插件从本机发起，不应带浏览器 Origin；带了就必须是同源，否则视为跨站。
+  const origin = req.headers.get('origin');
+  if (origin !== null && origin !== `http://${host}`) return json({ error: 'origin' }, 403);
+  const authorization = req.headers.get('authorization');
+  if (authorization === null || !authorization.startsWith('Bearer ') ||
+      !timingSafeEqual(authorization.slice(7), hook.token)) {
+    return json({ error: 'unauthorized' }, 401);
+  }
+  if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { allow: 'POST' });
+  if (ingesting) return json({ error: 'busy' }, 429);
+
+  const declared = Number(req.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declared) && declared > MAX_ENVELOPE_BYTES) return json({ error: 'envelope_too_large' }, 413);
+
+  ingesting = true;
+  try {
+    const text = await readBounded(req, MAX_ENVELOPE_BYTES);
+    if (text === null) return json({ error: 'envelope_too_large' }, 413);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return json({ error: 'invalid_json' }, 400);
+    }
+    if (!isRecord(parsed)) return json({ error: 'invalid_json' }, 400);
+    const envelope = parsed as unknown as HookEnvelope;
+    if (typeof envelope.hook_id !== 'string' || envelope.hook_id.length === 0) {
+      return json({ error: 'missing_hook_id' }, 422);
+    }
+    if (envelope.origin !== 'local') return json({ error: 'origin' }, 403);
+
+    try {
+      const result = acceptHook(store, envelope, Date.now(), hook.salt);
+      return json(result, 200);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'unknown';
+      if (code === 'disk_full') return json({ error: 'insufficient_storage' }, 507);
+      return json({ error: 'writer_failed', code }, 503);
+    }
+  } finally {
+    ingesting = false;
+  }
+}
+
+/** 只读上限内的字节；超限立即返回 null，不把剩余内容读进内存。 */
+async function readBounded(req: Request, limit: number): Promise<string | null> {
+  const body = req.body;
+  if (body === null) return '';
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map(chunk => Buffer.from(chunk))).toString('utf8');
+}
+
 export function createHandler(
   store: Store,
   config: Config,
   readToken: string,
+  hook?: { token: string; salt: Uint8Array },
 ): (req: Request) => Promise<Response> {
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
+    if (url.pathname === '/hook/ingest') {
+      return await handleHookIngest(req, store, config, hook);
+    }
     const isNavigation = !url.pathname.startsWith('/api/');
     const verdict = checkAccess(req, config.port, readToken, isNavigation);
     if (verdict !== 'ok') {
