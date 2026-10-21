@@ -817,7 +817,7 @@ if (typeof document !== 'undefined') {
       ? `<span class="req-row reply"><span class="req-text">${esc(r.reply_preview)}</span></span>`
       : '<span class="req-row reply" aria-hidden="true"></span>';
     const chainFlag = r.chain_role === 'branch'
-      ? '<span class="req-flag mute" title="与主链不相接，按后续请求数判定为次链">⎇ 分支</span>' : '';
+      ? '<span class="req-flag mute" title="与主链不相接；主链以时间最早的真实请求为准">⎇ 分支</span>' : '';
     const metrics = [
       chainFlag,
       anomaly,
