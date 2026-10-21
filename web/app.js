@@ -818,12 +818,19 @@ if (typeof document !== 'undefined') {
       : '<span class="req-row reply" aria-hidden="true"></span>';
     const chainFlag = r.chain_role === 'branch'
       ? '<span class="req-flag mute" title="与主链不相接；主链以时间最早的真实请求为准">⎇ 分支</span>' : '';
-    const metrics = [
+    // 标志位留在内容行右端：读数列只放数字，固定列宽不再被变长的异常标志挤爆。
+    const flags = [
       chainFlag,
       anomaly,
       r.status !== null && r.status >= 400 ? `<span class="num bad-text">HTTP ${r.status}</span>` : '',
+    ].join('');
+    // 读数分两行：上行是首字与总时长，下行是输入与输出 token。
+    // 两行各 18px，与内容列的两行对齐；168px 按最宽一行留有余量。
+    const timingLine = [
       r.ttft_ms !== null ? `<span class="num opt">首字 ${secs(r.ttft_ms)}</span>` : '',
-      r.ms !== null ? `<span class="num opt">${secs(r.ms)}</span>` : '',
+      r.ms !== null ? `<span class="num opt" title="总时长 ${esc(secs(r.ms))}">${secs(r.ms)}</span>` : '',
+    ].join('');
+    const usageLine = [
       r.in_tok !== null ? `<span class="num opt">↓ ${kk((r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0))}</span>` : '',
       r.out_tok !== null ? `<span class="num opt">↑ ${kk(r.out_tok)}</span>` : '',
     ].join('');
@@ -838,10 +845,14 @@ if (typeof document !== 'undefined') {
         <span class="req-line">
           <span class="req-row">
             <span class="req-text${primary.muted ? ' muted' : ''}"><span class="req-ord num">${String(ordinal).padStart(2, '0')}</span>${esc(primaryText)}</span>
+            ${flags ? `<span class="req-flags">${flags}</span>` : ''}
           </span>
           ${replyRow}
         </span>
-        <span class="req-metrics">${metrics}</span>
+        <span class="req-metrics">
+          <span class="req-metric-line">${timingLine}</span>
+          <span class="req-metric-line">${usageLine}</span>
+        </span>
         <span class="req-open-mark" aria-hidden="true"><svg width="9" height="9" viewBox="0 0 10 10" fill="none"><path d="M3 1.5L7 5l-4 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
       </button>
       ${open ? requestBody(r) : ''}

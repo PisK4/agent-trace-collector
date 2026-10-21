@@ -282,7 +282,7 @@ code,pre,.mono{font-family:var(--mono)}
 .req-tags{display:flex;flex-direction:column;justify-content:center;gap:2px;height:56px}
 .req-line{min-width:0;height:56px;display:flex;flex-direction:column;justify-content:center;gap:2px;overflow:hidden}
 .req-row{display:flex;align-items:center;height:18px;min-width:0}
-.req-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:12.5px;line-height:18px;color:var(--text-2)}
+.req-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:12.5px;line-height:18px;color:var(--text-2);flex:1 1 auto}
 .req-row.reply .req-text{font-size:11.5px;color:var(--muted)}
 .req-ord{font:10px var(--mono);color:var(--muted);font-weight:500;margin-right:5px}
 /* 类型标签：固定 56×18，颜色只表达消息类别，不表达状态。 */
@@ -295,8 +295,11 @@ code,pre,.mono{font-family:var(--mono)}
 .type-tag.reply{color:var(--k-assistant);background:var(--k-assistant-bg)}
 .type-tag.context{color:var(--k-field);background:var(--k-field-bg)}
 .type-tag.title{color:var(--k-system);background:var(--k-system-bg)}
-.req-metrics{display:flex;align-items:center;justify-content:flex-end;gap:7px;font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;min-width:0}
+.req-metrics{display:flex;flex-direction:column;justify-content:center;gap:2px;height:56px;font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;min-width:0}
+.req-metric-line{display:flex;align-items:center;justify-content:flex-end;gap:7px;height:18px;min-width:0}
 .req-metrics .num{font-size:10.5px}
+/* 异常标志与分支标记留在内容行右端：读数列只放数字，固定列宽不再被变长标志挤爆。 */
+.req-flags{display:flex;align-items:center;gap:4px;flex:none;margin-left:6px}
 .req-flag{font-size:9.5px;padding:1px 5px;border-radius:3px;border:1px solid currentColor;white-space:nowrap;flex:none}
 .req-flag.bad{color:var(--bad)} .req-flag.warn{color:var(--warn)} .req-flag.mute{color:var(--muted)}
 .req-open-mark{color:var(--muted);width:12px;display:inline-flex;justify-content:center}
@@ -533,8 +536,8 @@ pre.raw{
 @media(max-width:1240px){
   .app{grid-template-columns:220px minmax(0,1fr) 310px}
   .path-head,.path-row{grid-template-columns:22px 96px 54px minmax(0,1fr) 34px;gap:6px;padding-inline:8px}
-  .req-head{grid-template-columns:12px 56px 42px minmax(0,1fr) 128px 12px}
-  .req-metrics .opt{display:none}
+  .req-head{grid-template-columns:12px 56px 42px minmax(0,1fr) 12px}
+  .req-metrics{display:none}
 }
 @media(max-width:1000px){
   html,body{height:auto}
@@ -560,7 +563,6 @@ pre.raw{
   .brand em{display:none}
   .crumb{display:none}
   .req-head{grid-template-columns:12px 52px 40px minmax(0,1fr) 12px;gap:0 7px;height:auto;min-height:56px}
-  .req-metrics{display:none}
   .type-tag{width:52px}
   .session-head{padding:12px 14px}
   .req-body{margin-left:10px}
