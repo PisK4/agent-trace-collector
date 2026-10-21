@@ -8,7 +8,9 @@
     "verify-cutover": "bun scripts/verify-cutover.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "verify:notes": "node scripts/verify-agent-note-format.mjs && node scripts/verify-archived-agent-notes.mjs"
+    "verify:notes": "node scripts/verify-agent-note-format.mjs && node scripts/verify-archived-agent-notes.mjs && node scripts/verify-change-notes.mjs --staged && node scripts/verify-change-notes.mjs --range origin/master..HEAD",
+    "verify:notes:staged": "node scripts/verify-agent-note-format.mjs && node scripts/verify-archived-agent-notes.mjs && node scripts/verify-change-notes.mjs --staged",
+    "verify:notes:range": "node scripts/verify-agent-note-format.mjs && node scripts/verify-archived-agent-notes.mjs && node scripts/verify-change-notes.mjs --range origin/master..HEAD"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",

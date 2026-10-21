@@ -35,7 +35,7 @@ bun run verify-cutover
 
 - 每个行为变更只跑能对该回归失败的最窄测试；全量套件与平台矩阵留给显式动作。
 - 提交前不重复已经通过的检查。
-- 提交前跑 `bun run verify:notes`，它同时检查活跃 note 的格式与归档封印。
+- 提交前跑 `bun run verify:notes`，它同时检查活跃 note 的格式、归档封印，以及本次改动是否带 note。
 
 ## 常规约定
 
