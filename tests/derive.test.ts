@@ -435,6 +435,8 @@ test('标题生成请求不占主链，后续请求最多的链才是主链', ()
       insert.run(2, key, 2000, 'ledger|0002');
       insert.run(3, key, 3000, 'ledger|0003');
       insert.run(4, key, 4000, 'ledger|0004');
+      insert.run(5, key, 5000, 'ledger|0005');
+      insert.run(6, key, 6000, 'ledger|0006');
     });
     const message = (text: string) => ({ role: 'user', content: [{ type: 'text', text }] });
     // 1 是 Title Generator：单块 <session>，回复是正式标题。
@@ -444,10 +446,13 @@ test('标题生成请求不占主链，后续请求最多的链才是主链', ()
       reply: { id: 'msg_title', content: [{ type: 'text', text: '{"title":"trace 面板 UI 改版"}' }] },
       redact_version: 1,
     });
-    // 2 是真正的主对话起点；3 续写 2；4 是另一条不相接的链。
+    // 2 是真正的主对话起点；3 续写 2；4 是另一条不相接的链，5/6 继续 4。
+    // 即使 4 的后继更多，主链仍然是时间最早的 2。
     persistBody(f.store, 2, bodyFor(['系统指令', '工具调用']));
     persistBody(f.store, 3, bodyFor(['系统指令', '工具调用', '继续']));
     persistBody(f.store, 4, bodyFor(['另一份 CLAUDE.md', '另一条历史']));
+    persistBody(f.store, 5, bodyFor(['另一份 CLAUDE.md', '另一条历史', '分支继续']));
+    persistBody(f.store, 6, bodyFor(['另一份 CLAUDE.md', '另一条历史', '分支继续', '再继续']));
     enqueueDerive(f.store, key, 'actor-a', '');
     drainDerive(f.store);
     const rows = f.store.read.query<{
@@ -458,6 +463,8 @@ test('标题生成请求不占主链，后续请求最多的链才是主链', ()
       [2, 'first', 'chat', 'main'],
       [3, 'confirmed', 'chat', 'main'],
       [4, 'branch', 'chat', 'branch'],
+      [5, 'confirmed', 'chat', 'branch'],
+      [6, 'confirmed', 'chat', 'branch'],
     ]);
     // Title Generator 的正式标题优先于用户首句，作为会话标题。
     expect(listSessions(f.store, 10, null).items[0]?.title).toBe('trace 面板 UI 改版');
