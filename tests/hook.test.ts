@@ -11,6 +11,9 @@ import { drainDerive, enqueueDerive } from '../src/derive';
 import { onRequest, onResponse } from '../plugins/collector.hooks';
 import type { HookContext } from '../plugins/collector.hooks';
 import { restoreBody } from '../src/body';
+import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
+import { ingestLedger } from '../src/reconcile';
+import type { FileBatch } from '../src/sources/files';
 
 const salt = new Uint8Array(32).fill(3);
 
@@ -483,6 +486,99 @@ test('准入恢复后同一请求可以补上正文', () => {
     expect(row).toEqual({ body_state: 'available', miss_reason: null });
     expect(restoreBody(f.store, 1)?.protocol).toBe('anthropic');
     expect(f.store.read.query<{ have: number }, []>('SELECT have FROM request WHERE req_id=1').get()).toEqual({ have: 3 });
+  } finally {
+    f.close();
+  }
+});
+
+function ledgerBatch(rows: unknown[]): FileBatch {
+  let offset = 0;
+  const lines = rows.map(row => {
+    const text = JSON.stringify(row);
+    const start = offset;
+    offset += Buffer.byteLength(text) + 1;
+    return { offset: start, end: offset, text };
+  });
+  return {
+    generation: '1:2:3:1', rewriteEpoch: 0, lines, committedOff: offset,
+    observedOff: offset, seenSize: offset, headLen: 0, headHash: null, issues: [],
+  };
+}
+
+test('hook-only不合成HTTP状态也不写账本模型列', () => {
+  const f = fixture();
+  try {
+    const accepted = acceptHook(f.store, envelope({ model: 'hook-model', success: true }), 1, salt);
+    expect(f.store.read.query(
+      'SELECT status,model_requested,model_served FROM request WHERE req_id=?',
+    ).get(accepted.req_id)).toEqual({ status: null, model_requested: null, model_served: null });
+    expect(f.store.read.query<{ model: string; success: number }, [string]>(
+      'SELECT model,success FROM raw_hook WHERE hook_id=?').get('hook-synthetic-1'))
+      .toEqual({ model: 'hook-model', success: 1 });
+    const projection = f.store.write(db => projectRequestTx(db, accepted.req_id, {
+      now: 2, mappingVersion: SOURCE_PROJECTION_VERSION,
+    }));
+    expect(projection.hook).toMatchObject({ state: 'present', models: ['hook-model'], successes: [true] });
+    expect(projection.selected).toBeNull();
+  } finally {
+    f.close();
+  }
+});
+
+test('账本缺req时hook报告独立保留且不写账本模型', () => {
+  const f = fixture();
+  try {
+    ingestLedger(f.store, 'usage.jsonl', ledgerBatch([{
+      t: '2026-10-20T00:00:00Z', route_id: 7, response_id: 'msg_synthetic_1',
+      agent: 'demo', session: 'synthetic-session', model: 'provider-model', provider: 'p', status: 200, in: 10,
+    }]), 1, salt);
+    const accepted = acceptHook(f.store, envelope({ model: 'hook-model', success: true }), 2, salt);
+    expect(accepted.req_id).toBe(1);
+    const projection = f.store.write(db => projectRequestTx(db, accepted.req_id, {
+      now: 3, mappingVersion: SOURCE_PROJECTION_VERSION,
+    }));
+    expect(projection.selected).toMatchObject({ fields: { requested: null, model: 'provider-model' } });
+    expect(projection.hook).toMatchObject({ state: 'present', models: ['hook-model'], successes: [true] });
+    expect(f.store.read.query('SELECT model_requested,model_served FROM request WHERE req_id=1').get())
+      .toEqual({ model_requested: null, model_served: null });
+    expect(f.store.read.query<{ model: string }, [string]>('SELECT model FROM raw_hook WHERE hook_id=?').get('hook-synthetic-1'))
+      .toEqual({ model: 'hook-model' });
+  } finally {
+    f.close();
+  }
+});
+
+test('hook success为false同样不产生失败状态', () => {
+  const f = fixture();
+  try {
+    const accepted = acceptHook(f.store, envelope({ model: 'hook-model', success: false }), 1, salt);
+    expect(f.store.read.query('SELECT status FROM request WHERE req_id=?').get(accepted.req_id))
+      .toEqual({ status: null });
+  } finally {
+    f.close();
+  }
+});
+
+test('hook证据过期后报告expired且current为false', () => {
+  const f = fixture();
+  try {
+    const accepted = acceptHook(f.store, envelope({ model: 'hook-model', success: true }), 1, salt);
+    const before = f.store.write(db => projectRequestTx(db, accepted.req_id, {
+      now: 2, mappingVersion: SOURCE_PROJECTION_VERSION,
+    }));
+    expect(before.families.hook).toMatchObject({ state: 'complete', current: true });
+    f.store.write(db => {
+      db.run('DELETE FROM raw_hook WHERE hook_id=?', ['hook-synthetic-1']);
+      db.run(`UPDATE request_evidence SET payload_state='expired' WHERE source_kind='hook'`);
+    });
+    const after = f.store.write(db => projectRequestTx(db, accepted.req_id, {
+      now: 3, mappingVersion: SOURCE_PROJECTION_VERSION,
+    }));
+    expect(after.hook.state).toBe('expired');
+    expect(after.families.hook).toMatchObject({ state: 'expired', current: false });
+    expect(after.reasons).toContain('hook_expired');
+    expect(f.store.read.query('SELECT model_requested,model_served,status FROM request WHERE req_id=?')
+      .get(accepted.req_id)).toEqual({ model_requested: null, model_served: null, status: null });
   } finally {
     f.close();
   }
