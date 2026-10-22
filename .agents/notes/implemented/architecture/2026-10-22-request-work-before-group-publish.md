@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 请求用途的版本 1 解释已由[请求用途按版本 2 解释，主链身份只由已存用途决定](2026-10-22-request-purpose-and-chain.md)取代；两阶段入口、组内 pending 跳过与读模型状态仍以本记录为准。
+
 ## Problem
 
 派生的两个粒度混在一个循环里。组阶段自己判断"这一笔是不是标题生成请求"，同时请求表里还留着 `purpose_pending` 等一套从没被任何代码消费的列。于是同一个问题有两个答案来源：一个在组里现算，一个在列里挂着。任何一处改了规则，另一处不会跟着变。
@@ -38,8 +40,8 @@ Status: implemented
 - 未知归属的请求也会被判定用途，但不产生组；读模型里它没有组可加入，因此恒为 `dirty`，关系为 `unknown`。
 - 读模型多一次 `LEFT JOIN derive_queue`，以及每次调用一个只读事务。列表不带摘要算法列，详情带。
 - 非当前行的工具调用保留调用身份，`result_req`/`result_ord`/`result_path` 清空、`state` 退回 `pending`：界面显示"结果位置未确认"，而不是一个可能是旧的位置。
-- D 会用版本 2 的分类器替换请求阶段，不能与版本 1 并行运行；替换点是 `drainLegacyPurposeTx` 这一处调用。
-- 会话标题的当前性筛选仍未统一，D 会把 `SESSION_TITLE_SQL` 换成按 `derived_state` 取值。
+- 请求阶段按版本 2 解释，不能与版本 1 并行运行；历史 v1 行只有显式 `rebuild --session` 才升级。
+- 会话标题只取已完成组且用途已结算的行，与会话的 `derived_state='current'` 同条件。
 
 ## Testing
 

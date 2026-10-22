@@ -122,7 +122,7 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 
 ### rebuild
 
-整链重排一个会话的派生结果，只重算正文仍可读（`available` / `partial`）的请求。只排空目标会话的任务；其它会话的积压留给它自己的维护窗口。输出包含：
+整链重排一个会话的派生结果，只重算正文仍可读（`available` / `partial`）的请求。它先把目标会话里 `purpose_target<2` 的行置为待判，再排空用途、重排组；普通 tick 不升级 clean 的历史行，历史用途只在显式重建时换代。只排空目标会话的任务；其它会话的积压留给它自己的维护窗口。输出包含：
 
 - `queued`：处理的分组数（按 `conv_key` + `actor` 拆）。
 - `unavailable`：正文不可用的请求数；它们保持原样。
@@ -131,8 +131,13 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 - `queue_remaining`：目标会话重排后队列剩余量，正常为 0；其它会话的积压不计入。
 - `recomputed_requests`：本次真正按可比较消息序列重算的请求数。
 - `retained_requests`：本次消息序列不可比较、标题与摘要按旧值保留的请求数。
+- `purpose_upgraded`：本次置为待判的历史用途行数。
+- `purpose_processed`：本次结算的用途数。
+- `purpose_remaining`：目标会话排空后仍未判用途的请求数，正常为 0。
 
 `unavailable` 与 `reasons` 按正文状态统计，`recomputed_requests` 与 `retained_requests` 按实际比较结果统计，两者不能互相替代：正文状态为 `partial` 但没有骨架的请求计入后者，而不是重算。
+
+`derive_no_progress` 表示用途与组阶段连续一轮都没有推进。先查用途落成 `error` 的行与它们正文的可读性：一笔读不出的请求重试三次后会消费修订并记 `error`，不应继续卡住排空；若仍无进展，按正文不可读处理，而不是反复重建同一会话。
 
 正文已回收的请求不会因为重建而丢掉旧标题与已确认的工具配对：没有正文可读时，派生层保留原值，不把它们改写成时间兜底或空。
 

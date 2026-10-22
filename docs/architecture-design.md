@@ -690,7 +690,7 @@ AVA 的骨架里，`request.summary` 与 `response.summary` 合计占骨架大�
 
 没有正文时回落到 `模型 · HH:MM`，`title_source` 记为 `model_time`。direct 行永远走回落，界面要能显示这个差别。
 
-harness 的 Title Generator 是旁路请求：Claude Code 与 OMP 的输入/回复形状不同，但回复都可以解析成 `<title>` 或 `{"title":…}`。这类请求记 `req_kind='title'`，不进入祖先集合，不参与用户标题推导；解析出的正式标题存 `model_title`。会话标题优先取最新一次生成的正式标题，没有才退回用户首句。
+harness 的 Title Generator 是旁路请求：Claude Code 与 OMP 的输入/回复形状不同，但回复都可以解析成 `<title>` 或 `{"title":…}`。这类请求由用途阶段记 `purpose_chain='exclude'` 与 `req_kind='title'`，不进入祖先集合；解析出的正式标题存 `model_title`。会话标题优先取已完成组里最新一次生成的正式标题，没有才退回用户首句。
 
 链角色在每组派生末尾重算：最早的一笔真实请求是 `main`，其余互不相接的根及其后继是 `branch`；正文不可读的请求保持中性，不参与主链竞争。
 
@@ -853,7 +853,9 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 同一事务里先跑请求阶段、再跑组阶段，入口只有一个 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`，在线调度、维护与迁移都走它。
 
-请求阶段按 `req_id` 取 `purpose_pending=1` 的行，判完写 `purpose_status`（`recognized`/`unrecognized`/`retained`/`missing`）、`purpose_version`、`purpose_rule`、`purpose_chain`、`req_kind` 与 `model_title`，把 `purpose_pending` 清 0 并让 `purpose_revision` 追上当前 `input_revision`。正文不可读时：有旧 `purpose_version` 就保留原值并标 `retained`，从未判过则标 `missing`。该阶段不推进自己请求的输入修订——它消费输入，不改变输入；只在用途、链归属或正式标题真的变了时标所属组。
+请求阶段按 `req_id` 取 `purpose_pending=1` 的行，按 `PURPOSE_VERSION=2` 解释并写 `purpose_status`（`recognized`/`unrecognized`/`missing`/`retained`/`unsupported`/`error`）、`purpose_version`、`purpose_rule`、`purpose_chain`、`req_kind` 与 `model_title`，把 `purpose_pending` 清 0 并让 `purpose_revision` 追上当前 `input_revision`。规则优先级固定为分类器强指纹 > 来源 kind > 标题兼容 > 兜底：分类器要求 `agent='claude'`、system 文本含 `security monitor for autonomous ai coding agents`、`stop_sequences` 含 `</block>` 三者同时成立，消息数 2 与工具数 0 只写信号，判定取回复里最后一个 `<block>yes|no`；来源 kind 只把精确的 `title` 当标题别名并排除链，其它非空值变成 `source:<value>` 参与链；标题兼容先看严格回复形状（整段 `<title>` 或只含 `title` 键的 JSON），再看已存 `req_kind='title'`；兜底是 `unrecognized` + `chat` + `participate`。
+
+正文不可读时：有旧 `purpose_version` 就原样保留并标 `retained`，没有旧解释才落 `missing` 或 `unsupported`；来源 kind 只对没有旧解释的行生效。读取只解骨架与引用索引，不解压消息块。解释出错最多三次，终态记 `error` 并消费当前修订，避免一笔读不出的请求把整组卡在 dirty。写回以请求行上的身份、修订、目标与 `purpose_pending=1` 为条件，交换失败返回 stale 并保留 pending。该阶段不推进自己请求的输入修订——它消费输入，不改变输入；只在用途、链归属或正式标题真的变了时标所属组。
 
 组阶段只消费已经定下来的 `purpose_chain`，不再自己识别一遍标题请求。组内仍有 `purpose_pending=1` 的成员时整组跳过、保持 dirty：把组算干净等于替那些请求猜了一个用途。`limit` 按组计，`purposeLimit` 是请求阶段的每批大小，drain 会连续推进到没有待判请求为止。
 
@@ -882,6 +884,8 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 - 详情另带 `historical` 白名单，把旧的标题、摘要、关系与增量连同 `derived_state` 一起给出；列表不携带它。
 
 `summary_state`/`summary_algorithm`/`summary_basis` 只在详情返回，供后续能力读取区分"当前摘要"与"保留摘要"。
+
+会话标题的候选查询与 `current` 同条件：用途已结算、所属组已完成、修订与算法都追上；脏组或待判用途里的旧标题不拿来命名会话。排除用途提供 `model_title`，参与链的行提供用户首句；用户标题不再要求 `req_kind='chat'`，未知来源类别只要参与链也可以提供。
 
 ## 缺失与健康
 
