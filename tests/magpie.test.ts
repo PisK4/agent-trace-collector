@@ -9,6 +9,8 @@ import {
   assertCostPagePeriod,
   classifyLedger,
   costState,
+  mapLedgerRow,
+  mapRouteRow,
   probeMagpie,
   syncCosts,
   validateCostPeriod,
@@ -16,6 +18,62 @@ import {
 import { getStats } from '../src/queries';
 
 const salt = new Uint8Array(32).fill(7);
+
+test('账本来源字段按req与cost读取并给出类型状态', () => {
+  const fields = mapLedgerRow({
+    t: '2026-10-20T00:00:00Z', req: 'synthetic-req', model: 'synthetic-provider',
+    served: 'synthetic-served', cost: 0, err: 'synthetic error',
+    err_type: 'rate_limit', kind: 'compact', account: 'synthetic-account',
+  })!;
+  expect({
+    requested: fields.requested, model: fields.model, served: fields.served,
+    ownCost: fields.ownCost, err: fields.err, errType: fields.errType,
+    kind: fields.kind, account: fields.account, shape: fields.shape,
+  }).toEqual({
+    requested: 'synthetic-req', model: 'synthetic-provider', served: 'synthetic-served',
+    ownCost: 0, err: 'synthetic error', errType: 'rate_limit', kind: 'compact',
+    account: 'synthetic-account',
+    shape: {
+      req: 'reported', model: 'reported', served: 'reported', cost: 'reported',
+      err: 'reported', errType: 'reported', kind: 'reported',
+    },
+  });
+});
+
+test('账本旧键、空串与非法类型分开记录且都不当新值', () => {
+  const legacy = mapLedgerRow({ t: '2026-10-20T00:00:00Z', requested: 'legacy', own_cost: 3, ownCost: 4 })!;
+  expect([legacy.requested, legacy.ownCost, legacy.shape.req, legacy.shape.cost])
+    .toEqual([null, null, 'absent', 'absent']);
+  const invalid = mapLedgerRow({
+    t: '2026-10-20T00:00:00Z', req: 42, model: {}, served: [], cost: '0', err: [], err_type: true, kind: 7,
+  })!;
+  expect([invalid.requested, invalid.model, invalid.served, invalid.ownCost, invalid.err, invalid.errType, invalid.kind])
+    .toEqual([null, null, null, null, null, null, null]);
+  expect(invalid.shape).toEqual({
+    req: 'invalid', model: 'invalid', served: 'invalid', cost: 'invalid',
+    err: 'invalid', errType: 'invalid', kind: 'invalid',
+  });
+  const empty = mapLedgerRow({ t: '2026-10-20T00:00:00Z', req: '', kind: '' })!;
+  expect([empty.requested, empty.kind, empty.shape.req, empty.shape.kind])
+    .toEqual([null, null, 'empty', 'empty']);
+});
+
+test('路由Prompt只在校准布尔与tokens合法时给出counted', () => {
+  const trueRow = mapRouteRow({ id: 1, time: '2026-10-20T00:00:00Z', prompt: { tokens: 100, counted: true } })!;
+  expect([trueRow.promptTokens, trueRow.promptCounted, trueRow.shape.promptCounted])
+    .toEqual([100, 1, 'true']);
+  const falseRow = mapRouteRow({ id: 2, time: '2026-10-20T00:00:00Z', prompt: { tokens: 100, counted: false } })!;
+  expect([falseRow.promptCounted, falseRow.shape.promptCounted]).toEqual([0, 'false']);
+  const omitted = mapRouteRow({ id: 3, time: '2026-10-20T00:00:00Z', prompt: { tokens: 100 } })!;
+  expect([omitted.promptCounted, omitted.shape.promptCounted]).toEqual([0, 'absent']);
+  const invalid = mapRouteRow({ id: 4, time: '2026-10-20T00:00:00Z', prompt: { tokens: 100, counted: 'yes' } })!;
+  expect([invalid.promptCounted, invalid.shape.promptCounted]).toEqual([null, 'invalid']);
+  const noTokens = mapRouteRow({ id: 5, time: '2026-10-20T00:00:00Z', prompt: { counted: true } })!;
+  expect([noTokens.promptTokens, noTokens.promptCounted, noTokens.shape.prompt]).toEqual([null, null, 'invalid']);
+  const missing = mapRouteRow({ id: 6, time: '2026-10-20T00:00:00Z' })!;
+  expect([missing.promptCounted, missing.shape.prompt, missing.shape.promptCounted])
+    .toEqual([null, 'absent', 'absent']);
+});
 
 function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatch {
   let offset = startOffset;
