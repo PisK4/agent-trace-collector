@@ -673,3 +673,26 @@ test('到达顺序不改变请求事实与隐私形态', () => {
   };
   expect(build(true)).toEqual(build(false));
 });
+
+test('路由摘要按 format 2 写入展示字段，缺失 prompt 保持 null', () => {
+  const f = fixture();
+  try {
+    ingestRoute(f.store, [{
+      id: 8, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's',
+      model: 'm', provider: 'p', status: 200, kind: 'chat', folder: '/tmp/project', effort: 'high',
+      prompt: { tokens: 100, counted: true, window: 200000, parts: [{ kind: 'system', tokens: 10 }] },
+    }, {
+      id: 9, time: '2026-10-20T00:00:01Z', agent: 'demo', session: 's',
+      model: 'm', provider: 'p', status: 200,
+    }], 1, salt);
+    const first = JSON.parse(routeSummaryText(f, 8)) as Record<string, unknown>;
+    expect(first).toMatchObject({
+      format: 2, kind: 'chat', folder: '/tmp/project', effort: 'high',
+      prompt: { tokens: 100, counted: true, window: 200000, held: null, parts: [{ kind: 'system', tokens: 10 }] },
+    });
+    const second = JSON.parse(routeSummaryText(f, 9)) as Record<string, unknown>;
+    expect(second).toMatchObject({ format: 2, kind: null, folder: null, effort: null, prompt: null });
+  } finally {
+    f.close();
+  }
+});

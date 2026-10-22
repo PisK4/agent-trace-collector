@@ -1316,7 +1316,9 @@ git commit -m "feat(reading): serve capability views and remove browser-side par
 
 **Files:**
 - Modify: `src/queries.ts`（`getRoute`、新增 `routeSummaryReading`、`attemptChainOf`、`safeOrder`、`safeAffinity`）
+- Modify: `src/reconcile.ts`（`saveRouteSummary` 按 C 的 format 2 约定写 `kind`、`folder`、`effort` 与 `prompt`；实施时发现 C 的写入未落地，本 Task 一并补上）
 - Test: `tests/queries.test.ts`
+- Test: `tests/reconcile.test.ts`
 
 **Interfaces:**
 - Consumes: C 写入的 `route_summary.z` format 2；旧行 format 1 与现有列。

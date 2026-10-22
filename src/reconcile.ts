@@ -435,7 +435,17 @@ export function ingestLedger(
 }
 
 function saveRouteSummary(db: Database, route: RouteFields, now: number): void {
+  // format 2 只补充展示字段；身份与读数仍以列为准。prompt 家族在来源侧
+  // 缺失或非法时 tokens 为 null，这里保持 null，不补一份不完整的形状。
+  const prompt = route.promptTokens === null ? null : {
+    tokens: route.promptTokens,
+    counted: route.promptCounted === 1,
+    window: route.promptWindow,
+    held: null,
+    parts: Array.isArray(route.promptParts) ? route.promptParts : [],
+  };
   const summary = {
+    format: 2,
     route_id: route.routeId,
     time_ms: route.timeMs,
     day: route.day,
@@ -447,6 +457,10 @@ function saveRouteSummary(db: Database, route: RouteFields, now: number): void {
     ttft: route.ttft,
     flow: route.flow,
     first_text: route.firstText,
+    kind: route.kind,
+    folder: route.folder,
+    effort: route.effort,
+    prompt,
     order: route.order,
     tries: route.tries,
     affinity: route.affinity,
