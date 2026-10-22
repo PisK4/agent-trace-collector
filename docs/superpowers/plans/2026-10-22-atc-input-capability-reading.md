@@ -2238,7 +2238,7 @@ git commit -m "feat(reading): gate context ratios on recomputed prompt analysis"
 
 **Files:**
 - Modify: `src/queries.ts`（`RequestRow`、`RequestDetail`、`getRequest`、`listSessions` 的 flags）
-- Modify: `web/app.js`（`ledgerRow`、`relationTextOf`、`sessionHead` 的 flags 文案）
+- Modify: `web/app.js`（`ledgerRow`、`relationTextOf` 的链状态门与分支标记；会话整批状态由 `SessionRow.flags` 在左栏渲染，`sessionHead` 的计数继续只描述已加载页，不改成整会话口径）
 - Modify: `web/body-view.js`（`deltaOrdinals` 的派生状态门）
 - Test: `tests/queries.test.ts`
 - Test: `tests/body-view.test.ts`
@@ -2253,11 +2253,21 @@ git commit -m "feat(reading): gate context ratios on recomputed prompt analysis"
 test('未知 req_kind 与 chain_role 原样返回，不折叠成 chat 或 main', () => {
   const f = fixture();
   try {
-    f.store.write(db => db.run(`
-      INSERT INTO request(req_id,conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,req_kind,chain_role)
-      VALUES (1,?,'session','actor-a','claude','known',1000,'2026-10-22','through','available',1,7,1,1,'t','user_delta','synthetic_probe','synthetic_role')`,
-      [JSON.stringify(['session', 'unknown-kind'])]));
+    const key = JSON.stringify(['session', 'unknown-kind']);
+    f.store.write(db => {
+      db.run(`
+        INSERT INTO request(req_id,conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,req_kind,chain_role)
+        VALUES (1,?,'session','actor-a','claude','known',1000,'2026-10-22','through','available',1,7,1,1,'t','user_delta','synthetic_probe','synthetic_role')`,
+      [key]);
+      // 让这一笔成为当前结果：用途已结算、组干净、摘要按当前算法算过。
+      // 非当前行的 chain_role 按设计退回 unknown，测不到未知字符串的保留。
+      db.run(`UPDATE request SET purpose_pending=0, summary_state='recomputed', summary_algorithm=3 WHERE req_id=1`);
+      db.run(`
+        INSERT INTO derive_queue(conv_key,actor,from_sort,input_revision,published_revision,target_algorithm,published_algorithm,state)
+        VALUES (?,'actor-a','',1,1,3,3,'clean')`, [key]);
+    });
     const detail = getRequest(f.store, 1);
+    expect(detail?.derived_state).toBe('current');
     expect(detail?.req_kind).toBe('synthetic_probe');
     expect(detail?.chain_role).toBe('synthetic_role');
   } finally {
@@ -2298,7 +2308,7 @@ test('链结果非 current 时不标记新增与 confirmed', () => {
 });
 ```
 
-- [ ] **Step 2：运行测试确认失败。** Run: `bun test tests/queries.test.ts tests/body-view.test.ts -t '未知 req_kind|flags|非 current'`。Expected: FAIL，`getRequest` 仍把未知类别折叠成 `chat`，`flags` 仍为空，`deltaOrdinals` 仍只看 `prev_relation`。
+- [ ] **Step 2：运行测试确认失败。** Run: `bun test tests/queries.test.ts tests/body-view.test.ts -t '未知 req_kind|flags|非 current'`。Expected: FAIL，`flags` 仍为空，`deltaOrdinals` 仍只看 `prev_relation`。未知字符串的保留已由 D 落地，第一条测试从这次起充当回归护栏；`req_kind`、`chain_role` 的空值兜底仍未改为 `unknown`。
 
 - [ ] **Step 3：保留未知值并聚合 flags。** `RequestRow` 与 `RequestDetail` 的 `req_kind`、`chain_role` 改为 `string`；`getRequest` 不再写 `row.req_kind === 'title' ? 'title' : 'chat'`。`listSessions` 的 SQL 增加三个聚合列，按固定顺序生成 flags。
 
@@ -2317,7 +2327,7 @@ if (row.has_unknown === 1) flags.push('unknown');
 if (row.has_missing === 1) flags.push('missing_body');
 ```
 
-`getRequest` 返回 `req_kind: row.req_kind ?? 'unknown'`、`chain_role: row.chain_role ?? 'unknown'`、`model_title: row.model_title`，已知字符串原样保留，空值与未知字符串走中性显示；不得把空值补成 `chat` 或 `main`。`deltaOrdinals` 增加门：
+`getRequest` 返回 `req_kind: row.req_kind ?? 'unknown'`、`chain_role: current ? (row.chain_role ?? 'unknown') : 'unknown'`、`model_title: row.model_title`，已知字符串原样保留，空值与未知字符串走中性显示；不得把空值补成 `chat` 或 `main`。非当前行仍然整体退回 `unknown`，旧链角色不冒充当前结论。`deltaOrdinals` 增加门：
 
 ```js
 export function deltaOrdinals(detail) {
