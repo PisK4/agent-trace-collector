@@ -1,5 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import type { LedgerFields, RouteFields } from './magpie';
+import { SOURCE_PROJECTION_VERSION } from './projection';
+import { PRIVACY_TRANSFORM_VERSION } from '../privacy';
 
 export type LedgerPhysicalRef = { generation: string; offset: number };
 
@@ -14,6 +16,9 @@ function ledgerColumns(fields: LedgerFields, payloadJson: string): (string | num
     fields.ownMs, fields.reasoningHidden, fields.tierAsked, fields.tierSent, fields.tierServed,
     fields.errType, fields.computer, fields.via, fields.archive, fields.tries, fields.credits,
     fields.ownCost, fields.magpieVersion, payloadJson,
+    // 三个版本值与 payload 同源：它们描述的是这一行按哪套规则映射与脱敏，
+    // 缺了它们，读模型只能假设所有行同口径。
+    fields.err, SOURCE_PROJECTION_VERSION, PRIVACY_TRANSFORM_VERSION,
   ];
 }
 
@@ -21,7 +26,7 @@ const LEDGER_COLUMNS = `route_id,t_text,t_ms,source,handed_on,kind,agent,provide
   in_tok,out_tok,cache_read,cache_write,reasoning,effort,ms,status,stop,response_id,response_id_norm,rid,ep,
   session,native_session,subagent,parent_agent,ttft_ms,flow_ms,first_text_ms,sent_ms,retried_ms,queued_ms,
   own_ms,reasoning_hidden,tier_asked,tier_sent,tier_served,err_type,computer,via,archive,tries,credits,
-  own_cost,magpie_version,payload_json`;
+  own_cost,magpie_version,payload_json,err,mapping_version,privacy_version`;
 
 export function insertPreparedLedgerTx(
   db: Database, ref: LedgerPhysicalRef, fields: LedgerFields, payloadJson: string,
@@ -51,11 +56,13 @@ function routeColumns(route: RouteFields, payloadJson: string): (string | number
     route.subagentId, route.kind, route.forJson, route.model, route.provider, route.served, route.effort,
     route.status, route.error, route.done, route.ms, route.ttft, route.firstText, route.flow,
     route.tokens, route.outTok, route.reasoning, payloadJson, route.magpieVersion,
+    SOURCE_PROJECTION_VERSION, PRIVACY_TRANSFORM_VERSION,
   ];
 }
 
 const ROUTE_COLUMNS = `route_id,time_ms,day,agent,session,conv,folder,subagent_id,kind,for_json,model,provider,served,effort,
-  status,error,done,ms,ttft,first_text,flow,tokens,out_tok,reasoning,payload_json,magpie_version`;
+  status,error,done,ms,ttft,first_text,flow,tokens,out_tok,reasoning,payload_json,magpie_version,
+  mapping_version,privacy_version`;
 
 export function upsertPreparedRouteTx(db: Database, route: RouteFields, payloadJson: string): void {
   const placeholders = ROUTE_COLUMNS.split(',').map(() => '?').join(',');
@@ -67,7 +74,8 @@ export function upsertPreparedRouteTx(db: Database, route: RouteFields, payloadJ
        model=excluded.model,provider=excluded.provider,served=excluded.served,effort=excluded.effort,
        status=excluded.status,error=excluded.error,done=excluded.done,ms=excluded.ms,ttft=excluded.ttft,
        first_text=excluded.first_text,flow=excluded.flow,tokens=excluded.tokens,out_tok=excluded.out_tok,
-       reasoning=excluded.reasoning,payload_json=excluded.payload_json,magpie_version=excluded.magpie_version`,
+       reasoning=excluded.reasoning,payload_json=excluded.payload_json,magpie_version=excluded.magpie_version,
+       mapping_version=excluded.mapping_version,privacy_version=excluded.privacy_version`,
     routeColumns(route, payloadJson),
   );
 }

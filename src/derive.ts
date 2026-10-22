@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
-import { markGroupDirtyTx } from './derive-state';
+import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
 
 /** 从回复里取工具调用；两种协议结构都认。 */
 function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
@@ -480,7 +480,7 @@ type PresentationInput = {
  * 原样保留——那是当时按正文算出来的，没有正文重算只会把它们降级成时间兜底。
  */
 function writePresentationTx(db: Database, input: PresentationInput,
-  associations: readonly ResolvedTool[]): void {
+  associations: readonly ResolvedTool[], group: QueuedGroup): void {
   const { row, current, replyInfo, isTitleRequest, modelTitle, match } = input;
   const delta = match.delta;
   const fallback = modelTimeTitle(row.model_served, row.started_ms);
@@ -532,9 +532,25 @@ function writePresentationTx(db: Database, input: PresentationInput,
     inputKind = inputPreview === null ? null : 'tail';
   }
   const replyPreview = current === null ? row.reply_preview : replyInfo.preview;
+  // 摘要与标题是派生结果，不是来源事实：可比较时记下算法与本次消费的输入身份，
+  // 不可比较时保留原算法与 basis 只把状态标成 retained——不能把旧值冒充成本次重算。
+  const inputRow = db.query<{ input_epoch: string; input_revision: number }, [number]>(
+    'SELECT input_epoch,input_revision FROM request WHERE req_id=?').get(row.req_id);
+  const basis = JSON.stringify({
+    epoch: inputRow?.input_epoch ?? '', input_revision: inputRow?.input_revision ?? 0,
+    group_epoch: group.group_epoch, algorithm: GROUP_ALGORITHM,
+  });
+  const comparable = current !== null;
   db.run(`UPDATE request SET title=?,title_source=?,input_preview=?,
-    input_preview_kind=?,reply_preview=?,derive_version=derive_version+1
-    WHERE req_id=?`, [title, source, inputPreview, inputKind, replyPreview, row.req_id]);
+    input_preview_kind=?,reply_preview=?,derive_version=derive_version+1,
+    summary_algorithm=CASE WHEN ?=1 THEN ? ELSE summary_algorithm END,
+    summary_basis=CASE WHEN ?=1 THEN ? ELSE summary_basis END,
+    summary_state=CASE WHEN ?=1 THEN 'recomputed' ELSE 'retained' END
+    WHERE req_id=?`, [
+    title, source, inputPreview, inputKind, replyPreview,
+    comparable ? 1 : 0, GROUP_ALGORITHM, comparable ? 1 : 0, basis, comparable ? 1 : 0,
+    row.req_id,
+  ]);
 }
 
 /** 工具结果内容压平；数组形状里只取 text 块。 */
@@ -848,7 +864,7 @@ export function drainDerive(store: Store, limit = 100, scope?: DeriveScope): Dra
       assignChainRoles(db, group.conv_key, group.actor);
       const paired = pairToolCallsTx(db, group, pairRows, uncertain);
       for (const input of presentations) {
-        writePresentationTx(db, input, paired.associations);
+        writePresentationTx(db, input, paired.associations, group);
       }
       // 完成只在消费的修订仍是当前修订时才成立：同一事务里后到的输入变化
       // 会抬高 input_revision，CAS 失败即整批回滚，旧完成记录不会覆盖新输入。
@@ -980,9 +996,10 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     if (state === 'ambiguous') ambiguous += 1;
     else pending += 1;
     db.run(
-      `INSERT INTO tool_call(call_id,req_id,ord,tool_name,result_req,result_ord,result_path,state,derive_version)
-       VALUES (?,?,?,?,NULL,NULL,NULL,?,1)`,
-      [call.call_id, call.req_id, call.ord, call.name, state],
+      `INSERT INTO tool_call(call_id,req_id,ord,tool_name,result_req,result_ord,result_path,state,derive_version,
+         algorithm_version,basis_json,retention_state)
+       VALUES (?,?,?,?,NULL,NULL,NULL,?,1,?,?,'recomputed')`,
+      [call.call_id, call.req_id, call.ord, call.name, state, GROUP_ALGORITHM, toolBasis(group, call.call_id)],
     );
   }
 
@@ -1047,13 +1064,20 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     });
   }
 
-  // 版本写入留在原位置：它覆盖本组全部工具行，包括正文已回收、本轮没重建的那些。
+  // 保留行原 metadata 不动，只标出它们本轮没有被重算：正文已回收的请求不在
+  // 重建范围内，把它们的算法版本提升到本次版本等于声称重算过。
   db.run(
-    `UPDATE tool_call SET derive_version=derive_version+1 WHERE req_id IN (
-      SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known')`,
+    `UPDATE tool_call SET retention_state='retained' WHERE req_id IN (
+      SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known'
+        AND body_state NOT IN ('available','partial'))`,
     [group.conv_key, group.actor],
   );
   return { resolved, ambiguous, pending, associations };
+}
+
+/** 一条工具行的算法依据：组身份与调用身份，足以复现配对输入。 */
+function toolBasis(group: Group, callId: string): string {
+  return JSON.stringify({ group: [group.conv_key, group.actor], call_id: callId, algorithm: GROUP_ALGORITHM });
 }
 
 /** 工具往返的独立入口：维护与回填脚本迁移完成前仍可用，不参与摘要。 */

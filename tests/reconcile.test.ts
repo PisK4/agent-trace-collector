@@ -5,6 +5,8 @@ import type { FileBatch } from '../src/sources/files';
 import { ingestLedger, ingestRoute, resumePausedLedger } from '../src/reconcile';
 import { purgeMetadata } from '../src/maintenance';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
+import { readSourceFacts } from '../src/sources/facts';
+import { PRIVACY_TRANSFORM_VERSION } from '../src/privacy';
 
 function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatch {
   let offset = startOffset;
@@ -410,6 +412,13 @@ test('部分raw过期后旧尝试合计不缩小', () => {
     });
     expect(f.store.read.query('SELECT attempt_in,attempt_billed FROM request').get())
       .toEqual({ attempt_in: 30, attempt_billed: 2 });
+    // 事实层不因一条 raw 过期而缩小：集合与选定尝试都保留，只把状态降成 retained。
+    const facts = readSourceFacts(f.store.read.query<{ source_facts_json: string | null }, []>(
+      'SELECT source_facts_json FROM request').get()!.source_facts_json);
+    expect(facts?.kinds.ledger.values).toEqual([]);
+    expect(facts?.selected?.state).toBe('retained');
+    expect(facts?.selected?.modelProvider).toBe('p');
+    expect(facts?.selected?.ref).toBe(JSON.stringify(['file', batch.generation, batch.lines[1]!.offset]));
   } finally {
     f.close();
   }
@@ -599,6 +608,27 @@ test('route kind变化推进修订，同值重放不推进', () => {
     ingestRoute(f.store, [{ ...route, kind: 'compact' }], 4, salt);
     expect(revision()).toBeGreaterThan(afterFirst);
     expect(f.store.read.query('SELECT kind FROM raw_route').get()).toEqual({ kind: 'compact' });
+  } finally {
+    f.close();
+  }
+});
+
+test('在线摄入的原始行带映射与隐私版本', () => {
+  const f = fixture();
+  try {
+    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+      t: '2026-10-20T00:00:00Z', route_id: 7, err: 'synthetic error', err_type: 'rate_limit', in: 10, out: 5,
+    }]), 1, salt);
+    expect(f.store.read.query(`SELECT err,err_type,mapping_version,privacy_version
+      FROM raw_ledger`).get()).toEqual({
+      err: 'synthetic error', err_type: 'rate_limit',
+      mapping_version: SOURCE_PROJECTION_VERSION, privacy_version: PRIVACY_TRANSFORM_VERSION,
+    });
+    ingestRoute(f.store, [{ id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's' }], 1, salt);
+    expect(f.store.read.query(`SELECT mapping_version,privacy_version FROM raw_route`)
+      .get()).toEqual({
+      mapping_version: SOURCE_PROJECTION_VERSION, privacy_version: PRIVACY_TRANSFORM_VERSION,
+    });
   } finally {
     f.close();
   }

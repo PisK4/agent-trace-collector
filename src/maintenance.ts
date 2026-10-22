@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { openStore } from './store';
 import type { Store } from './store';
 import { drainDerive, rebuildDerived } from './derive';
-import { markGroupDirtyTx } from './derive-state';
+import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
 
 /**
  * 离线维护。这些命令都要求在 collector 停止后运行：
@@ -472,12 +472,26 @@ export async function runMaintenance(argv: string[], io: {
         } while (drained.remaining > 0);
         const version = store.read.query<{ v: number | null }, [string]>(
           'SELECT MAX(derive_version) AS v FROM request WHERE conv_key=?').get(session);
+        // 目标版本、实际算法分布与保留行分开报告：`derive_version` 已经不再逐次累加，
+        // 拿它的 MAX 当"当前算法"会把保留行误报成最新。
+        const algorithms = store.read.query<{ algorithm: number | null; n: number }, [string]>(`
+          SELECT summary_algorithm AS algorithm, COUNT(*) AS n FROM request
+          WHERE conv_key=? AND summary_state='recomputed'
+          GROUP BY summary_algorithm ORDER BY summary_algorithm`).all(session);
+        const actualAlgorithms: Record<string, number> = {};
+        for (const row of algorithms) actualAlgorithms[String(row.algorithm ?? 'legacy')] = row.n;
+        const legacy = store.read.query<{ n: number }, [string]>(`
+          SELECT COUNT(*) AS n FROM request WHERE conv_key=? AND summary_state='legacy'`).get(session)?.n ?? 0;
+        const pending = store.read.query<{ n: number }, [string]>(`
+          SELECT COUNT(*) AS n FROM derive_queue WHERE conv_key=? AND state<>'clean'`).get(session)?.n ?? 0;
         // 正文与 raw 都没了的分组只报告数量和原因，旧标题与工具关系保持原样。
         out(JSON.stringify({
           ok: true, session, queued: report.queued, unavailable: report.unavailable,
           reasons: report.reasons, derive_version: version?.v ?? 0,
           queue_remaining: drained.remaining,
           recomputed_requests: recomputedRequests, retained_requests: retainedRequests,
+          target_algorithm: GROUP_ALGORITHM, actual_algorithms: actualAlgorithms,
+          legacy_requests: legacy, pending_groups: pending,
         }));
         return 0;
       }

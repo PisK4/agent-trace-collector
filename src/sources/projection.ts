@@ -6,6 +6,14 @@ import {
   mapRouteRow,
 } from './magpie';
 import type { LedgerFields, RouteFields } from './magpie';
+import {
+  buildProjectionMeta,
+  buildSourceFacts,
+  readProjectionMeta,
+  readSourceFacts,
+  serializeFacts,
+  serializeMeta,
+} from './facts';
 
 export const SOURCE_PROJECTION_VERSION = 1;
 const MAX_KIND_VALUES_PER_SOURCE = 8;
@@ -679,6 +687,16 @@ export function projectRequestTx(
 ): RequestProjection {
   const projection = buildProjection(db, reqId, input.mappingVersion);
   writeProjectionTx(db, reqId, projection, input.now);
+  // 事实层与行级事实同一事务：原始行到期删除后，集合与选定尝试仍要读得到。
+  // 旧值在写入前读，集合因此只增不减，raw 缺失不会被当成"从没观测过"。
+  const old = db.query<{ source_facts_json: string | null; projection_meta_json: string | null }, [number]>(
+    'SELECT source_facts_json,projection_meta_json FROM request WHERE req_id=?',
+  ).get(reqId);
+  const facts = buildSourceFacts(projection, readSourceFacts(old?.source_facts_json ?? null));
+  const meta = buildProjectionMeta(projection, readProjectionMeta(old?.projection_meta_json ?? null));
+  db.run('UPDATE request SET source_facts_json=?,projection_meta_json=? WHERE req_id=?', [
+    serializeFacts(facts), serializeMeta(meta), reqId,
+  ]);
   return projection;
 }
 

@@ -7,6 +7,7 @@ import { openStore } from '../src/store';
 import { runMaintenance } from '../src/maintenance';
 import type { Store } from '../src/store';
 import { compareSequence, deriveTitle, drainDerive, enqueueDerive, matchPredecessor } from '../src/derive';
+import { GROUP_ALGORITHM } from '../src/derive-state';
 import { listSessions } from '../src/queries';
 import { modelTimeTitle } from '../src/sources/magpie';
 import { messageFingerprint } from '../src/fingerprint';
@@ -432,7 +433,7 @@ test('可读工具轮次标题不依赖旧值且缺正文标题保留', () => {
   } finally { f.close(); }
 });
 
-test('工具版本保持旧写入口径直到显式版本迁移', () => {
+test('工具行记算法依据，保留行不改原版本', () => {
   const f = fixture();
   try {
     seedRound(f.store, [1, 2]);
@@ -443,12 +444,20 @@ test('工具版本保持旧写入口径直到显式版本迁移', () => {
       db.run(`INSERT INTO tool_call(call_id,req_id,ord,tool_name,state,derive_version)
         VALUES ('old-retained',3,0,'old','resolved',7)`);
     });
-    for (const expected of [8, 9]) {
+    // 旧 derive_version 不再累加：重算只写算法版本与依据，重复运行结果稳定。
+    for (let run = 0; run < 2; run++) {
       rebuild(f.store);
-      expect(f.store.read.query(`SELECT derive_version FROM tool_call WHERE req_id=1`).get())
-        .toEqual({ derive_version: 2 });
-      expect(f.store.read.query(`SELECT derive_version FROM tool_call WHERE req_id=3`).get())
-        .toEqual({ derive_version: expected });
+      expect(f.store.read.query(
+        `SELECT derive_version,algorithm_version,retention_state FROM tool_call WHERE req_id=1`).get(),
+      ).toEqual({
+        derive_version: 1, algorithm_version: GROUP_ALGORITHM, retention_state: 'recomputed',
+      });
+      // 正文已回收的保留行原样保留：版本仍是它当时的，只标出本轮没有重算。
+      expect(f.store.read.query(
+        `SELECT derive_version,algorithm_version,retention_state FROM tool_call WHERE req_id=3`).get(),
+      ).toEqual({
+        derive_version: 7, algorithm_version: null, retention_state: 'retained',
+      });
     }
   } finally { f.close(); }
 });
