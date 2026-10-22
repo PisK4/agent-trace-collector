@@ -132,6 +132,8 @@ type RouteSummaryV2 = {
 
 ## Task 1：落 v5 结构与未完成启动拒绝
 
+> 2026-10-23 修订：迁移完成标记与拒绝分支已随破坏式替换移除，`openStore` 只拒绝低/高版本；上下文见 Task 6 的取消说明。
+
 **Files:** Modify `src/schema.sql`、`src/store.ts`；Create `src/conservation.ts`、`src/migrate-v5.ts`、`tests/migration-v5.test.ts`；实施时更新 schema note 与新 note。
 
 **Interfaces:** `openStore(path: string, options?: { allowIncompleteMigration?: boolean }): Store` 只允许显式迁移绕过完成标记，不允许普通低版本自动补列。`initializeV5(db: Database): void` 是迁移内部函数。`collector_state['migration:v5']` 的精确 `MigrationState` 类型由 Task6 定义，包含不可变 baseline 和累计扫描报告；首次新库直接创建 complete=true。第一轮结构升级是全库，按会话范围只用于之后的逻辑 rebuild，不能把半库结构迁移声明完成。
@@ -783,6 +785,8 @@ Run `bun test tests/secrets.test.ts tests/maintenance.test.ts`；Expected PASS�
 - [x] **Step 5：更新operations与note。** backup/restore/认证重配命令和限制只在operations维护，有授权时提交 `feat(recovery): bind privacy salt and verify restore bundles`。
 
 ## Task 6：实现可续跑的全库迁移和守恒验收
+
+> **已取消（2026-10-23）。** 改为破坏式替换：不做 v4→v5 迁移，旧库拒绝打开后删除重建；迁移状态机、守恒摘要与恢复时的标记校验已从源码移除。理由与后果见[旧库删除重建](../../../.agents/notes/implemented/architecture/2026-10-23-destructive-schema-replacement.md)。以下步骤只保留为计划记录，不再执行。
 
 **Files:** Complete `src/migrate-v5.ts`；Create `scripts/migrate-v5.ts`；Modify `tests/migration-v5.test.ts`、`docs/operations.md`、新note。
 

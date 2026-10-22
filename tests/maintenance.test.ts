@@ -353,32 +353,6 @@ test('恢复bundle保存原盐且拒绝覆盖目标', () => {
   }
 });
 
-test('恢复拒绝未完成迁移的bundle', () => {
-  const f = fixture();
-  const bundle = join(f.dir, 'bundle');
-  const restored = join(f.dir, 'restored');
-  try {
-    const salt = loadBoundSalt(f.store, f.dir);
-    // 半迁移标记：结构已是 v5，但数据还没走完各阶段。
-    f.store.write(db => {
-      const current = JSON.parse((db.query<{ value_json: string }, []>(
-        "SELECT value_json FROM collector_state WHERE key='migration:v5'").get()!).value_json);
-      db.run("UPDATE collector_state SET value_json=? WHERE key='migration:v5'",
-        [JSON.stringify({ ...current, phase: 'groups', complete: false })]);
-    });
-    f.store.close();
-    backupBundle(f.dir, bundle);
-    expect(() => restoreBundle(bundle, restored)).toThrow('restore_migration_incomplete');
-    expect(existsSync(restored)).toBe(false);
-    restoreBundle(bundle, restored, { allowIncompleteMigration: true });
-    expect(readFileSync(join(restored, 'redaction.salt'))).toEqual(Buffer.from(salt));
-    // 半迁移的库普通启动仍然拒绝打开，续跑只能走显式迁移。
-    expect(() => openStore(join(restored, 'trace.db'))).toThrow('migration_incomplete');
-  } finally {
-    f.close();
-  }
-});
-
 test('bundle备份要求采集器已停且失败不留目标', () => {
   const f = fixture();
   const bundle = join(f.dir, 'bundle');

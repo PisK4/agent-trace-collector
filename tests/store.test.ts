@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { fixture } from './fixtures';
@@ -230,5 +231,23 @@ test('拒绝未知的高版本schema', () => {
     expect(() => openStore(path)).toThrow('schema_version_unsupported');
   } finally {
     f.close();
+  }
+});
+
+test('低版本库拒绝打开，空库建到当前版本', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'atc-store-version-'));
+  try {
+    const legacy = join(dir, 'legacy', 'trace.db');
+    mkdirSync(join(dir, 'legacy'), { recursive: true, mode: 0o700 });
+    const raw = new Database(legacy);
+    raw.exec('CREATE TABLE legacy(x); PRAGMA user_version=4');
+    raw.close();
+    expect(() => openStore(legacy)).toThrow('schema_rebuild_required');
+    const store = openStore(join(dir, 'fresh', 'trace.db'));
+    try {
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 5 });
+    } finally { store.close(); }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

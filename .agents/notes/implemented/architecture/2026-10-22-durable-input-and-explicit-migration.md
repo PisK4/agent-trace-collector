@@ -10,13 +10,11 @@ v4 库里的派生结果按旧口径算错，且缺少来源依据、请求修�
 
 ## Decision
 
-v4→v5 只有一条路径：显式迁移。普通 `openStore` 不做 `ALTER`；空库直接建到 v5 并在建表事务里写入 `complete=true` 的标记；低版本报 `schema_rebuild_required`；高版本报 `schema_version_unsupported`。
+> v4→v5 的显式迁移已被[旧库删除重建](2026-10-23-destructive-schema-replacement.md)取代：迁移状态机、完成标记与 `src/conservation.ts` 已从源码移除，旧库报 `schema_rebuild_required` 后由运维删除重建。下方保留当时的迁移决策作为背景；持久输入与组修订部分仍然有效。
 
-结构存在之后还要读 `collector_state['migration:v5']` 的标记：标记缺失报 `migration_marker_missing`，格式不合法报 `migration_marker_invalid`，未完成且调用方没有显式传 `allowIncompleteMigration` 时报 `migration_incomplete`。显式迁移是唯一允许绕过完成标记的调用方，它自己续跑剩余阶段。
+当时的迁移路径是显式迁移：普通 `openStore` 不做 `ALTER`；空库直接建到 v5 并在建表事务里写入 `complete=true` 的标记；低版本报 `schema_rebuild_required`；高版本报 `schema_version_unsupported`。结构存在之后还要读 `collector_state['migration:v5']` 标记，未完成的库拒绝普通启动；标记与 DDL、`PRAGMA user_version` 同事务提交，不存在"列补上了但标记没写"的中间态。
 
-标记与 DDL、`PRAGMA user_version` 在同一事务里提交，因此不存在"列补上了但标记没写"的中间态；注入失败的用例证明回滚后列与版本号都回到 v4。
-
-`src/conservation.ts` 提供守恒摘要，只覆盖迁移不得改变的表：请求 ID、别名、证据 owner、正文引用、费用观测、游标、淘汰墓碑，以及按 id/hash/z 流式计算的正文块。新增长期列与派生结果不进摘要，否则一次合法重算就会让摘要失效。
+以下持久输入与组修订决策仍然有效。
 
 `derive_queue` 从待办集合变成持久组状态：`clean` 行保留，待办查询一律 `state<>'clean'`；`group_epoch` 标识组的世代，`input_revision` 随输入变化增长，完成时记 `published_revision` 与 `published_algorithm`；`dirty_since_ms` 只表示首次未完成触发时间，重复 dirty 保最早值，clean 后清 NULL。任何事务失败都不能提前把组标成 clean。
 
@@ -46,15 +44,12 @@ v4→v5 只有一条路径：显式迁移。普通 `openStore` 不做 `ALTER`；
 
 ## Consequences
 
-- 旧库不能直接启动，必须先跑显式迁移；迁移未完成期间任何普通启动都会被拒绝。
-- 迁移按阶段与游标推进，中断后重跑从上次提交的批次继续；已提交的批次不会重复产生副作用。
-- 正文块与证据在摘要里，迁移若重新编码了原文会立刻失败。
+- 旧库不能直接启动，报 `schema_rebuild_required`；升级方式是删除旧数据目录后重建，迁移不再提供续跑入口。
 - `derive_queue` 的 clean 行会长期保留，增长成本随会话组数而不是请求数；回收策略需要测量后才定，没有安全的 GC 证据前不自动删状态，见[容量收敛计划](../../../../docs/superpowers/plans/2026-10-22-atc-capacity-convergence.md)。
 - 同一事务里多处触发会多次推进修订；正确性只依赖单调性，不承诺恰好加一。因此回归断言用"增长"与"不变"，不写死具体差值。
-- 标记里保留初始 baseline，续跑不重建摘要；这同时意味着迁移期间被外部修改的守恒表会让校验失败，而不是被悄悄接受。
 
 ## Testing
 
-`tests/migration-v5.test.ts` 的「v5 结构和未完成标记原子提交并拒绝普通打开」「v5 初始化 marker 失败回滚全部 DDL」「新空库 v5 标记完整」锁定结构、拒绝与回滚；`tests/store.test.ts` 的「拒绝未知的高版本 schema」保持。合成库由 `tests/fixtures/schema-v4.sql` 固定为 v4 原文。
+`tests/store.test.ts` 的「低版本库拒绝打开，空库建到当前版本」锁定 `schema_rebuild_required` 与新库版本，「拒绝未知的高版本 schema」保持；迁移相关的结构与标记用例已随迁移一起删除。
 
 `tests/derive-state.test.ts` 锁定修订单调、epoch 复用与未知归属不入队；每个写入者的入口各有一条最窄回归：`tests/body.test.ts` 的「正文保存推进输入修订并置待处理，补正文再次推进」、`tests/hook.test.ts` 的「重复hook_id不推进修订，补正文与合并才推进」「合并先标源组再换存活请求epoch」「命中账本的metadata_only无骨架请求保持不可比较」、`tests/reconcile.test.ts` 的「账本字段级变化推进修订，重复证据与费用刷新不推进」「route kind变化推进修订，同值重放不推进」、`tests/retention.test.ts` 的「回收正文在同一事务推进修订并标脏所属组」「原始层过期在同一事务推进修订，证据族转expired」、`tests/maintenance.test.ts` 的「淘汰在删行前标记受影响组，空组同步完成」。

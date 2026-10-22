@@ -100,10 +100,8 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 1. bundle 目录与三个文件都是 0600 / 0700、不是符号链接。
 2. 清单可解析，`format=1`，`schema` 在白名单里，`salt_id` 与包内盐一致，`database_sha256` 与包内库一致。
 3. 复制到目标父目录下的 0700 staging，再校验一次哈希与 `integrity_check`。
-4. 以只读连接查包内数据库自身：盐绑定一致、`PRAGMA user_version` 与清单相等、`collector_state['migration:v<版本>'].complete` 存在且为 `true`。
+4. 以只读连接查包内数据库自身：盐绑定一致、`PRAGMA user_version` 与清单相等。
 5. `mkdir` 原子保留目标名后再 `rename`；目标已存在报 `destination_exists`。
-
-半迁移的包默认报 `restore_migration_incomplete`；只有明确要留作续跑迁移时才加 `--allow-incomplete-migration`，恢复出来的库普通启动仍会被 `migration_incomplete` 拒绝。
 
 恢复不包含 `read.token` 与 `hook.token`。启动时这两个文件按首次启动规则重新生成，插件要拿新的 hook 令牌重新注册——恢复盐连续性不等于恢复认证身份。
 
@@ -118,9 +116,8 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 | `redaction_salt_missing` | 源目录没有盐文件 | 先在原目录恢复盐，或从可用的 bundle 恢复 |
 | `redaction_salt_mismatch` | 库里的绑定与盐不是一对 | 不要继续；先查清哪份盐才对 |
 | `redaction_salt_binding_invalid` | 绑定记录损坏 | 不要按缺失重建；先确认原盐 |
-| `backup_schema_unsupported` | 库结构版本不在可恢复白名单 | 用对应版本的代码先迁移，再备份 |
+| `backup_schema_unsupported` | 库结构版本不在可恢复白名单 | 用对应版本的代码备份，不要跨版本恢复 |
 | `restore_bundle_invalid` | 清单、哈希、版本或内容集合对不上 | 包已损坏或被改过，换一份备份 |
-| `restore_migration_incomplete` | 包内迁移没走完 | 续跑迁移后再打包，或显式允许不完整恢复 |
 | `insufficient_space` | 目标目录余量不足 | 换目录或先腾空间 |
 
 ### rebuild
@@ -156,7 +153,7 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 1. 停服务。
 2. `verify` 当前库，确认问题不是磁盘或权限。
 3. `bundle` 到数据目录外的一个新目录；只有数据库的 `backup` 不能恢复占位符连续性。
-4. `restore` 到另一个新目录，按 `restore` 的校验顺序确认清单、哈希、盐绑定与迁移标记都通过。
+4. `restore` 到另一个新目录，按 `restore` 的校验顺序确认清单、哈希、盐绑定与结构版本都通过。
 5. 用 `ATC_DATA_DIR` 指向恢复目录启动：首次启动会重新生成 `read.token` 与 `hook.token`，插件要用新令牌重新注册。
 6. 先让合成来源跑一遍分页、正文与路由，确认占位符与备份前一致。
 7. 确认无误后再停服务、切换配置。
@@ -270,4 +267,6 @@ AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按
 
 ## schema 版本
 
-当前 `user_version=4`。v1→v2 是就地加两张表（`retention_event`、`purged_evidence`），v3 与 v4 都是派生列变更，用 `scripts/backfill-fingerprint.ts` 补齐并重跑派生。更高的未知版本直接拒绝打开（`schema_version_unsupported`），不猜兼容性；先备份再降级代码，不要手改 `user_version`。
+当前 `user_version=5`。空数据目录首次启动直接建到 v5；低版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
+
+首版发布前不提供跨结构升级：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库。需要保留旧库里的正文时，在升级前用旧版本导出；`scripts/backfill-fingerprint.ts` 只补齐 v3/v4 时代的列，不会把旧库带到 v5。不要手改 `user_version`。
