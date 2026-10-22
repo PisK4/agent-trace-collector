@@ -30,10 +30,16 @@ export type RequestRow = {
   input_preview: string | null;
   input_preview_kind: 'delta' | 'tail' | 'tool_result' | 'title' | null;
   reply_preview: string | null;
-  /** chat 是正常对话请求；title 是 harness 的 Title Generator 请求。 */
-  req_kind: 'chat' | 'title';
-  /** main 主链、branch 次链、aux 辅助请求（标题生成）；unknown 表示组未完成，角色不可确认。 */
-  chain_role: 'main' | 'branch' | 'aux' | 'unknown';
+  /** 用途阶段写下的请求类别；未知值原样返回，查询不折叠成 chat。 */
+  req_kind: string;
+  /** main 主链、branch 次链、aux 辅助请求（排除用途）；unknown 表示组未完成，角色不可确认。 */
+  chain_role: string;
+  /** 正式标题；只有用途阶段写下的值，回复文本不再参与。 */
+  model_title: string | null;
+  purpose_status: string;
+  purpose_version: number | null;
+  purpose_rule: string | null;
+  purpose_chain: string;
   derived_state: DerivedState;
 };
 
@@ -130,24 +136,42 @@ type SessionDbRow = {
 };
 
 /**
- * 会话标题：Title Generator 的正式标题优先，同一会话多次生成取最新一次；
- * 没有正式标题才退到主链上最早的用户首句，最后才是任意一笔的兜底标题。
+ * 会话标题只取已经结算的当前结果：排除用途提供模型标题，参与链提供用户标题。
+ *
+ * 四个候选都要求请求用途已判定且所属组已完成；dirty 组或待判定用途的旧标题
+ * 不是当前结论，不能拿来命名会话。用户标题不再按 `req_kind='chat'` 过滤：
+ * 未知来源类别只要参与链，就可以提供用户首句。
  */
 const SESSION_TITLE_SQL = `COALESCE(
   (SELECT r1.model_title FROM request r1
-   WHERE r1.conv_key = request.conv_key AND r1.req_kind = 'title'
-     AND r1.model_title IS NOT NULL
+   JOIN derive_queue q1 ON q1.conv_key = r1.conv_key AND q1.actor = r1.actor
+   WHERE r1.conv_key = request.conv_key AND r1.purpose_chain = 'exclude'
+     AND r1.model_title IS NOT NULL AND r1.purpose_pending = 0
+     AND q1.state = 'clean' AND q1.published_revision = q1.input_revision
+     AND q1.published_algorithm = q1.target_algorithm
    ORDER BY r1.started_ms DESC, r1.req_id DESC LIMIT 1),
   (SELECT r2.title FROM request r2
+   JOIN derive_queue q2 ON q2.conv_key = r2.conv_key AND q2.actor = r2.actor
    WHERE r2.conv_key = request.conv_key AND r2.title_source = 'user_delta'
-     AND r2.req_kind = 'chat' AND r2.chain_role = 'main' AND r2.title IS NOT NULL
+     AND r2.purpose_chain = 'participate' AND r2.chain_role = 'main'
+     AND r2.title IS NOT NULL AND r2.purpose_pending = 0
+     AND q2.state = 'clean' AND q2.published_revision = q2.input_revision
+     AND q2.published_algorithm = q2.target_algorithm
    ORDER BY r2.started_ms ASC, r2.req_id ASC LIMIT 1),
   (SELECT r3.title FROM request r3
+   JOIN derive_queue q3 ON q3.conv_key = r3.conv_key AND q3.actor = r3.actor
    WHERE r3.conv_key = request.conv_key AND r3.title_source = 'user_delta'
-     AND r3.req_kind = 'chat' AND r3.title IS NOT NULL
+     AND r3.purpose_chain = 'participate' AND r3.title IS NOT NULL
+     AND r3.purpose_pending = 0
+     AND q3.state = 'clean' AND q3.published_revision = q3.input_revision
+     AND q3.published_algorithm = q3.target_algorithm
    ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1),
   (SELECT r4.title FROM request r4
-   WHERE r4.conv_key = request.conv_key AND r4.req_kind = 'chat' AND r4.title IS NOT NULL
+   JOIN derive_queue q4 ON q4.conv_key = r4.conv_key AND q4.actor = r4.actor
+   WHERE r4.conv_key = request.conv_key AND r4.purpose_chain = 'participate'
+     AND r4.title IS NOT NULL AND r4.purpose_pending = 0
+     AND q4.state = 'clean' AND q4.published_revision = q4.input_revision
+     AND q4.published_algorithm = q4.target_algorithm
    ORDER BY r4.started_ms ASC, r4.req_id ASC LIMIT 1)
 )`;
 
@@ -270,6 +294,8 @@ type ProjectableRow = StateColumns & DerivedColumns & {
   cost: number | null; cost_state: string | null; have: number; body_state: string;
   miss_reason: string | null; reply_preview: string | null;
   req_kind: string | null; model_title: string | null; ms: number | null;
+  purpose_status: string; purpose_version: number | null; purpose_rule: string | null;
+  purpose_chain: string;
   ttft_ms: number | null; flow_ms: number | null;
 };
 
@@ -290,7 +316,7 @@ function projectRow(row: ProjectableRow): {
 } {
   const state = derivedStateOf(row);
   const current = state === 'current';
-  // 标题请求的正式标题来自回复，与组结果无关；用途还没判完时才不可信。
+  // 标题请求的正式标题来自用途列，与组结果无关；用途还没判完时才不可信。
   const modelTitleUsable = row.purpose_pending === 0 && row.req_kind === 'title'
     && row.model_title !== null;
   const historical: HistoricalResult | null = current ? null : {
@@ -335,10 +361,13 @@ function projectRow(row: ProjectableRow): {
     input_preview_kind: current
       ? row.input_preview_kind as RequestRow['input_preview_kind'] : null,
     reply_preview: row.reply_preview,
-    req_kind: row.req_kind === 'title' ? 'title' : 'chat',
-    chain_role: current
-      ? (row.chain_role === 'branch' || row.chain_role === 'aux' ? row.chain_role : 'main')
-      : 'unknown',
+    req_kind: row.req_kind ?? 'chat',
+    chain_role: current ? (row.chain_role ?? 'main') : 'unknown',
+    model_title: row.model_title,
+    purpose_status: row.purpose_status,
+    purpose_version: row.purpose_version,
+    purpose_rule: row.purpose_rule,
+    purpose_chain: row.purpose_chain,
     derived_state: state,
   };
   return { safe, state, historical };
@@ -351,7 +380,8 @@ const REQUEST_COLUMNS = `r.req_id, r.conv_key, r.actor, r.agent, r.actor_state, 
   r.title, r.title_source, r.status, r.model_requested, r.model_served, r.in_tok, r.out_tok,
   r.cache_read, r.cache_write, r.cost, r.cost_state, r.have,
   r.ms, r.ttft_ms, r.flow_ms, r.body_state, r.miss_reason, r.req_kind, r.chain_role,
-  r.model_title, r.input_preview, r.input_preview_kind, r.reply_preview,
+  r.model_title, r.purpose_status, r.purpose_version, r.purpose_rule, r.purpose_chain,
+  r.input_preview, r.input_preview_kind, r.reply_preview,
   r.purpose_pending, r.summary_state, r.summary_algorithm`;
 
 export function listRequests(store: Store, key: string, limit = 100, cursor: string | null = null): Page<RequestRow> {
