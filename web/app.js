@@ -130,6 +130,41 @@ export function resolveTraceTarget(rows, requested, detail) {
   return { kind: 'off-page', reqId: null };
 }
 
+/** 用途标签；未知类别原样显示，不猜成对话。 @param {string|null|undefined} kind */
+export function purposeLabel(kind) {
+  if (kind === 'title') return '标题生成';
+  if (kind === 'auto-mode-classifier') return '自动模式分类';
+  if (kind === 'chat') return '对话';
+  return kind ?? '未知用途';
+}
+
+/**
+ * 辅助行只由派生用途决定：排除用途，或组阶段给出的 aux 角色。
+ * 摘要文本里的任何字样都不参与判断。
+ * @param {{purpose_chain?: string|null, chain_role?: string|null,
+ *   req_kind?: string|null, reply_preview?: string|null}} row
+ */
+export function isAuxRow(row) {
+  return row.purpose_chain === 'exclude' || row.chain_role === 'aux';
+}
+
+/** @param {{req_kind?: string|null, reply_preview?: string|null, model_title?: string|null}} row */
+export function auxSummary(row) {
+  const label = purposeLabel(row.req_kind);
+  if (row.req_kind === 'auto-mode-classifier') {
+    const match = /<block>\s*(yes|no)\s*(?:<\/block>)?/i.exec(row.reply_preview ?? '');
+    const verdict = match?.[1]?.toLowerCase();
+    if (verdict === 'no') return `${label} · 放行`;
+    if (verdict === 'yes') return `${label} · 拦截`;
+    return `${label} · 判定未知`;
+  }
+  if (row.req_kind === 'title') {
+    return row.model_title === null || row.model_title === undefined
+      ? label : `${label} · ${row.model_title}`;
+  }
+  return label;
+}
+
 if (typeof document !== 'undefined') {
   /** @type {Record<string, string>} */
   const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -362,6 +397,9 @@ if (typeof document !== 'undefined') {
     // 非当前行没有可确认的关系：接口已经把 prev_relation 清成 null，
     // 这里只说清为什么，不拿 historical 里的旧关系冒充当前。
     if (detail.derived_state !== 'current') return '派生结果还没追上当前输入';
+    if (detail.purpose_chain === 'exclude' || detail.chain_role === 'aux') {
+      return '辅助请求，不在主链上';
+    }
     if (detail.prev_relation === 'first') return '会话首笔';
     if (detail.prev_relation === 'confirmed') return '续自上一笔';
     if (detail.prev_relation === 'branch') return '另起一支';
@@ -551,33 +589,6 @@ if (typeof document !== 'undefined') {
     </header>`;
   }
 
-  /**
-   * harness 自动发的标题请求不是用户说的话，对话视图里不画成 USER 气泡；
-   * 标题请求的回复也只是一个 <title> 标签，只展示里面的标题文本。
-   * @param {string} text
-   */
-  function isAuxTitleRequest(text) {
-    return text.trimStart().startsWith('<title-request>');
-  }
-  const TITLE_REPLY = /^<title\b[^>]*>([\s\S]*?)<\/title>\s*$/i;
-
-  /** 标题请求的回复：`<title>` 标签或 {"title":"…"} JSON。
-   * @param {string} text */
-  function titleOfReplyText(text) {
-    const tagged = TITLE_REPLY.exec(text.trim())?.[1]?.trim();
-    if (tagged !== undefined && tagged.length > 0) return tagged;
-    const trimmed = text.trim();
-    if (!trimmed.startsWith('{')) return null;
-    try {
-      const value = JSON.parse(trimmed);
-      if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-      if (Object.keys(value).length !== 1 || typeof value.title !== 'string') return null;
-      return value.title.trim() || null;
-    } catch {
-      return null;
-    }
-  }
-
   // 与服务端 derive 的剥壳规则对齐：正文是原始消息，harness 注入的通知、回顾、
   // 斜杠命令回显都不是用户说的话，对话视图不把它们铺进 USER 气泡。
   const HARNESS_BLOCKS = [
@@ -622,24 +633,23 @@ if (typeof document !== 'undefined') {
       const ordinal = String(ordinalOf(r.req_id)).padStart(2, '0');
       const delta = deltaOrdinals(detail);
       const relation = relationTextOf(r.req_id);
+      const aux = isAuxRow(r);
       // 正文是原始消息：先剥掉 harness 注入的块，再去掉空块。
-      // 回复是标题的那些请求是标题生成调用，不铺输入。
-      const auxReply = r.reply_preview !== null && r.reply_preview.startsWith('标题 · ');
-      const rawUserBlocks = auxReply || loaded === null || delta === null
+      // 辅助请求不是用户说的话，不铺输入气泡。
+      const rawUserBlocks = aux || loaded === null || delta === null
         ? []
         : loaded.entries.filter(entry => delta.has(entry.ord) && entry.isInput);
       const userTexts = rawUserBlocks
         .map(entry => cleanUserText(entry.blocks.filter(b => b.kind === 'text').map(b => b.text).join('\n') || entry.preview))
         .filter(text => text.length > 0);
       // 正文还没读时用派生摘要占位：对话视图不能因为"按需加载"就整屏空壳。
-      const auxPreview = auxReply || (r.input_preview !== null && isAuxTitleRequest(r.input_preview));
       const previewTag = r.input_preview_kind === 'tail' ? '<span class="tag">末轮上下文</span>'
-        : auxPreview ? '<span class="tag">辅助请求</span>' : '';
+        : aux ? '<span class="tag">辅助请求</span>' : '';
       const inputNote = loaded === null
         ? (r.input_preview !== null
-          ? auxPreview
-            // 标题请求是 harness 的辅助调用，不是用户说的话。
-            ? `<div class="conv-cont" data-select="${r.req_id}">${previewTag}生成会话标题</div>`
+          ? aux
+            // 辅助请求是 harness 的辅助调用，不是用户说的话。
+            ? `<div class="conv-cont" data-select="${r.req_id}">${previewTag}${esc(auxSummary(r))}</div>`
             : r.input_preview_kind === 'tool_result'
               // 工具结果不是用户说的话，不能画成 USER 气泡；摘要自带"工具结果 ·"前缀。
               ? `<div class="conv-cont" data-select="${r.req_id}">${esc(r.input_preview)}</div>`
@@ -648,7 +658,7 @@ if (typeof document !== 'undefined') {
                 <div class="conv-user-body preview">${esc(r.input_preview)}</div>
               </div>`
           : `<div class="conv-cont muted">${esc(r.body_state === 'available' ? '这一笔还没有派生摘要' : bodyStateText(r))}</div>`)
-        : auxReply ? `<div class="conv-cont" data-select="${r.req_id}"><span class="tag">辅助请求</span>生成会话标题</div>`
+        : aux ? `<div class="conv-cont" data-select="${r.req_id}"><span class="tag">辅助请求</span>${esc(auxSummary(r))}</div>`
           : userTexts.length > 0 ? ''
             : rawUserBlocks.length > 0
               ? '<div class="conv-cont">这一笔没有新的用户可见消息：输入是技能注入或系统提示。</div>'
@@ -662,9 +672,7 @@ if (typeof document !== 'undefined') {
       return `<section class="conv-req" data-req="${r.req_id}" data-current="${r.req_id === state.reqId}">
         <div class="conv-gutter"><b>${ordinal}</b><em>${esc(clock(r.started_ms))}</em></div>
         <div class="conv-main">
-          ${userTexts.map(text => isAuxTitleRequest(text)
-            ? `<div class="conv-cont" data-select="${r.req_id}"><span class="tag">辅助请求</span>生成会话标题</div>`
-            : `<div class="conv-user" data-select="${r.req_id}">
+          ${userTexts.map(text => `<div class="conv-user" data-select="${r.req_id}">
                 <div class="conv-who">USER</div>
                 <div class="conv-user-body">${esc(text)}</div>
               </div>`).join('')}
@@ -744,11 +752,7 @@ if (typeof document !== 'undefined') {
         <div class="conv-fail"><span>✕</span><span>这一笔返回 HTTP ${r.status}。失败尝试的用量仍保留在账本里，失败的读数不并入成功请求。</span></div>
       </div>`;
     }
-    // 标题请求的回复就是标题本身，只取标题文本。
-    const titleText = view.state === 'ok' ? titleOfReplyText(view.text) : null;
-    const body = titleText !== null
-      ? `<div class="conv-cont"><span class="tag">辅助回复</span>标题 · ${esc(titleText)}</div>`
-      : view.state === 'ok' && view.text.length > 0
+    const body = view.state === 'ok' && view.text.length > 0
       ? `<div class="conv-asst-body">${mdToHtml(view.text)}</div>`
       : view.state === 'ok' && view.calls.length > 0
         // 纯工具调用的回复常常只有推理块：推理块值得展开，工具本身下面会列出来，
@@ -799,18 +803,18 @@ if (typeof document !== 'undefined') {
     const primary = primaryOf(r);
     const sameAsPrevious = previous !== null && primary.kind === 'tail'
       && previous.kind === 'tail' && previous.text === primary.text;
-    // 标题生成请求是 harness 的辅助调用：不铺输入原文，只说明它在做什么。
-    const isTitle = r.req_kind === 'title';
-    const kind = isTitle ? 'title'
+    // 辅助请求是 harness 的旁路调用：不铺输入原文，只说明它在做什么。
+    const isAux = isAuxRow(r);
+    const kind = isAux ? 'aux'
       : primary.kind === 'tool_result' ? 'tool'
         : primary.kind === 'tail' ? 'context'
           : primary.kind === 'reply' ? 'reply'
             : primary.kind === 'title' ? 'context' : 'user';
-    const label = kind === 'title' ? '标题'
+    const label = kind === 'aux' ? '辅助'
       : kind === 'tool' ? '工具'
         : kind === 'context' ? '上下文'
           : kind === 'reply' ? '回复' : '用户';
-    const primaryText = isTitle ? '生成会话标题' : sameAsPrevious ? '同上' : primary.text;
+    const primaryText = isAux ? auxSummary(r) : sameAsPrevious ? '同上' : primary.text;
     // 第二行始终保留：没有回复时留空，保持所有折叠行等高、主文本起点一致。
     const hasReply = primary.kind !== 'reply' && r.reply_preview !== null;
     const replyTag = hasReply
