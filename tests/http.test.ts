@@ -3,6 +3,7 @@ import { fixture } from './fixtures';
 import { loadConfig } from '../src/config';
 import { createHandler, loadReadToken } from '../src/http';
 import { getRequest, getRoute, listRequests, listSessions } from '../src/queries';
+import { createCapacityMetrics } from '../src/capacity';
 
 function seedRequests(store: ReturnType<typeof fixture>['store'], convKey: string, count: number, sameMs = false): number[] {
   const ids: number[] = [];
@@ -327,4 +328,65 @@ test('暖查询100行本机目标低于100ms', () => {
   } finally {
     f.close();
   }
+});
+
+test('hook 拒绝按固定原因计数且不保留正文', async () => {
+  const f = fixture();
+  try {
+    const metrics = createCapacityMetrics(f.store, f.dir, 1000);
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token', {
+      token: 'synthetic-hook-token', salt: new Uint8Array(32),
+    }, metrics);
+    const make = (body: string, headers: Record<string, string>) =>
+      new Request('http://127.0.0.1:8320/hook/ingest', {
+        method: 'POST', headers: { host: '127.0.0.1:8320', ...headers }, body,
+      });
+    const marker = 'REJECTED_BODY_MARKER';
+    // 未认证最先拒绝，正文甚至不必是合法 JSON。
+    expect((await handler(make(`{"marker":"${marker}"`, {
+      authorization: 'Bearer wrong',
+    }))).status).toBe(401);
+    // 认证和来源通过后，语法错误才是 invalid_json。
+    expect((await handler(make(`{"marker":"${marker}"`, {
+      authorization: 'Bearer synthetic-hook-token',
+    }))).status).toBe(400);
+    // 合法 JSON、缺 hook_id：必须走 422，而不是被当成语法错误。
+    expect((await handler(make(JSON.stringify({ marker, origin: 'local' }), {
+      authorization: 'Bearer synthetic-hook-token',
+    }))).status).toBe(422);
+    expect((await handler(make(JSON.stringify({ marker, hook_id: 'h1', origin: 'local' }), {
+      authorization: 'Bearer synthetic-hook-token', origin: 'http://evil.example',
+    }))).status).toBe(403);
+    const snapshot = metrics.ingest.snapshot(2000);
+    expect(snapshot.rejected_by_reason.unauthorized).toBe(1);
+    expect(snapshot.rejected_by_reason.invalid_json).toBe(1);
+    expect(snapshot.rejected_by_reason.missing_hook_id).toBe(1);
+    expect(snapshot.rejected_by_reason.origin).toBe(1);
+    expect(JSON.stringify(snapshot)).not.toContain('REJECTED_BODY_MARKER');
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 0 });
+  } finally { f.close(); }
+});
+
+test('认证统计入口返回计数与启动时间，未认证返回 401', async () => {
+  const f = fixture();
+  try {
+    const metrics = createCapacityMetrics(f.store, f.dir, 5000);
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token', undefined, metrics);
+    metrics.ingest.reject('busy');
+    metrics.eventLoop.start();
+    const denied = await handler(new Request('http://127.0.0.1:8320/api/ingest-metrics', {
+      headers: { host: '127.0.0.1:8320' },
+    }));
+    expect(denied.status).toBe(401);
+    const response = await handler(new Request('http://127.0.0.1:8320/api/ingest-metrics', {
+      headers: { host: '127.0.0.1:8320', authorization: 'Bearer synthetic-read-token' },
+    }));
+    metrics.eventLoop.stop();
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    expect(body.started_at_ms).toBe(5000);
+    expect(body.ingest.rejected_by_reason.busy).toBe(1);
+    expect(Object.keys(body).sort()).toContain('writer');
+    expect(Object.keys(body).sort()).toContain('event_loop');
+  } finally { f.close(); }
 });

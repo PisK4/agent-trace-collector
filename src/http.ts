@@ -14,6 +14,7 @@ import {
 import { PAGE_MAX, getBodyPage } from './protocols';
 import { acceptHook } from './hook';
 import type { HookAdmission, HookEnvelope } from './hook';
+import { createIngestMetrics, type CapacityMetrics, type IngestMetrics } from './capacity';
 
 const WEB_ROOT = new URL('../web/', import.meta.url);
 const MAX_ENVELOPE_BYTES = 64 * 1024 * 1024;
@@ -127,48 +128,88 @@ async function handleHookIngest(
   store: Store,
   config: Config,
   hook: { token: string; salt: Uint8Array; admission?: () => HookAdmission } | undefined,
+  metrics: IngestMetrics,
 ): Promise<Response> {
-  if (hook === undefined) return json({ error: 'hook_unavailable' }, 404);
+  if (hook === undefined) {
+    metrics.reject('hook_unavailable');
+    return json({ error: 'hook_unavailable' }, 404);
+  }
   const host = req.headers.get('host');
-  if (host === null || !allowedHosts(config.port).has(host)) return json({ error: 'host' }, 403);
+  if (host === null || !allowedHosts(config.port).has(host)) {
+    metrics.reject('host');
+    return json({ error: 'host' }, 403);
+  }
   // 插件从本机发起，不应带浏览器 Origin；带了就必须是同源，否则视为跨站。
   const origin = req.headers.get('origin');
-  if (origin !== null && origin !== `http://${host}`) return json({ error: 'origin' }, 403);
+  if (origin !== null && origin !== `http://${host}`) {
+    metrics.reject('origin');
+    return json({ error: 'origin' }, 403);
+  }
   const authorization = req.headers.get('authorization');
   if (authorization === null || !authorization.startsWith('Bearer ') ||
       !timingSafeEqual(authorization.slice(7), hook.token)) {
+    metrics.reject('unauthorized');
     return json({ error: 'unauthorized' }, 401);
   }
-  if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { allow: 'POST' });
-  if (ingesting) return json({ error: 'busy' }, 429);
+  if (req.method !== 'POST') {
+    metrics.reject('method_not_allowed');
+    return json({ error: 'method_not_allowed' }, 405, { allow: 'POST' });
+  }
+  if (ingesting) {
+    metrics.reject('busy');
+    return json({ error: 'busy' }, 429);
+  }
 
   const declared = Number(req.headers.get('content-length') ?? '0');
-  if (Number.isFinite(declared) && declared > MAX_ENVELOPE_BYTES) return json({ error: 'envelope_too_large' }, 413);
+  if (Number.isFinite(declared) && declared > MAX_ENVELOPE_BYTES) {
+    metrics.reject('envelope_too_large');
+    return json({ error: 'envelope_too_large' }, 413);
+  }
 
   ingesting = true;
   try {
     const text = await readBounded(req, MAX_ENVELOPE_BYTES);
-    if (text === null) return json({ error: 'envelope_too_large' }, 413);
+    if (text === null) {
+      metrics.reject('envelope_too_large');
+      return json({ error: 'envelope_too_large' }, 413);
+    }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
     } catch {
+      metrics.reject('invalid_json');
       return json({ error: 'invalid_json' }, 400);
     }
-    if (!isRecord(parsed)) return json({ error: 'invalid_json' }, 400);
+    if (!isRecord(parsed)) {
+      metrics.reject('invalid_json');
+      return json({ error: 'invalid_json' }, 400);
+    }
     const envelope = parsed as unknown as HookEnvelope;
     if (typeof envelope.hook_id !== 'string' || envelope.hook_id.length === 0) {
+      metrics.reject('missing_hook_id');
       return json({ error: 'missing_hook_id' }, 422);
     }
-    if (envelope.origin !== 'local') return json({ error: 'origin' }, 403);
+    if (envelope.origin !== 'local') {
+      metrics.reject('origin_not_local');
+      return json({ error: 'origin' }, 403);
+    }
 
     try {
       const result = acceptHook(store, envelope, Date.now(), hook.salt, { admission: hook.admission });
+      metrics.accept({
+        duplicate: result.duplicate,
+        requestBytes: envelope.request_bytes,
+        replyBytes: envelope.reply_bytes,
+      });
       return json(result, 200);
     } catch (error) {
       const code = error instanceof Error ? error.message : 'unknown';
-      if (code === 'disk_full') return json({ error: 'insufficient_storage' }, 507);
+      if (code === 'disk_full') {
+        metrics.reject('insufficient_storage');
+        return json({ error: 'insufficient_storage' }, 507);
+      }
+      metrics.reject('writer_failed');
       return json({ error: 'writer_failed', code }, 503);
     }
   } finally {
@@ -201,11 +242,14 @@ export function createHandler(
   config: Config,
   readToken: string,
   hook?: { token: string; salt: Uint8Array; admission?: () => HookAdmission },
+  metrics?: CapacityMetrics,
 ): (req: Request) => Promise<Response> {
+  // hook 计数在未注入观测运行时也保留，只是没有对外入口。
+  const ingestMetrics = metrics?.ingest ?? createIngestMetrics();
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     if (url.pathname === '/hook/ingest') {
-      return await handleHookIngest(req, store, config, hook);
+      return await handleHookIngest(req, store, config, hook, ingestMetrics);
     }
     const isNavigation = !url.pathname.startsWith('/api/');
     const verdict = checkAccess(req, config.port, readToken, isNavigation);
@@ -220,6 +264,11 @@ export function createHandler(
     if (!path.startsWith('/api/')) return await serveStatic(path);
 
     try {
+      if (path === '/api/ingest-metrics') {
+        if (metrics === undefined) return json({ error: 'metrics_unavailable' }, 404);
+        return json(metrics.snapshot(store, config.dataDir));
+      }
+
       if (path === '/api/stats') return json(getStats(store));
 
       if (path === '/api/sessions') {
