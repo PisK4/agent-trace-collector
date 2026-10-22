@@ -14,9 +14,9 @@ import {
 import type { LedgerFields, RouteFields } from './sources/magpie';
 import { insertPreparedLedgerTx, upsertPreparedRouteTx } from './sources/raw';
 import type { LedgerPhysicalRef } from './sources/raw';
-import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
+import { SOURCE_PROJECTION_VERSION, projectRequestTx, projectionSignature, readProjectionTx } from './sources/projection';
+import { markOwnershipChangeTx, markRequestInputTx, requestGroupTx } from './derive-state';
 import type { RequestProjection } from './sources/projection';
-import { enqueueDeriveTx } from './derive';
 import { isPurgedEvidence } from './maintenance';
 import { closeSourceGapsTx, markStaleGapsTx, recordPausedBatchTx } from './retention';
 
@@ -165,8 +165,28 @@ function insertRequest(
   return Number(result.lastInsertRowid);
 }
 
-function projectLedgerRequestTx(db: Database, reqId: number, now: number): RequestProjection {
-  return projectRequestTx(db, reqId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
+/**
+ * 写投影，并且只在派生输入真的变了时推进请求修订。
+ *
+ * 基线必须由调用方在本批证据写入**之前**取：投影是幂等的，写完再读只会读到
+ * 已包含新证据的结果，永远看不出差异。新建的请求没有基线，一律算输入变化。
+ */
+function projectLedgerRequestTx(
+  db: Database,
+  reqId: number,
+  now: number,
+  before: string | null,
+): RequestProjection {
+  const projection = projectRequestTx(db, reqId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
+  if (before === null || projectionSignature(projection) !== before) markRequestInputTx(db, reqId);
+  return projection;
+}
+
+/** 本批写入前的投影签名；请求还不存在时返回 null。 */
+function projectionBaselineTx(db: Database, reqId: number): string | null {
+  const exists = db.query('SELECT 1 AS hit FROM request WHERE req_id=?').get(reqId);
+  if (exists === null) return null;
+  return projectionSignature(readProjectionTx(db, reqId, SOURCE_PROJECTION_VERSION));
 }
 
 /**
@@ -184,6 +204,7 @@ function applyLedgerOwnershipTx(
   now: number,
 ): void {
   const current = currentRequest(db, reqId);
+  const beforeGroup = requestGroupTx(db, reqId);
   const identity = projection.identity;
   const session = identity.state === 'complete' ? identity.session : null;
   const subagent = identity.state === 'complete' ? identity.subagent : null;
@@ -219,12 +240,8 @@ function applyLedgerOwnershipTx(
   );
   // 身份确认后，这一组要重算前驱、增量与标题；未知归属不入队。
   // 用本笔实际的 conv_key/actor 而不是局部变量：合并时 conv 可能来自既有行。
-  const settled = db.query<{ conv_key: string | null; actor: string | null; actor_state: string }, [number]>(
-    'SELECT conv_key, actor, actor_state FROM request WHERE req_id=?',
-  ).get(reqId);
-  if (settled?.conv_key != null && settled.actor !== null && settled.actor_state === 'known') {
-    enqueueDeriveTx(db, settled.conv_key, settled.actor, '');
-  }
+  // 归属发生迁移时旧组也少了一个成员，两边都得重算。
+  markOwnershipChangeTx(db, reqId, beforeGroup);
 }
 
 function attachRouteEvidenceTx(db: Database, reqId: number, routeId: number, now: number): void {
@@ -271,13 +288,28 @@ function applyRouteOwnershipTx(db: Database, reqId: number, route: RouteFields, 
   );
 }
 
-function applyRouteToRequest(db: Database, reqId: number, route: RouteFields, now: number): void {
+function applyRouteToRequest(
+  db: Database,
+  reqId: number,
+  route: RouteFields,
+  now: number,
+  baseline: string | null = projectionBaselineTx(db, reqId),
+): void {
+  const beforeGroup = requestGroupTx(db, reqId);
   attachRouteEvidenceTx(db, reqId, route.routeId, now);
   applyRouteOwnershipTx(db, reqId, route, now);
-  projectLedgerRequestTx(db, reqId, now);
+  // 归属可能由 request/conv 升到 session：旧组要重算，新组要收进这一笔。
+  markOwnershipChangeTx(db, reqId, beforeGroup);
+  projectLedgerRequestTx(db, reqId, now, baseline);
 }
 
-function linkRouteIfPresent(db: Database, reqId: number, routeId: number, now: number): void {
+function linkRouteIfPresent(
+  db: Database,
+  reqId: number,
+  routeId: number,
+  now: number,
+  baseline: string | null,
+): void {
   const raw = db.query<{ payload_json: string }, [number]>(
     'SELECT payload_json FROM raw_route WHERE route_id=?',
   ).get(routeId);
@@ -286,7 +318,7 @@ function linkRouteIfPresent(db: Database, reqId: number, routeId: number, now: n
     const parsed = JSON.parse(raw.payload_json) as unknown;
     if (!isRecord(parsed)) return;
     const route = mapRouteRow(parsed);
-    if (route !== null) applyRouteToRequest(db, reqId, route, now);
+    if (route !== null) applyRouteToRequest(db, reqId, route, now, baseline);
   } catch {
     // A malformed raw route stays available for later repair; ledger fields are already applied.
   }
@@ -310,13 +342,15 @@ function mergeLedgerRow(
   if (reqId === null) {
     reqId = insertRequest(db, fields, refKey, now);
   }
+  // 基线必须在本次证据写入之前取：写完再读只会读到已含新证据的结果。
+  const baseline = projectionBaselineTx(db, reqId);
   db.run(
     'INSERT OR IGNORE INTO request_evidence(req_id,source_kind,ref_key,merge_state,match_rule,added_at) VALUES (?,?,?,?,?,?)',
     [reqId, 'ledger', refKey, 'merged', null, now],
   );
-  if (!rejected && fields.routeId !== null) linkRouteIfPresent(db, reqId, fields.routeId, now);
+  if (!rejected && fields.routeId !== null) linkRouteIfPresent(db, reqId, fields.routeId, now, baseline);
   // 行级事实只由投影写；投影幂等，route 挂载前后各调一次不改变结果。
-  const projection = projectLedgerRequestTx(db, reqId, now);
+  const projection = projectLedgerRequestTx(db, reqId, now, baseline);
   applyLedgerOwnershipTx(db, reqId, fields, projection, now);
 }
 
@@ -463,12 +497,14 @@ export function ingestRoute(store: Store, records: unknown[], now: number, salt:
       }
       if (seen.has(route.routeId)) continue;
       seen.add(route.routeId);
-      upsertPreparedRouteTx(db, route, JSON.stringify(redacted));
-      saveRouteSummary(db, route, now);
       const existing = db.query<{ req_id: number }, [number]>(
         "SELECT req_id FROM request WHERE route_id=? AND via!='rejected' ORDER BY req_id LIMIT 1",
       ).get(route.routeId);
-      if (existing != null) applyRouteToRequest(db, existing.req_id, route, now);
+      // 基线要在写入 raw 行之前取：投影读的是 raw payload，写完之后再读就永远相同。
+      const baseline = existing === null ? null : projectionBaselineTx(db, existing.req_id);
+      upsertPreparedRouteTx(db, route, JSON.stringify(redacted));
+      saveRouteSummary(db, route, now);
+      if (existing != null) applyRouteToRequest(db, existing.req_id, route, now, baseline);
     }
   });
 }

@@ -1,4 +1,5 @@
 import { Database } from 'bun:sqlite';
+import { randomUUID } from 'node:crypto';
 import {
   chmodSync, closeSync, existsSync, openSync, readFileSync, statfsSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
@@ -6,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { openStore } from './store';
 import type { Store } from './store';
 import { drainDerive, rebuildDerived } from './derive';
+import { markGroupDirtyTx } from './derive-state';
 
 /**
  * 离线维护。这些命令都要求在 collector 停止后运行：
@@ -137,7 +139,8 @@ export function verifyDatabase(path: string): VerifyReport {
       SELECT COUNT(*) AS n FROM (
         SELECT source_kind, ref_key FROM request_evidence GROUP BY source_kind, ref_key HAVING COUNT(*) > 1
       )`).get();
-    const pending = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM derive_queue').get();
+    // clean 行是完成记录，不是积压。
+    const pending = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'").get();
     return {
       integrity,
       dangling_blocks: dangling?.n ?? 0,
@@ -311,6 +314,11 @@ export function purgeMetadata(store: Store, beforeDay: string, approvalId: strin
       [now, targets?.first_day ?? null, targets?.last_day ?? null, count, approvalId],
     );
     // 3) 其他引用先清掉，再删别名与请求。
+    //    删行前先记下受影响的组：这些请求消失后，同组剩下的成员要重算链与增量。
+    const affected = db.query<{ conv_key: string; actor: string }, []>(`
+      SELECT DISTINCT conv_key, actor FROM request
+      WHERE req_id IN (SELECT req_id FROM purge_requests)
+        AND conv_key IS NOT NULL AND actor IS NOT NULL AND actor_state='known'`).all();
     db.run('DELETE FROM tool_call WHERE req_id IN (SELECT req_id FROM purge_requests)');
     db.run('DELETE FROM tool_call WHERE result_req IN (SELECT req_id FROM purge_requests)');
     db.run('DELETE FROM request_block WHERE req_id IN (SELECT req_id FROM purge_requests)');
@@ -328,6 +336,25 @@ export function purgeMetadata(store: Store, beforeDay: string, approvalId: strin
                 AND NOT EXISTS (SELECT 1 FROM raw_ledger l WHERE l.route_id=route_summary.route_id))`);
     db.run('DELETE FROM purge_requests');
     db.run('DELETE FROM purge_routes');
+    // 5) 被删请求所在的组少成员，链与增量要重算；已经空掉的组没有产物可算，直接完成。
+    for (const group of affected) {
+      const remaining = db.query<{ n: number }, [string, string]>(
+        `SELECT COUNT(*) AS n FROM request
+         WHERE conv_key=? AND actor=? AND actor_state='known'`).get(group.conv_key, group.actor)?.n ?? 0;
+      if (remaining === 0) {
+        // 空组同步成 clean：保留完成记录，不把它算成积压。
+        db.run(
+          `INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,input_revision,
+             published_revision,target_algorithm,state,dirty_since_ms)
+           VALUES (?,?,'',?,0,0,1,'clean',NULL)
+           ON CONFLICT(conv_key,actor) DO UPDATE SET state='clean',dirty_since_ms=NULL,
+             published_revision=input_revision,published_algorithm=target_algorithm`,
+          [group.conv_key, group.actor, randomUUID()],
+        );
+      } else {
+        markGroupDirtyTx(db, group.conv_key, group.actor, '');
+      }
+    }
     return { deleted: count, event_id: Number(event.lastInsertRowid) };
   });
 }

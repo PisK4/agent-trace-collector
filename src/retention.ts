@@ -2,6 +2,8 @@ import { readdirSync, statfsSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
+import { markRequestInputTx } from './derive-state';
+import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
 
 /**
  * 容量与保留。
@@ -311,6 +313,10 @@ export function evictOldestBodyBatch(store: Store, now: number, limit = EVICT_BA
       [now, now],
     ).changes;
 
+    // 正文删掉的同一事务里推进修订：引用没了，序列指纹就不可比，
+    // 派生结论必须重算而不是继续沿用删除前的结果。
+    for (const row of candidates.slice(0, requests)) markRequestInputTx(db, row.req_id);
+
     db.run('DELETE FROM evict_requests');
     db.run('DELETE FROM evict_blocks');
     return { requests: evicted, blocks: deletedBlocks, releasedLogicalBytes: blockBytes + skeletonBytes, day };
@@ -332,9 +338,20 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
     const expire = db.prepare(
       "UPDATE request_evidence SET payload_state='expired' WHERE source_kind=? AND ref_key=?",
     );
+    // 证据过期会改变投影完整度（current 变 false、reason 换成 expired），
+    // 这里与删原文同一事务重算投影：读模型不会看到"raw 已删但还标 current"的中间态。
+    // 长期 kind 集合不因 raw 缺失而撤销——那是长期事实，不是本次证据缺失。
+    const ownersOf = db.prepare(
+      'SELECT req_id FROM request_evidence WHERE source_kind=? AND ref_key=?',
+    );
+    const expiredOwners = new Set<number>();
+    const expireEvidence = (kind: string, refKey: string): void => {
+      for (const row of ownersOf.all(kind, refKey) as { req_id: number }[]) expiredOwners.add(row.req_id);
+      expire.run(kind, refKey);
+    };
     for (const row of ledgerRows) {
       deleteLedger.run(row.source_kind, row.file_generation, row.byte_offset);
-      expire.run('ledger', JSON.stringify(['file', row.file_generation, row.byte_offset]));
+      expireEvidence('ledger', JSON.stringify(['file', row.file_generation, row.byte_offset]));
     }
 
     // route 只删已经落到 route_summary 或根本没被请求引用的行。
@@ -367,11 +384,16 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
         continue;
       }
       deleteHook.run(row.hook_id);
-      expire.run('hook', row.hook_id);
+      expireEvidence('hook', row.hook_id);
       hook += 1;
     }
     ledger = ledgerRows.length;
     route = routeRows.length;
+    // 过期证据的归属请求要重算：投影与派生输入都变了。
+    for (const reqId of expiredOwners) {
+      projectRequestTx(db, reqId, { now: beforeMs, mappingVersion: SOURCE_PROJECTION_VERSION });
+      markRequestInputTx(db, reqId);
+    }
     return { ledger, route, hook };
   });
 }

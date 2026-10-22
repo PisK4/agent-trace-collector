@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
+import { markGroupDirtyTx } from './derive-state';
 
 /** 从回复里取工具调用；两种协议结构都认。 */
 function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
@@ -279,11 +280,7 @@ export function enqueueDeriveTx(db: Database, convKey: string, actor: string, fr
     SELECT req_id FROM request
     WHERE conv_key=? AND actor=? AND actor_state='known' LIMIT 1`).get(convKey, actor);
   if (known == null) return;
-  db.run(
-    `INSERT INTO derive_queue(conv_key,actor,from_sort) VALUES (?,?,?)
-     ON CONFLICT(conv_key,actor) DO UPDATE SET from_sort=MIN(derive_queue.from_sort,excluded.from_sort)`,
-    [convKey, actor, fromSort],
-  );
+  markGroupDirtyTx(db, convKey, actor, fromSort);
 }
 
 /**
@@ -769,11 +766,12 @@ export function drainDerive(store: Store, limit = 100, scope?: DeriveScope): Dra
     throw new Error('invalid_derive_scope');
   }
   return store.write(db => {
+    const columns = 'conv_key,actor,group_epoch,input_revision,target_algorithm';
     const groups = scope === undefined
-      ? db.query<Group, [number]>(`SELECT conv_key,actor FROM derive_queue
-          ORDER BY conv_key,actor LIMIT ?`).all(limit)
-      : db.query<Group, [string, number]>(`SELECT conv_key,actor FROM derive_queue
-          WHERE conv_key=? ORDER BY actor LIMIT ?`).all(scope.convKey, limit);
+      ? db.query<QueuedGroup, [number]>(`SELECT ${columns} FROM derive_queue
+          WHERE state<>'clean' ORDER BY conv_key,actor LIMIT ?`).all(limit)
+      : db.query<QueuedGroup, [string, number]>(`SELECT ${columns} FROM derive_queue
+          WHERE conv_key=? AND state<>'clean' ORDER BY actor LIMIT ?`).all(scope.convKey, limit);
     const touched: Group[] = [];
     let processed = 0;
     let recomputed = 0;
@@ -852,13 +850,23 @@ export function drainDerive(store: Store, limit = 100, scope?: DeriveScope): Dra
       for (const input of presentations) {
         writePresentationTx(db, input, paired.associations);
       }
-      db.run('DELETE FROM derive_queue WHERE conv_key=? AND actor=?', [group.conv_key, group.actor]);
-      touched.push(group);
+      // 完成只在消费的修订仍是当前修订时才成立：同一事务里后到的输入变化
+      // 会抬高 input_revision，CAS 失败即整批回滚，旧完成记录不会覆盖新输入。
+      const changed = db.run(
+        `UPDATE derive_queue SET state='clean',dirty_since_ms=NULL,
+           published_revision=?,published_algorithm=?
+         WHERE conv_key=? AND actor=? AND group_epoch=? AND input_revision=? AND target_algorithm=?`,
+        [group.input_revision, group.target_algorithm, group.conv_key, group.actor,
+          group.group_epoch, group.input_revision, group.target_algorithm],
+      ).changes;
+      if (changed !== 1) throw new Error('derive_input_changed');
+      touched.push({ conv_key: group.conv_key, actor: group.actor });
     }
+    // clean 行是持久完成记录，不是积压。
     const remaining = scope === undefined
-      ? (db.query('SELECT COUNT(*) AS n FROM derive_queue').get() as { n: number }).n
+      ? (db.query(`SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'`).get() as { n: number }).n
       : db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM derive_queue
-          WHERE conv_key=?`).get(scope.convKey)!.n;
+          WHERE conv_key=? AND state<>'clean'`).get(scope.convKey)!.n;
     return { processed, remaining, groups: touched, recomputed, retained };
   });
 }
@@ -890,6 +898,11 @@ function bodyInTx(db: Database, reqId: number): TxBody {
 }
 
 type Group = { conv_key: string; actor: string };
+
+/** 取组时一并读出的完成身份；ack 用它与当前行比对，防止覆盖后到的输入变化。 */
+type QueuedGroup = Group & {
+  group_epoch: string; input_revision: number; target_algorithm: number;
+};
 
 /** 工具配对消费的行：链阶段刚写下的关系与顺序。 */
 export type PairRow = LogicalRow & {
@@ -1103,11 +1116,7 @@ export function rebuildDerived(store: Store, convKey: string): RebuildReport {
           bump(hasRawEvidence(db, row.req_id) ? 'body_evicted_raw_present' : 'body_evicted_raw_expired');
         }
       }
-      db.run(
-        `INSERT INTO derive_queue(conv_key,actor,from_sort) VALUES (?,?,?)
-         ON CONFLICT(conv_key,actor) DO UPDATE SET from_sort=''`,
-        [convKey, actor, ''],
-      );
+      markGroupDirtyTx(db, convKey, actor, '');
     }
     return { queued: actors.length, unavailable, reasons };
   });
