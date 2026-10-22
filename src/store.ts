@@ -1,9 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { conservationDigest } from './conservation';
-import { readMigrationState } from './migrate-v5';
-import type { MigrationState } from './migrate-v5';
 
 export type Store = {
   db: Database;
@@ -26,9 +23,7 @@ function pragmaNumber(db: Database, name: string): number {
   return row === null ? Number.NaN : Number(Object.values(row)[0]);
 }
 
-export type OpenOptions = { allowIncompleteMigration?: boolean };
-
-function migrate(db: Database, options: OpenOptions): void {
+function migrate(db: Database): void {
   const version = pragmaNumber(db, 'user_version');
   const tables = tableNames(db);
   if (version === 0 && tables.length === 0) {
@@ -36,29 +31,15 @@ function migrate(db: Database, options: OpenOptions): void {
     db.exec('PRAGMA journal_mode=WAL');
     db.transaction(() => {
       db.exec(SCHEMA);
-      // 新库直接是完整的 v5：标记与建表同事务，不存在"结构有、标记无"的中间态。
-      const state: MigrationState = {
-        format: 1, target: 5, phase: 'complete', cursor: null, scope: 'all', complete: true,
-        baseline: conservationDigest(db),
-        report: { scanned: 0, remapped: 0, projected: 0 },
-      };
-      db.run("INSERT INTO collector_state(key,value_json) VALUES ('migration:v5',?)",
-        [JSON.stringify(state)]);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
     return;
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
-  // 低版本没有原地升级路径：普通启动不做 ALTER，也不假装列已经补上。
-  // v4→v5 只能由显式迁移脚本执行，未完成时拒绝启动。
+  // 低版本没有升级路径：普通启动不做 ALTER。旧库由运维显式删除后重建，
+  // 这条拒绝是唯一的处理方式，不提供半迁移状态。
   if (version < SCHEMA_VERSION) throw new Error('schema_rebuild_required');
-  // v5 之后结构存在不等于迁移完成：普通启动只认 complete=true，
-  // 未完成的库必须由显式迁移续跑，否则在线写入会往半迁移数据上追加事实。
-  const state = readMigrationState(db);
-  if (!state.complete && options.allowIncompleteMigration !== true) {
-    throw new Error('migration_incomplete');
-  }
   const requestSql = db.query(
     "SELECT sql FROM sqlite_master WHERE type='table' AND name='request'",
   ).get() as { sql: string } | null;
@@ -68,7 +49,7 @@ function migrate(db: Database, options: OpenOptions): void {
   if (pragmaNumber(db, 'auto_vacuum') !== 2) throw new Error('auto_vacuum_requires_migration');
 }
 
-export function openStore(path: string, options: OpenOptions = {}): Store {
+export function openStore(path: string): Store {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
@@ -85,9 +66,9 @@ export function openStore(path: string, options: OpenOptions = {}): Store {
   }
 
   try {
-    migrate(db, options);
+    migrate(db);
   } catch (error) {
-    // 迁移或标记校验失败时关闭写连接，否则调用方重试会撞上一个已打开的库。
+    // 版本校验失败时关闭写连接，否则调用方重试会撞上一个已打开的库。
     db.close();
     throw error;
   }

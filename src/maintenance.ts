@@ -454,16 +454,12 @@ export function backupBundle(sourceDir: string, destinationDir: string): void {
  * 从 bundle 恢复到新目录。目标已存在就拒绝，任何一步校验不过都不留下半套目录。
  *
  * 校验顺序：目录内容与权限 → 清单格式与版本 → 盐标识 → 数据库哈希 → 复制到 staging
- * → 再校验哈希与完整性 → 包内库自身的版本、盐绑定与迁移完成标记 → 发布。
+ * → 再校验哈希与完整性 → 包内库自身的版本与盐绑定 → 发布。
  * 清单是自述，包内数据库是事实；两者对不上就不发布。
  *
  * 认证令牌不随包走：恢复后的库要在新目录里按显式重配流程生成 `read.token` 与 `hook.token`。
  */
-export function restoreBundle(
-  bundleDir: string,
-  destinationDir: string,
-  options: { allowIncompleteMigration?: boolean } = {},
-): void {
+export function restoreBundle(bundleDir: string, destinationDir: string): void {
   if (existsSync(destinationDir)) throw new Error('destination_exists');
   requirePrivateDirectory(bundleDir);
   requirePrivateDirectory(dirname(destinationDir));
@@ -528,23 +524,6 @@ export function restoreBundle(
       const bundled = bundledRow?.user_version ?? 0;
       // 清单不能只靠自述：包内数据库自身的版本必须与清单一致。
       if (bundled !== manifest.schema) throw new Error('restore_bundle_invalid');
-      const marker = snapshot.query<{ value_json: string }, [string]>(
-        'SELECT value_json FROM collector_state WHERE key=?').get(`migration:v${bundled}`);
-      let saved: unknown;
-      try {
-        saved = marker === null ? null : JSON.parse(marker.value_json);
-      } catch {
-        throw new Error('restore_bundle_invalid');
-      }
-      if (saved === null || typeof saved !== 'object' || Array.isArray(saved)
-        || typeof (saved as { complete?: unknown }).complete !== 'boolean') {
-        throw new Error('restore_bundle_invalid');
-      }
-      // 半迁移的库恢复出来也打不开：除非调用方明确要留着它续跑迁移，否则不接受。
-      if ((saved as { complete: boolean }).complete !== true
-        && options.allowIncompleteMigration !== true) {
-        throw new Error('restore_migration_incomplete');
-      }
     } finally {
       snapshot.close();
     }
@@ -701,7 +680,7 @@ const USAGE = `usage:
   maintain verify --db <path>
   maintain backup --db <path> --out <new-path>
   maintain bundle --dir <dataDir> --out <new-dir>
-  maintain restore --bundle <bundleDir> --out <new-dir> [--allow-incomplete-migration]
+  maintain restore --bundle <bundleDir> --out <new-dir>
   maintain rebuild --db <path> --session <conv_key>
   maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --approval-id <id>]
 `;
@@ -732,9 +711,7 @@ export async function runMaintenance(argv: string[], io: {
         backupBundle(source, destination);
         out(JSON.stringify({ ok: true, bundle: destination }));
       } else {
-        restoreBundle(source, destination, {
-          allowIncompleteMigration: flags.get('allow-incomplete-migration') === true,
-        });
+        restoreBundle(source, destination);
         out(JSON.stringify({ ok: true, restored: destination }));
       }
       return 0;

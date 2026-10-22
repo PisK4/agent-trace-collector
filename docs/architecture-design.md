@@ -417,17 +417,17 @@ hook 的 `model` 与 `success` 只作为独立报告保留在 `raw_hook`：前�
 
 SQLite，WAL，单文件，放仓库外。默认路径 `~/Library/Application Support/agent-trace-collector/trace.db`，可用环境变量或配置改。
 
-### 版本与显式迁移
+### 版本与破坏式替换
 
-当前结构版本是 v5。普通 `openStore` 从不做 `ALTER`：空库直接建到 v5；低版本报 `schema_rebuild_required`；高版本报 `schema_version_unsupported`；v5 结构存在但迁移标记未完成时，除非显式传 `allowIncompleteMigration`，否则报 `migration_incomplete`。
+当前结构版本是 v5。普通 `openStore` 从不做 `ALTER`：空库直接建到 v5；低版本报 `schema_rebuild_required`；高版本报 `schema_version_unsupported`。
 
-v4→v5 只能由显式迁移执行，结构与标记在同一个事务里落地，中途失败不留半套列。标记存在 `collector_state['migration:v5']`，记录格式、目标版本、阶段、游标、是否完成、守恒摘要与累计扫描计数。新库在建表事务内直接写入 `complete=true` 的标记。
+首版发布前不提供跨结构升级。旧库的处理是停采集器、把数据目录整体移走或删除，让新版本建新库；旧库里的正文与派生结果一起丢弃。因此不存在"结构已升级、数据未迁移"的中间态，也没有完成标记或续跑入口。
 
 ### 脱敏盐绑定与可恢复快照
 
 脱敏盐是数据目录里的 `redaction.salt`（32 字节，0600），不写进数据库。库与盐是否配对记在 `collector_state['privacy:salt']`：`{format:1, id, confirmedLegacy}`，`id` 是 `sha256('atc-redaction-salt-v1\0' + salt)`，不含盐明文。有请求却没有绑定、绑定与盐不符或盐文件缺失，都拒绝启动，不生成新盐；换盐会让库里已写入的占位符再也解释不了。旧库有盐无绑定时只有显式确认才绑定，并如实记下 `confirmedLegacy`——确认只说明"从今往后用这一份盐"，不能证明历史占位符的血统。
 
-可恢复快照是 bundle，不是裸数据库：`trace.db`、`redaction.salt` 与 `manifest.json` 三件，清单记 `{format:1, schema, salt_id, database_sha256}`。可接受的结构版本只有一份导出常量 `RESTORABLE_SCHEMA_VERSIONS`，备份与恢复都查它；恢复还要求包内数据库自身的 `user_version` 与清单相等、迁移标记 `complete=true`。发布用同父目录的 0700 staging 加 `rename`，目标已存在就拒绝，不覆盖任何已有目录。认证令牌不随包走，恢复后按首次启动规则重新生成。
+可恢复快照是 bundle，不是裸数据库：`trace.db`、`redaction.salt` 与 `manifest.json` 三件，清单记 `{format:1, schema, salt_id, database_sha256}`。可接受的结构版本只有一份导出常量 `RESTORABLE_SCHEMA_VERSIONS`，备份与恢复都查它；恢复还要求包内数据库自身的 `user_version` 与清单相等。发布用同父目录的 0700 staging 加 `rename`，目标已存在就拒绝，不覆盖任何已有目录。认证令牌不随包走，恢复后按首次启动规则重新生成。
 
 ### 原始层
 
