@@ -14,7 +14,7 @@
 | `redaction.salt` | 脱敏用的本地盐；与库里的绑定标识配对，不能单独替换 |
 | `maintenance.lock` | 维护命令的独占锁，只在维护期间存在 |
 
-`redaction.salt` 与库必须配对。库里的 `collector_state['privacy:salt']` 记这份盐的标识（加域前缀的 SHA-256，不含盐明文）；有数据却没有绑定、盘上没有盐文件、或盐与标识不符时，采集器拒绝启动，分别报 `redaction_salt_unbound`、`redaction_salt_missing`、`redaction_salt_mismatch`。启动路径不会顺手生成新盐：换盐会让库里已有的占位符再也解释不了。旧库只有盐文件没有绑定，需要显式确认后由迁移命令绑定；确认只能证明"从今往后用这一份盐"，不能证明历史占位符当时也是用它算的。
+`redaction.salt` 与库必须配对。库里的 `collector_state['privacy:salt']` 记这份盐的标识（加域前缀的 SHA-256，不含盐明文）；有数据却没有绑定、盘上没有盐文件、或盐与标识不符时，采集器拒绝启动，分别报 `redaction_salt_unbound`、`redaction_salt_missing`、`redaction_salt_mismatch`。启动路径不会顺手生成新盐：换盐会让库里已有的占位符再也解释不了。有盐文件却没有绑定同样拒绝启动（`redaction_salt_unbound`）：无法证明历史占位符是这份盐算的，也没有确认绕过的入口，旧库删除后重建。
 
 停服务：`SIGTERM` 或 `SIGINT`。收到信号后先清定时器、停 HTTP 服务、再关库；`SIGKILL` 不会走这套流程，库本身仍然一致（WAL + `synchronous=NORMAL`），只是 WAL 里可能留着未回放的已提交页，下次打开自动回放。
 
