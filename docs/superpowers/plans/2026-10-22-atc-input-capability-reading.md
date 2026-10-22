@@ -998,6 +998,7 @@ export function extractTools(protocol: string, request: unknown): CapabilityResu
   const list = Array.isArray(request.tools) ? request.tools
     : Array.isArray(request.functions) ? request.functions : null;
   if (list === null) return { state: 'unrecognized', items: [], reason: 'tools_not_array' };
+  if (list.length === 0) return { state: 'empty', items: [], reason: 'no_tools_declared' };
   const items: ToolCapability[] = [];
   for (const entry of list) {
     if (!isRecord(entry)) continue;
