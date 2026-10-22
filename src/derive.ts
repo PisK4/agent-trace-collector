@@ -2,7 +2,8 @@ import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
-import { GROUP_ALGORITHM, markGroupDirtyTx, markRequestGroupsTx } from './derive-state';
+import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
+import { drainRequestPurposesTx } from './request-purpose';
 
 /** 从回复里取工具调用；两种协议结构都认。 */
 function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
@@ -755,14 +756,6 @@ function assignChainRoles(db: Database, convKey: string, actor: string): void {
 /** 离线维护只处理目标会话，不消费其它会话的任务。 */
 export type DeriveScope = { convKey: string };
 
-/**
- * 兼容用途判定的版本。
- *
- * C 只把现有 title/chat 行为固化成可重放的结论：它不新增分类器，也不解释
- * 新的用途类别。D 会把这个版本整体替换成版本 2 的实现，两者不能同时运行。
- */
-export const LEGACY_PURPOSE_VERSION = 1;
-
 export type DrainResult = {
   processed: number;
   /** 当前 scope 内未完成组；省略 scope 时是全队列。 */
@@ -778,67 +771,6 @@ export type DrainResult = {
   /** 当前 scope 内仍待判定用途的请求数；未完成时组不能被宣布为最新。 */
   purpose_remaining: number;
 };
-
-type LegacyPurposeRow = {
-  req_id: number; conv_key: string | null; actor: string | null; input_revision: number;
-  purpose_version: number | null; purpose_chain: string; req_kind: string; model_title: string | null;
-};
-
-/**
- * 请求用途阶段：在同一事务里、组阶段之前完成。
- *
- * 用途与组是两个粒度：请求的用途只依赖它自己的输入，组的结果依赖全部成员的
- * 用途与关系。先定用途，组才有稳定的输入；因此这里不标"请求输入变化"，
- * 只在用途、链归属或正式标题真的变了时标所属组。
- *
- * 正文不可读时：有旧版本就保留原值并标 retained，从未判定过则标 missing。
- * 未知归属的请求同样要完成用途——它不是组的一部分，但它自己的用途是有效事实。
- */
-function drainLegacyPurposeTx(
-  db: Database,
-  limit: number,
-  scope?: DeriveScope,
-): { processed: number; remaining: number } {
-  const rows = scope === undefined
-    ? db.query<LegacyPurposeRow, [number]>(`
-        SELECT req_id, conv_key, actor, input_revision, purpose_version, purpose_chain,
-               req_kind, model_title
-        FROM request WHERE purpose_pending=1 ORDER BY req_id LIMIT ?`).all(limit)
-    : db.query<LegacyPurposeRow, [string, number]>(`
-        SELECT req_id, conv_key, actor, input_revision, purpose_version, purpose_chain,
-               req_kind, model_title
-        FROM request WHERE purpose_pending=1 AND conv_key=? ORDER BY req_id LIMIT ?`)
-      .all(scope.convKey, limit);
-  for (const row of rows) {
-    const readable = fingerprintsOf(db, row.req_id) !== null;
-    const reply = readable ? replyInfoOf(db, row.req_id) : null;
-    const retained = !readable && row.purpose_version !== null;
-    const isTitle = readable && (reply?.modelTitle !== null || row.req_kind === 'title');
-    const status = readable ? (isTitle ? 'recognized' : 'unrecognized') : (retained ? 'retained' : 'missing');
-    // 版本只在真的重新解释时更新；保留行仍是它当时的版本。
-    const version = readable ? LEGACY_PURPOSE_VERSION : row.purpose_version;
-    const kind = readable ? (isTitle ? 'title' : 'chat') : row.req_kind;
-    const chain = readable ? (isTitle ? 'exclude' : 'participate') : row.purpose_chain;
-    const modelTitle = readable ? (reply?.modelTitle ?? (isTitle ? row.model_title : null)) : row.model_title;
-    db.run(
-      `UPDATE request SET purpose_pending=0, purpose_retry=0, purpose_revision=input_revision,
-         purpose_status=?, purpose_version=?, purpose_rule=?, purpose_chain=?, req_kind=?, model_title=?
-       WHERE req_id=?`,
-      [
-        status, version, readable ? (isTitle ? 'legacy.title' : 'legacy.default') : null,
-        chain, kind, modelTitle, row.req_id,
-      ],
-    );
-    if (chain !== row.purpose_chain || kind !== row.req_kind || modelTitle !== row.model_title) {
-      markRequestGroupsTx(db, row.req_id);
-    }
-  }
-  const remaining = scope === undefined
-    ? (db.query('SELECT COUNT(*) AS n FROM request WHERE purpose_pending=1').get() as { n: number }).n
-    : db.query<{ n: number }, [string]>(
-      'SELECT COUNT(*) AS n FROM request WHERE purpose_pending=1 AND conv_key=?').get(scope.convKey)!.n;
-  return { processed: rows.length, remaining };
-}
 
 export type DrainOptions = { limit: number; scope?: DeriveScope; purposeLimit?: number };
 
@@ -860,14 +792,15 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
   }
   // 先完成请求用途：组阶段只消费已经定下来的用途，不在组里再识别一次。
   //
-  // 分批推进直到这一轮没有待判定请求为止：组的完成条件就是"组内没有 pending"，
-  // 只判一批会让大组永远等不到完成。`purposeLimit` 是每批大小，不是总量上限；
-  // 没有进展（剩下的都读不出来）才停。
+  // `limit` 按组计数，而组的完成条件是"组内没有 pending"：本次要处理的组里
+  // 所有成员都必须先结算，否则一个大组会被切到多轮、迟迟不能发布。
+  // `purposeLimit` 是每批大小，不是总量上限；每次都会推进，错误重试到顶后
+  // 该行以 error 终态出列，所以循环会结束。
   const purposeLimit = options.purposeLimit ?? 100;
   let purposeProcessed = 0;
   let purposeRemaining = 0;
   for (;;) {
-    const batch = drainLegacyPurposeTx(db, purposeLimit, scope);
+    const batch = drainRequestPurposesTx(db, purposeLimit, scope);
     purposeProcessed += batch.processed;
     purposeRemaining = batch.remaining;
     if (batch.remaining === 0 || batch.processed === 0) break;
