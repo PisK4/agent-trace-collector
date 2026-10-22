@@ -11,21 +11,29 @@
 | `trace.db` | 主库，WAL 模式，`auto_vacuum=INCREMENTAL` |
 | `read.token` | 页面读取令牌，首次启动生成 |
 | `hook.token` | 插件投递令牌，首次启动生成；插件只拿这一个 |
-| `redaction.salt` | 脱敏用的本地盐 |
+| `redaction.salt` | 脱敏用的本地盐；与库里的绑定标识配对，不能单独替换 |
 | `maintenance.lock` | 维护命令的独占锁，只在维护期间存在 |
+
+`redaction.salt` 与库必须配对。库里的 `collector_state['privacy:salt']` 记这份盐的标识（加域前缀的 SHA-256，不含盐明文）；有数据却没有绑定、盘上没有盐文件、或盐与标识不符时，采集器拒绝启动，分别报 `redaction_salt_unbound`、`redaction_salt_missing`、`redaction_salt_mismatch`。启动路径不会顺手生成新盐：换盐会让库里已有的占位符再也解释不了。旧库只有盐文件没有绑定，需要显式确认后由迁移命令绑定；确认只能证明"从今往后用这一份盐"，不能证明历史占位符当时也是用它算的。
 
 停服务：`SIGTERM` 或 `SIGINT`。收到信号后先清定时器、停 HTTP 服务、再关库；`SIGKILL` 不会走这套流程，库本身仍然一致（WAL + `synchronous=NORMAL`），只是 WAL 里可能留着未回放的已提交页，下次打开自动回放。
 
 ## 维护命令
 
-四条命令都在 `src/maintenance.ts`，通过 `bun run maintain` 调用。退出码：`0` 成功，`1` 失败，`2` 用法错误。失败时 stderr 写 `<命令>_failed:<原因码>`。
+这些命令都在 `src/maintenance.ts`，通过 `bun run maintain` 调用。退出码：`0` 成功，`1` 失败，`2` 用法错误。失败时 stderr 写 `<命令>_failed:<原因码>`。
 
 ```bash
 # 只读校验：完整性与三类容易悄悄积累的结构问题
 bun run maintain verify --db '<dataDir>/trace.db'
 
-# 离线备份到不存在的目标
+# 离线备份到不存在的目标（只含数据库，不能恢复占位符连续性）
 bun run maintain backup --db '<dataDir>/trace.db' --out '<新路径>/backup-2026-10-21.db'
+
+# 可恢复快照：数据库、脱敏盐与清单一起发布到不存在的目录
+bun run maintain bundle --dir '<dataDir>' --out '<新路径>/bundle-2026-10-21'
+
+# 从 bundle 恢复到新目录，绝不覆盖已有目录
+bun run maintain restore --bundle '<新路径>/bundle-2026-10-21' --out '<新路径>/restored'
 
 # 整链重排某个会话的派生结果
 bun run maintain rebuild --db '<dataDir>/trace.db' --session '<conv_key>'
@@ -69,6 +77,52 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 
 不要用 `cp` 拷裸数据库：WAL 里已提交但还没回放的页会丢。
 
+### bundle
+
+`backup` 只含数据库，不含脱敏盐，恢复后解释不了已有占位符。要能恢复采集连续性，用 `bundle`：源数据目录必须已停、权限 0700，目标目录必须不存在，且它与目标的父目录都得是 0700。
+
+一个包恰好三样东西，权限都是 0600：
+
+| 文件 | 内容 |
+| --- | --- |
+| `trace.db` | `VACUUM INTO` 生成的一致快照 |
+| `redaction.salt` | 与库绑定的那份盐 |
+| `manifest.json` | `format`、`schema`、`salt_id`、`database_sha256` |
+
+顺序是：取维护锁 → 目录权限 → 空间余量（源库 1.1 倍 + 4 KiB）→ 同父目录建 0700 staging → 独占探测与 `VACUUM INTO` → **在独占连接仍然打开时**读盐并核对 `collector_state['privacy:salt']` → 写盐与清单 → 完整性校验 → `rename` 整个 staging 到目标。盐在释放独占约束之后才读的话，中间可能已被替换。
+
+源库的绑定与盘上的盐不符报 `redaction_salt_mismatch`，盐文件缺失报 `redaction_salt_missing`（不会顺手生成新盐），结构版本不在 `RESTORABLE_SCHEMA_VERSIONS` 里报 `backup_schema_unsupported`。失败时只清理本次创建的 staging，目标不会留下半套目录。
+
+### restore
+
+`restore` 只认清单里的三个文件，多一个少一个都报 `restore_bundle_invalid`。校验顺序：
+
+1. bundle 目录与三个文件都是 0600 / 0700、不是符号链接。
+2. 清单可解析，`format=1`，`schema` 在白名单里，`salt_id` 与包内盐一致，`database_sha256` 与包内库一致。
+3. 复制到目标父目录下的 0700 staging，再校验一次哈希与 `integrity_check`。
+4. 以只读连接查包内数据库自身：盐绑定一致、`PRAGMA user_version` 与清单相等、`collector_state['migration:v<版本>'].complete` 存在且为 `true`。
+5. `mkdir` 原子保留目标名后再 `rename`；目标已存在报 `destination_exists`。
+
+半迁移的包默认报 `restore_migration_incomplete`；只有明确要留作续跑迁移时才加 `--allow-incomplete-migration`，恢复出来的库普通启动仍会被 `migration_incomplete` 拒绝。
+
+恢复不包含 `read.token` 与 `hook.token`。启动时这两个文件按首次启动规则重新生成，插件要拿新的 hook 令牌重新注册——恢复盐连续性不等于恢复认证身份。
+
+常见错误码：
+
+| 错误 | 原因 | 处理 |
+| --- | --- | --- |
+| `source_must_be_stopped` | 采集器或别的进程还开着源库 | 停服务后重试 |
+| `maintenance_lock_held` | 另一个维护进程持有锁 | 等它结束，别删锁文件 |
+| `directory_permissions` | 源、目标父目录或 bundle 目录不是 0700 / 属主不符 | 收紧目录权限后重试 |
+| `destination_exists` | 目标目录已存在 | 换一个新目录；不覆盖是刻意的 |
+| `redaction_salt_missing` | 源目录没有盐文件 | 先在原目录恢复盐，或从可用的 bundle 恢复 |
+| `redaction_salt_mismatch` | 库里的绑定与盐不是一对 | 不要继续；先查清哪份盐才对 |
+| `redaction_salt_binding_invalid` | 绑定记录损坏 | 不要按缺失重建；先确认原盐 |
+| `backup_schema_unsupported` | 库结构版本不在可恢复白名单 | 用对应版本的代码先迁移，再备份 |
+| `restore_bundle_invalid` | 清单、哈希、版本或内容集合对不上 | 包已损坏或被改过，换一份备份 |
+| `restore_migration_incomplete` | 包内迁移没走完 | 续跑迁移后再打包，或显式允许不完整恢复 |
+| `insufficient_space` | 目标目录余量不足 | 换目录或先腾空间 |
+
 ### rebuild
 
 整链重排一个会话的派生结果，只重算正文仍可读（`available` / `partial`）的请求。只排空目标会话的任务；其它会话的积压留给它自己的维护窗口。输出包含：
@@ -101,10 +155,11 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 
 1. 停服务。
 2. `verify` 当前库，确认问题不是磁盘或权限。
-3. `backup` 到一个新路径。
-4. 在新目录里打开备份：`verify` 通过、权限 0600、`collector_state` 里的探针值与备份时一致。
-5. 用 `ATC_DATA_DIR` 指向新目录启动，先让合成来源跑一遍分页、正文与路由。
-6. 确认无误后再停服务、切换配置。
+3. `bundle` 到数据目录外的一个新目录；只有数据库的 `backup` 不能恢复占位符连续性。
+4. `restore` 到另一个新目录，按 `restore` 的校验顺序确认清单、哈希、盐绑定与迁移标记都通过。
+5. 用 `ATC_DATA_DIR` 指向恢复目录启动：首次启动会重新生成 `read.token` 与 `hook.token`，插件要用新令牌重新注册。
+6. 先让合成来源跑一遍分页、正文与路由，确认占位符与备份前一致。
+7. 确认无误后再停服务、切换配置。
 
 游标可能落后于上游：重放按物理身份进行（文件代际 + 偏移），hook 的 best-effort 缺口仍然保留。**不要**把恢复库当成“补回了停机期间的正文”——停机期间没被投递的 hook 就是没投递，缺口表里会一直显示。
 

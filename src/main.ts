@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import type { Config } from './config';
-import { loadLocalSecret } from './config';
+import { loadBoundSalt, loadLocalSecret } from './config';
 import { openStore } from './store';
 import type { Store } from './store';
 import { readBatch, readRouteFiles } from './sources/files';
@@ -59,7 +59,15 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   if (heldLock !== null) throw new Error(`maintenance_lock_present:${heldLock}`);
   const dbPath = join(config.dataDir, 'trace.db');
   const store = openStore(dbPath);
-  const salt = loadLocalSecret(config.dataDir, 'redaction.salt');
+  // 盐与库必须配对：有数据却没有绑定、或盐文件与绑定不符时，采集器不能起来。
+  // 失败要在这里关掉库，否则调用方重试会撞上一个已打开的写连接。
+  let salt: Uint8Array;
+  try {
+    salt = loadBoundSalt(store, config.dataDir);
+  } catch (error) {
+    store.close();
+    throw error;
+  }
   const readToken = loadReadToken(config.dataDir);
   const hookToken = Buffer.from(loadLocalSecret(config.dataDir, 'hook.token')).toString('base64url');
   // 准入闸门在每个写入点共用：模式变了才落库，量测按 TTL 缓存。
