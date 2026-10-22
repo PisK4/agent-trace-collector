@@ -37,6 +37,69 @@ function messagesBody(count: number): BodyInput {
   };
 }
 
+test('正文页返回服务端消息解释且原文不变', async () => {
+  const f = fixture();
+  try {
+    seed(f.store, 1, {
+      protocol: 'anthropic',
+      request: {
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: '<system-reminder>x</system-reminder>\n真实输入' }] },
+          { role: 'user', content: [{ type: 'text', text: '第二条' }] },
+        ],
+      },
+      reply: { id: 'msg_1', content: [] },
+      redact_version: 1,
+    });
+    const page = await (await handlerFor(f)('/api/requests/1/body')).json() as Record<string, unknown>;
+    const interpretations = page.interpretations as { ord: number; input: { text: string } | null }[];
+    expect(interpretations.map(item => item.input?.text)).toEqual(['真实输入', '第二条']);
+    const messages = page.messages as { value: { content: { text: string }[] } }[];
+    expect(messages[0]?.value.content[0]?.text).toContain('<system-reminder>');
+    expect((page.coverage as { complete: boolean }).complete).toBe(true);
+  } finally {
+    f.close();
+  }
+});
+
+test('畸形包装保留原文并标未识别', async () => {
+  const f = fixture();
+  try {
+    seed(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: '<session>没有闭合' }] },
+      reply: { id: 'msg_1', content: [] },
+      redact_version: 1,
+    });
+    const page = await (await handlerFor(f)('/api/requests/1/body')).json() as Record<string, unknown>;
+    const interpretation = (page.interpretations as {
+      input: { state: string; text: string } | null; is_input: boolean;
+    }[])[0];
+    expect(interpretation?.input?.state).toBe('unrecognized');
+    expect(interpretation?.input?.text).toBe('<session>没有闭合');
+    expect(interpretation?.is_input).toBe(true);
+  } finally {
+    f.close();
+  }
+});
+
+test('回收正文返回空解释与不可用覆盖，不伪造空对话', async () => {
+  const f = fixture();
+  try {
+    seed(f.store, 1, messagesBody(2));
+    f.store.write(db => db.run(
+      "UPDATE request SET body_state='evicted', body_evict_reason='budget', skeleton_z=NULL WHERE req_id=1",
+    ));
+    const page = await (await handlerFor(f)('/api/requests/1/body')).json() as Record<string, unknown>;
+    expect(page.state).toBe('evicted');
+    expect(page.interpretations).toEqual([]);
+    expect((page.coverage as { complete: boolean; reason: string }).complete).toBe(false);
+    expect((page.coverage as { reason: string }).reason).toBe('body_unavailable');
+  } finally {
+    f.close();
+  }
+});
+
 test('正文首片带请求字段与回复，后续片只带消息', async () => {
   const f = fixture();
   try {
