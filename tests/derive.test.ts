@@ -149,6 +149,83 @@ function seedChain(store: ReturnType<typeof fixture>['store'], sessions: string[
   return ids;
 }
 
+for (const state of ['partial', 'available'] as const) {
+  for (const edge of ['0000', 'zzzz'] as const) {
+    test(`${state}无骨架${edge}不充当祖先或主链根`, () => {
+      const f = fixture();
+      try {
+        seedChain(f.store, [['A'], ['A', 'B'], ['A', 'B', 'C']]);
+        f.store.write(db => db.run(`INSERT INTO request(req_id,conv_key,actor,
+          actor_state,started_ms,day,via,body_state,derive_version,have,created_at,
+          updated_at,sort_source,sort_key) VALUES (99,?,'actor-a','known',
+          999,'2026-10-22','hook',?,0,1,1,1,'ledger',?)`,
+          [JSON.stringify(['session', 'chain']), state, `ledger|${edge}`]));
+        enqueueDerive(f.store, JSON.stringify(['session', 'chain']), 'actor-a', '');
+        drainDerive(f.store);
+        expect(f.store.read.query(`SELECT prev_relation,prev_req_id FROM request
+          WHERE req_id=99`).get()).toEqual({ prev_relation: 'unknown', prev_req_id: null });
+        expect(f.store.read.query(`SELECT req_id,chain_role FROM request
+          WHERE req_id IN (1,2,3) ORDER BY req_id`).all()).toEqual([
+          { req_id: 1, chain_role: 'main' }, { req_id: 2, chain_role: 'main' },
+          { req_id: 3, chain_role: 'main' },
+        ]);
+        expect(f.store.read.query(`SELECT prev_req_id FROM request WHERE req_id=3`).get())
+          .toEqual({ prev_req_id: 2 });
+      } finally { f.close(); }
+    });
+  }
+}
+
+test('合法空messages可读但不证明后续请求的父节点', () => {
+  const f = fixture();
+  try {
+    seedChain(f.store, [[], ['A']]);
+    enqueueDerive(f.store, JSON.stringify(['session', 'chain']), 'actor-a', '');
+    drainDerive(f.store);
+    expect(f.store.read.query(`SELECT prev_relation,delta_ordinals FROM request
+      WHERE req_id=1`).get()).toEqual({ prev_relation: 'first', delta_ordinals: '[]' });
+    expect(f.store.read.query(`SELECT prev_req_id,prev_relation FROM request
+      WHERE req_id=2`).get()).toEqual({ prev_req_id: null, prev_relation: 'branch' });
+    expect(matchPredecessor([{ reqId: 1, fingerprints: [] }], ['A']))
+      .toEqual({ parent: null, relation: 'branch', delta: null, near: null });
+  } finally {
+    f.close();
+  }
+});
+
+test('有骨架但无messages不参与消息前驱比较', () => {
+  const f = fixture();
+  try {
+    seedChain(f.store, [['A'], ['A', 'B']]);
+    persistBody(f.store, 1, { protocol: 'anthropic', request: { system: 'synthetic' },
+      reply: { content: [] }, redact_version: 1 });
+    enqueueDerive(f.store, JSON.stringify(['session', 'chain']), 'actor-a', '');
+    drainDerive(f.store);
+    expect(f.store.read.query(`SELECT prev_relation FROM request WHERE req_id=1`).get())
+      .toEqual({ prev_relation: 'unknown' });
+    expect(f.store.read.query(`SELECT prev_req_id FROM request WHERE req_id=2`).get())
+      .toEqual({ prev_req_id: null });
+  } finally {
+    f.close();
+  }
+});
+
+test('缺消息引用不能缩成合法空序列', () => {
+  const f = fixture();
+  try {
+    seedChain(f.store, [['A'], ['A', 'B']]);
+    f.store.write(db => db.run('DELETE FROM request_block WHERE req_id=1'));
+    enqueueDerive(f.store, JSON.stringify(['session', 'chain']), 'actor-a', '');
+    drainDerive(f.store);
+    expect(f.store.read.query(`SELECT prev_relation FROM request WHERE req_id=1`).get())
+      .toEqual({ prev_relation: 'unknown' });
+    expect(f.store.read.query(`SELECT prev_req_id FROM request WHERE req_id=2`).get())
+      .toEqual({ prev_req_id: null });
+  } finally {
+    f.close();
+  }
+});
+
 test('稳定排序重算得到确定增量与标题', () => {
   const f = fixture();
   try {
