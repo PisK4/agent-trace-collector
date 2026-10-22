@@ -524,6 +524,8 @@ CREATE TABLE route_summary (
 
 `prompt` 分解仍只在 `request` 行上存（`prompt_tokens`、`parts_json`），原始路由过期不影响它。
 
+`z` 的写入格式是 format 2：在原有字段外带 `kind`、`folder`、`effort` 与 `prompt` 分解。路由详情只读展示需要的白名单标量与 `z` 里的安全字段：候选顺序与尝试项都按固定键挑选，`who`、`account`、`host`、`id` 与任意原始 JSON 不进入响应。旧行按 format 1 读取，format 2 才有的字段返回 null，不从 `raw_route.payload_json` 补。尝试链保留未知 `fail` 与错误码原值；缺少开始时间时只说明时间不完整，不推算间隔。
+
 ### 读模型
 
 ```sql
@@ -686,7 +688,7 @@ AVA 的骨架里，`request.summary` 与 `response.summary` 合计占骨架大�
 
 ### 标题
 
-取该笔第一条新增 USER 消息的首行，去掉 harness 包装（`<system-reminder>`、`<command-*>`、工作目录说明这类），压空白，截到 60 字。
+取该笔第一条新增 USER 消息里状态为 `text` 的解释文本首行，压空白，截到 60 字。包装剥离、注入识别与"这条消息算不算用户输入"由[输入解释与能力阅读](#输入解释与能力阅读)统一判定，标题不再自己维护一份规则。
 
 没有正文时回落到 `模型 · HH:MM`，`title_source` 记为 `model_time`。direct 行永远走回落，界面要能显示这个差别。
 
@@ -809,6 +811,16 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | 系统提示 | 顶层 `system` | `messages[].role == system` |
 
 未实现的两种记录在案，接入时补：Responses 用 `input` / `output` / `instructions`，工具通过 `function_call` / `function_call_output` 与 `call_id` 关联；Gemini 用 `contents[].parts` 与 `systemInstruction`。Responses 的前序响应引用不能解释为本笔包含全会话历史。
+
+### 输入解释与能力阅读
+
+正文分页在服务端附带消息级展示解释与能力视图。解释只影响显示：原始脱敏消息、块哈希与语义指纹保持原值，页面不再维护第二套包装规则。
+
+输入解释只剥开头的已知包装，并按嵌套深度扫描配对标签。结果状态是 `text`、`empty`、`injected` 或 `unrecognized`；未闭合或无法识别的包装保留原文并标未识别。只有 `text` 与 `unrecognized` 算用户输入（`is_input`），`injected` 与 `empty` 不产生用户气泡。同一请求的多条用户消息逐条解释，不合并成一条。标题与折叠行摘要复用同一解释结果。
+
+能力视图把协议工具定义与 Agent 技能声明分开。工具只读请求的 `tools` / `functions` 字段；技能只读 system 文本里的标签清单与 Claude 标题列表。两种能力各分 `present`、`empty`、`unrecognized`、`missing`、`partial`：正文不完整时技能最多报 partial，正文不可读时报 missing，不把没读到解释成零技能。覆盖状态记录本片的读取区间与整笔消息总数。能力按正文读取即时计算，不长期复制技能描述或工具 schema。
+
+链关系与新增消息只在 `derivation.chain_state` 为 `current` 时标记为确定结论。`dirty`、`retained`、`legacy` 与状态未知分别显示重建中、历史保留、旧算法与状态未知，不显示 confirmed，也不把旧的增量序号当成这一轮新增。
 
 ### 派生算法版本
 
@@ -971,6 +983,8 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 列表接口不返回骨架。会话内 1,825 笔的列表，每笔骨架 9.5 KB，全取就是 17 MB，列表只返回 `req_id`、时间、状态、模型、四个读数、标题、`have`、`body_state`。
 
 列表与详情都带 `derived_state`，并只在该值为 `current` 时把关系、增量与折叠行摘要放在顶层。详情另带 `historical`（旧派生结论连同状态）与摘要的算法三列；列表不携带这几项。判定的具体规则见[读模型里的派生状态](#读模型里的派生状态)。
+
+详情另附四个展示视图：`prompt`（上下文阅读）、`source_facts`、`projection_meta` 与 `derivation`。上下文比例只在 prompt 族状态为 `recomputed` 且窗口为正时计算；`retained`、`invalid_input`、`missing` 即使带着旧计数也不给比例，并说明原因。正文分页附带 `interpretations`、`coverage` 与 `capabilities`，解释只覆盖当前页。这些视图都按白名单挑标量，不返回原始 JSON；失效或缺失的值保持 null，不从邻近字段补猜。
 
 分页用 keyset 不用 offset。摄入一直在写，offset 会漂移，游标是本页最后一行的 `(started_ms, req_id)`。
 
