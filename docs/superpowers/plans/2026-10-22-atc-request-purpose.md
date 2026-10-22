@@ -2267,7 +2267,7 @@ Expected: PASS。再跑 `bun test tests/maintenance.test.ts tests/derive.test.ts
 
 - [ ] **Step 1：更新架构文档。** 在 `docs/architecture-design.md` 的派生字段/请求语义章节写明：用途状态集合；`PURPOSE_VERSION=2`；规则优先级；分类器三信号门槛；来源 kind 只对 `title` 别名排除；未知用途参与链；组 pending 时不发布；会话标题候选与 C 的 `derived_state='current'` 同条件，dirty 组不返回旧标题。
 - [ ] **Step 2：更新运维文档。** 在 `docs/operations.md#rebuild` 写明：`rebuild --session <key>` 会先把该会话 `purpose_target<2` 的行置为 pending 再排空；普通 tick 不升级 clean 历史行；报告字段 `purpose_upgraded`、`purpose_processed`、`purpose_remaining`；遇到 `derive_no_progress` 先查用途错误读取日志与正文可读性。
-- [ ] **Step 3：补齐 note。** 更新 Task 2 新建的 `.agents/notes/implemented/architecture/2026-10-22-request-purpose-and-chain.md`，保持 `Status: implemented`，删掉 Task 2 临时写下的那句本提交只落地模块与单笔语义、接入与消费由后续提交补齐的说明，补齐：问题（三处各自猜标题/类别）；决定（纯解释 + 单笔 CAS + `drainDeriveTx` 内的用途阶段）；来源 kind 只作信号的取舍；未知 actor 仍完成用途的理由；历史 v1 显式升级的代价；derive/query/web/维护只消费已存用途；迁移最终 `stage=drain` 与在线 tick 共用入口；被部分取代的旧 note 链接。
+- [ ] **Step 3：补齐 note。** 更新 Task 2 新建的 `.agents/notes/implemented/architecture/2026-10-22-request-purpose-and-chain.md`，保持 `Status: implemented`，删掉 Task 2 临时写下的那句本提交只落地模块与单笔语义、接入与消费由后续提交补齐的说明，补齐：问题（三处各自猜标题/类别）；决定（纯解释 + 单笔 CAS + `drainDeriveTx` 内的用途阶段）；来源 kind 只作信号的取舍；未知 actor 仍完成用途的理由；历史 v1 显式升级的代价；derive/query/web/维护只消费已存用途；在线 tick 与显式重建共用排空入口（显式迁移已随破坏式结构替换移除，没有 `stage=drain`）；被部分取代的旧 note 链接。
 - [ ] **Step 4：全量验证。**
 
 Run:
