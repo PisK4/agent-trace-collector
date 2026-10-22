@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { openStore } from '../src/store';
+import type { Store } from '../src/store';
 import { compareSequence, deriveTitle, drainDerive, enqueueDerive, matchPredecessor, pairToolCalls } from '../src/derive';
 import { listSessions } from '../src/queries';
 import { messageFingerprint } from '../src/fingerprint';
@@ -225,6 +226,144 @@ test('缺消息引用不能缩成合法空序列', () => {
     f.close();
   }
 });
+
+type TestStore = ReturnType<typeof fixture>['store'];
+const GROUP = 'synthetic-derive';
+const ACTOR = 'actor-synthetic';
+
+function seedRound(store: TestStore, ids: readonly [number, number],
+  times: readonly [number, number] = [1000, 1000]): void {
+  store.write(db => {
+    for (const [i, id] of ids.entries()) {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,
+        started_ms,day,via,body_state,derive_version,have,created_at,
+        updated_at,sort_source,sort_key)
+        VALUES (?,?,?,'known',?,'2026-10-22','hook','pending',0,1,1,1,'ledger',?)`,
+        [id, GROUP, ACTOR, times[i]!, `1:2:3:0|${String(i * 100).padStart(20, '0')}`]);
+    }
+  });
+  const user = { role: 'user', content: [{ type: 'text', text: 'synthetic input' }] };
+  const call = { type: 'tool_use', id: 'synthetic_call', name: 'read_file', input: {} };
+  persistBody(store, ids[0], { protocol: 'anthropic',
+    request: { messages: [user] }, reply: { content: [call] }, redact_version: 1 });
+  persistBody(store, ids[1], { protocol: 'anthropic', request: { messages: [user,
+    { role: 'assistant', content: [call] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'synthetic_call',
+      content: 'synthetic output' }] }] }, reply: { content: [] }, redact_version: 1 });
+}
+
+function snapshot(store: TestStore, ids: readonly [number, number]) {
+  const [first, second] = ids;
+  const requests = ids.map(id => store.read.query<{
+    prev_req_id: number | null; prev_relation: string; delta_ordinals: string | null;
+    chain_role: string; req_kind: string; title: string | null;
+    title_source: string | null; input_preview: string | null;
+    input_preview_kind: string | null; reply_preview: string | null;
+  }, [number]>(`SELECT prev_req_id,prev_relation,delta_ordinals,chain_role,
+    req_kind,title,title_source,input_preview,input_preview_kind,reply_preview
+    FROM request WHERE req_id=?`).get(id)!).map(row => ({ ...row,
+      prev_req_id: row.prev_req_id === first ? 'first'
+        : row.prev_req_id === second ? 'second' : row.prev_req_id,
+    }));
+  const tools = store.read.query<{
+    req_id: number; ord: number; call_id: string; tool_name: string | null;
+    result_req: number | null; result_ord: number | null; result_path: string | null; state: string;
+  }, [number, number]>(`SELECT req_id,ord,call_id,tool_name,result_req,
+    result_ord,result_path,state FROM tool_call WHERE req_id IN (?,?)
+    ORDER BY req_id,ord`).all(first, second).map(row => ({ ...row,
+      req_id: row.req_id === first ? 'first' : 'second',
+      result_req: row.result_req === first ? 'first'
+        : row.result_req === second ? 'second' : row.result_req,
+    })).sort((a, b) => String(a.req_id).localeCompare(String(b.req_id)) || a.ord - b.ord);
+  return { requests, tools };
+}
+
+function rebuild(store: TestStore): void {
+  enqueueDerive(store, GROUP, ACTOR, '');
+  drainDerive(store);
+}
+
+test('同毫秒交换摄入ID仍得到相同链角色和工具关系', () => {
+  const a = fixture(); const b = fixture();
+  try {
+    seedRound(a.store, [1, 2]); seedRound(b.store, [2, 1]);
+    rebuild(a.store); pairToolCalls(a.store, GROUP, ACTOR);
+    rebuild(b.store); pairToolCalls(b.store, GROUP, ACTOR);
+    expect(snapshot(a.store, [1, 2])).toEqual(snapshot(b.store, [2, 1]));
+    expect(snapshot(b.store, [2, 1]).tools[0]).toMatchObject({
+      state: 'resolved', result_req: 'second',
+    });
+  } finally { a.close(); b.close(); }
+});
+
+test('时间优先于跨代际物理键字典序', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2], [1000, 2000]);
+    f.store.write(db => db.run(`UPDATE request SET sort_key=CASE req_id
+      WHEN 1 THEN '9:8:7:0|00000000000000000000'
+      ELSE '1:2:3:0|00000000000000000100' END`));
+    rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+    expect(snapshot(f.store, [1, 2]).requests[1]?.prev_req_id).toBe('first');
+    expect(snapshot(f.store, [1, 2]).tools[0]?.state).toBe('resolved');
+  } finally { f.close(); }
+});
+
+test('同代际重复偏移不能由ID创造确定关系', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    f.store.write(db => db.run(`UPDATE request
+      SET sort_key='1:2:3:0|00000000000000000000'`));
+    rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+    expect(snapshot(f.store, [1, 2]).requests.map(r => r.prev_relation))
+      .toEqual(['unknown', 'unknown']);
+    expect(snapshot(f.store, [1, 2]).tools[0]?.state).toBe('pending');
+  } finally { f.close(); }
+});
+
+test('缺键同时间桶保守且来源后补可重算', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    f.store.write(db => db.run('UPDATE request SET sort_source=NULL,sort_key=NULL'));
+    rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+    expect(snapshot(f.store, [1, 2]).tools[0]?.state).toBe('pending');
+    f.store.write(db => {
+      for (const id of [1, 2]) db.run(`UPDATE request
+        SET sort_source='ledger',sort_key=? WHERE req_id=?`,
+        [`1:2:3:0|${String((id - 1) * 100).padStart(20, '0')}`, id]);
+    });
+    rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+    expect(snapshot(f.store, [1, 2]).tools[0]?.state).toBe('resolved');
+  } finally { f.close(); }
+});
+
+const unsupportedOrders = [
+  [['ledger', '1:2:3:0|00000000000000000000'], ['ledger', '9:8:7:0|00000000000000000100']],
+  [['ledger', '1:2:3:0|00000000000000000000'], ['route', '00000000000000000002']],
+  [['hook', '00000000-0000-4000-8000-000000000001'], ['hook', 'ffffffff-ffff-4fff-8fff-ffffffffffff']],
+] as const;
+
+for (const [index, sources] of unsupportedOrders.entries()) {
+  test(`无同源位置证据${index}交换ID也不生成确定关系`, () => {
+    const a = fixture(); const b = fixture();
+    try {
+      for (const [f, ids] of [[a, [1, 2]], [b, [2, 1]]] as const) {
+        seedRound(f.store, ids);
+        f.store.write(db => {
+          for (const [i, id] of ids.entries()) db.run(`UPDATE request
+            SET sort_source=?,sort_key=? WHERE req_id=?`, [...sources[i]!, id]);
+        });
+        rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+        expect(snapshot(f.store, ids).requests.map(row => row.prev_relation))
+          .toEqual(['unknown', 'unknown']);
+        expect(snapshot(f.store, ids).tools[0]?.state).toBe('pending');
+      }
+      expect(snapshot(a.store, [1, 2])).toEqual(snapshot(b.store, [2, 1]));
+    } finally { a.close(); b.close(); }
+  });
+}
 
 test('稳定排序重算得到确定增量与标题', () => {
   const f = fixture();

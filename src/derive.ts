@@ -285,12 +285,77 @@ export function enqueueDeriveTx(db: Database, convKey: string, actor: string, fr
   );
 }
 
-/** 稳定排序键：优先账本物理位置，其次是时间与请求号。 */
-function sortKeyOf(row: {
-  sort_source: string | null; sort_key: string | null; started_ms: number; req_id: number;
-}): string {
-  if (row.sort_source !== null && row.sort_key !== null) return row.sort_key;
-  return `time|${String(row.started_ms).padStart(16, '0')}|${String(row.req_id).padStart(20, '0')}`;
+/**
+ * 逻辑顺序：时间优先，同毫秒按来源位置定序。
+ *
+ * 不用 `req_id`：它是摄入时分配的，与逻辑先后无关。同毫秒时只有同一账本代际
+ * 的不同偏移能证明先后；其余来源身份只够确定一个稳定遍历顺序，不能证明谁先谁后，
+ * 所以关系判定还要过 `uncertainOrderIds`。
+ */
+export type LogicalRow = {
+  req_id: number; started_ms: number;
+  sort_source: string | null; sort_key: string | null;
+};
+
+type LedgerPosition = { generation: string; offset: bigint };
+
+/** 账本行的物理位置：`代际|20位偏移`。解析不出时返回 null。 */
+function ledgerPosition(row: LogicalRow): LedgerPosition | null {
+  if (row.sort_source !== 'ledger' || row.sort_key === null) return null;
+  const match = /^(\d+:\d+:\d+:\d+)\|(\d{20})$/.exec(row.sort_key);
+  return match === null ? null : { generation: match[1]!, offset: BigInt(match[2]!) };
+}
+
+/** 时间与来源位置的比较；不含 req_id，所以本身不能单独证明同毫秒先后。 */
+export function compareLogicalOrder(a: LogicalRow, b: LogicalRow): number {
+  if (a.started_ms !== b.started_ms) return a.started_ms < b.started_ms ? -1 : 1;
+  return Buffer.compare(
+    Buffer.from(JSON.stringify([a.sort_source, a.sort_key])),
+    Buffer.from(JSON.stringify([b.sort_source, b.sort_key])),
+  );
+}
+
+/** 遍历顺序：逻辑顺序相同时用 req_id 兜底，保证每次重算的处理次序一致。 */
+export function compareTraversalOrder(a: LogicalRow, b: LogicalRow): number {
+  return compareLogicalOrder(a, b) || a.req_id - b.req_id;
+}
+
+/**
+ * 同毫秒里顺序未被证据证明的请求。
+ *
+ * 整桶出现非账本来源、缺失/非法位置或跨代际时，整桶保守标为未证实；
+ * 同代际重复偏移只标重复的那几条。这些请求仍可遍历，但不作为确定祖先或主链根，
+ * 同毫秒的工具关系也不能 resolved。
+ */
+export function uncertainOrderIds(rows: readonly LogicalRow[]): Set<number> {
+  const buckets = new Map<number, LogicalRow[]>();
+  for (const row of rows) {
+    const list = buckets.get(row.started_ms) ?? [];
+    list.push(row);
+    buckets.set(row.started_ms, list);
+  }
+  const out = new Set<number>();
+  for (const bucket of buckets.values()) {
+    if (bucket.length < 2) continue;
+    const positions = bucket.map(ledgerPosition);
+    const generation = positions[0]?.generation;
+    if (positions.some(position => position === null || position.generation !== generation)) {
+      for (const row of bucket) out.add(row.req_id);
+      continue;
+    }
+    const offsets = new Map<bigint, LogicalRow[]>();
+    for (const [index, row] of bucket.entries()) {
+      const offset = positions[index]!.offset;
+      const list = offsets.get(offset) ?? [];
+      list.push(row);
+      offsets.set(offset, list);
+    }
+    for (const list of offsets.values()) {
+      if (list.length < 2) continue;
+      for (const row of list) out.add(row.req_id);
+    }
+  }
+  return out;
 }
 
 type ChainRow = {
@@ -582,27 +647,28 @@ function messageAt(db: Database, reqId: number, ordinal: number): unknown | null
  * 既不能证明在主链上，也不能证明是分支，保持中性的 main，不误标分支。
  */
 function assignChainRoles(db: Database, convKey: string, actor: string): void {
-  const rows = db.query<{ req_id: number; prev_req_id: number | null; started_ms: number }, [string, string]>(`
-    SELECT req_id, prev_req_id, started_ms FROM request
+  const rows = db.query<{ req_id: number; prev_req_id: number | null; started_ms: number;
+    sort_source: string | null; sort_key: string | null }, [string, string]>(`
+    SELECT req_id, prev_req_id, started_ms, sort_source, sort_key FROM request
     WHERE conv_key=? AND actor=? AND actor_state='known' AND req_kind='chat'
       AND (prev_relation IS NULL OR prev_relation != 'unknown')
     ORDER BY started_ms ASC, req_id ASC`).all(convKey, actor);
-  const first = rows[0];
+  // 按时间与来源位置遍历，第一个根就是逻辑上最早的根；req_id 只兜底同位置。
+  const ordered = [...rows].sort(compareTraversalOrder);
+  const first = ordered[0];
   if (first === undefined) return;
-  const ids = new Set(rows.map(row => row.req_id));
+  const ids = new Set(ordered.map(row => row.req_id));
   const children = new Map<number, number[]>();
   const roots: number[] = [];
-  for (const row of rows) {
-    const parent = row.prev_req_id !== null && ids.has(row.prev_req_id) ? row.prev_req_id : null;
-    if (parent === null) {
+  for (const row of ordered) {
+    if (row.prev_req_id === null || !ids.has(row.prev_req_id)) {
       roots.push(row.req_id);
       continue;
     }
-    const list = children.get(parent);
-    if (list === undefined) children.set(parent, [row.req_id]);
+    const list = children.get(row.prev_req_id);
+    if (list === undefined) children.set(row.prev_req_id, [row.req_id]);
     else list.push(row.req_id);
   }
-  // rows 已按 started_ms 排序，roots 的第一个就是时间最早的根。
   const trunkRoot = roots[0] ?? first.req_id;
   const trunk = new Set<number>();
   const stack = [trunkRoot];
@@ -635,8 +701,9 @@ export function drainDerive(store: Store, limit = 100): {
                title_source, title, model_served, req_kind, model_title,
                input_preview, input_preview_kind, reply_preview
         FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
-      const ordered = [...rows].sort((left, right) =>
-        sortKeyOf(left).localeCompare(sortKeyOf(right)));
+      const ordered = [...rows].sort(compareTraversalOrder);
+      // 同毫秒且没有来源位置证据的请求：可以遍历，但不能用来证明先后。
+      const uncertain = uncertainOrderIds(ordered);
       // 本组已处理过的请求，供后面每一笔在链上找前驱。按正序推进，
       // 所以这里只会看到"早于本笔"的祖先。
       const ancestors: { reqId: number; fingerprints: readonly string[] }[] = [];
@@ -659,6 +726,9 @@ export function drainDerive(store: Store, limit = 100): {
         } else if (current === null) {
           // 本笔正文不可读：没法比，但也不能把上一笔的结论照抄过来。
           match = { parent: null, relation: 'unknown', delta: null, near: null };
+        } else if (uncertain.has(row.req_id)) {
+          // 顺序未证实：同毫秒的来源身份只够排序，不够当因果证据。
+          match = { parent: null, relation: 'unknown', delta: null, near: null };
         } else {
           const found = matchPredecessor(ancestors, current, sawEarlier);
           match = found.relation === 'branch' && unreadableEarlier
@@ -668,7 +738,7 @@ export function drainDerive(store: Store, limit = 100): {
         if (!isTitleRequest) {
           // 标题请求是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
           sawEarlier = true;
-          if (current === null) unreadableEarlier = true;
+          if (current === null || uncertain.has(row.req_id)) unreadableEarlier = true;
         }
 
         const relation: SequenceRelation = match.relation;
@@ -737,7 +807,9 @@ export function drainDerive(store: Store, limit = 100): {
             inputPreview, inputKind, replyPreview, row.req_id,
           ],
         );
-        if (!isTitleRequest && current !== null) ancestors.push({ reqId: row.req_id, fingerprints: current });
+        if (!isTitleRequest && current !== null && !uncertain.has(row.req_id)) {
+          ancestors.push({ reqId: row.req_id, fingerprints: current });
+        }
         processed += 1;
       }
       assignChainRoles(db, group.conv_key, group.actor);
@@ -791,11 +863,14 @@ export function pairToolCalls(store: Store, convKey: string, actor: string): { r
   return store.write(db => {
     const rows = db.query<{
       req_id: number; prev_relation: string | null; delta_ordinals: string | null;
+      started_ms: number; sort_source: string | null; sort_key: string | null;
     }, [string, string]>(`
-      SELECT req_id, prev_relation, delta_ordinals FROM request
-      WHERE conv_key=? AND actor=? AND actor_state='known'
-      ORDER BY started_ms, req_id`).all(convKey, actor);
+      SELECT req_id, prev_relation, delta_ordinals, started_ms, sort_source, sort_key FROM request
+      WHERE conv_key=? AND actor=? AND actor_state='known'`).all(convKey, actor);
     if (rows.length === 0) return { resolved: 0, ambiguous: 0, pending: 0 };
+    // 与链阶段同一个遍历顺序；同毫秒缺来源证据的请求另算一集合。
+    rows.sort(compareTraversalOrder);
+    const uncertain = uncertainOrderIds(rows);
 
     // 先清空本组旧配对，再按当前数据重建；配对是可变状态，重算比增量修补更不容易漂移。
     // 正文已回收的请求不在重算范围内：它们的块已经不在，从空数据重配只会把原有关系抹掉，
@@ -867,8 +942,12 @@ export function pairToolCalls(store: Store, convKey: string, actor: string): { r
         continue;
       }
       const call = candidates[0]!;
-      // 结果必须晚于调用；同一请求内的结果顺序不可靠，不配对。
-      if (call.index >= result.index) continue;
+      // 结果必须晚于调用。同一毫秒且顺序未证实时不配对：身份字典序不是证据。
+      const callRow = rows[call.index]!;
+      const resultRow = rows[result.index]!;
+      if (compareLogicalOrder(callRow, resultRow) >= 0) continue;
+      if (callRow.started_ms === resultRow.started_ms
+        && (uncertain.has(callRow.req_id) || uncertain.has(resultRow.req_id))) continue;
       // 后续请求会重发整段历史，同一结果会反复出现。已确认的配对是终态，
       // 重发样本只可能把它降级成 pending，因此直接跳过。
       const paired = db.query<{ state: string }, [number, number]>(
