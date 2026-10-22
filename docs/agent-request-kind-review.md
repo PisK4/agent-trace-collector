@@ -64,7 +64,7 @@
 
 上游用途没有进入长期读模型。`src/sources/magpie.ts:158`、`:218` 解析账本与路由的 `kind`，`src/reconcile.ts:405`、`:495` 将它们保存在原始表；但 `saveRouteSummary` 的长期摘要不含该值（`:507`），派生 `req_kind` 也只来自 title 启发式。原始层按七天清理后，这条语义证据就无法从现有长期记录取回。建议先保留上游原始用途及来源，再由 Profile 解释它；不能把上游 `kind` 无条件覆盖为 ATC 的类别，也不能为有明确用途标签的请求重复扫描全文。
 
-派生并不等待全部证据齐备。hook-only 请求以未知 actor 写入（`src/hook.ts:120`），`enqueueDeriveTx` 只接纳已知 actor（`src/derive.ts:274`），后续证据到达才可能触发分类。提案第 25 行的只判定一次不能作为契约。分类应在依赖证据变化后重算，并保证相同证据集以不同顺序到达时结果相同；不能因第一次未匹配就永久记成普通对话。
+派生并不等待全部证据齐备。hook-only 请求以未知归属状态写入（`src/hook.ts:120`），`enqueueDeriveTx` 只接纳已知 actor（`src/derive.ts:274`），后续证据到达才可能触发分类。提案第 25 行的只判定一次不能作为契约。分类应在依赖证据变化后重算，并保证相同证据集以不同顺序到达时结果相同；不能因第一次未匹配就永久记成普通对话。
 
 `derive_version` 当前是重算次数：`src/derive.ts:718` 执行 `derive_version=derive_version+1`，没有统一算法版本常量。因此多次重算的旧算法记录可能有更大的数，提案要求的升版和低版本回填不能直接依赖它。建议将算法版本改为显式常量赋值，已有计数不参与算法新旧比较；迁移应重新入队，而不是筛选数值小于某版本的行。
 
@@ -217,6 +217,54 @@ magpie 的 direct 来自本地会话调用的内存派生行（`internal/usage/d
 建议先修正算法版本语义并长期保留来源用途及分类依据，再迁入 title、增加分类器、贯通查询与页面。随后统一 harness 输入解释及消息级展示输出，再迁技能解析并组合协议工具清单；后两项分别验收，不作为 classifier 上线的前置条件。第一步的 schema 变化需要离线迁移和旧行处理，不能依赖现有重算计数推断版本。容量工作按目标负载独立推进，分类正确与吞吐提升分别报告；指纹归一另案评估。
 
 这次评审只部分涉及 [Title Generator 决策](../.agents/notes/implemented/feature/2026-10-21-title-generator-and-main-chain.md) 和 [不可读请求保持中性决策](../.agents/notes/implemented/bug-fix/2026-10-21-unreadable-requests-stay-neutral.md)，不取代它们；源码尚未变更，无需归档。原提案保持 proposed，本文只记录评审意见，不能作为已交付行为引用。
+
+## 执行与恢复补充评审
+
+以下机制以 ATC `36fe256` 为文档基准，运行时代码仍与 `a9df065` 相同，属于 `版本锁定`。修订建议归[方案 v2](architecture-evolution-v2.md)，这里保留读码与合成反例，未修复运行时代码。
+
+### 派生排序与摘要依赖
+
+链计算在 `src/derive.ts:627` 使用 sortKeyOf，主链根选择在 `:573` 按 started_ms/req_id 排序，工具配对在 `:784` 使用同样时间顺序，并在 `:860` 以数组位置排除不晚于调用的结果。两笔请求 A、B 同毫秒且逻辑键固定 A→B，A 回复发起 read_file、B 增量含结果：A=1/B=2 时链 confirmed、工具 resolved；交换 ID 后链仍 confirmed、工具变 pending。此差异已在新建临时库复现，两个阶段放在同一外层同步写事务中仍成立。统一完成事务解决退出恢复，不能自动统一逻辑顺序。
+
+`src/derive.ts:701` 在本轮配对之前调用 toolResultPreview，`:448` 仅按 call_id 从 tool_call 取首行名称。相同两笔合成请求首次完整重建得到摘要 `工具结果 · synthetic output`，再次重建变成 `工具结果 · read_file`，删除可重算工具关系后重建又回到内容兜底；合并写事务仍存在。另组放入相同 call_id、名称 unrelated_tool 后，当前组摘要变成 `工具结果 · unrelated_tool`，当前组最终配对却仍 resolved。摘要依赖上一轮关系且查找范围过宽，需消费本次确定的调用关系。
+
+### 请求触发与完成恢复
+
+hook 归属未定的入队约束在 `src/derive.ts:274` 的 enqueueDeriveTx：仅查询 actor_state='known' 的组，有效组不存在则返回。`src/hook.ts:272` 实际调用 savePending，不能用该行指认队列守卫。另一条直接命中路径应整体看 `src/hook.ts:207` 至 `:274`：选中已有 req_id、补正文与证据后返回，没有派生入队；savePending 在唯一候选时返回（`:156`），后续 pending 调和不能补此触发。合成库已复现正文 available、队列为空且类别/关系仍为 chat/unknown。hook 的 actor 可能保存 session，其 actor_state 仍为 unknown，不应概括成 actor 总是 NULL。
+
+`src/derive.ts:733` 删除组任务后提交，实时入口 `src/main.ts:213` 与维护入口 `src/maintenance.ts:435` 随后另调 pairToolCalls。在两步之间关闭合成库，重开后无任务、无工具关系，手动配对才 resolved；这项故障已复现。完成协议需覆盖链、角色、工具及摘要全部阶段。
+
+### 来源完整性与隐私一致性
+
+`src/reconcile.ts:241` 只读存活 raw_ledger，`:282` 依当前行数与求和覆写长期尝试字段；`src/retention.ts:333` 删 raw 时把对应 request_evidence 标 expired。合成两行原为输入合计 30、计费行数 2，raw 过期后只用新代际重放最终行，长期字段降为 20/1。共享投影函数仍须读 owner 引用和完整性，不能以存活 raw 代表全部历史。
+
+route 在线摄入由 `src/reconcile.ts:556` 映射未脱敏 record，`:564` 才处理 payload；补关联在 `:359` 从已处理 raw.payload_json 重映射。相同合成 route 与 ledger 交换到达顺序，prompt parts 形态不同。`src/privacy.ts:63` 保护普通字符串占位符，但敏感键分支 `:83` 无此检查，providerAccount 的合成占位符二次处理后改变。两项均已复现，支持统一在线保存形态、将历史重映射和显式幂等隐私修复分开。
+
+### 版本消费者与旧测试契约
+
+`src/derive.ts:718` 的 request.derive_version 与 `:887` 的工具版本都累加；维护 rebuild 在 `src/maintenance.ts:437` 取请求版本 MAX，并在 `:441` 输出 derive_version。`tests/maintenance.test.ts:287` 断言报告为 2，[运维手册](operations.md#rebuild)说明该字段是会话最大派生版本。改算法版本必须同步修改报告、断言和说明；有不可重算旧结果时，单个最大值不能证明所有结果使用目标算法。
+
+`tests/derive.test.ts:200` 实际完成整组 250 笔后重开再重算，验证末笔增量一致；其名称不能证明切片恢复。`:270` 的同名测试对 drainDerive(store,1) 断言 processed=250、remaining=0，关闭后只有未使用的 snapshot，没有重开验证。该 limit 当前确实表示组数（`src/derive.ts:617`），此行为可以保留为完整组契约；空壳应删除或重写。未来切片若改变 Interface，需显式迁移调用者和断言，不能仅改名称或把现有 250 笔断言当成切片恢复验收。
+
+### hook 模型与版本列的实际语义
+
+`src/hook.ts:134` 将 success 合成为 200，`:135` 把 envelope.model 同写 requested/served。直接命中路径 `:207` 至 `:274` 不重新投影模型，mergeHookInto 的归属合并 `:328` 至 `:336` 也不迁移模型；账本聚合则在 `src/reconcile.ts:289` 覆写。修正 req 映射后，账本合法缺键若直接覆写 NULL，仍会丢掉已有 hook 报告。方案采用来源并存：账本 req 缺失保持未知，独立保留 hook 模型及 success；显示备用值附来源，不能以 hook 值证明 ledger.req 或 vendor served。此项为读码确认，未新增模型覆盖的运行时复现。
+
+adapter_version 在 `src/body.ts:140` 写协议解析版本，redact_version 在 hook 正文保存时传入（`src/hook.ts:224`），不表示来源字段映射已版本化。按 src 与 scripts 的写入搜索，match_version、attempt_derive_version 没有业务赋值，instance_key 只有 schema 的 local 默认值；它们分别是预留列或默认身份，不能合称为三个版本列，也不能仅凭存在就宣称相关能力已实现。来源版本应有独立语义与消费者，不改写 adapter_version 的旧口径来复用列。
+
+### 拒绝观测边界
+
+`src/http.ts:143` 在 ingesting 时直接返回 429，早于读取正文和写库；`src/queries.ts:391` 聚合 ingest_issue，不包含这条拒绝。插件在 `plugins/collector.hooks.ts:34` 将 429 作为可重试状态，因此客户端能观察响应，collector 当前没有完整服务端计数。统计缺口成立，但不必逐次写数据库：保留准入限制，以固定原因的进程计数及负载端尝试记录即可建立基线，重启归零需明示。观测计数不能变成并发放行计数，不以记录拒绝为由缓存被拒正文。此项静态核对，未运行并发负载。
+
+### 盐与备份边界
+
+`src/config.ts:72` 的 loadLocalSecret 在文件不存在时随机生成盐，启动在 `src/main.ts:62` 加载。现有 `src/maintenance.ts:181` 起的数据库备份使用 VACUUM INTO，不包含 redaction.salt；[备份](operations.md#backup)和[恢复](operations.md#恢复流程)未覆盖盐绑定。已有库恢复后缺盐会导致新值使用另一套占位符，旧占位符本身不能还原原盐。可恢复采集须保存匹配的盐并验证绑定，旧库无法证明原盐时需要显式确认及限制报告，不能自动认领。read.token/hook.token 是独立认证身份，可恢复或重配；它们不代替隐私盐。此项只读代码与文档，未读取任何真实 secret，也未执行备份或启动。
+
+### 补充验证范围
+
+既有五项临时合成核对分别覆盖完成恢复、route 到达顺序、部分 raw 重放、直接 hook 漏触发与敏感键占位符重散列。后续另在同一事务中复现逻辑排序差异、重复重建摘要漂移和跨组 call_id 串名。所有检查只读项目源码并使用新建临时 SQLite 库及合成内容，检查后关闭并清理各自临时库；临时脚本不属于仓库持久回归。
+
+既有 `bun test tests/derive.test.ts tests/reconcile.test.ts tests/privacy.test.ts` 记录为 43 pass、0 fail、119 expect；本次文档修订未重复运行。该结果与缺陷复现并存，不能证明当前未覆盖行为正确。未运行混合负载、全量测试、真实库修复或服务切换。
 
 ## 来源与验证范围
 
