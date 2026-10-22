@@ -149,7 +149,9 @@ export function matchPredecessor(
       best = { reqId: ancestor.reqId, shared };
     }
     // 完整前缀：祖先整条都在本笔里。取最长的那条，即最深的祖先。
-    if (shared === ancestor.fingerprints.length && shared <= current.length
+    // shared > 0 排除零长度祖先：空序列是任何序列的前缀，认它当父节点等于
+    // 用"这一笔没有消息"证明"本笔续自它"，那是没有证据的边。
+    if (shared > 0 && shared === ancestor.fingerprints.length && shared <= current.length
       && (parent === null || ancestor.fingerprints.length > parent.length)) {
       parent = { reqId: ancestor.reqId, length: ancestor.fingerprints.length };
     }
@@ -159,7 +161,7 @@ export function matchPredecessor(
     const delta = current.slice(parent.length).map((_, offset) => offset + parent.length);
     return {
       parent: parent.reqId,
-      relation: parent.length === 0 ? 'first' : 'confirmed',
+      relation: 'confirmed',
       delta,
       near: best,
     };
@@ -311,17 +313,26 @@ function blocksOf(db: Database, reqId: number): number[] | null {
 }
 
 /**
- * 本笔的语义指纹序列。正文不可读时返回 null，调用方据此判成未知，
- * 不拿空序列去冒充"这一笔没有消息"。
+ * 本笔的语义指纹序列。
+ *
+ * 返回 null 表示"不可比较"，[] 表示"已保存的真实空消息数组"，两者不能混：
+ * 空数组是有效证据（这一笔确实没有消息），会占主链根；无骨架、无消息计数或
+ * 引用不完整则说明读不出可比内容，调用方据此判成未知。
  */
 function fingerprintsOf(db: Database, reqId: number): string[] | null {
-  const body = db.query<{ body_state: string }, [number]>(
-    'SELECT body_state FROM request WHERE req_id=?',
-  ).get(reqId);
-  if (body == null || (body.body_state !== 'available' && body.body_state !== 'partial')) return null;
-  return db.query<{ fingerprint: string }, [number]>(`
-    SELECT b.fingerprint AS fingerprint FROM request_block rb JOIN block b ON b.id = rb.block
-    WHERE rb.req_id=? ORDER BY rb.ord`).all(reqId).map(row => row.fingerprint);
+  const row = db.query<{
+    body_state: string; skeleton_z: Uint8Array | null; msg_count: number | null;
+  }, [number]>(`SELECT body_state,skeleton_z,msg_count
+    FROM request WHERE req_id=?`).get(reqId);
+  if (row === null || !['available', 'partial'].includes(row.body_state) ||
+      row.skeleton_z === null || row.msg_count === null ||
+      !Number.isSafeInteger(row.msg_count) || row.msg_count < 0) return null;
+  const refs = db.query<{ ord: number; fingerprint: string }, [number]>(`
+    SELECT rb.ord,b.fingerprint FROM request_block rb JOIN block b ON b.id=rb.block
+    WHERE rb.req_id=? ORDER BY rb.ord`).all(reqId);
+  if (refs.length !== row.msg_count || refs.some((ref, i) =>
+      ref.ord !== i || ref.fingerprint.length === 0)) return null;
+  return refs.map(ref => ref.fingerprint);
 }
 
 /** 摘要长度按 Unicode 字符算，避免把中文截成半个字。 */

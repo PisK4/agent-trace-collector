@@ -7,6 +7,7 @@ import { loadConfig } from '../src/config';
 import { createHandler } from '../src/http';
 import { acceptHook, bodyOmission, reconcilePending } from '../src/hook';
 import type { HookEnvelope } from '../src/hook';
+import { drainDerive, enqueueDerive } from '../src/derive';
 import { onRequest, onResponse } from '../plugins/collector.hooks';
 import type { HookContext } from '../plugins/collector.hooks';
 import { restoreBody } from '../src/body';
@@ -416,6 +417,35 @@ test('只接元数据时保留证据位并把正文标为暂停原因', () => {
     f.close();
   }
 });
+
+for (const mode of ['body_omitted', 'metadata_only'] as const) {
+  test(`命中账本的${mode}无骨架请求保持不可比较`, () => {
+    const f = fixture();
+    const key = JSON.stringify(['session', 'synthetic-session']);
+    try {
+      f.store.write(db => db.run(`INSERT INTO request(req_id,route_id,
+        response_id_norm,agent,session,conv_key,conv_source,actor,actor_state,
+        started_ms,day,via,status,body_state,derive_version,have,created_at,updated_at)
+        VALUES (1,101,'synthetic_1','alpha','synthetic-session',?,'session',
+        'synthetic-session','known',1700000000000,'2026-10-22','through',200,
+        'pending',0,2,1,1)`, [key]));
+      const input = envelope({ hook_id: `synthetic-${mode}`,
+        body_omitted: mode === 'body_omitted' });
+      const accepted = mode === 'metadata_only'
+        ? acceptHook(f.store, input, 6, salt, {
+          admission: () => ({ mode: 'metadata_only', reason: 'disk_budget' }),
+        })
+        : acceptHook(f.store, input, 6, salt);
+      expect(accepted.req_id).toBe(1);
+      enqueueDerive(f.store, key, 'synthetic-session', '');
+      drainDerive(f.store);
+      expect(f.store.read.query(`SELECT body_state,skeleton_z,prev_relation
+        FROM request WHERE req_id=1`).get()).toEqual({
+        body_state: 'partial', skeleton_z: null, prev_relation: 'unknown',
+      });
+    } finally { f.close(); }
+  });
+}
 
 test('只接元数据不覆盖已有正文', () => {
   const f = fixture();
