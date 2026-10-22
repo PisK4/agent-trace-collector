@@ -522,7 +522,7 @@ REQUEST_COLUMNS 同时显式加入 `summary_state`、`summary_algorithm`、`summ
 
 **Interfaces:** `loadBoundSalt(store:Store,dataDir:string,options?:{confirmLegacy?:boolean}):Uint8Array`；`backupBundle(sourceDir:string,destinationDir:string):void`；`restoreBundle(bundleDir:string,destinationDir:string,options?:{allowIncompleteMigration?:boolean}):void`。bundle 的可接受版本集合是唯一权威常量 `RESTORABLE_SCHEMA_VERSIONS: readonly number[] = [5]`（导出）；备份写实际 `PRAGMA user_version`，恢复先查该集合，再与包内数据库自身的 user_version 相等校验。F 的条件 v6 分支只扩展这一个数组，不另写第二份版本规则。绑定存collector_state['privacy:salt'] `{format:1,id:sha256('atc-redaction-salt-v1\0'+salt),confirmedLegacy:boolean}`。不写盐明文到DB/报告。read.token/hook.token独立，不放bundle默认恢复；恢复后显式重新生成认证token。
 
-- [ ] **Step 1：盐测试。** 新增下列可执行用例，复用 `fixture` 和显式合成盐；另外在同一组测试检查旧库有盐无binding默认抛redaction_salt_unbound，只有显式confirmLegacy才绑定并报告无法证明历史身份。不能把显式确认当密码学证明。
+- [x] **Step 1：盐测试。** 新增下列可执行用例，复用 `fixture` 和显式合成盐；另外在同一组测试检查旧库有盐无binding默认抛redaction_salt_unbound，只有显式confirmLegacy才绑定并报告无法证明历史身份。不能把显式确认当密码学证明。
 
 ```ts
 import {expect,test} from 'bun:test';
@@ -551,8 +551,8 @@ test('首次空库生成绑定后拒绝错盐',()=>{
   }finally{f.close();}
 });
 ```
-- [ ] **Step 2：运行观察FAIL。** `bun test tests/secrets.test.ts`，Expected缺少loadBoundSalt或旧行为静默生盐。
-- [ ] **Step 3：实现绑定。** 导出现有readLocalSecret为只读受限读取；loadLocalSecret增加禁止创建选项供盐使用，认证token原行为保留。
+- [x] **Step 2：运行观察FAIL。** `bun test tests/secrets.test.ts`，Expected缺少loadBoundSalt或旧行为静默生盐。**记录不完整**：失败态的首次运行输出未留存，四条用例的拒绝行为以 Step 3 后的通过结果为准。
+- [x] **Step 3：实现绑定。** 导出现有readLocalSecret为只读受限读取；盐的生成只发生在 `loadBoundSaltTx` 判定的空库分支，有数据或已有绑定时缺文件直接报 `redaction_salt_missing`，认证token原行为保留。**实现偏差**：没有给 `loadLocalSecret` 加 `create:false` 选项——唯一调用点在空库分支，选项没有使用者；拒绝路径由 `loadBoundSaltTx` 显式判断。
 
 ```ts
 import { createHash } from 'node:crypto';
@@ -589,7 +589,7 @@ export function loadBoundSalt(store:Store,dataDir:string,
 
 绑定写入与迁移阶段标记同事务。main openStore后在try中loadBoundSalt，失败关闭Store，不先启动定时任务。首次新库可绑定；已有库缺盐不能调用通用生成分支。仅数据库快照通过只读工具读取，不调用采集启动。
 
-- [ ] **Step 4：完成bundle。** destination必须不存在，以同父目录mkdtemp创建0700 staging，持有maintenance锁；沿用backupDatabase的EXCLUSIVE探测与VACUUM复制。先在该排他连接仍打开时完成源盐读取和binding校验，绝不在释放数据库停止约束后读取可能已被替换的盐。source的binding与snapshot binding相等后，写trace.db、redaction.salt与manifest.json(0600)，manifest为format1、schema5、salt_id、数据库SHA256，最后rename整个staging至目标。失败仅清理本次创建staging；恢复先完整校验manifest、hash、salt_id、integrity，再在新staging落文件rename，绝不覆盖已有目录。源停止约束不降级。把backupDatabase原排他复制代码提为维护专用导出的 `withStoppedDatabase<T>(source:string, fn:(db:Database)=>T):T`，backupDatabase和bundle共同复用，资源在finally关闭，不能增加先探测再重新打开的窗口。测试错盐、缺盐、损坏DB、目标存在、半写失败均不留下可用目标；成功恢复继续合成摄入得到同一占位符。核心复制与校验代码如下，权限和源停止检查由withStoppedDatabase与readLocalSecret承担：
+- [x] **Step 4：完成bundle。** destination必须不存在，以同父目录mkdtemp创建0700 staging，持有maintenance锁；沿用backupDatabase的EXCLUSIVE探测与VACUUM复制。先在该排他连接仍打开时完成源盐读取和binding校验，绝不在释放数据库停止约束后读取可能已被替换的盐。source的binding与snapshot binding相等后，写trace.db、redaction.salt与manifest.json(0600)，manifest为format1、schema5、salt_id、数据库SHA256，最后rename整个staging至目标。失败仅清理本次创建staging；恢复先完整校验manifest、hash、salt_id、integrity，再在新staging落文件rename，绝不覆盖已有目录。源停止约束不降级。把backupDatabase原排他复制代码提为维护专用导出的 `withStoppedDatabase<T>(source:string, fn:(db:Database)=>T):T`，backupDatabase和bundle共同复用，资源在finally关闭，不能增加先探测再重新打开的窗口。测试错盐、缺盐、损坏DB、目标存在、半写失败均不留下可用目标；成功恢复继续合成摄入得到同一占位符。核心复制与校验代码如下，权限和源停止检查由withStoppedDatabase与readLocalSecret承担：
 
 ```ts
 export function withStoppedDatabase<T>(source:string,fn:(db:Database)=>T):T {
@@ -780,7 +780,7 @@ test('恢复拒绝未完成迁移的bundle',()=>{
 ```
 
 Run `bun test tests/secrets.test.ts tests/maintenance.test.ts`；Expected PASS。保留数据库-only backup，输出明确not_ingestion_restorable，不宣称替代bundle。
-- [ ] **Step 5：更新operations与note。** backup/restore/认证重配命令和限制只在operations维护，有授权时提交 `feat(recovery): bind privacy salt and verify restore bundles`。
+- [x] **Step 5：更新operations与note。** backup/restore/认证重配命令和限制只在operations维护，有授权时提交 `feat(recovery): bind privacy salt and verify restore bundles`。
 
 ## Task 6：实现可续跑的全库迁移和守恒验收
 

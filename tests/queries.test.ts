@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
-import { loadConfig } from '../src/config';
+import { loadBoundSalt, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
 import { getRequest, getStats, listRequests, listSessions } from '../src/queries';
 import { persistBody } from '../src/body';
@@ -282,6 +282,8 @@ test('SIGTERM停止后不再响应请求', async () => {
 test('启动时逐项运行各任务，回收不受其它任务占锁影响', async () => {
   const f = fixture();
   try {
+    // 盐与库的绑定要在空库时建立：有数据之后再生成盐会被拒绝（无法证明历史占位符用的是它）。
+    loadBoundSalt(f.store, f.dir);
     const config = {
       ...loadConfig({}),
       port: 0,

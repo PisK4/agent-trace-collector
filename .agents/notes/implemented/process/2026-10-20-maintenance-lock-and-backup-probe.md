@@ -8,9 +8,9 @@ Status: implemented
 
 ## Decision
 
-维护命令 `verify`、`backup`、`rebuild`、`purge-metadata` 统一从 `bun run maintain` 调用。`backup`、`rebuild`、`purge-metadata` 在数据目录下用 `wx` 原子创建 `maintenance.lock`，内容记 pid 与持有者；`verify` 只读，不建锁。采集器启动时看到锁就拒绝启动，陈旧锁不自动覆盖，路径原样报出来由人确认后删除。
+维护命令 `verify`、`backup`、`bundle`、`restore`、`rebuild`、`purge-metadata` 统一从 `bun run maintain` 调用。`backup`、`bundle`、`rebuild`、`purge-metadata` 在数据目录下用 `wx` 原子创建 `maintenance.lock`，内容记 pid 与持有者；`verify` 只读，不建锁。采集器启动时看到锁就拒绝启动，陈旧锁不自动覆盖，路径原样报出来由人确认后删除。
 
-备份走 `VACUUM INTO ?`，绑定目标路径。前置检查目标不存在、目录可写、余量不少于源库 1.1 倍；事后对备份再跑一次完整性校验，权限 0600。「源库是否已停」用 `locking_mode=EXCLUSIVE` 探测，探测与复制共用同一个连接，中间不留窗口。
+备份走 `VACUUM INTO ?`，绑定目标路径。前置检查目标不存在、目录可写、余量不少于源库 1.1 倍；事后对备份再跑一次完整性校验，权限 0600。「源库是否已停」用 `locking_mode=EXCLUSIVE` 探测，探测与复制共用同一个连接，中间不留窗口。`bundle` 复用同一探测函数（`withStoppedDatabase`），并在该连接仍然打开时读盐、核对绑定；只含数据库的 `backup` 不包含盐，不能恢复占位符连续性，可恢复快照的理由见[盐绑定与可恢复快照](../architecture/2026-10-22-salt-binding-and-recovery-bundles.md)。
 
 `purge-metadata` 默认只预览，`--apply` 必须带 `--approval-id`。一个事务里按顺序删费用观测、写墓碑、删工具链接、删块引用与孤儿块、删证据与别名、删请求、清无引用的路由摘要；外键是 `NO ACTION`，顺序错了整体回滚。墓碑按证据键记录，同一天只淘汰一部分也能精确处理；来源回放命中墓碑计 `purged_skip`，不复活。
 

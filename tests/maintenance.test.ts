@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { existsSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { openStore } from '../src/store';
@@ -7,13 +8,16 @@ import {
   acquireMaintenanceLock,
   lockPath,
   maintenanceLockPresent,
+  backupBundle,
   backupDatabase,
   previewMetadataPurge,
   purgeMetadata,
+  restoreBundle,
   runMaintenance,
   verifyDatabase,
 } from '../src/maintenance';
-import { loadConfig } from '../src/config';
+import { loadBoundSalt, loadConfig } from '../src/config';
+import { redact } from '../src/privacy';
 import { startCollector } from '../src/main';
 import { persistBody } from '../src/body';
 import { GROUP_ALGORITHM } from '../src/derive-state';
@@ -316,6 +320,178 @@ test('维护命令在目标库上执行并返回退出码', async () => {
     expect(await runMaintenance(['purge-metadata', '--db', source, '--before', '2026-09-01'])).toBe(0);
     expect(await runMaintenance(['purge-metadata', '--db', source, '--before', '2026-09-01', '--apply'])).toBe(1);
     expect(await runMaintenance(['nope'])).toBe(2);
+  } finally {
+    f.close();
+  }
+});
+
+test('恢复bundle保存原盐且拒绝覆盖目标', () => {
+  const f = fixture();
+  const bundle = join(f.dir, 'bundle');
+  const restored = join(f.dir, 'restored');
+  try {
+    const salt = loadBoundSalt(f.store, f.dir);
+    f.store.close();
+    backupBundle(f.dir, bundle);
+    // 包里只放数据库、盐与清单三样，别的文件一律不认。
+    expect(readdirSync(bundle).sort()).toEqual(['manifest.json', 'redaction.salt', 'trace.db']);
+    restoreBundle(bundle, restored);
+    expect(readFileSync(join(restored, 'redaction.salt'))).toEqual(Buffer.from(salt));
+    expect(statSync(join(restored, 'trace.db')).mode & 0o777).toBe(0o600);
+    expect(() => restoreBundle(bundle, restored)).toThrow('destination_exists');
+    const store = openStore(join(restored, 'trace.db'));
+    try {
+      expect(loadBoundSalt(store, restored)).toEqual(salt);
+      // 同一份盐继续脱敏：同一敏感值得到与备份前相同的占位符。
+      const secret = { account: 'synthetic-account-1' };
+      expect(redact(secret, loadBoundSalt(store, restored))).toEqual(redact(secret, salt));
+    } finally {
+      store.close();
+    }
+  } finally {
+    f.close();
+  }
+});
+
+test('恢复拒绝未完成迁移的bundle', () => {
+  const f = fixture();
+  const bundle = join(f.dir, 'bundle');
+  const restored = join(f.dir, 'restored');
+  try {
+    const salt = loadBoundSalt(f.store, f.dir);
+    // 半迁移标记：结构已是 v5，但数据还没走完各阶段。
+    f.store.write(db => {
+      const current = JSON.parse((db.query<{ value_json: string }, []>(
+        "SELECT value_json FROM collector_state WHERE key='migration:v5'").get()!).value_json);
+      db.run("UPDATE collector_state SET value_json=? WHERE key='migration:v5'",
+        [JSON.stringify({ ...current, phase: 'groups', complete: false })]);
+    });
+    f.store.close();
+    backupBundle(f.dir, bundle);
+    expect(() => restoreBundle(bundle, restored)).toThrow('restore_migration_incomplete');
+    expect(existsSync(restored)).toBe(false);
+    restoreBundle(bundle, restored, { allowIncompleteMigration: true });
+    expect(readFileSync(join(restored, 'redaction.salt'))).toEqual(Buffer.from(salt));
+    // 半迁移的库普通启动仍然拒绝打开，续跑只能走显式迁移。
+    expect(() => openStore(join(restored, 'trace.db'))).toThrow('migration_incomplete');
+  } finally {
+    f.close();
+  }
+});
+
+test('bundle备份要求采集器已停且失败不留目标', () => {
+  const f = fixture();
+  const bundle = join(f.dir, 'bundle');
+  try {
+    loadBoundSalt(f.store, f.dir);
+    // 采集器还开着：拒绝，且目标与 staging 都不留下。
+    expect(() => backupBundle(f.dir, bundle)).toThrow('source_must_be_stopped');
+    expect(existsSync(bundle)).toBe(false);
+    expect(readdirSync(f.dir).filter(name => name.startsWith('.atc-bundle-'))).toEqual([]);
+    f.store.close();
+    backupBundle(f.dir, bundle);
+    expect(() => backupBundle(f.dir, bundle)).toThrow('destination_exists');
+
+    // 错盐：库里的绑定与盘上的盐不是一对，包不能出。
+    const wrongSalt = join(f.dir, 'wrong-bundle');
+    const correctSalt = readFileSync(join(f.dir, 'redaction.salt'));
+    writeFileSync(join(f.dir, 'redaction.salt'), new Uint8Array(32).fill(9), { mode: 0o600 });
+    expect(() => backupBundle(f.dir, wrongSalt)).toThrow('redaction_salt_mismatch');
+    expect(existsSync(wrongSalt)).toBe(false);
+    expect(readdirSync(f.dir).filter(name => name.startsWith('.atc-bundle-'))).toEqual([]);
+
+    // 缺盐：没有文件就没有可恢复的包，也不能顺手生成一份新盐。
+    const missingSalt = join(f.dir, 'missing-salt-bundle');
+    rmSync(join(f.dir, 'redaction.salt'));
+    expect(() => backupBundle(f.dir, missingSalt)).toThrow('redaction_salt_missing');
+    expect(existsSync(missingSalt)).toBe(false);
+    expect(existsSync(join(f.dir, 'redaction.salt'))).toBe(false);
+    writeFileSync(join(f.dir, 'redaction.salt'), correctSalt, { mode: 0o600 });
+  } finally {
+    f.close();
+  }
+});
+
+test('恢复拒绝错盐、缺盐与损坏的数据库且不留目标', () => {
+  const f = fixture();
+  const bundle = join(f.dir, 'bundle');
+  const restored = join(f.dir, 'restored');
+  try {
+    loadBoundSalt(f.store, f.dir);
+    f.store.close();
+    backupBundle(f.dir, bundle);
+    // 复制一份包做破坏实验，原包保持可恢复。
+    const tampered = join(f.dir, 'tampered');
+    cpSync(bundle, tampered, { recursive: true });
+    const files = ['trace.db', 'redaction.salt', 'manifest.json'] as const;
+    for (const name of files) writeFileSync(join(tampered, name), readFileSync(join(tampered, name)), { mode: 0o600 });
+
+    writeFileSync(join(tampered, 'redaction.salt'), new Uint8Array(32).fill(9), { mode: 0o600 });
+    expect(() => restoreBundle(tampered, restored)).toThrow('restore_bundle_invalid');
+    expect(existsSync(restored)).toBe(false);
+
+    // 缺文件：包的内容集合对不上，不猜缺的是哪一份。
+    rmSync(join(tampered, 'redaction.salt'));
+    expect(() => restoreBundle(tampered, restored)).toThrow('restore_bundle_invalid');
+    expect(existsSync(restored)).toBe(false);
+
+    // 数据库被改写：清单哈希对不上。
+    rmSync(tampered, { recursive: true, force: true });
+    cpSync(bundle, tampered, { recursive: true });
+    for (const name of files) writeFileSync(join(tampered, name), readFileSync(join(tampered, name)), { mode: 0o600 });
+    const db = readFileSync(join(tampered, 'trace.db'));
+    db[100] = db[100]! ^ 0xff;
+    writeFileSync(join(tampered, 'trace.db'), db, { mode: 0o600 });
+    expect(() => restoreBundle(tampered, restored)).toThrow('restore_bundle_invalid');
+    expect(existsSync(restored)).toBe(false);
+    expect(readdirSync(f.dir).filter(name => name.startsWith('.atc-restore-'))).toEqual([]);
+  } finally {
+    f.close();
+  }
+});
+
+test('恢复在发布前校验失败时不留下半套目录', () => {
+  const f = fixture();
+  const bundle = join(f.dir, 'bundle');
+  const restored = join(f.dir, 'restored');
+  try {
+    loadBoundSalt(f.store, f.dir);
+    f.store.close();
+    backupBundle(f.dir, bundle);
+    // 清单自洽但数据库不是库：哈希能对上，只有完整性校验会拒绝。
+    const junk = join(f.dir, 'junk.db');
+    writeFileSync(junk, 'this is not a database', { mode: 0o600 });
+    const manifestPath = join(bundle, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    rmSync(join(bundle, 'trace.db'));
+    cpSync(junk, join(bundle, 'trace.db'));
+    const hash = createHash('sha256').update(readFileSync(join(bundle, 'trace.db'))).digest('hex');
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, database_sha256: hash }), { mode: 0o600 });
+    expect(() => restoreBundle(bundle, restored)).toThrow('restore_bundle_invalid');
+    expect(existsSync(restored)).toBe(false);
+    expect(readdirSync(f.dir).filter(name => name.startsWith('.atc-restore-'))).toEqual([]);
+  } finally {
+    f.close();
+  }
+});
+
+test('维护命令能产出并恢复bundle', async () => {
+  const f = fixture();
+  const bundle = join(f.dir, 'cli-bundle');
+  const restored = join(f.dir, 'cli-restored');
+  try {
+    const salt = loadBoundSalt(f.store, f.dir);
+    f.store.close();
+    const lines: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: (line: string) => lines.push(line) };
+    expect(await runMaintenance(['bundle', '--dir', f.dir, '--out', bundle], io)).toBe(0);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ ok: true, bundle });
+    expect(await runMaintenance(['restore', '--bundle', bundle, '--out', restored], io)).toBe(0);
+    expect(JSON.parse(lines[1]!)).toMatchObject({ ok: true, restored });
+    expect(readFileSync(join(restored, 'redaction.salt'))).toEqual(Buffer.from(salt));
+    // 用法错误与目标已存在都返回失败码，而不是静默继续。
+    expect(await runMaintenance(['bundle', '--dir', f.dir], io)).toBe(2);
+    expect(await runMaintenance(['restore', '--bundle', bundle, '--out', restored], io)).toBe(1);
   } finally {
     f.close();
   }
