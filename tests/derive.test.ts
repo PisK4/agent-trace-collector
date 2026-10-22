@@ -2,12 +2,13 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fixture } from './fixtures';
+import { fixture, seedPurposeRequest } from './fixtures';
 import { openStore } from '../src/store';
 import { runMaintenance } from '../src/maintenance';
 import type { Store } from '../src/store';
 import { compareSequence, deriveTitle, drainDerive, drainDeriveTx, enqueueDerive,
-  LEGACY_PURPOSE_VERSION, matchPredecessor } from '../src/derive';
+  matchPredecessor } from '../src/derive';
+import { PURPOSE_VERSION } from '../src/semantics';
 import { GROUP_ALGORITHM } from '../src/derive-state';
 import { listSessions } from '../src/queries';
 import { modelTimeTitle } from '../src/sources/magpie';
@@ -825,7 +826,7 @@ test('未知归属的请求不入队', () => {
   }
 });
 
-test('未知归属的请求也能完成兼容用途且不建哨兵组', () => {
+test('未知归属的请求也能完成用途且不建哨兵组', () => {
   const f = fixture();
   try {
     // hook 先到：只知道会话，不知道 actor。它不进组，但它的用途是有效事实。
@@ -846,8 +847,8 @@ test('未知归属的请求也能完成兼容用途且不建哨兵组', () => {
     expect(f.store.read.query(`SELECT req_kind,purpose_pending,purpose_version,
       purpose_status,purpose_rule,purpose_chain,model_title FROM request WHERE req_id=1`).get())
       .toEqual({
-        req_kind: 'title', purpose_pending: 0, purpose_version: LEGACY_PURPOSE_VERSION,
-        purpose_status: 'recognized', purpose_rule: 'legacy.title', purpose_chain: 'exclude',
+        req_kind: 'title', purpose_pending: 0, purpose_version: PURPOSE_VERSION,
+        purpose_status: 'recognized', purpose_rule: 'title.reply.v1', purpose_chain: 'exclude',
         model_title: '合成标题',
       });
     // 未知归属不产生组：没有哨兵，也没有替它编一个 actor。
@@ -877,7 +878,7 @@ test('正文回收后保留原用途版本并消费当前修订', () => {
       FROM request WHERE req_id=1`).get()!;
     expect(row.input_revision).toBe(before.input_revision + 1);
     expect(row).toEqual({
-      purpose_status: 'retained', purpose_version: LEGACY_PURPOSE_VERSION,
+      purpose_status: 'retained', purpose_version: PURPOSE_VERSION,
       // 消费的是当前修订，不是"上次判定的那一版"：留着旧修订等于没判。
       purpose_revision: row.input_revision, input_revision: row.input_revision,
       req_kind: 'chat',
@@ -901,15 +902,16 @@ test('从未判定过又读不出正文的请求标missing', () => {
   } finally { f.close(); }
 });
 
-test('组内仍有待判定用途时不完成该组', () => {
+test('用途分批推进到排空后再发布组', () => {
   const f = fixture();
   try {
     seedChain(f.store, [['synthetic a'], ['synthetic a', 'synthetic b']]);
     enqueueDerive(f.store, JSON.stringify(['session', 'chain']), 'actor-a', '');
-    // 用途阶段只判一批，且这批判不出进展：模拟"组已 dirty、成员仍 pending"。
+    // 模拟"组已 dirty、成员仍 pending"：purposeLimit 只限制每批大小。
     f.store.write(db => db.run('UPDATE request SET purpose_pending=1'));
     const result = drainDeriveTx(f.store.db, { limit: 10, purposeLimit: 1 });
-    // 一批准完了用途，组才能算：这里两笔各占一批，循环推进到没有 pending 为止。
+    // 两笔各占一批，同一事务内推进到没有 pending 后组才能算。
+    expect(result.purpose_processed).toBe(2);
     expect(result.purpose_remaining).toBe(0);
     expect(result.remaining).toBe(0);
     expect(result.groups.length).toBe(1);
@@ -1234,4 +1236,82 @@ test('先到的未确认结果不挡后来的确认配对', () => {
   } finally {
     f.close();
   }
+});
+
+function queueState(store: Store, convKey: string): string | null {
+  return store.read.query<{ state: string }, [string]>(
+    'SELECT state FROM derive_queue WHERE conv_key=?').get(convKey)?.state ?? null;
+}
+
+test('派生先结算用途再发布组', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'purpose-group',
+      system: 'You are a security monitor for autonomous AI coding agents.',
+      stop: ['</block>'],
+      messages: [{ role: 'user', content: 'x' }, { role: 'user', content: 'y' }],
+      reply: { content: [{ type: 'text', text: '<block>no' }] },
+    });
+    enqueueDerive(f.store, 'purpose-group', 'actor', '');
+    const result = drainDerive(f.store, 100);
+    // 本 Task 只断言用途先结算、组再发布；链角色与工具配对由 Task 4 消费后断言。
+    expect(result).toMatchObject({
+      purpose_processed: 1, purpose_remaining: 0, processed: 1,
+    });
+    expect(f.store.read.query<{
+      purpose_status: string; purpose_pending: number; req_kind: string;
+    }, [number]>(`
+      SELECT purpose_status, purpose_pending, req_kind FROM request WHERE req_id=?`)
+      .get(id)).toEqual({
+      purpose_status: 'recognized', purpose_pending: 0, req_kind: 'auto-mode-classifier',
+    });
+    expect(queueState(f.store, 'purpose-group')).toBe('clean');
+  } finally { f.close(); }
+});
+
+test('用途分批结算不延迟同组发布', () => {
+  const f = fixture();
+  try {
+    seedPurposeRequest(f.store, { convKey: 'defer', reply: { content: [{ type: 'text', text: 'one' }] } });
+    seedPurposeRequest(f.store, { convKey: 'defer', reply: { content: [{ type: 'text', text: 'two' }] } });
+    enqueueDerive(f.store, 'defer', 'actor', '');
+    // limit 按组计数：即使每批只判一笔用途，同一调用也要把组内成员判完再发布。
+    const result = drainDerive(f.store, 1);
+    expect(result.purpose_processed).toBe(2);
+    expect(result.purpose_remaining).toBe(0);
+    expect(result.processed).toBe(2);
+    expect(queueState(f.store, 'defer')).toBe('clean');
+  } finally { f.close(); }
+});
+
+test('未知 actor 仍完成用途且不产生哨兵组', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'solo', actor: null, actorState: 'unknown',
+      reply: { content: [{ type: 'text', text: 'plain' }] },
+    });
+    drainDerive(f.store, 100);
+    expect(f.store.read.query<{ purpose_pending: number }, [number]>(
+      'SELECT purpose_pending FROM request WHERE req_id=?').get(id))
+      .toEqual({ purpose_pending: 0 });
+    expect(f.store.read.query<{ n: number }, [string]>(
+      'SELECT COUNT(*) AS n FROM derive_queue WHERE conv_key=?').get('solo'))
+      .toEqual({ n: 0 });
+  } finally { f.close(); }
+});
+
+test('范围派生只处理目标会话的待定用途', () => {
+  const f = fixture();
+  try {
+    seedPurposeRequest(f.store, { convKey: 'scope-a' });
+    const other = seedPurposeRequest(f.store, { convKey: 'scope-b' });
+    const result = drainDerive(f.store, 100, { convKey: 'scope-a' });
+    expect(result.purpose_processed).toBe(1);
+    expect(result.purpose_remaining).toBe(0);
+    expect(f.store.read.query<{ purpose_pending: number }, [number]>(
+      'SELECT purpose_pending FROM request WHERE req_id=?').get(other))
+      .toEqual({ purpose_pending: 1 });
+  } finally { f.close(); }
 });

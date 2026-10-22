@@ -1531,20 +1531,17 @@ test('派生先结算用途再发布组', () => {
   } finally { f.close(); }
 });
 
-test('用途批次未结算时组保持 dirty', () => {
+test('用途分批结算不延迟同组发布', () => {
   const f = fixture();
   try {
     seedPurposeRequest(f.store, { convKey: 'defer', reply: { content: [{ type: 'text', text: 'one' }] } });
     seedPurposeRequest(f.store, { convKey: 'defer', reply: { content: [{ type: 'text', text: 'two' }] } });
     enqueueDerive(f.store, 'defer', 'actor', '');
-    const first = drainDerive(f.store, 1);
-    expect(first.purpose_processed).toBe(1);
-    expect(first.purpose_remaining).toBe(1);
-    expect(first.processed).toBe(0);
-    expect(queueState(f.store, 'defer')).not.toBe('clean');
-    const second = drainDerive(f.store, 1);
-    expect(second.purpose_processed).toBe(1);
-    expect(second.processed).toBe(2);
+    // limit 按组计数：即使每批只判一笔用途，同一调用也要把组内成员判完再发布。
+    const result = drainDerive(f.store, 1);
+    expect(result.purpose_processed).toBe(2);
+    expect(result.purpose_remaining).toBe(0);
+    expect(result.processed).toBe(2);
     expect(queueState(f.store, 'defer')).toBe('clean');
   } finally { f.close(); }
 });
@@ -1591,17 +1588,23 @@ Expected: FAIL，`purpose_processed` 为 undefined，或目标请求的 `purpose
 
 ```ts
 export function drainDeriveTx(db: Database, options: DeriveTxOptions): DrainResult {
-  const purpose = drainRequestPurposesTx(
-    db,
-    options.purposeLimit ?? options.limit,
-    options.scope,
-  );
+  // limit 按组计数，组完成要求组内没有 pending：同一调用必须推进用途到排空，
+  // 否则一个大组会被切成多轮、迟迟不能发布。purposeLimit 只是每批大小。
+  const purposeLimit = options.purposeLimit ?? 100;
+  let purposeProcessed = 0;
+  let purposeRemaining = 0;
+  for (;;) {
+    const batch = drainRequestPurposesTx(db, purposeLimit, options.scope);
+    purposeProcessed += batch.processed;
+    purposeRemaining = batch.remaining;
+    if (batch.remaining === 0 || batch.processed === 0) break;
+  }
   // C 的组选择、全量重建、assignChainRoles、pairToolCallsTx、组 CAS 原样保留。
-  // 只在每轮组开始前加入下面的 pending 检查。
+  // 每轮组开始前保留 existing pending 检查。
   return {
     processed, remaining, groups: touched, recomputed, retained,
-    purpose_processed: purpose.processed,
-    purpose_remaining: purpose.remaining,
+    purpose_processed: purposeProcessed,
+    purpose_remaining: purposeRemaining,
   };
 }
 ```
