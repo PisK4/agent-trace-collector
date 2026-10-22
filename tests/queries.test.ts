@@ -4,7 +4,8 @@ import { loadBoundSalt, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
 import { zstdCompressSync } from 'node:zlib';
 import { attemptChainOf, derivationOf, getRequest, getRoute, getStats, listRequests, listSessions,
-  projectionMetaReading, routeSummaryReading, sourceFactsReading } from '../src/queries';
+  projectionMetaReading, promptReadingOf, routeSummaryReading, sourceFactsReading } from '../src/queries';
+import type { ProjectionMetaReading } from '../src/queries';
 import { persistBody } from '../src/body';
 import { drainDerive, enqueueDerive } from '../src/derive';
 import { markGroupDirtyTx } from '../src/derive-state';
@@ -630,4 +631,33 @@ test('详情在同一个快照里带出安全来源事实与派生状态', () =>
   } finally {
     f.close();
   }
+});
+
+const prompt = { tokens: 500, counted: true, window: 1000, held: false, parts: [{ kind: 'chat', tokens: 300 }] };
+const freshPrompt: ProjectionMetaReading['prompt'] = { actualVersion: 3, state: 'recomputed', reason: 'complete', basis: ['req:1'] };
+const retainedPrompt: ProjectionMetaReading['prompt'] = { actualVersion: 2, state: 'retained', reason: 'expired_input', basis: [] };
+const invalidPrompt: ProjectionMetaReading['prompt'] = { actualVersion: 2, state: 'retained', reason: 'invalid_input', basis: [] };
+const missingPrompt: ProjectionMetaReading['prompt'] = { actualVersion: null, state: 'missing', reason: 'legacy_unknown', basis: [] };
+
+test('只有 recomputed 才计算占用比例', () => {
+  const fresh = promptReadingOf(prompt, freshPrompt, null, null);
+  expect(fresh.state).toBe('recomputed');
+  expect(fresh.ratio).toBe(0.5);
+  const retained = promptReadingOf(prompt, retainedPrompt, null, null);
+  expect(retained.state).toBe('retained');
+  expect(retained.tokens).toBe(500);
+  expect(retained.ratio).toBeNull();
+  expect(retained.note).toContain('旧结果');
+});
+
+test('缺分母、invalid_input 与 missing 都不显示比例', () => {
+  expect(promptReadingOf({ ...prompt, window: null }, freshPrompt, null, null).ratio).toBeNull();
+  const invalid = promptReadingOf(prompt, invalidPrompt, null, null);
+  expect(invalid.state).toBe('retained');
+  expect(invalid.reason).toBe('invalid_input');
+  expect(invalid.ratio).toBeNull();
+  expect(invalid.note).toContain('无法复核');
+  expect(promptReadingOf(null, missingPrompt, [{ kind: 'chat', tokens: 10 }], 10).ratio).toBeNull();
+  expect(promptReadingOf(null, missingPrompt, [{ kind: 'chat', tokens: 10 }], null).tokens).toBeNull();
+  expect(promptReadingOf(null, missingPrompt, null, null).state).toBe('missing');
 });
