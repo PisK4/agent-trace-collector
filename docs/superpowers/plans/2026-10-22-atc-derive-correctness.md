@@ -228,7 +228,8 @@ for (const mode of ['body_omitted', 'metadata_only'] as const) {
 
 **Interfaces:**
 - Consumes: `fixture()`、`persistBody(store, reqId, input)`、`enqueueDerive(store, convKey, actor, fromSort)`、现有 `drainDerive` 与暂时保留的 `pairToolCalls`。
-- Produces: 内部 `compareLogicalOrder(left: LogicalRow, right: LogicalRow): number`、`compareTraversalOrder(left: LogicalRow, right: LogicalRow): number`；前者按时间和来源身份稳定遍历，不含 req_id，也不能单独证明同时间先后；后者仅在时间和身份相同时用 req_id 兜底。关系判断同时消费 `uncertainOrderIds`，仅认可同代际的不同账本偏移。
+- Produces: `compareLogicalOrder(left: LogicalRow, right: LogicalRow): number`、`compareTraversalOrder(left: LogicalRow, right: LogicalRow): number`；前者按时间和来源身份稳定遍历，不含 req_id，也不能单独证明同时间先后；后者仅在时间和身份相同时用 req_id 兜底。关系判断同时消费 `uncertainOrderIds`，仅认可同代际的不同账本偏移。
+- Produces（供 [F 的条件切片](2026-10-22-atc-capacity-convergence.md) import，不复制第二份实现）：`type LogicalRow`、`type ResolvedTool`、`uncertainOrderIds`、`fingerprintsOf`、`toolResultPreview`，以及 `src/derive.ts` 既有的 `firstUserPreview`、`tailUserPreview`、`messageAt`、`deriveTitle`、`previewOf`、`replyInfoOf` 一并导出（`modelTimeTitle` 已是 `src/sources/magpie.ts` 的导出，无需改动）。这些符号只暴露既有取值与格式化，不暴露事务步骤；切片路径只 import 它们，不得复刻名称合并、内容兜底、字符截断与兜底标题。
 
 - [ ] **Step 1：添加同时间、生产形状键的回归与 helper。** 在测试文件沿用已有 Bun/import，补 `Store` 类型和以下本地 helper。显式 ID 只用于模拟不同摄入顺序，生产写入继续由 SQLite 分配。
 
@@ -743,7 +744,7 @@ expect(snapshot(f.store, [1, 2]).requests[1]?.input_preview).toBe('工具结果 
 
 同组重复 call_id 沿用当前 ambiguous 测试，并增加结果内容兜底断言；若其关系为 unknown，只断言摘要不出现调用名，不能要求 delta 分支文案。保留 title 旁路测试，另构造标题请求回复中含工具调用并检查没有该请求的 tool_call。未知前驱沿用 pending 测试，摘要不得取工具名。加入一个被回收调用的旧 resolved 行，用相同 call_id 指向当前结果，断言它本身保留，当前摘要仍只由本次关联决定。Run: `bun test tests/derive.test.ts`，Expected: PASS。清空重建只清可重算请求的结果，缺正文历史值不参与清空。
 
-- [ ] **Step 5：更新拥有决策的 note 与架构后提交。** 说明摘要从当前确定关联得名、调用位置与结果 path 均限定、历史保留行不充当本次确认。加以下版本兼容回归，锁定现有 UPDATE 的实际行为，不将其解读为算法版本或可靠累计重建次数。新建可重算工具行每轮先插入 1 再增至 2；被回收的旧工具行仍按旧逻辑递增，C 批次再修正该口径。
+- [ ] **Step 5：更新拥有决策的 note 与架构后提交。** 说明摘要从当前确定关联得名、调用位置与结果 path 均限定、历史保留行不充当本次确认。加以下版本兼容回归，锁定现有 UPDATE 的实际行为，不将其解读为算法版本或可靠累计重建次数。新建可重算工具行每轮先插入 1 再增至 2；被回收的旧工具行仍按旧逻辑递增，[C 批次](2026-10-22-atc-durable-rebuild.md)再修正该口径。
 
 ```ts
 test('工具版本保持旧写入口径直到显式版本迁移', () => {
@@ -875,7 +876,7 @@ else recomputed += 1;
 return { processed, remaining, groups: touched, recomputed, retained };
 ```
 
-维护循环累加并输出 `recomputed_requests`、`retained_requests`。旧 unavailable/reasons 是按 body_state 的补采报告，不能代替上述实际比较状态；旧 derive_version/MAX 字段继续兼容，但明确不用于证明算法覆盖率，C 批次再迁移目标/实际版本。
+维护循环累加并输出 `recomputed_requests`、`retained_requests`。旧 unavailable/reasons 是按 body_state 的补采报告，不能代替上述实际比较状态；旧 derive_version/MAX 字段继续兼容，但明确不用于证明算法覆盖率，[C 批次](2026-10-22-atc-durable-rebuild.md)再迁移目标/实际版本。
 
 ```ts
 let drained: ReturnType<typeof drainDerive>;
@@ -1037,7 +1038,7 @@ expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_queue').get()).toEqu
 bun run maintain rebuild --db /private/tmp/atc-synthetic-plan/trace.db --session synthetic-derive
 ```
 
-验收记录包含代码提交、目标会话清单、逐会话命令退出码、queue_remaining、recomputed_requests、retained_requests 和 unavailable/reasons。queue_remaining=0 只表示目标组执行完毕；retained_requests 必须单列，不把旧 derive_version 的 MAX 当作规则覆盖率。当前计数按请求描述本次执行，不提供逐字段或历史算法证明；C 批次再交付持久的目标/实际版本及原输入依据。
+验收记录包含代码提交、目标会话清单、逐会话命令退出码、queue_remaining、recomputed_requests、retained_requests 和 unavailable/reasons。queue_remaining=0 只表示目标组执行完毕；retained_requests 必须单列，不把旧 derive_version 的 MAX 当作规则覆盖率。当前计数按请求描述本次执行，不提供逐字段或历史算法证明；[C 批次](2026-10-22-atc-durable-rebuild.md)再交付持久的目标/实际版本及原输入依据。
 
 - [ ] Task 3 的混合报告回归通过：recomputed_requests=1、retained_requests=1、queue_remaining=0，旧标题保留；101 个无骨架请求全部计入 retained_requests。
 - [ ] Task 3 的合成旧排序对齐回归通过：维护命令处理入口与直接完整入口的前驱、角色、工具和摘要一致，费用、owner 与正文引用不变。
