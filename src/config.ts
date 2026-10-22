@@ -15,7 +15,27 @@ export type Config = {
   diskLimit: number;
   /** hook 回调的总投递预算；上限来自计划，不随环境放大。 */
   gatewayTimeoutMs: number;
+  /** 容量实验用的作业间隔；生产配置不设置，缺省沿用各作业常量。 */
+  intervals?: Partial<Record<IntervalKey, number>>;
 };
+
+const INTERVAL_KEYS = ['ledger', 'route', 'cost', 'probe', 'pending', 'derive', 'retention', 'rawPrune', 'gap'] as const;
+export type IntervalKey = typeof INTERVAL_KEYS[number];
+
+/**
+ * 作业间隔的唯一读取点。只接受显式注入的正安全整数；生产 `loadConfig`
+ * 不解析环境变量，缺省返回调用点的现有常量。
+ */
+export function intervalOf(
+  config: Pick<Config, 'intervals'>,
+  key: IntervalKey,
+  fallback: number,
+): number {
+  const value = config.intervals?.[key];
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error('invalid_capacity_interval');
+  return value;
+}
 
 export const GB = 1_000_000_000;
 export const MiB = 1024 * 1024;
