@@ -878,7 +878,7 @@ bun test tests/body.test.ts -t '末条块引用缺失'
 
 Expected: 第一条 FAIL，`Cannot find module '../src/request-purpose'` 或 `seedPurposeRequest` 未导出；第二条 FAIL，`restoreBody` 仍返回只有一条消息的正文。
 
-- [ ] **Step 3：把正文读取与回复文本抽成共享 helper。** `request` 表没有 `protocol` 列，协议只来自 skeleton。`readSkeletonTx` 严格检查 `format=1`、非空 `protocol`、布尔 `has_messages`、整数 `msg_count`；`readBodyMetaTx` 用 `LEFT JOIN` 检查引用数、ord 连续和块存在，但**不解压消息块**，供用途读取；`readBodyTx` 在 meta 通过后解压全部消息，供 derive 与 `restoreBody` 使用。任何结构不一致返回 null，不抛错：derive 保持"不可读"，用途走 retained/missing，不能把 partial 当完整分类。`src/body.ts` 已导入 `Database` 与 `zstdDecompressSync`，不需要新增 import。
+- [ ] **Step 3：把正文读取与回复文本抽成共享 helper。** `request` 表没有 `protocol` 列，协议只来自 skeleton；消息条数反过来只存在 `request.msg_count`，骨架里没有也不该再抄一份。`readSkeletonTx` 严格检查 `format=1`、非空 `protocol`、布尔 `has_messages`、整数 `redact_version`，并按 `has_messages` 核对 `request` 行的整数 `msg_count`；`readBodyMetaTx` 用 `LEFT JOIN` 检查引用数、ord 连续和块存在，但**不解压消息块**，供用途读取；`readBodyTx` 在 meta 通过后解压全部消息，供 derive 与 `restoreBody` 使用。任何结构不一致返回 null，不抛错：derive 保持"不可读"，用途走 retained/missing，不能把 partial 当完整分类。`src/body.ts` 已导入 `Database` 与 `zstdDecompressSync`，不需要新增 import。
 
 ```ts
 export type BodyMeta = {
@@ -898,15 +898,17 @@ export type StoredBody = {
 
 type SkeletonFields = {
   format?: unknown; protocol?: unknown; request_without_messages?: unknown;
-  reply?: unknown; has_messages?: unknown; msg_count?: unknown; redact_version?: unknown;
+  reply?: unknown; has_messages?: unknown; redact_version?: unknown;
 };
 
 function readSkeletonTx(db: Database, reqId: number): {
   protocol: string; request: unknown; reply: unknown;
   hasMessages: boolean; messageCount: number; redactVersion: number;
 } | null {
-  const row = db.query<{ skeleton_z: Uint8Array | null; body_state: string }, [number]>(
-    'SELECT skeleton_z, body_state FROM request WHERE req_id=?').get(reqId);
+  const row = db.query<{
+    skeleton_z: Uint8Array | null; body_state: string; msg_count: number | null;
+  }, [number]>(
+    'SELECT skeleton_z, body_state, msg_count FROM request WHERE req_id=?').get(reqId);
   if (row == null || row.skeleton_z == null) return null;
   if (row.body_state !== 'available' && row.body_state !== 'partial') return null;
   let parsed: unknown;
@@ -921,14 +923,13 @@ function readSkeletonTx(db: Database, reqId: number): {
   if (typeof skeleton.protocol !== 'string' || skeleton.protocol.length === 0) return null;
   if (typeof skeleton.has_messages !== 'boolean') return null;
   if (typeof skeleton.redact_version !== 'number'
-    || !Number.isInteger(skeleton.redact_version)) return null;
+    || !Number.isInteger(skeleton.redact_version) || skeleton.redact_version < 1) return null;
   let messageCount = 0;
   if (skeleton.has_messages) {
-    if (typeof skeleton.msg_count !== 'number'
-      || !Number.isInteger(skeleton.msg_count) || skeleton.msg_count < 0) return null;
-    messageCount = skeleton.msg_count;
-  } else if (skeleton.msg_count !== null && skeleton.msg_count !== undefined
-    && skeleton.msg_count !== 0) {
+    if (typeof row.msg_count !== 'number'
+      || !Number.isInteger(row.msg_count) || row.msg_count < 0) return null;
+    messageCount = row.msg_count;
+  } else if (row.msg_count !== null && row.msg_count !== 0) {
     return null;
   }
   return {
@@ -978,6 +979,10 @@ export function readBodyTx(db: Database, reqId: number): StoredBody | null {
       redact_version: meta.redact_version,
     };
   }
+  // 带消息时骨架必须原本就是对象，否则无法无损合并 messages。
+  if (meta.request === null || typeof meta.request !== 'object' || Array.isArray(meta.request)) {
+    return null;
+  }
   let messages: unknown[] = [];
   if (meta.messageCount > 0) {
     const refs = db.query<{ z: Uint8Array }, [number]>(`
@@ -990,11 +995,9 @@ export function readBodyTx(db: Database, reqId: number): StoredBody | null {
       return null;
     }
   }
-  let request = meta.request;
-  if (request === null || typeof request !== 'object' || Array.isArray(request)) request = {};
   return {
     protocol: meta.protocol,
-    request: { ...(request as Record<string, unknown>), messages },
+    request: { ...(meta.request as Record<string, unknown>), messages },
     reply: meta.reply,
     redact_version: meta.redact_version,
   };
@@ -1456,7 +1459,7 @@ Status: implemented
 
 ## Decision
 
-用途是版本 2 的显式派生结果：`src/semantics.ts` 只解释已读出的视图，`src/request-purpose.ts` 提供单笔读取、按 `req_id + input_epoch + input_revision + purpose_target + purpose_pending` 的 CAS 写回，以及有界重试。规则优先级为分类器强指纹 > 来源 kind > 标题兼容；来源 kind 只在精确值 `title` 时排除链，其它值记为 `source:<value>` 并参与链。正文读取走 skeleton：协议来自 `skeleton.protocol`，严格校验 format、`msg_count`、连续 ord 与块存在；用途只解骨架与引用索引，不解压消息。正文不可读时保留旧解释为 retained，没有旧解释为 missing；协议不支持为 unsupported。错误最多重试 3 次，终态清 pending 并消费当前修订。
+用途是版本 2 的显式派生结果：`src/semantics.ts` 只解释已读出的视图，`src/request-purpose.ts` 提供单笔读取、按 `req_id + input_epoch + input_revision + purpose_target + purpose_pending` 的 CAS 写回，以及有界重试。规则优先级为分类器强指纹 > 来源 kind > 标题兼容；来源 kind 只在精确值 `title` 时排除链，其它值记为 `source:<value>` 并参与链。正文读取走 skeleton：协议来自 `skeleton.protocol`，严格校验 format、骨架字段、`request` 行的 `msg_count`、连续 ord 与块存在；用途只解骨架与引用索引，不解压消息。正文不可读时保留旧解释为 retained，没有旧解释为 missing；协议不支持为 unsupported。错误最多重试 3 次，终态清 pending 并消费当前修订。
 
 ## Alternatives considered
 

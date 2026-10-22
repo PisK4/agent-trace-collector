@@ -258,3 +258,32 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
 }
 
 export { PAGE_MAX };
+
+/**
+ * 回复里的第一段非空文本；两种协议结构都认，不拼工具调用。
+ *
+ * 摘要是给折叠行看的，只取首段就够；需要完整判定（例如分类器只认最后一个
+ * `<block>`）的调用方应遍历全部文本，不要用这个函数。
+ */
+export function assistantText(reply: unknown): string | null {
+  if (!isRecord(reply)) return null;
+  const fromBlocks = (blocks: unknown): string | null => {
+    if (!Array.isArray(blocks)) return null;
+    for (const block of blocks) {
+      if (!isRecord(block)) continue;
+      const value = block.text;
+      if (typeof value === 'string' && value.trim().length > 0) return value;
+    }
+    return null;
+  };
+  const direct = fromBlocks(reply.content);
+  if (direct !== null) return direct;
+  const choices = reply.choices;
+  if (!Array.isArray(choices) || choices.length === 0) return null;
+  const first = choices[0];
+  const message = isRecord(first) ? first.message : null;
+  if (!isRecord(message)) return null;
+  const content = message.content;
+  if (typeof content === 'string') return content.trim().length > 0 ? content : null;
+  return fromBlocks(content);
+}
