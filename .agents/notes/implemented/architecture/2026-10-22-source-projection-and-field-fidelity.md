@@ -43,6 +43,16 @@ Status: implemented
 
 `request.req_kind`、长期版本列与 `projection_meta` 不在这里写；kind、hook 与 nativeSession 只返回给调用方。长期落库归[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)。
 
+## Decision：在线写入只经过同一个投影入口
+
+`src/reconcile.ts` 的账本与路由写入不再各自拼聚合 SQL。`src/sources/raw.ts` 只负责把已准备字段写进 raw 层（`insertPreparedLedgerTx`、`upsertPreparedRouteTx`、只改既有行的 `writePreparedLedgerTx`、`writePreparedRouteTx`），行级事实一律由 `projectRequestTx` 决定。
+
+**脱敏先于映射。** `ingestLedger` 与 `ingestRoute` 先 `redact` 再 `mapLedgerRow` / `mapRouteRow`，raw 列、`payload_json` 与投影读到的字段都来自同一个已脱敏对象。否则列与 payload 各说一套，而 payload 会留着未脱敏副本。
+
+**插入不预判最终值。** 新请求的 `status`、模型三列、token、耗时列与排序键先写 NULL，投影随后写入。此前插入时先拿这一行冒充最终尝试，route 还没到时读者会看到"已成功"的假象。
+
+**归属与排序键留在写入者。** 投影只写行级事实；`applyLedgerOwnershipTx` 写会话归属、`actor`、标题与排序键，并在身份确认后入派生队列。`orderState` 决定排序键：`provable` 才写，`unprovable` 清空，`unknown`（证据不完整）保留旧键。
+
 账号脱敏归一到同一形态：`account` 与 `providerAccount` 都是敏感键，都得到同一个 `credential` 占位符，所以同一个订阅身份在两个入口下不会看起来像两个人。`placeholder` 对已经是占位符的值原样返回，敏感键、请求头与普通字符串三处分支都调用它，重复脱敏不会把占位符再散列成另一个 digest。历史明文账号的修复与隐私变换版本由[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)交付。
 
 ## Alternatives considered
@@ -65,4 +75,4 @@ Status: implemented
 
 ## Testing
 
-`tests/magpie.test.ts` 的「账本来源字段按 req 与 cost 读取并给出类型状态」「账本旧键、空串与非法类型分开记录且都不当新值」「路由 Prompt 只在校准布尔与 tokens 合法时给出 counted」锁定读取与状态；`tests/privacy.test.ts` 的「account 别名共享占位符且已脱敏值不再散列」锁定账号归一与占位符幂等；`tests/projection.test.ts` 的十四条用例锁定完整选择、pending_final、failed、同毫秒可证与跨代际不可证、缺 req、partial 保留、duplicate 保留、后到非法 counted 保留、当前 route 缺 Prompt、同毫秒 route 冲突、kind 冲突、hook 独立与重复投影幂等。上游键名以锚定检出 `开源源码@magpie-2374ffe` 的 `internal/usage/usage.go` 与 `internal/gateway/prompt.go` 为准。
+`tests/magpie.test.ts` 的「账本来源字段按 req 与 cost 读取并给出类型状态」「账本旧键、空串与非法类型分开记录且都不当新值」「路由 Prompt 只在校准布尔与 tokens 合法时给出 counted」锁定读取与状态；`tests/privacy.test.ts` 的「account 别名共享占位符且已脱敏值不再散列」锁定账号归一与占位符幂等；`tests/projection.test.ts` 的十四条用例锁定完整选择、pending_final、failed、同毫秒可证与跨代际不可证、缺 req、partial 保留、duplicate 保留、后到非法 counted 保留、当前 route 缺 Prompt、同毫秒 route 冲突、kind 冲突、hook 独立与重复投影幂等；`tests/reconcile.test.ts` 的「账本 req 与 served 分别落列」「缺 req 保持 NULL」「同一脱敏对象」「部分 raw 过期」「后到非法账本行」「清空排序键」锁定在线写入路径。上游键名以锚定检出 `开源源码@magpie-2374ffe` 的 `internal/usage/usage.go` 与 `internal/gateway/prompt.go` 为准。

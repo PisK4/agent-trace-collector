@@ -12,6 +12,10 @@ import {
   optionalNumber,
 } from './sources/magpie';
 import type { LedgerFields, RouteFields } from './sources/magpie';
+import { insertPreparedLedgerTx, upsertPreparedRouteTx } from './sources/raw';
+import type { LedgerPhysicalRef } from './sources/raw';
+import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
+import type { RequestProjection } from './sources/projection';
 import { enqueueDeriveTx } from './derive';
 import { isPurgedEvidence } from './maintenance';
 import { closeSourceGapsTx, markStaleGapsTx, recordPausedBatchTx } from './retention';
@@ -103,17 +107,6 @@ export function resumePausedLedger(
   });
 }
 
-function sumOrNull(rows: Record<string, unknown>[], column: string): number | null {
-  if (rows.length === 0) return null;
-  let total = 0;
-  for (const row of rows) {
-    const value = row[column];
-    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-    total += value;
-  }
-  return total;
-}
-
 type CurrentRequest = {
   req_id: number;
   conv_key: string | null;
@@ -144,13 +137,14 @@ function insertRequest(
   db: Database,
   fields: LedgerFields,
   refKey: string,
-  sortKey: string,
   now: number,
 ): number {
   const via = fields.source === 'rejected' ? 'rejected' : (fields.via ?? 'through');
   const conv = sessionConv(fields.session, refKey);
   const actor = fields.subagent ?? fields.session ?? null;
   const title = modelTimeTitle(fields.model ?? fields.served, fields.tMs);
+  // 行级事实列由紧随其后的投影写入：这里传 NULL 而不是先拿这一行冒充最终尝试。
+  // 排序键同理，只有投影证明顺序可证时才写。
   const result = db.run(
     `INSERT INTO request(
        route_id,response_id_norm,agent,session,conv_key,conv_source,actor,actor_state,subagent,parent_agent,
@@ -162,143 +156,65 @@ function insertRequest(
     [
       fields.routeId, fields.responseIdNorm, fields.agent, fields.session, conv.key, conv.source,
       actor, actor === null ? 'unknown' : 'known', fields.subagent, fields.parentAgent,
-      fields.tMs, localDay(fields.tMs), via, fields.status, fields.stop, fields.model, fields.served ?? fields.model, fields.provider,
-      fields.inTok, fields.outTok, fields.cacheRead, fields.cacheWrite, fields.reasoning, fields.ms, fields.ttftMs, fields.flowMs, fields.firstTextMs,
+      fields.tMs, localDay(fields.tMs), via, null, null, null, null, null,
+      null, null, null, null, null, null, null, null, null,
       'pending', 0, 2, now, now, title, 'model_time', 'absent', via === 'rejected' ? 'not_applicable' : null,
-      'known', 'ledger', sortKey, fields.magpieVersion, null, null,
+      'known', null, null, fields.magpieVersion, null, null,
     ],
   );
   return Number(result.lastInsertRowid);
 }
 
-function applySingleLedger(db: Database, reqId: number, fields: LedgerFields, now: number): void {
-  const current = currentRequest(db, reqId);
-  const conv = fields.session !== null && current.conv_source === 'request'
-    ? { key: JSON.stringify(['session', fields.session]), source: 'session' }
-    : null;
-  const actor = fields.subagent ?? fields.session ?? null;
-  const title = current.title === null || current.title_source === 'model_time'
-    ? modelTimeTitle(fields.model ?? fields.served, fields.tMs)
-    : current.title;
-  db.run(
-    `UPDATE request SET
-       status=?, stop=?, model_requested=?, model_served=?, provider=?,
-       in_tok=?, out_tok=?, cache_read=?, cache_write=?, reasoning=?, response_id_norm=?,
-       ms=?, ttft_ms=?, flow_ms=?, first_text_ms=?, started_ms=?, day=?,
-       session=COALESCE(session,?), agent=COALESCE(agent,?), subagent=COALESCE(subagent,?), parent_agent=COALESCE(parent_agent,?),
-       conv_key=COALESCE(?,conv_key), conv_source=COALESCE(?,conv_source),
-       actor=CASE WHEN actor_state='known' THEN actor ELSE ? END,
-       actor_state=CASE WHEN actor_state='known' THEN actor_state ELSE ? END,
-       attempt_billed=1, attempt_in=?, attempt_out=?, attempt_cache_read=?, attempt_cache_write=?, attempt_reasoning=?,
-       title=?, title_source=?, have=have|2, updated_at=?, magpie_version=COALESCE(?,magpie_version)
-     WHERE req_id=?`,
-    [
-      fields.status, fields.stop, fields.model, fields.served ?? fields.model, fields.provider,
-      fields.inTok, fields.outTok, fields.cacheRead, fields.cacheWrite, fields.reasoning, fields.responseIdNorm,
-      fields.ms, fields.ttftMs, fields.flowMs, fields.firstTextMs, fields.tMs, localDay(fields.tMs),
-      fields.session, fields.agent, fields.subagent, fields.parentAgent,
-      conv?.key ?? null, conv?.source ?? null,
-      actor, actor === null ? 'unknown' : 'known',
-      fields.inTok, fields.outTok, fields.cacheRead, fields.cacheWrite, fields.reasoning,
-      title, current.title_source ?? 'model_time', now, fields.magpieVersion,
-      reqId,
-    ],
-  );
+function projectLedgerRequestTx(db: Database, reqId: number, now: number): RequestProjection {
+  return projectRequestTx(db, reqId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
 }
 
-type LedgerAggregateRow = {
-  t_ms: number;
-  file_generation: string;
-  byte_offset: number;
-  handed_on: number;
-  status: number | null;
-  stop: string | null;
-  model: string | null;
-  requested: string | null;
-  served: string | null;
-  provider: string | null;
-  response_id_norm: string | null;
-  agent: string | null;
-  session: string | null;
-  subagent: string | null;
-  parent_agent: string | null;
-  in_tok: number | null;
-  out_tok: number | null;
-  cache_read: number | null;
-  cache_write: number | null;
-  reasoning: number | null;
-  ms: number | null;
-  ttft_ms: number | null;
-  flow_ms: number | null;
-  first_text_ms: number | null;
-  magpie_version: string | null;
-};
-
-function applyLedgerAggregate(db: Database, reqId: number, routeId: number, now: number): void {
-  const rows = db.query<LedgerAggregateRow, [number]>(
-    `SELECT t_ms,file_generation,byte_offset,handed_on,status,stop,model,requested,served,provider,response_id_norm,
-            agent,session,subagent,parent_agent,in_tok,out_tok,cache_read,cache_write,reasoning,ms,ttft_ms,flow_ms,first_text_ms,magpie_version
-     FROM raw_ledger WHERE route_id=? AND source!='rejected' ORDER BY t_ms,file_generation,byte_offset`,
-  ).all(routeId);
-  if (rows.length === 0) return;
-  const final = [...rows].reverse().find(row => row.handed_on === 0) ?? null;
+/**
+ * 账本证据给出的身份、排序键与标题。
+ *
+ * 投影只写行级事实；归属与排序键涉及合并既有行与派生队列，仍在这里写。
+ * 证据完整但顺序不可证时清空排序键，否则读模型会把任意一行的物理位置当成组内次序；
+ * 证据不完整时保留旧键，由长期读模型标成非 current。
+ */
+function applyLedgerOwnershipTx(
+  db: Database,
+  reqId: number,
+  fields: LedgerFields,
+  projection: RequestProjection,
+  now: number,
+): void {
   const current = currentRequest(db, reqId);
-  const session = final?.session ?? rows.find(row => row.session !== null)?.session ?? null;
-  const agent = final?.agent ?? rows.find(row => row.agent !== null)?.agent ?? null;
-  const subagent = final?.subagent ?? rows.find(row => row.subagent !== null)?.subagent ?? null;
-  const parentAgent = final?.parent_agent ?? rows.find(row => row.parent_agent !== null)?.parent_agent ?? null;
-  const actor = subagent ?? session;
-  const started = Math.min(...rows.map(row => row.t_ms));
-  const sortRow = final ?? rows[rows.length - 1]!;
-  const sortKey = `${sortRow.file_generation}|${String(sortRow.byte_offset).padStart(20, '0')}`;
+  const identity = projection.identity;
+  const session = identity.state === 'complete' ? identity.session : null;
+  const subagent = identity.state === 'complete' ? identity.subagent : null;
+  const actor = subagent ?? session ?? null;
   const conv = session !== null && (current.conv_source === 'request' || current.conv_source === null)
     ? { key: JSON.stringify(['session', session]), source: 'session' }
     : null;
+  const started = identity.startedMs ?? fields.tMs;
+  const clearSort = identity.orderState === 'unprovable';
+  const setSort = identity.orderState === 'provable' && identity.sortKey !== null;
+  const titleModel = projection.selected?.fields.model ?? projection.selected?.fields.served
+    ?? fields.model ?? fields.served;
   const title = current.title === null || current.title_source === 'model_time'
-    ? modelTimeTitle(final?.model ?? final?.served ?? null, started)
+    ? modelTimeTitle(titleModel, started)
     : current.title;
-  const triesRow = db.query<{ tries_json: string | null }, [number]>(
-    'SELECT tries_json FROM route_summary WHERE route_id=?',
-  ).get(routeId);
-  let attemptCount: number | null = current.attempt_count;
-  if (triesRow?.tries_json) {
-    try {
-      const tries = JSON.parse(triesRow.tries_json) as unknown;
-      if (Array.isArray(tries)) attemptCount = tries.length;
-    } catch {
-      // Keep the previous count when the summary is not valid JSON.
-    }
-  }
-
   db.run(
     `UPDATE request SET
-       status=?, stop=?, model_requested=?, model_served=?, provider=?, response_id_norm=?,
-       in_tok=?, out_tok=?, cache_read=?, cache_write=?, reasoning=?, ms=?, ttft_ms=?, flow_ms=?, first_text_ms=?,
-       started_ms=?, day=?,
        session=COALESCE(session,?), agent=COALESCE(agent,?), subagent=COALESCE(subagent,?), parent_agent=COALESCE(parent_agent,?),
        conv_key=COALESCE(?,conv_key), conv_source=COALESCE(?,conv_source),
        actor=CASE WHEN actor_state='known' THEN actor ELSE ? END,
        actor_state=CASE WHEN actor_state='known' THEN actor_state ELSE ? END,
-       attempt_count=COALESCE(?,attempt_count), attempt_billed=?, attempt_in=?, attempt_out=?,
-       attempt_cache_read=?, attempt_cache_write=?, attempt_reasoning=?,
-       title=?, title_source=?, sort_source='ledger', sort_key=?,
-       have=have|2, updated_at=?, magpie_version=COALESCE(?,magpie_version),
-       attempt_state=CASE WHEN ?=1 THEN 'known' ELSE 'pending_final' END
+       sort_source=CASE WHEN ?=1 THEN NULL WHEN ?=1 THEN 'ledger' ELSE sort_source END,
+       sort_key=CASE WHEN ?=1 THEN NULL WHEN ?=1 THEN ? ELSE sort_key END,
+       title=?, title_source=?, updated_at=?, have=have|2
      WHERE req_id=?`,
     [
-      final?.status ?? null, final?.stop ?? null, final?.model ?? final?.requested ?? null,
-      final?.served ?? final?.model ?? null, final?.provider ?? null, final?.response_id_norm ?? null,
-      final?.in_tok ?? null, final?.out_tok ?? null, final?.cache_read ?? null, final?.cache_write ?? null,
-      final?.reasoning ?? null, final?.ms ?? null, final?.ttft_ms ?? null, final?.flow_ms ?? null, final?.first_text_ms ?? null,
-      started, localDay(started),
-      session, agent, subagent, parentAgent,
+      session, identity.agent, subagent, identity.parentAgent,
       conv?.key ?? null, conv?.source ?? null,
       actor, actor === null ? 'unknown' : 'known',
-      attemptCount, rows.length, sumOrNull(rows, 'in_tok'), sumOrNull(rows, 'out_tok'),
-      sumOrNull(rows, 'cache_read'), sumOrNull(rows, 'cache_write'), sumOrNull(rows, 'reasoning'),
-      title, current.title_source ?? 'model_time', sortKey,
-      now, final?.magpie_version ?? null, final === null ? 0 : 1,
-      reqId,
+      clearSort ? 1 : 0, setSort ? 1 : 0, clearSort ? 1 : 0, setSort ? 1 : 0, identity.sortKey,
+      title, current.title_source ?? 'model_time', now, reqId,
     ],
   );
   // 身份确认后，这一组要重算前驱、增量与标题；未知归属不入队。
@@ -375,7 +291,6 @@ function mergeLedgerRow(
   db: Database,
   fields: LedgerFields,
   refKey: string,
-  sortKey: string,
   now: number,
 ): void {
   const via = fields.source === 'rejected' ? 'rejected' : (fields.via ?? 'through');
@@ -388,27 +303,17 @@ function mergeLedgerRow(
     if (existing != null) reqId = existing.req_id;
   }
   if (reqId === null) {
-    reqId = insertRequest(db, fields, refKey, sortKey, now);
+    reqId = insertRequest(db, fields, refKey, now);
   }
   db.run(
     'INSERT OR IGNORE INTO request_evidence(req_id,source_kind,ref_key,merge_state,match_rule,added_at) VALUES (?,?,?,?,?,?)',
     [reqId, 'ledger', refKey, 'merged', null, now],
   );
-  if (!rejected && fields.routeId !== null) {
-    applyLedgerAggregate(db, reqId, fields.routeId, now);
-    linkRouteIfPresent(db, reqId, fields.routeId, now);
-  } else {
-    applySingleLedger(db, reqId, fields, now);
-  }
+  if (!rejected && fields.routeId !== null) linkRouteIfPresent(db, reqId, fields.routeId, now);
+  // 行级事实只由投影写；投影幂等，route 挂载前后各调一次不改变结果。
+  const projection = projectLedgerRequestTx(db, reqId, now);
+  applyLedgerOwnershipTx(db, reqId, fields, projection, now);
 }
-
-const RAW_LEDGER_INSERT = `INSERT OR IGNORE INTO raw_ledger(
-  source_kind,file_generation,byte_offset,route_id,t_text,t_ms,source,handed_on,kind,
-  agent,provider,host,account,model,requested,served,in_tok,out_tok,cache_read,cache_write,reasoning,effort,
-  ms,status,stop,response_id,response_id_norm,rid,ep,session,native_session,subagent,parent_agent,
-  ttft_ms,flow_ms,first_text_ms,sent_ms,retried_ms,queued_ms,own_ms,reasoning_hidden,
-  tier_asked,tier_sent,tier_served,err_type,computer,via,archive,tries,credits,own_cost,magpie_version,payload_json
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
 
 export function ingestLedger(
   store: Store,
@@ -458,29 +363,27 @@ export function ingestLedger(
         invalid += 1;
         continue;
       }
-      const fields = mapLedgerRow(parsed);
+      // 脱敏先于映射：raw 列、payload 与投影都只来自同一个已脱敏对象，
+      // 否则列与 payload 会各说一套，而 payload 的未脱敏副本会绕开脱敏边界。
+      const redacted = redact(parsed, salt);
+      if (!isRecord(redacted)) {
+        recordIssue(db, 'ledger', refKey, 'ledger_invalid_redaction', now, line.end - line.offset);
+        invalid += 1;
+        continue;
+      }
+      const fields = mapLedgerRow(redacted);
       if (fields === null) {
         recordIssue(db, 'ledger', refKey, 'ledger_invalid_time', now, line.end - line.offset);
         invalid += 1;
         continue;
       }
-      const payloadJson = JSON.stringify(redact(parsed, salt));
-      const inserted = db.run(RAW_LEDGER_INSERT, [
-        'file', batch.generation, line.offset, fields.routeId, fields.tText, fields.tMs, fields.source, fields.handedOn, fields.kind,
-        fields.agent, fields.provider, fields.host, fields.account, fields.model, fields.requested, fields.served,
-        fields.inTok, fields.outTok, fields.cacheRead, fields.cacheWrite, fields.reasoning, fields.effort,
-        fields.ms, fields.status, fields.stop, fields.responseId, fields.responseIdNorm, fields.rid, fields.ep,
-        fields.session, fields.nativeSession, fields.subagent, fields.parentAgent,
-        fields.ttftMs, fields.flowMs, fields.firstTextMs, fields.sentMs, fields.retriedMs, fields.queuedMs, fields.ownMs, fields.reasoningHidden,
-        fields.tierAsked, fields.tierSent, fields.tierServed, fields.errType, fields.computer, fields.via, fields.archive,
-        fields.tries, fields.credits, fields.ownCost, fields.magpieVersion, payloadJson,
-      ]).changes;
-      if (inserted === 0) {
+      const payloadJson = JSON.stringify(redacted);
+      const ref: LedgerPhysicalRef = { generation: batch.generation, offset: line.offset };
+      if (!insertPreparedLedgerTx(db, ref, fields, payloadJson)) {
         duplicate += 1;
         continue;
       }
-      const sortKey = `${batch.generation}|${String(line.offset).padStart(20, '0')}`;
-      mergeLedgerRow(db, fields, refKey, sortKey, now);
+      mergeLedgerRow(db, fields, refKey, now);
       accepted += 1;
     }
     upsertCursor(db, 'ledger', sourceName, batch, now);
