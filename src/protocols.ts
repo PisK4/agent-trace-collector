@@ -1,6 +1,7 @@
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
 import type { BodyState } from './queries';
+import { interpretMessage, type MessageView, type UserInputView } from './input-interpretation';
 
 /**
  * 协议适配层：把已保存的脱敏对象解释成阅读用的辅助视图。
@@ -23,6 +24,23 @@ export type ParsedBody = {
   response_id: string | null;
 };
 
+export type MessageInterpretation = {
+  ord: number;
+  role: MessageView['role'];
+  role_state: MessageView['role_state'];
+  input: UserInputView | null;
+  is_input: boolean;
+};
+
+export type BodyCoverage = {
+  from: number;
+  to: number;
+  total: number | null;
+  complete: boolean;
+  loaded_complete: boolean;
+  reason: 'available' | 'body_partial' | 'body_unavailable';
+};
+
 export type BodyPage = {
   state: BodyState;
   parse_state: string | null;
@@ -34,6 +52,8 @@ export type BodyPage = {
   request_fields: unknown;
   reply: unknown;
   reason: string | null;
+  interpretations: MessageInterpretation[];
+  coverage: BodyCoverage;
 };
 
 /** 适配器版本写进 request 的长期列；语义变化时升版。 */
@@ -215,9 +235,9 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
   const stateRow = store.read.query<{
     body_state: string; parse_state: string | null; reply_state: string | null;
     msg_count: number | null; miss_reason: string | null; body_evict_reason: string | null;
-    skeleton_z: Uint8Array | null;
+    skeleton_z: Uint8Array | null; agent: string | null;
   }, [number]>(`
-    SELECT body_state, parse_state, reply_state, msg_count, miss_reason, body_evict_reason, skeleton_z
+    SELECT body_state, parse_state, reply_state, msg_count, miss_reason, body_evict_reason, skeleton_z, agent
     FROM request WHERE req_id=?`).get(id);
   if (stateRow == null) return null;
 
@@ -236,6 +256,15 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
     request_fields: null,
     reply: null,
     reason: state === 'evicted' ? stateRow.body_evict_reason : stateRow.miss_reason,
+    interpretations: [],
+    coverage: {
+      from,
+      to,
+      total: readable ? stateRow.msg_count : null,
+      complete: state === 'available',
+      loaded_complete: readable && stateRow.msg_count !== null && to >= stateRow.msg_count,
+      reason: readable ? (state === 'available' ? 'available' : 'body_partial') : 'body_unavailable',
+    },
   };
   if (!readable) return page;
   if (stateRow.skeleton_z == null) return page;
@@ -254,6 +283,15 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
     SELECT ord, block FROM request_block WHERE req_id=? AND ord >= ? AND ord < ? ORDER BY ord`)
     .all(id, from, to);
   page.messages = rows.map(row => ({ ord: row.ord, value: decompressBlock(store, row.block, cache) }));
+  page.interpretations = page.messages.map(message => {
+    const view = interpretMessage(message.value, stateRow.agent, message.ord);
+    // unrecognized 仍是用户消息：保留原文并标未识别，不能因为清洗失败就吞掉。
+    // injected 与 empty 不是用户可见输入，页面据此不铺气泡。
+    return {
+      ...view,
+      is_input: view.input !== null && (view.input.state === 'text' || view.input.state === 'unrecognized'),
+    };
+  });
   return page;
 }
 
