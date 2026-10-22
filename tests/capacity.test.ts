@@ -7,6 +7,7 @@ import {
   metadataSnapshot, summarizeDurations,
 } from '../src/capacity';
 import { intervalOf, loadConfig, type Config } from '../src/config';
+import { buildCapacityConfig, makeHookEnvelope, makeLedgerLine, mulberry32 } from '../scripts/capacity-support';
 import { fixture } from './fixtures';
 
 test('最近秩分位与空样本', () => {
@@ -108,4 +109,39 @@ test('容量间隔只由显式 Config 注入，缺省保持常量', () => {
   expect(intervalOf(configured, 'derive', 1_000)).toBe(1_000);
   expect(() => intervalOf({ intervals: { retention: 0 } }, 'retention', 1))
     .toThrow('invalid_capacity_interval');
+});
+
+test('合成负载固定种子可复现', () => {
+  const a = mulberry32(42);
+  const b = mulberry32(42);
+  expect([a(), a(), a()]).toEqual([b(), b(), b()]);
+});
+
+test('合成配置只落在临时根内', () => {
+  const root = mkdtempSync(join(tmpdir(), 'atc-capacity-config-'));
+  try {
+    mkdirSync(join(root, 'sources', 'routing'), { recursive: true });
+    const config = buildCapacityConfig({ root, upstreamPort: 40123, bodyBudget: 1_000_000, diskLimit: 2_000_000 });
+    expect(config.dataDir).toBe(join(root, 'data'));
+    expect(config.ledgerPath).toBe(join(root, 'sources', 'usage.jsonl'));
+    expect(config.routingDir).toBe(join(root, 'sources', 'routing'));
+    expect(config.magpieUrl).toBe('http://127.0.0.1:40123');
+    expect(config.port).toBe(0);
+    expect(() => assertCapacityIsolation({ root, config, upstreamPort: 40124 }))
+      .toThrow('capacity_upstream_mismatch');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('合成 hook 与账本行形状可被真实解析器接受', () => {
+  const envelope = makeHookEnvelope({
+    hookId: 'hook-1', session: 'session-1', routeId: 7,
+    requestBytes: 4096, replyBytes: 512, bodyOmitted: false, omitReason: null,
+    model: 'synthetic-model', startedMs: 1_700_000_000_000,
+  });
+  expect(envelope.origin).toBe('local');
+  expect(envelope.request_bytes).toBeGreaterThanOrEqual(4096);
+  expect(envelope.reply_bytes).toBeGreaterThanOrEqual(512);
+  expect(JSON.stringify(envelope.request)).toContain('synthetic');
+  const line = makeLedgerLine({ routeId: 7, session: 'session-1', responseId: envelope.hook_id, startedMs: 1_700_000_000_000 });
+  expect(JSON.parse(line)).toMatchObject({ route_id: 7, session: 'session-1', response_id: envelope.hook_id });
 });
