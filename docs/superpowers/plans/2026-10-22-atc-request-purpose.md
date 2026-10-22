@@ -1697,11 +1697,12 @@ test('非标题的排除用途不从用户增量取标题', () => {
     });
     enqueueDerive(f.store, 'aux-delta', 'actor', '');
     drainDerive(f.store, 100);
+    // aux 与主链没有可比关系，输入摘要按末轮输入展示；标题只来自用途列。
     expect(f.store.read.query<{ title: string; title_source: string;
       input_preview_kind: string | null }, [number]>(
       'SELECT title,title_source,input_preview_kind FROM request WHERE req_id=?').get(aux))
       .toEqual({ title: '分类器标题', title_source: 'model_title',
-        input_preview_kind: 'delta' });
+        input_preview_kind: 'tail' });
   } finally { f.close(); }
 });
 
@@ -1812,7 +1813,8 @@ db.run(`UPDATE request SET prev_req_id=?, prev_relation=?, delta_ordinals=?, tit
   - `isTitle`：保留原分支，`title = modelTitle ?? (current === null ? row.title ?? fallback : fallback)`、`model_title` 来源提升、`生成会话标题` 输入摘要与 `inputKind='title'`。
   - `isAux && !isTitle` 且正文可比较、delta 非空：`title = modelTitle ?? fallback`，`source = modelTitle !== null ? 'model_title' : 'model_time'`，即保持模型标题或时间兜底，不调 `deriveTitle`；输入摘要与 `input_kind` 仍走同一 delta 分支的 `previewOf`/`toolResultPreview` 取值，不显示成标题请求。
   - `isAux && !isTitle` 且 `current === null`：与其它行一样保留库里旧标题与旧来源，不因 aux 改写。
-- 因此 `writePresentationTx` 的 delta 分支内多一个 aux 判据；其余分支顺序、`replyPreview` 计算与保留分支不变。
+- 因此 `writePresentationTx` 在可比较分支里先按 `isAux` 决定标题来源，再走原有的 delta/末轮摘要取值；正常 aux 流程 `delta` 为 null，落末轮输入分支（`tail`）；「aux 且 delta 非空」只做防御性标题取值，输入摘要仍按 delta 取。
+- 现有用例「标题请求的回复只留标题文本」同步改为断言预览保留回复原文、正式标题由用途列提供：预览不再解析 `<title>`。
 - 正常流程里 aux 行由链匹配的 aux 分支给出 `{parent:null,relation:'aux',delta:null}`，所以「aux 且 delta 非空」在管线里不可达，这条判据是防御性的：它把「排除用途不从用户增量取标题」钉在选标题的那一处，而不是依赖链匹配的非局部不变量。回归用直写一次暂存行的定向用例覆盖，不要求执行者去找可达路径。
 - `assignChainRoles` 已由 A 改为消费 `roleRows`，过滤条件从 `row.req_kind === 'chat'` 改成 `row.purpose_chain === 'participate'`。
 - `pairToolCallsTx` 的 `rows` 就是传入的 `pairRows`；把 `if (row.req_kind === 'title') continue` 改成 `if (row.purpose_chain === 'exclude') continue`，不要保留第二套 title 判断。旧 `pairToolCalls` 包装已由 A 取消，不新增 SQL 扫描。
