@@ -1540,15 +1540,18 @@ git commit -m "test(capacity): add deterministic synthetic sources and isolated 
 import { scenarioPlan } from '../scripts/capacity';
 
 test('场景矩阵固定请求速率、时长与正文混合', () => {
-  expect(scenarioPlan('baseline-1rps', { full: true })).toMatchObject({
-    durationMs: 600_000, rps: 1, bodyMix: [0.35 * 1024 * 1024, 2 * 1024 * 1024], concurrency: 1,
+  expect(scenarioPlan('baseline-1rps', { full: true, acknowledgeLongRun: true })).toMatchObject({
+    durationMs: 600_000, rps: 1, bodyMix: [350 * 1024, 2 * 1024 * 1024], concurrency: 1,
   });
-  expect(scenarioPlan('baseline-5rps', { full: true })).toMatchObject({
+  expect(scenarioPlan('baseline-5rps', { full: true, acknowledgeLongRun: true })).toMatchObject({
     durationMs: 600_000, rps: 5, concurrency: 1,
   });
   expect(scenarioPlan('burst', { full: false })).toMatchObject({ concurrency: 10, requestBytes: 4 * 1024 * 1024 });
   expect(scenarioPlan('long', { full: false, requests: 2_000 })).toMatchObject({ requests: 2_000 });
-  expect(scenarioPlan('long', { full: false, requests: 10_000 })).toMatchObject({ requests: 10_000 });
+  expect(scenarioPlan('long', { full: false, requests: 10_000, acknowledgeLongRun: true }))
+    .toMatchObject({ requests: 10_000 });
+  expect(() => scenarioPlan('long', { full: false, requests: 10_000 }))
+    .toThrow('capacity_long_run_not_acknowledged');
   expect(() => scenarioPlan('baseline-5rps', { full: true, acknowledgeLongRun: false }))
     .toThrow('capacity_long_run_not_acknowledged');
 });
@@ -1556,7 +1559,7 @@ test('场景矩阵固定请求速率、时长与正文混合', () => {
 
 - [ ] **Step 2：验证失败。** Run: `bun test tests/capacity.test.ts -t '场景矩阵'`。Expected: FAIL，`scenarioPlan` 不存在。
 
-- [ ] **Step 3：实现参数解析与场景规划。** 默认时长 10 秒，`--full` 才启用 600 秒；10 分钟运行必须同时给 `--acknowledge-long-run`。所有数值有上限校验，避免误把真实流量参数带进来。
+- [ ] **Step 3：实现参数解析与场景规划。** 默认时长 10 秒，`--full` 才启用 600 秒；10 分钟运行、10,000 笔长组与 `all` 都必须同时给 `--acknowledge-long-run`，`requiresLongRunAck` 是唯一判定点。所有数值有上限校验，避免误把真实流量参数带进来。
 
 ```ts
 export type ScenarioName =
@@ -1691,9 +1694,9 @@ async function runBaseline(name: 'baseline-1rps' | 'baseline-5rps', args: Args):
 }
 ```
 
-`postWithRetry` 在 429 和 503 时最多重试 5 次，退避 10、20、40、80、160 ms；只记录状态码与响应中的固定 `error` 字段，不把请求体写进失败记录。最终失败计入 `client.failed`，报告保留原因码。
+`postWithRetry` 在 429 和 503 时最多重试 8 次，退避 10、20、40、80、160、320、640、1,280 ms；十笔 4 MiB 并发在单线程采集器上串行排空，短窗口会让最后一笔耗尽重试。只记录状态码与响应中的固定 `error` 字段，不把请求体写进失败记录。不可重试状态码立即计入 `client.failed`，不等最后一次尝试；网络错误与重试耗尽也计入 `client.failed`。
 
-- [ ] **Step 5：实现读取与排空轮询。** `readOnce` 依次请求会话列表、首个会话的请求列表和首条请求的正文页，分别计时。`pollDrain` 每 100 ms 读统计，直到 `derive_queue.pending_groups === 0` 或超时（`durationMs + 120_000`）；超时把 `pending_groups_end` 保留为非零，报告 `ok:false`。
+- [ ] **Step 5：实现读取与排空轮询。** `readOnce` 依次请求会话列表、首个会话的请求列表和首条请求的正文页，任一非 2xx 都算读取失败并计入 `client.query_failed`，不能把 401/404 的 JSON 当样本。`pollDrain` 每 100 ms 读统计，直到 `derive_queue.pending_groups === 0` 或超时（`plan.durationMs + 120_000`，调用方显式传入）；超时把 `pending_groups_end` 保留为非零，报告 `ok:false`。
 
 ```ts
 async function readOnce(port: number, headers: Record<string, string>): Promise<number> {
@@ -1706,7 +1709,7 @@ async function readOnce(port: number, headers: Record<string, string>): Promise<
       .then(r => r.json()) as any;
     const id = requests.items?.[0]?.req_id;
     if (typeof id === 'number') {
-      await fetch(`${base}/api/requests/${id}/body?from=0&to=65536`, { headers });
+      await fetch(`${base}/api/requests/${id}/body?from=0&to=${PAGE_MAX}`, { headers });
     }
   }
   return performance.now() - started;
@@ -1804,7 +1807,9 @@ function countConservation(dbPath: string, hookAccepted: number): {
       `SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
     const rawHook = count('raw_hook');
     const requests = count('request');
-    const evidence = count('request_evidence');
+    // 账本与 hook 对同一请求各留一行证据，按 req_id 去重才对得上唯一请求数。
+    const evidence = Number((db.query(
+      'SELECT COUNT(DISTINCT req_id) AS n FROM request_evidence').get() as { n: number }).n);
     const route = count('route_summary');
     const missing: string[] = [];
     if (rawHook !== hookAccepted) missing.push(`raw_hook:${rawHook}!=${hookAccepted}`);
@@ -1895,7 +1900,9 @@ function buildReport(input: {
 }
 ```
 
-- [ ] **Step 6：实现突发、长组、路由与回收场景。** 突发场景使用 `Promise.all` 发 10 个并发，其中第 1 个请求体用分块流延迟 50 ms，保证 `ingesting` 互斥被观测到；重复发送第一个 `hook_id` 一次。长组场景直接 `openStore` 建合成库，调用 `persistBody`、`enqueueDerive`，再 `store.write(db => drainDeriveTx(db,{limit}))`，记录比较次数与解码次数；路由场景在同一个采集器上按时序追加、替换 gzip、增加跨午夜文件；回收场景注入 5 秒 retention/rawPrune 与 10 秒 cost 间隔，并预置 8 天前的 raw 行。
+- [ ] **Step 6：实现突发、长组、路由与回收场景。** 突发场景使用 `Promise.all` 发 10 个并发，其中第 1 个请求体用分块流延迟 50 ms，保证 `ingesting` 互斥被观测到；重复发送第一个 `hook_id` 一次。长组场景直接 `openStore` 建合成库，调用 `persistBody`、`enqueueDerive`，再 `store.write(db => drainDeriveTx(db,{limit}))`，记录比较次数与解码次数；每写一笔就入队，积压年龄覆盖整个写入阶段。路由场景在同一个采集器上按时序追加、替换 gzip、增加跨午夜文件；回收场景注入 5 秒 retention/raw_prune 与 10 秒 cost 间隔，并预置 8 天前的 raw 行；停止后只读核对预置 raw 行已清空，残量非零时报告 `ok:false`。
+
+**实现偏差（已按代码校正）。** 报告在最终快照之外按 1 秒采样 rss 与存储峰值（burst 在并发结束与排空后各一次，long 在写入、增量排空、全量重排后各一次），字段为 `rss_peak_bytes`、`storage_peak`、`storage_end`、`peak_samples`，采样次数写进 `notes`；`buildReport` 的 `config` 增加临时 `dataDir`，磁盘总量取 `StorageUsage.total_bytes` 而不是只加 db/wal/temp。`client` 增加 `query_failed`，非零时 `ok:false`。`hook_id` 由 `seed` 与序号生成，不再用随机 UUID，重放同一场景时关联可复现。`scenarioPlan` 对 10,000 笔长组同样要求 `acknowledgeLongRun`，`all`、`--full` 与 600,000 ms 由 `requiresLongRunAck` 统一判定。长组重建后的排空循环补 `processed===0` 的卡死守卫。回收场景在正文峰值低于预算 90% 时写明未触发回收，不把未执行写成通过；用户未显式给 `--body-budget` 时，回收场景把预算压到 4 KiB（且小于盘上限的一半），`all` 中其余场景不受影响。
 
 - [ ] **Step 7：运行冒烟。** Run:
 
@@ -1909,7 +1916,7 @@ Expected: 退出 0；报告 `ok:true`；`client.accepted` 等于发送数；`con
 - [ ] **Step 8：提交。** 获授权后：
 
 ```bash
-git add scripts/capacity.ts scripts/capacity-support.ts scripts/capacity-collector.ts tests/capacity.test.ts .agents/notes/implemented/feature/2026-10-22-atc-capacity-load-driver.md
+git add scripts/capacity.ts scripts/capacity-gate.ts scripts/capacity-support.ts scripts/capacity-collector.ts tests/capacity.test.ts .agents/notes/implemented/feature/2026-10-22-atc-capacity-load-driver.md
 git commit -m "test(capacity): add isolated load driver and scenario matrix" \
   -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
@@ -1933,7 +1940,7 @@ bun scripts/capacity.ts --scenario smoke --duration-ms 5000 --rps 2 \
   --report /private/tmp/atc-capacity-reports/smoke.json
 ```
 
-Expected: 报告 `ok:true`；`config.dataDir` 以 `/private/tmp/atc-capacity-` 开头；假上游请求列表里没有 `:3425`。
+Expected: 报告 `ok:true`；`config.dataDir` 的 basename 以 `atc-capacity-` 开头并落在 `tmpdir()` 下（macOS 上通常是 `/var/folders/…`，不是 `/private/tmp`）；假上游请求列表里没有 `:3425`。
 
 - [ ] **Step 2：运行 1 请求/秒与 5 请求/秒各 10 分钟。** 这里需要容量实验授权，并显式确认长跑。两条命令分开运行，避免两个采集器争用机器。
 
@@ -1979,11 +1986,11 @@ Expected: 报告 `route.unchanged` 随轮询增长；`route.decoded` 只在追�
 
 ```sh
 bun scripts/capacity.ts --scenario retention --duration-ms 120000 \
-  --body-budget 67108864 --disk-limit 536870912 \
+  --body-budget 4096 --disk-limit 536870912 \
   --report /private/tmp/atc-capacity-reports/retention.json
 ```
 
-Expected: `collector.jobs.retention.count >= 2`；`collector.jobs.raw_prune.count >= 1`；`collector.jobs.cost.count >= 1`；`body_bytes` 在回收后下降；请求数与分页结果不因正文回收改变；`query_latency` 有样本；`db/wal/temp` 峰值已记录。若 raw 清理没有触发，检查预置行时间与 TTL，不把未执行写成通过。
+Expected: `collector.jobs.retention.count >= 2`；`collector.jobs.raw_prune.count >= 1`；`collector.jobs.cost.count >= 1`；`storage_peak.body_bytes > storage_end.body_bytes`（回收后下降）；报告注明预置 raw 行剩余为 0；请求数与分页结果不因正文回收改变；`query_latency` 有样本；`db/wal/temp` 峰值已记录。若 raw 清理没有触发，检查预置行时间与 TTL，不把未执行写成通过。
 
 - [ ] **Step 7：运行汇总。** 汇总命令按顺序重跑全部场景并写一份报告，供预算生成。只有在已获得长跑授权时执行。
 
@@ -2343,7 +2350,7 @@ done
 
 Expected: 每个命令输出 `{ok,...}` 与失败项；退出码 0 或 1。若某场景报告不在预算中，先补汇总预算，不跳过。
 
-- [ ] **Step 2：复核测量口径。** 检查报告中 `client.accepted` 与 `collector.ingest.accepted - duplicates` 的差异，差异必须能由重试、重复或边界请求解释；`conservation.missing` 必须为空；`storage_peak` 与最终 `storage` 不同是正常的，报告写明峰值时点。不能把 `accepted` 与发送数不等直接判为丢失。
+- [ ] **Step 2：复核测量口径。** 检查报告中 `client.accepted` 与 `collector.ingest.accepted - duplicates` 的差异，差异必须能由重试、重复或边界请求解释；`conservation.missing` 必须为空；`storage_peak` 与 `storage_end` 不同是正常的，报告用 `peak_samples` 与 `notes` 写明采样口径。不能把 `accepted` 与发送数不等直接判为丢失。
 
 - [ ] **Step 3：写基线记录。** 创建 `docs/superpowers/capacity/2026-10-22-atc-capacity-baseline.md`，写明基准提交、Bun 版本、机器、每个场景命令、报告路径与 sha256、预算哈希、门槛失败项及 `basis`。记录不写真实请求内容；报告路径可以写临时路径，提交前确认报告没有进入仓库。process note `.agents/notes/implemented/process/2026-10-22-atc-capacity-baseline.md` 只写测量方法（合成负载、隔离与固定原因计数口径）、机器与固定种子、实测数字与置信口径，不写运行时结构决策；`keep-sync` 的决策与理由已在 `implemented/architecture/2026-10-22-capacity-baseline-keeps-sync.md`，本 note 不另立第二份。
 
