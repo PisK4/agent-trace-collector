@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { fixture } from './fixtures';
+import { fixture, seedPurposeRequest } from './fixtures';
 import { loadBoundSalt, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
 import { getRequest, getStats, listRequests, listSessions } from '../src/queries';
@@ -320,4 +320,96 @@ test('启动时逐项运行各任务，回收不受其它任务占锁影响', as
   } finally {
     f.close();
   }
+});
+
+test('会话标题只取排除用途的模型标题', () => {
+  const f = fixture();
+  try {
+    seedPurposeRequest(f.store, {
+      convKey: 'title-priority', purposePending: 0, purposeChain: 'exclude',
+      reqKind: 'title', modelTitle: '正式标题', title: 'x',
+      titleSource: 'model_title', purposeStatus: 'recognized', purposeVersion: 2,
+      startedMs: 1, cleanGroup: true,
+    });
+    seedPurposeRequest(f.store, {
+      convKey: 'title-priority', purposePending: 0, purposeChain: 'participate',
+      reqKind: 'source:compaction', title: '噪声标题',
+      titleSource: 'user_delta', startedMs: 2, cleanGroup: true,
+    });
+    seedPurposeRequest(f.store, {
+      convKey: 'title-priority', purposePending: 0, purposeChain: 'participate',
+      reqKind: 'chat', title: '用户首句', titleSource: 'user_delta',
+      chainRole: 'main', startedMs: 3, cleanGroup: true,
+    });
+    expect(listSessions(f.store, 10).items[0]?.title).toBe('正式标题');
+  } finally { f.close(); }
+});
+
+test('参与链的未知来源类别也能提供用户标题', () => {
+  const f = fixture();
+  try {
+    seedPurposeRequest(f.store, {
+      convKey: 'neutral-title', purposePending: 0, purposeChain: 'participate',
+      reqKind: 'source:compaction', title: '来源标题',
+      titleSource: 'user_delta', startedMs: 1, cleanGroup: true,
+    });
+    seedPurposeRequest(f.store, {
+      convKey: 'neutral-title', purposePending: 0, purposeChain: 'participate',
+      reqKind: 'chat', title: '用户首句', titleSource: 'user_delta',
+      chainRole: 'main', startedMs: 2, cleanGroup: true,
+    });
+    // 不再按 req_kind='chat' 硬编码：更早的参与链用户标题优先，来源类别原样保留。
+    expect(listSessions(f.store, 10).items[0]?.title).toBe('来源标题');
+  } finally { f.close(); }
+});
+
+test('组未 current 或用途未结算时都不返回旧标题', () => {
+  const f = fixture();
+  try {
+    seedPurposeRequest(f.store, {
+      convKey: 'pending-title', purposePending: 1, purposeChain: 'participate',
+      reqKind: 'chat', title: '待结算旧标题', titleSource: 'user_delta',
+      chainRole: 'main', startedMs: 1, cleanGroup: true,
+    });
+    seedPurposeRequest(f.store, {
+      convKey: 'dirty-title', purposePending: 0, purposeChain: 'participate',
+      reqKind: 'chat', title: 'dirty旧标题', titleSource: 'user_delta',
+      chainRole: 'main', startedMs: 2,
+    });
+    f.store.write(db => db.run(`
+      UPDATE derive_queue SET input_revision=2, published_revision=1,
+        target_algorithm=2, published_algorithm=2, state='dirty'
+      WHERE conv_key='dirty-title'`));
+    const titles = listSessions(f.store, 10).items.map(item => item.title);
+    expect(titles).not.toContain('待结算旧标题');
+    expect(titles).not.toContain('dirty旧标题');
+  } finally { f.close(); }
+});
+
+test('未知用途与链角色原样返回', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'raw-kind', purposePending: 0, purposeChain: 'exclude',
+      reqKind: 'auto-mode-classifier', chainRole: 'aux',
+      purposeStatus: 'recognized', purposeVersion: 2,
+      purposeRule: 'claude.auto-mode-classifier.v1',
+      purposeSignals: ['classifier.agent.claude'],
+      summaryState: 'recomputed', summaryAlgorithm: 1,
+      cleanGroup: true,
+    });
+    expect(getRequest(f.store, id)).toMatchObject({
+      req_kind: 'auto-mode-classifier', chain_role: 'aux',
+      purpose_status: 'recognized', purpose_version: 2,
+      purpose_rule: 'claude.auto-mode-classifier.v1', purpose_chain: 'exclude',
+    });
+    const unknown = seedPurposeRequest(f.store, {
+      convKey: 'raw-kind-2', purposePending: 0, purposeChain: 'participate',
+      reqKind: 'future-kind', chainRole: 'mystery',
+      summaryState: 'recomputed', summaryAlgorithm: 1, cleanGroup: true,
+    });
+    expect(getRequest(f.store, unknown)).toMatchObject({
+      req_kind: 'future-kind', chain_role: 'mystery',
+    });
+  } finally { f.close(); }
 });

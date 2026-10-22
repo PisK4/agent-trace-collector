@@ -1366,6 +1366,8 @@ export type PurposeSeed = {
   title?: string;
   titleSource?: string;
   chainRole?: string;
+  summaryState?: string;
+  summaryAlgorithm?: number | null;
   cleanGroup?: boolean;
 };
 
@@ -1413,7 +1415,7 @@ export function seedPurposeRequest(store: Store, input: PurposeSeed = {}): numbe
   store.write(db => db.run(`
     UPDATE request SET purpose_target=?, purpose_version=?, purpose_status=?, purpose_rule=?,
       purpose_chain=?, purpose_pending=?, purpose_signals=?, req_kind=?, model_title=?,
-      title=?, title_source=?, chain_role=?
+      title=?, title_source=?, chain_role=?, summary_state=?, summary_algorithm=?
     WHERE req_id=?`, [
     input.purposeTarget ?? 2,
     input.purposeVersion ?? null,
@@ -1427,6 +1429,8 @@ export function seedPurposeRequest(store: Store, input: PurposeSeed = {}): numbe
     input.title ?? '',
     input.titleSource ?? null,
     input.chainRole ?? 'main',
+    input.summaryState ?? 'legacy',
+    input.summaryAlgorithm ?? null,
     reqId,
   ]));
   if (input.cleanGroup === true && actor !== null && actorState === 'known') {
@@ -1899,9 +1903,9 @@ test('组未 current 或用途未结算时都不返回旧标题', () => {
       chainRole: 'main', startedMs: 2,
     });
     f.store.write(db => db.run(`
-      INSERT INTO derive_queue(conv_key, actor, from_sort, group_epoch, input_revision,
-        published_revision, target_algorithm, published_algorithm, state)
-      VALUES ('dirty-title','actor','','dirty-epoch',2,1,2,2,'dirty')`));
+      UPDATE derive_queue SET input_revision=2, published_revision=1,
+        target_algorithm=2, published_algorithm=2, state='dirty'
+      WHERE conv_key='dirty-title'`));
     const titles = listSessions(f.store, 10).items.map(item => item.title);
     expect(titles).not.toContain('待结算旧标题');
     expect(titles).not.toContain('dirty旧标题');
@@ -1917,6 +1921,7 @@ test('未知用途与链角色原样返回', () => {
       purposeStatus: 'recognized', purposeVersion: 2,
       purposeRule: 'claude.auto-mode-classifier.v1',
       purposeSignals: ['classifier.agent.claude'],
+      summaryState: 'recomputed', summaryAlgorithm: 1,
       cleanGroup: true,
     });
     expect(getRequest(f.store, id)).toMatchObject({
@@ -1926,7 +1931,8 @@ test('未知用途与链角色原样返回', () => {
     });
     const unknown = seedPurposeRequest(f.store, {
       convKey: 'raw-kind-2', purposePending: 0, purposeChain: 'participate',
-      reqKind: 'future-kind', chainRole: 'mystery', cleanGroup: true,
+      reqKind: 'future-kind', chainRole: 'mystery',
+      summaryState: 'recomputed', summaryAlgorithm: 1, cleanGroup: true,
     });
     expect(getRequest(f.store, unknown)).toMatchObject({
       req_kind: 'future-kind', chain_role: 'mystery',
@@ -1999,11 +2005,11 @@ const SESSION_TITLE_SQL = `COALESCE(
 )`;
 ```
 
-`DetailDbRow` 加入 `model_title`、`purpose_status`、`purpose_version`、`purpose_rule`、`purpose_chain`，`getRequest` 返回时原样映射，并把折叠改掉：
+`ProjectableRow` 加入 `purpose_status`、`purpose_version`、`purpose_rule`、`purpose_chain`（`DetailDbRow` 继承它，`r.*` 已带这些列）；`projectRow` 原样映射，并把未知 `req_kind`/`chain_role` 与 `model_title` 一起返回：
 
 ```ts
 req_kind: row.req_kind ?? 'chat',
-chain_role: row.chain_role ?? 'main',
+chain_role: current ? (row.chain_role ?? 'main') : 'unknown',
 model_title: row.model_title,
 purpose_status: row.purpose_status,
 purpose_version: row.purpose_version,

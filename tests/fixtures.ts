@@ -50,6 +50,8 @@ export type PurposeSeed = {
   title?: string;
   titleSource?: string;
   chainRole?: string;
+  summaryState?: string;
+  summaryAlgorithm?: number | null;
   cleanGroup?: boolean;
 };
 
@@ -97,7 +99,7 @@ export function seedPurposeRequest(store: Store, input: PurposeSeed = {}): numbe
   store.write(db => db.run(`
     UPDATE request SET purpose_target=?, purpose_version=?, purpose_status=?, purpose_rule=?,
       purpose_chain=?, purpose_pending=?, purpose_signals=?, req_kind=?, model_title=?,
-      title=?, title_source=?, chain_role=?
+      title=?, title_source=?, chain_role=?, summary_state=?, summary_algorithm=?
     WHERE req_id=?`, [
     input.purposeTarget ?? 2,
     input.purposeVersion ?? null,
@@ -111,6 +113,8 @@ export function seedPurposeRequest(store: Store, input: PurposeSeed = {}): numbe
     input.title ?? '',
     input.titleSource ?? null,
     input.chainRole ?? 'main',
+    input.summaryState ?? 'legacy',
+    input.summaryAlgorithm ?? null,
     reqId,
   ]));
   if (input.cleanGroup === true && actor !== null && actorState === 'known') {
