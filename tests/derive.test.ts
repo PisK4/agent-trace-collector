@@ -574,6 +574,78 @@ test('合成旧排序经维护入口对齐且事实守恒', async () => {
   } finally { direct.close(); historical.close(); }
 });
 
+const injectedStages = [
+  ['tool', `BEFORE INSERT ON tool_call`],
+  ['preview', `BEFORE UPDATE OF input_preview ON request`],
+  ['ack', `BEFORE DELETE ON derive_queue`],
+] as const;
+
+for (const [stage, event] of injectedStages) {
+  test(`同步派生${stage}失败保留队列且重开可恢复`, () => {
+    const f = fixture();
+    let reopened: ReturnType<typeof openStore> | undefined;
+    try {
+      seedRound(f.store, [1, 2]);
+      enqueueDerive(f.store, GROUP, ACTOR, '');
+      const before = snapshot(f.store, [1, 2]);
+      f.store.write(db => db.exec(`CREATE TRIGGER injected_derive ${event}
+        BEGIN SELECT RAISE(ABORT,'injected_derive'); END`));
+      expect(() => drainDerive(f.store)).toThrow('injected_derive');
+      expect(snapshot(f.store, [1, 2])).toEqual(before);
+      expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_queue').get())
+        .toEqual({ n: 1 });
+      f.store.write(db => db.exec('DROP TRIGGER injected_derive'));
+      f.store.close();
+      reopened = openStore(join(f.dir, 'trace.db'));
+      expect(drainDerive(reopened).remaining).toBe(0);
+      expect(snapshot(reopened, [1, 2]).tools[0]?.state).toBe('resolved');
+      expect(snapshot(reopened, [1, 2]).requests[1]?.input_preview)
+        .toBe('工具结果 · read_file');
+    } finally { reopened?.close(); f.close(); }
+  });
+}
+
+test('第二组确认失败时整批回滚且旧结果保留', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    rebuild(f.store);
+    const settled = snapshot(f.store, [1, 2]);
+    // 第二个组用不同身份与工具 ID，复用同一形状。
+    f.store.write(db => {
+      for (const [i, id] of [11, 12].entries()) {
+        db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,
+          day,via,body_state,derive_version,have,created_at,updated_at,sort_source,sort_key)
+          VALUES (?,?,'actor-second','known',?,'2026-10-22','hook','pending',0,1,1,1,
+          'ledger',?)`, [id, 'zz-second', 2000 + i,
+          `1:2:3:0|${String(i * 100).padStart(20, '0')}`]);
+      }
+    });
+    const user = { role: 'user', content: [{ type: 'text', text: 'second input' }] };
+    const call = { type: 'tool_use', id: 'second_call', name: 'second_tool', input: {} };
+    persistBody(f.store, 11, { protocol: 'anthropic', request: { messages: [user] },
+      reply: { content: [call] }, redact_version: 1 });
+    persistBody(f.store, 12, { protocol: 'anthropic', request: { messages: [user,
+      { role: 'assistant', content: [call] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'second_call',
+        content: 'second output' }] }] }, reply: { content: [] }, redact_version: 1 });
+    enqueueDerive(f.store, GROUP, ACTOR, '');
+    enqueueDerive(f.store, 'zz-second', 'actor-second', '');
+    f.store.write(db => db.exec(`CREATE TRIGGER fail_second_ack
+      BEFORE DELETE ON derive_queue WHEN OLD.conv_key='zz-second'
+      BEGIN SELECT RAISE(ABORT,'injected_second'); END`));
+    expect(() => drainDerive(f.store)).toThrow('injected_second');
+    // 本批全部组在同一个事务里，第二组失败连第一组一起回滚。
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_queue').get()).toEqual({ n: 2 });
+    expect(snapshot(f.store, [1, 2])).toEqual(settled);
+    f.store.write(db => db.exec('DROP TRIGGER fail_second_ack'));
+    expect(drainDerive(f.store).remaining).toBe(0);
+    expect(snapshot(f.store, [1, 2])).toEqual(settled);
+    expect(f.store.read.query(`SELECT state FROM tool_call WHERE call_id='second_call'`).get())
+      .toEqual({ state: 'resolved' });
+  } finally { f.close(); }
+});
+
 test('稳定排序重算得到确定增量与标题', () => {
   const f = fixture();
   try {
