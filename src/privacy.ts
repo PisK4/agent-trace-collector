@@ -6,7 +6,10 @@ const PLACEHOLDER = /^\[redacted:[a-z_]+:[0-9a-f]{16}\]$/;
 const SENSITIVE_KEYS = new Set([
   'authorization', 'x-api-key', 'api-key', 'api_key', 'apikey', 'cookie', 'set-cookie',
   'password', 'passwd', 'client_secret', 'secret_key', 'access_token', 'refresh_token',
-  'id_token', 'aws_secret_access_key', 'private_key', 'provideraccount', 'providerkeyid',
+  'id_token', 'aws_secret_access_key', 'private_key',
+  // 账号与 provider 账号指向同一订阅身份，两者必须得到同一个占位符；
+  // 否则同一个账号在两个入口下看起来像两个不同的人。
+  'account', 'provideraccount', 'providerkeyid',
 ]);
 const HEADER_WHITELIST = new Set([
   'content-type', 'content-length', 'accept', 'accept-encoding', 'accept-language',
@@ -14,7 +17,14 @@ const HEADER_WHITELIST = new Set([
   'anthropic-beta', 'openai-organization', 'openai-project', 'openai-beta', 'x-request-id',
 ]);
 
+/**
+ * 稳定占位符：同一 salt 下同一 (kind, 值) 永远得到同一个摘要。
+ *
+ * 已是占位符的值原样返回。敏感键分支、请求头分支与字符串分支都走这里，
+ * 所以重复脱敏不会把一个占位符再散列成另一个。
+ */
 function placeholder(kind: string, value: string, salt: Uint8Array): string {
+  if (PLACEHOLDER.test(value)) return value;
   const digest = createHmac('sha256', salt).update(kind).update('\0').update(value).digest('hex');
   return `[redacted:${kind}:${digest.slice(0, 16)}]`;
 }

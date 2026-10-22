@@ -63,6 +63,25 @@ test('已知凭证形态与私钥块被替换且非JSON字符串保留原样', (
   expect(out.plain).toBe('普通中文内容');
 });
 
+test('account别名共享占位符且已脱敏值不再散列', () => {
+  const input = { account: 'synthetic-account', providerAccount: 'synthetic-account' };
+  const first = redact(input, salt) as Record<string, string>;
+  expect(first.account).toMatch(/^\[redacted:credential:[0-9a-f]{16}\]$/);
+  expect(first.account).toBe(first.providerAccount);
+  expect(redact(first, salt)).toEqual(first);
+
+  const existing = '[redacted:credential:0123456789abcdef]';
+  expect(redact({
+    account: existing,
+    providerAccount: existing,
+    headers: { authorization: existing },
+  }, salt)).toEqual({
+    account: existing,
+    providerAccount: existing,
+    headers: { authorization: existing },
+  });
+});
+
 test('非法自定义规则使配置启动失败', () => {
   expect(() => redact({ a: 'x' }, salt, [{ path: '*', pattern: '(' }])).toThrow('invalid_redact_rule');
 });
