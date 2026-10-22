@@ -2,7 +2,7 @@
 
 Status: proposed
 
-本提案作为字段缺口与对标问题的输入材料保留；下一轮统筹范围与顺序见[架构演进方案 v2](../../../../docs/architecture-evolution-v2.md)，来源、回填和隐私方面的事实修正见[联合评审](../../../../docs/agent-request-kind-review.md#与字段保真方案的联合评估)。本文尚未修订的列集合、重算方式与验收不直接作为执行依据。
+本提案作为字段缺口与对标问题的输入材料保留；下一轮统筹范围与顺序见[架构演进方案 v2](../../../../docs/architecture-evolution-v2.md)，来源、回填和隐私方面的事实修正见[联合评审](../../../../docs/agent-request-kind-review.md#与字段保真方案的联合评估)。键名与类型状态的已交付决定见[来源字段按上游真实键读取](../implemented/architecture/2026-10-22-source-projection-and-field-fidelity.md)。本文尚未修订的列集合、重算方式与验收不直接作为执行依据。
 
 ## Problem
 
