@@ -29,22 +29,18 @@ test('首次空库生成绑定后拒绝错盐', () => {
   } finally { f.close(); }
 });
 
-test('旧库有盐无绑定默认拒绝，显式确认才绑定', () => {
+test('有盐无绑定拒绝，不提供确认绕过', () => {
   const f = fixture();
   try {
     f.store.write(db => db.run(`INSERT INTO request(req_id,started_ms,day,via,
       body_state,derive_version,have,created_at,updated_at)
       VALUES (1,1,'2026-10-22','hook','pending',0,1,1,1)`));
-    const salt = new Uint8Array(32).fill(5);
-    writeFileSync(join(f.dir, 'redaction.salt'), salt, { mode: 0o600 });
-    // 有盐文件、有数据、没有绑定：默认拒绝，因为无法证明这份盐就是当时用的那份。
+    writeFileSync(join(f.dir, 'redaction.salt'), new Uint8Array(32).fill(5), { mode: 0o600 });
+    // 有盐文件、有数据、没有绑定：无法证明这份盐就是当时用的那份。
     expect(() => loadBoundSalt(f.store, f.dir)).toThrow('redaction_salt_unbound');
-    expect(loadBoundSalt(f.store, f.dir, { confirmLegacy: true })).toEqual(salt);
-    // 显式确认记进绑定，之后按普通路径校验；它是对"历史身份无法证明"的接受，不是证明。
+    // 失败不写绑定：没有"确认旧盐"的入口，旧库删除后重建。
     expect(f.store.read.query<{ value_json: string }, []>(
-      "SELECT value_json FROM collector_state WHERE key='privacy:salt'").get())
-      .toMatchObject({ value_json: expect.stringContaining('"confirmedLegacy":true') });
-    expect(loadBoundSalt(f.store, f.dir)).toEqual(salt);
+      "SELECT value_json FROM collector_state WHERE key='privacy:salt'").get()).toBeNull();
   } finally { f.close(); }
 });
 

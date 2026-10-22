@@ -425,7 +425,7 @@ SQLite，WAL，单文件，放仓库外。默认路径 `~/Library/Application Su
 
 ### 脱敏盐绑定与可恢复快照
 
-脱敏盐是数据目录里的 `redaction.salt`（32 字节，0600），不写进数据库。库与盐是否配对记在 `collector_state['privacy:salt']`：`{format:1, id, confirmedLegacy}`，`id` 是 `sha256('atc-redaction-salt-v1\0' + salt)`，不含盐明文。有请求却没有绑定、绑定与盐不符或盐文件缺失，都拒绝启动，不生成新盐；换盐会让库里已写入的占位符再也解释不了。旧库有盐无绑定时只有显式确认才绑定，并如实记下 `confirmedLegacy`——确认只说明"从今往后用这一份盐"，不能证明历史占位符的血统。
+脱敏盐是数据目录里的 `redaction.salt`（32 字节，0600），不写进数据库。库与盐是否配对记在 `collector_state['privacy:salt']`：`{format:1, id}`，`id` 是 `sha256('atc-redaction-salt-v1\0' + salt)`，不含盐明文。有请求却没有绑定、绑定与盐不符或盐文件缺失，都拒绝启动，不生成新盐；换盐会让库里已写入的占位符再也解释不了。有盐无绑定同样拒绝，没有确认绕过的入口：无法证明历史占位符是这份盐算的，旧库按破坏式替换处理。
 
 可恢复快照是 bundle，不是裸数据库：`trace.db`、`redaction.salt` 与 `manifest.json` 三件，清单记 `{format:1, schema, salt_id, database_sha256}`。可接受的结构版本只有一份导出常量 `RESTORABLE_SCHEMA_VERSIONS`，备份与恢复都查它；恢复还要求包内数据库自身的 `user_version` 与清单相等。发布用同父目录的 0700 staging 加 `rename`，目标已存在就拒绝，不覆盖任何已有目录。认证令牌不随包走，恢复后按首次启动规则重新生成。
 

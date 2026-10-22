@@ -105,33 +105,18 @@ export function saltId(salt: Uint8Array): string {
   return createHash('sha256').update('atc-redaction-salt-v1\0').update(salt).digest('hex');
 }
 
-export type SaltBinding = { format: 1; id: string; confirmedLegacy: boolean };
-
-export type BoundSaltOptions = {
-  /**
-   * 显式接受"旧库有盐文件但没有绑定"。
-   *
-   * 这只能证明"从今往后用的是这一份盐"，不能证明历史占位符当时也是用它算的。
-   * 所以它必须由调用方显式给出，并且绑定里如实记下这个事实。
-   */
-  confirmLegacy?: boolean;
-};
+export type SaltBinding = { format: 1; id: string };
 
 /**
  * 读取并校验脱敏盐与库的绑定。
  *
  * 三种情况分开处理，都不允许悄悄生成新盐：
  * - 空库首次启动：生成盐并写入绑定。
- * - 有数据但没有绑定：默认拒绝（`redaction_salt_unbound`），只有显式确认才绑定。
+ * - 有数据但没有绑定：拒绝（`redaction_salt_unbound`）。无法证明历史占位符是这份盐算的，
+ *   也没有确认绕过的入口；旧库按破坏式替换处理，删除后重建。
  * - 有绑定但文件缺失或标识不符：拒绝（`redaction_salt_missing` / `redaction_salt_mismatch`）。
- *
- * 绑定写入与调用方的事务一起提交，不存在"绑定写了但迁移没跑"的中间态。
  */
-export function loadBoundSaltTx(
-  db: Database,
-  dataDir: string,
-  options: BoundSaltOptions = {},
-): Uint8Array {
+export function loadBoundSaltTx(db: Database, dataDir: string): Uint8Array {
   const bound = db.query<{ value_json: string }, []>(
     "SELECT value_json FROM collector_state WHERE key='privacy:salt'").get();
   const hasData = (db.query<{ n: number }, []>('SELECT EXISTS(SELECT 1 FROM request) AS n').get()?.n ?? 0) !== 0;
@@ -139,9 +124,7 @@ export function loadBoundSaltTx(
   const exists = existsSync(path);
   // 库里有数据、或已经写过绑定，盐文件就是必须存在的：此时缺文件不是"首次启动"。
   if (!exists && (hasData || bound !== null)) throw new Error('redaction_salt_missing');
-  if (bound === null && hasData && options.confirmLegacy !== true) {
-    throw new Error('redaction_salt_unbound');
-  }
+  if (bound === null && hasData) throw new Error('redaction_salt_unbound');
   const salt = exists
     ? readLocalSecret(path)
     : loadLocalSecret(dataDir, 'redaction.salt');
@@ -160,16 +143,12 @@ export function loadBoundSaltTx(
     if ((saved as { id: string }).id !== saltId(salt)) throw new Error('redaction_salt_mismatch');
     return salt;
   }
-  const binding: SaltBinding = { format: 1, id: saltId(salt), confirmedLegacy: hasData };
+  const binding: SaltBinding = { format: 1, id: saltId(salt) };
   db.run("INSERT INTO collector_state(key,value_json) VALUES('privacy:salt',?)",
     [JSON.stringify(binding)]);
   return salt;
 }
 
-export function loadBoundSalt(
-  store: Store,
-  dataDir: string,
-  options: BoundSaltOptions = {},
-): Uint8Array {
-  return store.write(db => loadBoundSaltTx(db, dataDir, options));
+export function loadBoundSalt(store: Store, dataDir: string): Uint8Array {
+  return store.write(db => loadBoundSaltTx(db, dataDir));
 }

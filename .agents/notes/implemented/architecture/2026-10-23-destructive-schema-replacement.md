@@ -14,7 +14,7 @@ v4→v5 没有迁移路径。普通 `openStore` 只接受两种状态：空数�
 
 旧库的处理是显式动作：停采集器，把数据目录整体移走或删除，让新版本建新库；旧库里的正文与派生结果一起丢弃。需要留档时在升级前用旧版本导出，不依赖本仓库的工具读取旧结构。
 
-源码随之删除：`V5_DELTA`、`initializeV5`、迁移状态机、守恒摘要与 `src/conservation.ts`，以及恢复时的迁移标记校验和 `--allow-incomplete-migration`。`scripts/backfill-fingerprint.ts` 保留为 v3/v4 时代的列补齐工具，它不会把旧库带到 v5；文档不再把它描述成升级到当前版本的路径。
+源码随之删除：`V5_DELTA`、`initializeV5`、迁移状态机、守恒摘要与 `src/conservation.ts`，恢复时的迁移标记校验和 `--allow-incomplete-migration`，以及盐绑定的旧库确认入口（`confirmLegacy` 与 `confirmedLegacy`）。盐绑定仍保留"有数据却无绑定即拒绝"的规则，但不再有绕过方式。`scripts/backfill-fingerprint.ts` 保留为 v3/v4 时代的列补齐工具，它不会把旧库带到 v5；文档不再把它描述成升级到当前版本的路径。
 
 ## Alternatives considered
 
