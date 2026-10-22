@@ -1,7 +1,8 @@
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
 import type { BodyState } from './queries';
-import { interpretMessage, type MessageView, type UserInputView } from './input-interpretation';
+import { interpretMessage, messageText, type MessageView, type UserInputView } from './input-interpretation';
+import { capabilityView, type CapabilityCoverage, type CapabilityView } from './capabilities';
 
 /**
  * 协议适配层：把已保存的脱敏对象解释成阅读用的辅助视图。
@@ -54,6 +55,7 @@ export type BodyPage = {
   reason: string | null;
   interpretations: MessageInterpretation[];
   coverage: BodyCoverage;
+  capabilities: CapabilityView;
 };
 
 /** 适配器版本写进 request 的长期列；语义变化时升版。 */
@@ -243,6 +245,12 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
 
   const state = stateRow.body_state as BodyState;
   const readable = state === 'available' || state === 'partial';
+  const missingCapabilities: CapabilityView = {
+    tools: { state: 'missing', items: [], reason: 'body_unavailable' },
+    skills: { state: 'missing', items: [], reason: 'body_unavailable' },
+    coverage: { complete: false, reason: 'body_unavailable', from, to, total: null },
+    agent: stateRow.agent,
+  };
   const page: BodyPage = {
     state,
     parse_state: stateRow.parse_state,
@@ -265,15 +273,57 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
       loaded_complete: readable && stateRow.msg_count !== null && to >= stateRow.msg_count,
       reason: readable ? (state === 'available' ? 'available' : 'body_partial') : 'body_unavailable',
     },
+    capabilities: missingCapabilities,
   };
   if (!readable) return page;
   if (stateRow.skeleton_z == null) return page;
 
+  const skeleton = JSON.parse(zstdDecompressSync(stateRow.skeleton_z).toString('utf8')) as {
+    protocol?: unknown; request_without_messages?: unknown; reply?: unknown; has_messages?: boolean;
+  };
+  const fields = isRecord(skeleton.request_without_messages) ? skeleton.request_without_messages : null;
+  const protocol = typeof skeleton.protocol === 'string' && skeleton.protocol.length > 0
+    ? skeleton.protocol : 'unknown';
+  const systemTexts: string[] = [];
+  const system = fields === null ? undefined : fields.system;
+  if (typeof system === 'string' && system.length > 0) systemTexts.push(system);
+  if (Array.isArray(system)) {
+    for (const block of system) {
+      if (isRecord(block) && typeof block.text === 'string' && block.text.length > 0) systemTexts.push(block.text);
+    }
+  }
+  // 只解压 system 块：能力提取不需要整份消息，回收后也不该扫描全部正文。
+  const systemRows = store.read.query<{ z: Uint8Array }, [number]>(`
+    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? AND rb.role=2 ORDER BY rb.ord`).all(id);
+  for (const row of systemRows) {
+    let message: unknown;
+    try {
+      message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
+    } catch {
+      continue;
+    }
+    const text = messageText(message);
+    if (text !== null) systemTexts.push(text);
+  }
+  const coverage: CapabilityCoverage = {
+    complete: state === 'available',
+    reason: state === 'available' ? 'available' : 'body_partial',
+    from,
+    to,
+    total: stateRow.msg_count,
+  };
+  page.capabilities = capabilityView({
+    protocol,
+    request: fields,
+    systemTexts,
+    coverage,
+    systemPresent: fields !== null && ('system' in fields || systemRows.length > 0),
+    agent: stateRow.agent,
+  });
+
   const cache = new Map<number, unknown>();
   if (from === 0) {
-    const skeleton = JSON.parse(zstdDecompressSync(stateRow.skeleton_z).toString('utf8')) as {
-      request_without_messages?: unknown; reply?: unknown; has_messages?: boolean;
-    };
     page.request_fields = skeleton.request_without_messages ?? null;
     page.reply = skeleton.reply ?? null;
   }

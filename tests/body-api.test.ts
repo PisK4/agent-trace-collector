@@ -57,6 +57,12 @@ test('正文页返回服务端消息解释且原文不变', async () => {
     const messages = page.messages as { value: { content: { text: string }[] } }[];
     expect(messages[0]?.value.content[0]?.text).toContain('<system-reminder>');
     expect((page.coverage as { complete: boolean }).complete).toBe(true);
+    const capabilities = page.capabilities as {
+      tools: { state: string }; skills: { state: string }; coverage: { complete: boolean };
+    };
+    expect(capabilities.tools.state).toBe('missing');
+    expect(capabilities.skills.state).toBe('empty');
+    expect(capabilities.coverage.complete).toBe(true);
   } finally {
     f.close();
   }
@@ -95,6 +101,7 @@ test('回收正文返回空解释与不可用覆盖，不伪造空对话', async
     expect(page.interpretations).toEqual([]);
     expect((page.coverage as { complete: boolean; reason: string }).complete).toBe(false);
     expect((page.coverage as { reason: string }).reason).toBe('body_unavailable');
+    expect((page.capabilities as { tools: { state: string } }).tools.state).toBe('missing');
   } finally {
     f.close();
   }

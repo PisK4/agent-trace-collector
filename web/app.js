@@ -14,7 +14,7 @@
  */
 
 import {
-  bodyNotice, capabilitySummary, deltaOrdinals, mdToHtml, messageEntries, roleTag,
+  bodyNotice, deltaOrdinals, mdToHtml, messageEntries, roleTag,
   renderCapabilities, renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools,
   replyView, toolEntries,
 } from './body-view.js';
@@ -691,11 +691,13 @@ if (typeof document !== 'undefined') {
    */
   function contextInfo(loaded) {
     if (loaded === null || loaded.page === null) return null;
-    const capability = capabilitySummary(loaded.page, loaded.entries);
+    const capability = loaded.page.capabilities ?? null;
     const systems = loaded.entries.filter(entry => entry.role === 'system').length;
+    const tools = capability === null ? 0 : capability.tools.items.length;
+    const skills = capability === null ? 0 : capability.skills.items.length;
     return {
-      key: `${systems}/${capability.tools.length}/${capability.skills.length}`,
-      html: `<div class="conv-context">上下文 · 系统 ${systems} 条 · ${capability.tools.length} 工具 · ${capability.skills.length} 技能</div>`,
+      key: `${systems}/${tools}/${skills}`,
+      html: `<div class="conv-context">上下文 · 系统 ${systems} 条 · ${tools} 工具 · ${skills} 技能</div>`,
     };
   }
 
@@ -971,7 +973,7 @@ if (typeof document !== 'undefined') {
     const rows = loaded.entries;
     const unread = loaded.total !== null && rows.length < loaded.total;
     const unsupported = page.parse_state === 'unsupported';
-    return `${renderCapabilities(page, rows)}
+    return `${renderCapabilities(page)}
     <section class="section">
       <div class="section-head">
         <h3>请求结构</h3>

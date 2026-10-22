@@ -1,10 +1,18 @@
 import { expect, test } from 'bun:test';
 import {
-  bodyNotice, capabilitySummary, deltaOrdinals, messageEntries, renderCapabilities, renderMessages, renderRaw,
+  bodyNotice, deltaOrdinals, messageEntries, renderCapabilities, renderMessages, renderRaw,
   renderReply, renderReplyDetail, renderTools, replyView, toolEntries,
 } from '../web/body-view.js';
 import type { BodyPage } from '../src/protocols';
+import type { CapabilityView } from '../src/capabilities';
 import type { RequestDetail } from '../src/queries';
+
+const missingCapabilities: CapabilityView = {
+  tools: { state: 'missing', items: [], reason: 'body_unavailable' },
+  skills: { state: 'missing', items: [], reason: 'body_unavailable' },
+  coverage: { complete: false, reason: 'body_unavailable', from: 0, to: 0, total: null },
+  agent: null,
+};
 
 function page(overrides: Partial<BodyPage> = {}): BodyPage {
   return {
@@ -12,6 +20,7 @@ function page(overrides: Partial<BodyPage> = {}): BodyPage {
     messages: [], request_fields: null, reply: null, reason: null,
     interpretations: [],
     coverage: { from: 0, to: 0, total: 2, complete: true, loaded_complete: false, reason: 'available' },
+    capabilities: missingCapabilities,
     ...overrides,
   };
 }
@@ -222,140 +231,90 @@ test('工具结果消息不算用户输入，纯调用回复保留推理块', ()
   expect(card).not.toContain('没有文本内容');
 });
 
-test('Anthropic 形状的工具读出名称、描述与 input_schema', () => {
-  const summary = capabilitySummary(page({
-    request_fields: {
-      tools: [
-        { name: 'Bash', description: 'Run a shell command', input_schema: { type: 'object', properties: { command: { type: 'string' } } } },
-        { name: 'Read', input_schema: null },
-        { name: '  ' },
-        { description: '没有名字' },
-      ],
-    },
-  }), []);
-  expect(summary.tools.map(tool => tool.name)).toEqual(['Bash', 'Read']);
-  expect(summary.tools[0]?.description).toBe('Run a shell command');
-  expect(summary.tools[1]?.description).toBe('');
-  expect(summary.tools[1]?.schema).toBeNull();
-  expect(summary.skills).toEqual([]);
-
-  const html = renderCapabilities(page({
-    request_fields: { tools: [{ name: 'Bash', description: 'Run a shell command', input_schema: { type: 'object' } }] },
-  }), []);
-  expect(html).toContain('1 工具 · 0 技能');
-  expect(html).toContain('工具清单 · 1');
-  expect(html).not.toContain('技能清单');
-  expect(html).toContain('<code class="cap-name">Bash</code>');
-  expect(html).toContain('&quot;type&quot;: &quot;object&quot;');
-});
-
-test('Chat 形状的工具从 function 里取名称与 parameters', () => {
-  const summary = capabilitySummary(page({
-    request_fields: {
-      tools: [
-        { type: 'function', function: { name: 'read_file', description: '读取文件', parameters: { type: 'object', required: ['path'] } } },
-        { type: 'function', function: { name: 'empty', parameters: { type: 'object' } } },
-      ],
-    },
-  }), []);
-  expect(summary.tools.map(tool => tool.name)).toEqual(['read_file', 'empty']);
-  expect(summary.tools[0]?.description).toBe('读取文件');
-  expect(summary.tools[0]?.schema).toEqual({ type: 'object', required: ['path'] });
-  expect(summary.tools[1]?.description).toBe('');
-
-  // functions 字段是旧形状，也要兼容。
-  const legacy = capabilitySummary(page({
-    request_fields: { functions: [{ name: 'old_tool', parameters: { type: 'object' } }] },
-  }), []);
-  expect(legacy.tools.map(tool => tool.name)).toEqual(['old_tool']);
-});
-
-test('OMP 的 <skills> 清单解析出多条技能', () => {
-  const system = '<skills>\n- anysearch: 实时搜索与网页抓取\n- archify：画架构图\n- bad line without colon\n</skills>';
-  const summary = capabilitySummary(page({ request_fields: { system } }), []);
-  expect(summary.skills).toEqual([
-    { name: 'anysearch', description: '实时搜索与网页抓取' },
-    { name: 'archify', description: '画架构图' },
-  ]);
-  const html = renderCapabilities(page({ request_fields: { system } }), []);
-  expect(html).toContain('0 工具 · 2 技能');
-  expect(html).toContain('技能清单 · 2');
-  expect(html).not.toContain('工具清单');
-  expect(html).toContain('<code class="cap-name">anysearch</code>');
-});
-
-test('Claude Code 的技能标题后只吃连续列表行', () => {
-  const text = [
-    'The following skills are available for use with the Skill tool:',
-    '',
-    '- anysearch: Real-time search',
-    '- archify: Diagrams',
-    '',
-    '- 空行之后的这一行不应该被算进来',
-    '普通段落也不是列表',
-  ].join('\n');
-  const entries = messageEntries(page({
-    messages: [
-      { ord: 0, value: { role: 'system', content: [{ type: 'text', text }] } },
-      { ord: 1, value: { role: 'user', content: 'hi' } },
+const presentView: CapabilityView = {
+  tools: {
+    state: 'present',
+    items: [
+      { name: 'Bash', description: 'Run a shell command', schema: { type: 'object' }, source: 'tools' },
+      { name: 'Read', description: '', schema: null, source: 'tools' },
     ],
+    reason: null,
+  },
+  skills: { state: 'present', items: [{ name: 'anysearch', description: '实时搜索', format: 'tagged' }], reason: null },
+  coverage: { complete: true, reason: 'available', from: 0, to: 2, total: 2 },
+  agent: 'claude',
+};
+
+test('能力区块消费服务端状态，partial 不显示零技能', () => {
+  const partialView: CapabilityView = {
+    tools: { state: 'empty', items: [], reason: 'no_tools_field' },
+    skills: { state: 'partial', items: [], reason: 'body_partial' },
+    coverage: { complete: false, reason: 'body_partial', from: 0, to: 40, total: 90 },
+    agent: 'claude',
+  };
+  const html = renderCapabilities(page({ capabilities: partialView }));
+  expect(html).toContain('技能清单未读完');
+  expect(html).not.toContain('0 技能');
+  expect(html).toContain('0 工具');
+});
+
+test('能力区块区分 missing 与 empty', () => {
+  const missing = renderCapabilities(page({
+    capabilities: {
+      ...presentView,
+      skills: { state: 'missing', items: [], reason: 'body_unavailable' },
+      coverage: { complete: false, reason: 'body_unavailable', from: 0, to: 0, total: null },
+    },
   }));
-  const summary = capabilitySummary(page(), entries);
-  expect(summary.skills).toEqual([
-    { name: 'anysearch', description: 'Real-time search' },
-    { name: 'archify', description: 'Diagrams' },
-  ]);
-});
-
-test('技能按 name 去重，先出现的描述优先', () => {
-  const system = '<skills>\n- a: 第一个\n- b: 另一个\n- a: 重复\n</skills><available_skills>- c: 第三</available_skills>';
-  const summary = capabilitySummary(page({ request_fields: { system } }), []);
-  expect(summary.skills).toEqual([
-    { name: 'a', description: '第一个' },
-    { name: 'b', description: '另一个' },
-    { name: 'c', description: '第三' },
-  ]);
-});
-
-test('没有工具也没有技能时给出说明而不是空 details', () => {
-  const html = renderCapabilities(page({ request_fields: { model: 'm' } }), []);
-  expect(html).toContain('0 工具 · 0 技能');
-  expect(html).toContain('这一笔请求没有携带工具定义，也没有可解析的技能清单。');
-  expect(html).not.toContain('cap-block');
-  expect(renderCapabilities(null, [])).toContain('0 工具 · 0 技能');
-});
-
-test('能力清单的动态内容只作为文本转义', () => {
-  const payload = '<img src=x onerror=alert(1)>';
-  const summary = capabilitySummary(page({
-    request_fields: {
-      tools: [{ name: payload, description: payload, input_schema: { description: payload } }],
-      system: `<skills>\n- ${payload}: ${payload}\n</skills>`,
+  expect(missing).toContain('技能声明缺失');
+  const empty = renderCapabilities(page({
+    capabilities: {
+      ...presentView,
+      skills: { state: 'empty', items: [], reason: 'no_skill_declaration' },
+      coverage: { complete: true, reason: 'available', from: 0, to: 2, total: 2 },
     },
-  }), []);
-  expect(summary.tools[0]?.name).toBe(payload);
-  const html = renderCapabilities(page({
-    request_fields: {
-      tools: [{ name: payload, description: payload, input_schema: { description: payload } }],
-      system: `<skills>\n- ${payload}: ${payload}\n</skills>`,
-    },
-  }), []);
-  expect(html).not.toContain('<img');
-  expect(html).toContain('&lt;img');
-  expect(html).toContain('&quot;description&quot;: &quot;&lt;img');
+  }));
+  expect(empty).toContain('没有可解析的技能清单');
 });
 
-test('描述压成单行并截断', () => {
+test('能力区块渲染服务端条目并压平描述', () => {
   const description = `${'x'.repeat(200)}\n第二行`;
-  const summary = capabilitySummary(page({
-    request_fields: { tools: [{ name: 'T', description, input_schema: null }] },
-  }), []);
-  expect([...(summary.tools[0]?.description ?? '')].length).toBe(204);
   const html = renderCapabilities(page({
-    request_fields: { tools: [{ name: 'T', description, input_schema: null }] },
-  }), []);
+    capabilities: {
+      ...presentView,
+      tools: {
+        state: 'present',
+        items: [{ name: 'T', description, schema: null, source: 'tools' }],
+        reason: null,
+      },
+    },
+  }));
+  expect(html).toContain('1 工具 · 1 技能');
+  expect(html).toContain('<code class="cap-name">T</code>');
   expect(html).toContain(`${'x'.repeat(120)}…`);
   expect(html).not.toContain('\n第二行');
   // schema 为 null 时不输出 pre。
   expect(html).not.toContain('<pre class="raw"');
+});
+
+test('能力区块没有视图时说明原因', () => {
+  const html = renderCapabilities(page({ capabilities: missingCapabilities }));
+  expect(html).toContain('工具定义缺失');
+  expect(html).toContain('技能声明缺失');
+  expect(renderCapabilities(null)).toContain('这一片没有能力视图');
+});
+
+test('能力区块的动态内容只作为文本转义', () => {
+  const payload = '<img src=x onerror=alert(1)>';
+  const html = renderCapabilities(page({
+    capabilities: {
+      ...presentView,
+      tools: { state: 'present', items: [{ name: payload, description: payload, schema: null, source: 'tools' }], reason: null },
+      skills: { state: 'present', items: [{ name: payload, description: payload, format: 'tagged' }], reason: null },
+      coverage: { complete: true, reason: 'available', from: 0, to: 2, total: 2 },
+    },
+  }));
+  expect(html).not.toContain('<img');
+  expect(html).toContain('&lt;img');
+  expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
 });
