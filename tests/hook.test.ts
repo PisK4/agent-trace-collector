@@ -7,7 +7,7 @@ import { loadConfig } from '../src/config';
 import { createHandler } from '../src/http';
 import { acceptHook, bodyOmission, reconcilePending } from '../src/hook';
 import type { HookEnvelope } from '../src/hook';
-import { drainDerive, enqueueDerive } from '../src/derive';
+import { drainDerive } from '../src/derive';
 import { onRequest, onResponse } from '../plugins/collector.hooks';
 import type { HookContext } from '../plugins/collector.hooks';
 import { restoreBody } from '../src/body';
@@ -440,7 +440,12 @@ for (const mode of ['body_omitted', 'metadata_only'] as const) {
         })
         : acceptHook(f.store, input, 6, salt);
       expect(accepted.req_id).toBe(1);
-      enqueueDerive(f.store, key, 'synthetic-session', '');
+      // 直接命中已有账本请求本身就是输入变化：不靠调用方额外 enqueue，
+      // 请求要带待处理标记，组要进 dirty。
+      expect(f.store.read.query(
+        'SELECT input_revision,purpose_pending FROM request WHERE req_id=1').get())
+        .toEqual({ input_revision: 1, purpose_pending: 1 });
+      expect(f.store.read.query('SELECT state FROM derive_queue').get()).toEqual({ state: 'dirty' });
       drainDerive(f.store);
       expect(f.store.read.query(`SELECT body_state,skeleton_z,prev_relation
         FROM request WHERE req_id=1`).get()).toEqual({
@@ -449,6 +454,72 @@ for (const mode of ['body_omitted', 'metadata_only'] as const) {
     } finally { f.close(); }
   });
 }
+
+test('重复hook_id不推进修订，补正文与合并才推进', () => {
+  const f = fixture();
+  const key = JSON.stringify(['session', 'synthetic-session']);
+  try {
+    const first = acceptHook(f.store, envelope({ hook_id: 'hook-rev-1' }), 1, salt);
+    const revision = () => f.store.read.query<{ input_revision: number; input_epoch: string }, [number]>(
+      'SELECT input_revision,input_epoch FROM request WHERE req_id=?').get(first.req_id)!;
+    const afterFirst = revision();
+    // 同一事务里正文与证据各标一次，修订可以涨多次；只要求非零且单调。
+    expect(afterFirst.input_revision).toBeGreaterThan(0);
+    expect(afterFirst.input_epoch).not.toBe('');
+    // 重复 envelope 提前返回：没有新证据，也没有新输入。
+    expect(acceptHook(f.store, envelope({ hook_id: 'hook-rev-1' }), 2, salt).duplicate).toBe(true);
+    expect(revision()).toEqual(afterFirst);
+
+    // 同一 response ID 的第二份 hook 证据：新证据进入请求，修订增长、epoch 保留。
+    // route_id 是关联前提：没有它这笔请求不参与 response ID 关联。
+    f.store.write(db => db.run(
+      `UPDATE request SET route_id=101,conv_key=?,conv_source='session',
+         actor='synthetic-session',actor_state='known'
+       WHERE req_id=?`, [key, first.req_id]));
+    acceptHook(f.store, envelope({ hook_id: 'hook-rev-2' }), 3, salt);
+    const afterSecond = revision();
+    expect(afterSecond.input_epoch).toBe(afterFirst.input_epoch);
+    expect(afterSecond.input_revision).toBeGreaterThan(afterFirst.input_revision);
+    expect(f.store.read.query('SELECT state FROM derive_queue').get()).toEqual({ state: 'dirty' });
+  } finally {
+    f.close();
+  }
+});
+
+test('合并先标源组再换存活请求epoch', () => {
+  const f = fixture();
+  const sourceKey = JSON.stringify(['session', 'synthetic-source']);
+  const targetKey = JSON.stringify(['session', 'synthetic-target']);
+  try {
+    // 源请求已有确认归属并进过组；目标属于另一组。
+    const hook = acceptHook(f.store, envelope({ hook_id: 'hook-merge-rev' }), 1, salt);
+    f.store.write(db => db.run(
+      `UPDATE request SET conv_key=?,conv_source='session',actor='synthetic-source',actor_state='known'
+       WHERE req_id=?`, [sourceKey, hook.req_id]));
+    f.store.write(db => db.run(`INSERT INTO request(req_id,route_id,response_id_norm,conv_key,conv_source,
+        actor,actor_state,started_ms,day,via,status,body_state,derive_version,have,created_at,updated_at)
+       VALUES (2,202,'synthetic_1',?,'session','synthetic-target','known',
+         1700000000000,'2026-10-20','through',200,'pending',0,2,1,1)`, [targetKey]));
+    const before = f.store.read.query<{ input_epoch: string }, [number]>(
+      'SELECT input_epoch FROM request WHERE req_id=?').get(2)!;
+
+    expect(reconcilePending(f.store, 2).merged).toBe(1);
+    // 源组在源请求被删前就标脏了：它少了一个成员，链要重算。
+    const groups = f.store.read.query<{ conv_key: string; state: string }, []>(
+      'SELECT conv_key,state FROM derive_queue ORDER BY conv_key').all();
+    expect(groups).toEqual([
+      { conv_key: sourceKey, state: 'dirty' },
+      { conv_key: targetKey, state: 'dirty' },
+    ]);
+    // 存活请求的输入集合换成了两笔证据的并集：epoch 必须换新的。
+    const after = f.store.read.query<{ input_epoch: string; input_revision: number }, [number]>(
+      'SELECT input_epoch,input_revision FROM request WHERE req_id=?').get(2)!;
+    expect(after.input_epoch).not.toBe(before.input_epoch);
+    expect(after.input_revision).toBeGreaterThan(0);
+  } finally {
+    f.close();
+  }
+});
 
 test('只接元数据不覆盖已有正文', () => {
   const f = fixture();

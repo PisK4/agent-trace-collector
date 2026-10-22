@@ -5,6 +5,7 @@ import type { Store } from './store';
 import { resolveRequestId } from './queries';
 import { ADAPTER_VERSION, parseProtocol } from './protocols';
 import { fingerprintHash, messageFingerprint } from './fingerprint';
+import { markRequestInputTx } from './derive-state';
 
 /**
  * 可还原的脱敏正文。调用方负责先脱敏再调用 persist，本模块只认已脱敏对象。
@@ -141,6 +142,9 @@ export function persistBodyTx(db: Database, reqId: number, body: BodyInput): voi
       parsed.parse_state, parsed.reply_state, ADAPTER_VERSION, Date.now(), reqId,
     ],
   );
+  // 正文是派生输入的一部分：骨架、块引用与解析状态变了，旧结论不能复用。
+  // 归属未知时这里只推进修订，入组由归属确认后的入口负责。
+  markRequestInputTx(db, reqId);
 }
 
 export function persistBody(store: Store, reqId: number, body: BodyInput): void {

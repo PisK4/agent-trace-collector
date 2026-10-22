@@ -539,6 +539,71 @@ test('非法counted不写prompt族且保留旧值并报告非current', () => {
   }
 });
 
+test('账本字段级变化推进修订，重复证据与费用刷新不推进', () => {
+  const f = fixture();
+  try {
+    const first = batchOf([
+      { t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 10 },
+    ]);
+    ingestLedger(f.store, 'usage.jsonl', first, 1, salt);
+    const state = () => f.store.read.query<{
+      input_epoch: string; input_revision: number; purpose_pending: number;
+    }, []>('SELECT input_epoch,input_revision,purpose_pending FROM request').get()!;
+    const initial = state();
+    expect(initial.input_epoch).not.toBe('');
+    expect(initial.input_revision).toBeGreaterThan(0);
+    expect(f.store.read.query('SELECT state FROM derive_queue').get()).toEqual({ state: 'dirty' });
+
+    // 同一批证据重放：提前返回，修订不动。
+    expect(ingestLedger(f.store, 'usage.jsonl', first, 2, salt).duplicate).toBe(1);
+    expect(state()).toEqual(initial);
+
+    // 费用刷新只改费用列，不是派生输入。
+    f.store.write(db => db.run(
+      "UPDATE request SET cost=0.5,cost_state='priced',cost_at=3,attempt_cost=0.5,attempt_cost_state='priced'"));
+    expect(state()).toEqual(initial);
+
+    // 同一 route 的第二条计费行改变尝试合计与最终结果：输入变了。
+    ingestLedger(f.store, 'usage.jsonl', batchOf([
+      { t: '2026-10-20T00:00:01Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 20, out: 5 },
+    ], 'g:1'), 4, salt);
+    const after = state();
+    expect(after.input_epoch).toBe(initial.input_epoch);
+    expect(after.input_revision).toBeGreaterThan(initial.input_revision);
+    expect(after.purpose_pending).toBe(1);
+  } finally {
+    f.close();
+  }
+});
+
+test('route kind变化推进修订，同值重放不推进', () => {
+  const f = fixture();
+  try {
+    ingestLedger(f.store, 'usage.jsonl', batchOf([
+      { t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 10 },
+    ]), 1, salt);
+    const route = {
+      id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm', provider: 'p',
+      status: 200, kind: 'chat',
+    };
+    ingestRoute(f.store, [route], 2, salt);
+    const revision = () => f.store.read.query<{ input_revision: number }, []>(
+      'SELECT input_revision FROM request').get()!.input_revision;
+    const afterFirst = revision();
+
+    // 同一 route 同值重放：投影签名不变，修订不动。
+    ingestRoute(f.store, [route], 3, salt);
+    expect(revision()).toBe(afterFirst);
+
+    // kind 从 chat 变成 compact：来源种类是派生输入，必须重算。
+    ingestRoute(f.store, [{ ...route, kind: 'compact' }], 4, salt);
+    expect(revision()).toBeGreaterThan(afterFirst);
+    expect(f.store.read.query('SELECT kind FROM raw_route').get()).toEqual({ kind: 'compact' });
+  } finally {
+    f.close();
+  }
+});
+
 test('到达顺序不改变请求事实与隐私形态', () => {
   const ledger = {
     t: '2026-10-20T00:00:02Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p',

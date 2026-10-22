@@ -248,7 +248,7 @@ Run `bun test tests/migration-v5.test.ts tests/store.test.ts`；Expected PASS。
 
 **Interfaces:** 导出 `markRequestInputTx(db: Database, reqId: number): void`、`markGroupDirtyTx(db: Database, convKey: string, actor: string, fromSort: string): void`、`markRequestGroupsTx(db: Database, reqId: number): void`。调用者传当前 writer，不再嵌套 Store.write。正常新请求插入后调用一次 mark，重复证据提前返回时不调用；同事务多处 mark 可增加多次修订，正确性只依赖单调性，不承诺恰好增1。
 
-- [ ] **Step 1：写失效测试。** 在测试中用现有 fixture 和单笔合成 INSERT；断言 input_epoch 非空，正文保存后 input_revision 增长；只改 cost 时不增长。给组写 clean 后再次标记，组 epoch 不变但 input_revision 增长；删除重建组时 epoch 不同。重复同 hook_id 不改变修订，补正文、merge、回收均改变。直接 hook 命中已有 ledger 的回归沿用 A hook fixture，但取消显式 enqueue，改断言 dirty 和 purpose_pending=1。
+- [x] **Step 1：写失效测试。** 在测试中用现有 fixture 和单笔合成 INSERT；断言 input_epoch 非空，正文保存后 input_revision 增长；只改 cost 时不增长。给组写 clean 后再次标记，组 epoch 不变但 input_revision 增长；删除重建组时 epoch 不同。重复同 hook_id 不改变修订，补正文、merge、回收均改变。直接 hook 命中已有 ledger 的回归沿用 A hook fixture，但取消显式 enqueue，改断言 dirty 和 purpose_pending=1。
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -270,8 +270,8 @@ test('组完成后再次触发不复用旧修订', () => {
 });
 ```
 
-- [ ] **Step 2：运行目标测试。** Run `bun test tests/derive-state.test.ts`；Expected FAIL，helper未定义或clean组不可再次触发。
-- [ ] **Step 3：实现共享修订操作。** schema版本迁移期间批量epoch初始化使用randomUUID，非空检查失败拒绝发布。
+- [x] **Step 2：运行目标测试。** Run `bun test tests/derive-state.test.ts`；Expected FAIL，helper未定义或clean组不可再次触发。
+- [x] **Step 3：实现共享修订操作。** schema版本迁移期间批量epoch初始化使用randomUUID，非空检查失败拒绝发布。
 
 ```ts
 import { randomUUID } from 'node:crypto';
@@ -313,8 +313,8 @@ if(changed!==1) throw new Error('derive_input_changed');
 
 `group` 查询类型扩全部字段；scope、limit组数和processed请求数沿用A。迁移A的ack故障trigger为 BEFORE UPDATE OF state WHEN NEW.state='clean'；不要保留只监听DELETE的假覆盖。verifyDatabase与维护pending统计、A测试COUNT均过滤dirty；clean行不是积压。
 
-- [ ] **Step 4：接入全部写入者。** persistBodyTx 保存完成时标记；acceptHook在直接命中及插入完成时标记，metadata-only也标记；mergeHookInto 在改owner前标两旧组、改后重置存活request epoch再mark，不能复制clean。reconcile按字段输入投影差异标记，不因费用刷新调用；route kind变化同样标记。evictOldestBodyBatch在删正文的同一事务按候选req_id标记；pruneRaw在证据expired同事务更新projection completeness，不把raw过期当新的缺失kind撤销。元数据purge在删除前标原组，空组同步clean。Run `bun test tests/derive-state.test.ts tests/hook.test.ts tests/retention.test.ts tests/derive.test.ts`；Expected PASS；为上列每个入口沿用现有真实helper构造最窄测试，不能只测共享helper。
-- [ ] **Step 5：同步契约与note。** 显式保留clean组增长成本交F测量；没有安全GC证据时不自动删状态。有提交授权时提交 `feat(derive): persist input revisions and group completion`。
+- [x] **Step 4：接入全部写入者。** persistBodyTx 保存完成时标记；acceptHook在直接命中及插入完成时标记，metadata-only也标记；mergeHookInto 在改owner前标两旧组、改后重置存活request epoch再mark，不能复制clean。reconcile按字段输入投影差异标记，不因费用刷新调用；route kind变化同样标记。evictOldestBodyBatch在删正文的同一事务按候选req_id标记；pruneRaw在证据expired同事务更新projection completeness，不把raw过期当新的缺失kind撤销。元数据purge在删除前标原组，空组同步clean。Run `bun test tests/derive-state.test.ts tests/hook.test.ts tests/retention.test.ts tests/derive.test.ts`；Expected PASS；为上列每个入口沿用现有真实helper构造最窄测试，不能只测共享helper。
+- [x] **Step 5：同步契约与note。** 显式保留clean组增长成本交F测量；没有安全GC证据时不自动删状态。有提交授权时提交 `feat(derive): persist input revisions and group completion`。
 
 ## Task 3：保存有界来源事实与实际算法依据
 

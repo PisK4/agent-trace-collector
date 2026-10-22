@@ -124,6 +124,39 @@ test('不存在的请求写入被拒绝', () => {
   }
 });
 
+test('正文保存推进输入修订并置待处理，补正文再次推进', () => {
+  const f = fixture();
+  const key = JSON.stringify(['session', 'synthetic-session']);
+  try {
+    f.store.write(db => db.run(
+      `INSERT INTO request(req_id,started_ms,day,via,conv_key,conv_source,actor,actor_state,
+         body_state,derive_version,have,created_at,updated_at)
+       VALUES (1,1,'2026-10-20','hook',?,'session','synthetic-session','known','pending',0,1,1,1)`,
+      [key],
+    ));
+    const state = () => f.store.read.query<{
+      input_epoch: string; input_revision: number; purpose_pending: number;
+    }, []>('SELECT input_epoch,input_revision,purpose_pending FROM request WHERE req_id=1').get()!;
+    const initial = state();
+    expect(initial).toEqual({ input_epoch: '', input_revision: 0, purpose_pending: 1 });
+
+    persistBody(f.store, 1, twoRepeats);
+    const saved = state();
+    expect(saved.input_epoch).not.toBe('');
+    expect(saved.input_revision).toBe(1);
+    expect(f.store.read.query('SELECT state FROM derive_queue').get()).toEqual({ state: 'dirty' });
+
+    // 正文被替换（补正文/重写）同样是输入变化，epoch 保留、修订增长。
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0'));
+    persistBody(f.store, 1, { ...twoRepeats, reply: null });
+    expect(state()).toEqual({
+      input_epoch: saved.input_epoch, input_revision: saved.input_revision + 1, purpose_pending: 1,
+    });
+  } finally {
+    f.close();
+  }
+});
+
 test('已回收的正文不再还原', () => {
   const f = fixture();
   try {

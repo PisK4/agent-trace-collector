@@ -18,6 +18,7 @@ import {
   shrinkStorage,
 } from '../src/retention';
 import type { StorageUsage } from '../src/retention';
+import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
 
 const MiB = 1024 * 1024;
 
@@ -272,6 +273,46 @@ test('原始层过期先标证据再删原文，长期读数不动', () => {
   }
 });
 
+test('原始层过期在同一事务推进修订，证据族转expired', () => {
+  const f = fixture();
+  const key = JSON.stringify(['session', 'synthetic-session']);
+  try {
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO request(req_id,started_ms,day,via,conv_key,conv_source,actor,actor_state,
+           body_state,derive_version,have,created_at,updated_at)
+         VALUES (1,1,'2026-10-01','through',?,'session','synthetic-session','known','pending',1,7,1,1)`,
+        [key],
+      );
+      db.run(`INSERT INTO raw_ledger(source_kind,file_generation,byte_offset,t_text,t_ms,source,payload_json,route_id,kind)
+              VALUES ('file','g:0',0,'2026-10-01T00:00:00Z',10,'through',?,7,'compact')`,
+        [JSON.stringify({ t: '2026-10-01T00:00:00Z', route_id: 7, kind: 'compact', status: 200, in: 11 })]);
+      db.run(`INSERT INTO request_evidence(req_id,source_kind,ref_key,merge_state,added_at)
+              VALUES (1,'ledger',?,'merged',1)`, [JSON.stringify(['file', 'g:0', 0])]);
+    });
+    const before = f.store.write(db => projectRequestTx(db, 1, {
+      now: 2, mappingVersion: SOURCE_PROJECTION_VERSION,
+    }));
+    expect(before.families.selected).toMatchObject({ state: 'complete', current: true });
+    const revision = () => f.store.read.query<{ input_revision: number; purpose_pending: number }, []>(
+      'SELECT input_revision,purpose_pending FROM request WHERE req_id=1').get()!;
+    const beforeRevision = revision();
+    // 先把请求的待处理标记清掉：过期本身必须重新把它置位。
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0'));
+
+    expect(pruneRaw(f.store, 100, 100)).toEqual({ ledger: 1, route: 0, hook: 0 });
+    const after = f.store.write(db => projectRequestTx(db, 1, {
+      now: 3, mappingVersion: SOURCE_PROJECTION_VERSION,
+    }));
+    // raw 过期不是新的缺失 kind：证据仍在，只是内容读不到，族状态标 expired 且不再 current。
+    expect(after.families.selected).toMatchObject({ state: 'expired', current: false });
+    expect(after.reasons).toContain('ledger_expired');
+    expect(revision()).toEqual({ input_revision: beforeRevision.input_revision + 1, purpose_pending: 1 });
+  } finally {
+    f.close();
+  }
+});
+
 test('带正文且无法迁移的hook原文不被过期规则删掉', () => {
   const f = fixture();
   try {
@@ -390,6 +431,43 @@ test('准入闸门按TTL缓存量测，回收后invalidate立刻重算', () => {
     gate.invalidate();
     gate.check(0);
     expect(gate.last().usage).not.toBe(beforeInvalidate);
+  } finally {
+    f.close();
+  }
+});
+
+test('回收正文在同一事务推进修订并标脏所属组', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'synthetic-session']);
+    f.store.write(db => db.run(
+      `INSERT INTO request(req_id,started_ms,day,via,conv_key,conv_source,actor,actor_state,
+         body_state,derive_version,have,created_at,updated_at)
+       VALUES (1,1,'2026-10-18','hook',?,'session','synthetic-session','known','pending',0,1,1,1)`,
+      [key],
+    ));
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'synthetic' }] }] },
+      reply: null,
+      redact_version: 1,
+    });
+    const before = f.store.read.query<{ input_revision: number }, []>(
+      'SELECT input_revision FROM request WHERE req_id=1').get()!;
+    // 先把组标成 clean：回收必须让它重新 dirty，而不是沿用旧完成记录。
+    f.store.write(db => {
+      db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,state,published_revision,published_algorithm)
+              VALUES (?,'synthetic-session','','clean',0,1)
+              ON CONFLICT(conv_key,actor) DO UPDATE SET state='clean'`, [key]);
+    });
+    evictOldestBodyBatch(f.store, 1000, 10);
+    expect(f.store.read.query<{ body_state: string }, []>(
+      'SELECT body_state FROM request WHERE req_id=1').get()).toEqual({ body_state: 'evicted' });
+    const after = f.store.read.query<{ input_revision: number }, []>(
+      'SELECT input_revision FROM request WHERE req_id=1').get()!;
+    expect(after.input_revision).toBeGreaterThan(before.input_revision);
+    expect(f.store.read.query<{ state: string }, [string]>(
+      'SELECT state FROM derive_queue WHERE conv_key=?').get(key)).toEqual({ state: 'dirty' });
   } finally {
     f.close();
   }

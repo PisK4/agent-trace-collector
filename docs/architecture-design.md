@@ -808,6 +808,22 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 `request.derive_version` 记录产生当前派生值的算法版本。算法改动后按会话或按天批量重算，`/api/stats` 显示还有多少行低于当前版本。整体重建入口：从 `request_evidence` 找到原始记录，按当前算法重跑，写回同一 `req_id`。
 
+### 组完成与输入修订
+
+派生按 `(conv_key, actor)` 成组重算整条链，所以"这一组的产物是不是最新的"必须由持久状态回答，不能靠队列里还有没有这一行。
+
+| 字段 | 含义 |
+| --- | --- |
+| `group_epoch` | 组的世代。组被删除后重建拿到新 epoch，旧完成记录因此不能复用到新组 |
+| `input_revision` | 该组消费过的输入修订，只增不减；任何写入者发现输入变化就推进它 |
+| `published_revision` / `published_algorithm` | 完成时实际消费的修订与算法；与当前修订相等且 `state='clean'` 才表示产物最新 |
+| `state` | `dirty` 待派生，`clean` 已完成；待办查询一律 `state<>'clean'` |
+| `dirty_since_ms` | 首次未完成触发时间。重复 dirty 保留最早值，clean 后清空 |
+
+组内请求的 `input_epoch` / `input_revision` 是同一套修订的请求侧。输入指正文、回复、归属与来源证据：正文保存、hook 到达或合并、账本或路由的字段级事实变化、证据过期、正文回收都会推进它；只改费用不推进，因为费用不改变用途判定与派生结果。合并把两笔请求的证据并成一笔时，存活请求换新 `input_epoch`，旧 epoch 下的用途结论不再复用。
+
+完成用比较交换而不是无条件写：drain 读到 `{group_epoch, input_revision, target_algorithm}` 后，全部阶段在同一事务里完成才把状态改成 clean 并记下这两个值；若同事务里后到的输入变化抬高了修订，交换失败即整批回滚，旧完成记录不会覆盖新输入。
+
 ## 缺失与健康
 
 ### 证据缺失

@@ -35,10 +35,11 @@ test('维护重建排空目标会话且不消费其它会话积压', async () =>
     expect(code).toBe(0);
     expect(JSON.parse(lines[0]!)).toMatchObject({ ok: true, queue_remaining: 0,
       recomputed_requests: 0, retained_requests: 101 });
+    // 完成的组保留 clean 记录，待办只剩另一个会话。
     expect(f.store.read.query(`SELECT COUNT(*) AS n FROM derive_queue
-      WHERE conv_key='zz-target'`).get()).toEqual({ n: 0 });
-    expect(f.store.read.query(`SELECT conv_key FROM derive_queue`).all())
-      .toEqual([{ conv_key: 'aa-other' }]);
+      WHERE conv_key='zz-target' AND state<>'clean'`).get()).toEqual({ n: 0 });
+    expect(f.store.read.query(`SELECT conv_key,state FROM derive_queue WHERE state<>'clean'`).all())
+      .toEqual([{ conv_key: 'aa-other', state: 'dirty' }]);
   } finally {
     f.close();
   }
@@ -198,6 +199,39 @@ test('淘汰元数据先预览再执行，删别名在前且费用观测一起�
       { source_kind: 'ledger', ref_key: 'r1' },
       { source_kind: 'ledger', ref_key: 'r2' },
     ]);
+  } finally {
+    f.close();
+  }
+});
+
+test('淘汰在删行前标记受影响组，空组同步完成', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,started_ms,day,via,conv_key,conv_source,actor,actor_state,
+                body_state,derive_version,have,created_at,updated_at)
+              VALUES (1,1,'2026-09-01','through','k-live','session','a-live','known','pending',1,3,1,1),
+                     (2,2,'2026-09-04','through','k-live','session','a-live','known','pending',1,3,1,1),
+                     (3,3,'2026-09-02','through','k-gone','session','a-gone','known','pending',1,3,1,1)`);
+      // 两个组都先标成完成：淘汰必须让有剩余成员的组重新 dirty，空组保持完成。
+      db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,input_revision,
+                published_revision,target_algorithm,state)
+              VALUES ('k-live','a-live','','epoch-live',4,4,1,'clean'),
+                     ('k-gone','a-gone','','epoch-gone',2,2,1,'clean')`);
+    });
+    expect(purgeMetadata(f.store, '2026-09-03', 'approval-synthetic-groups').deleted).toBe(2);
+    const rows = f.store.read.query<{
+      conv_key: string; state: string; input_revision: number; published_revision: number; group_epoch: string;
+    }, []>('SELECT conv_key,state,input_revision,published_revision,group_epoch FROM derive_queue ORDER BY conv_key').all();
+    const live = rows.find(row => row.conv_key === 'k-live')!;
+    const gone = rows.find(row => row.conv_key === 'k-gone')!;
+    // 仍有成员的组：保留 epoch、修订增长、重新 dirty。
+    expect(live).toMatchObject({ state: 'dirty', group_epoch: 'epoch-live' });
+    expect(live.input_revision).toBeGreaterThan(4);
+    // 空组：不产生积压，完成记录对当前修订成立。
+    expect(gone).toMatchObject({
+      state: 'clean', published_revision: gone.input_revision,
+    });
   } finally {
     f.close();
   }

@@ -4,7 +4,12 @@ import { persistBodyTx } from './body';
 import type { BodyInput } from './body';
 import { redact } from './privacy';
 import { localDay, modelTimeTitle, normalizeResponseId } from './sources/magpie';
-import { enqueueDeriveTx } from './derive';
+import {
+  markGroupDirtyTx,
+  markRequestInputTx,
+  requestGroupTx,
+  resetRequestInputEpochTx,
+} from './derive-state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
 
 /**
@@ -274,6 +279,9 @@ export function acceptHook(
     savePending(db, envelope, responseIdNorm, joined.candidates, now);
     db.run('UPDATE request SET have=have|1, updated_at=? WHERE req_id=?', [now, reqId]);
     projectRequestTx(db, reqId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
+    // 直接命中已有请求与新建请求都要推进修订：hook 证据、正文与降级原因都是派生输入。
+    // metadata-only 分支虽然没写正文，但证据与 miss_reason 变了，同样不能复用旧结论。
+    markRequestInputTx(db, reqId);
     return { req_id: reqId, duplicate: false };
   });
 }
@@ -294,6 +302,10 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
     return;
   }
   const sourceId = source.req_id;
+  // 合并前先记下两笔各自的组：源请求稍后被删，它原来那一组也少了一个成员，
+  // 必须在删行前标记，否则那一组的产物会一直停在旧结果上。
+  const sourceGroup = requestGroupTx(db, sourceId);
+  const targetGroupBefore = requestGroupTx(db, targetId);
 
   // 1) 先把别的别名从 sourceId 改指向 targetId。
   db.run('UPDATE request_alias SET new_id=? WHERE new_id=?', [targetId, sourceId]);
@@ -342,17 +354,23 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
   // 只留在 raw_hook 里作为独立报告，不迁移成账本事实。
   projectRequestTx(db, targetId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
 
-  // 7) 清掉临时请求与 pending 行。
+  // 7) 源请求即将消失：它原来那一组少了一个成员，必须在删行前标脏，
+  //    否则那一组的产物会一直停在把源请求算进去的旧结果上。
+  if (sourceGroup !== null) markGroupDirtyTx(db, sourceGroup.convKey, sourceGroup.actor, '');
   db.run('DELETE FROM pending_hook WHERE hook_id=?', [hookId]);
   db.run('DELETE FROM request WHERE req_id=?', [sourceId]);
 
-  // 8) 正文可能刚迁到目标请求，按目标已确认的归属重算这一组。
-  const target = db.query<{ conv_key: string | null; actor: string | null; actor_state: string }, [number]>(
-    'SELECT conv_key, actor, actor_state FROM request WHERE req_id=?',
-  ).get(targetId);
-  if (target?.conv_key != null && target.actor !== null && target.actor_state === 'known') {
-    enqueueDeriveTx(db, target.conv_key, target.actor, '');
+  // 8) 目标的输入集合换成了两笔证据的并集：旧 epoch 下的用途结论不能复用。
+  //    先换 epoch，再推进修订并按目标当前归属标脏；归属若被源请求改过，旧组也要重算。
+  resetRequestInputEpochTx(db, targetId);
+  const targetGroupAfter = requestGroupTx(db, targetId);
+  const moved = targetGroupBefore !== null &&
+    (targetGroupAfter === null ||
+      targetGroupAfter.convKey !== targetGroupBefore.convKey || targetGroupAfter.actor !== targetGroupBefore.actor);
+  if (moved && targetGroupBefore !== null) {
+    markGroupDirtyTx(db, targetGroupBefore.convKey, targetGroupBefore.actor, '');
   }
+  markRequestInputTx(db, targetId);
 }
 
 /**

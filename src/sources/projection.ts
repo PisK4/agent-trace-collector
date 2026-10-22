@@ -681,3 +681,33 @@ export function projectRequestTx(
   writeProjectionTx(db, reqId, projection, input.now);
   return projection;
 }
+
+/**
+ * 只读构建：写入前取差异基线用，不写任何列。
+ *
+ * 调用方拿它与写入后的投影签名比较，只有派生输入真的变了才标脏；
+ * 同一 route 的重复摘要刷新不应触发整组重算。
+ */
+export function readProjectionTx(db: Database, reqId: number, version: number): RequestProjection {
+  return buildProjection(db, reqId, version);
+}
+
+/**
+ * 投影事实的稳定签名，只用于判断"这次写入是否改变了派生输入"。
+ *
+ * 字段顺序由字面量固定，数组在投影内已排序，所以同一输入必然得到同一串。
+ * 它不是持久字段：投影元数据落在 Task 3 的 projection_meta_json。
+ */
+export function projectionSignature(projection: RequestProjection): string {
+  return JSON.stringify({
+    state: projection.state,
+    selected: projection.selected,
+    attempts: projection.attempts,
+    prompt: projection.prompt,
+    kind: projection.kind,
+    hook: projection.hook,
+    identity: projection.identity,
+    families: projection.families,
+    reasons: projection.reasons,
+  });
+}

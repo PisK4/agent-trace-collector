@@ -577,7 +577,7 @@ test('合成旧排序经维护入口对齐且事实守恒', async () => {
 const injectedStages = [
   ['tool', `BEFORE INSERT ON tool_call`],
   ['preview', `BEFORE UPDATE OF input_preview ON request`],
-  ['ack', `BEFORE DELETE ON derive_queue`],
+  ['ack', `BEFORE UPDATE OF state ON derive_queue WHEN NEW.state='clean'`],
 ] as const;
 
 for (const [stage, event] of injectedStages) {
@@ -592,7 +592,8 @@ for (const [stage, event] of injectedStages) {
         BEGIN SELECT RAISE(ABORT,'injected_derive'); END`));
       expect(() => drainDerive(f.store)).toThrow('injected_derive');
       expect(snapshot(f.store, [1, 2])).toEqual(before);
-      expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_queue').get())
+      // ack 失败：组仍是 dirty，没有写成 clean。
+      expect(f.store.read.query("SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'").get())
         .toEqual({ n: 1 });
       f.store.write(db => db.exec('DROP TRIGGER injected_derive'));
       f.store.close();
@@ -632,11 +633,12 @@ test('第二组确认失败时整批回滚且旧结果保留', () => {
     enqueueDerive(f.store, GROUP, ACTOR, '');
     enqueueDerive(f.store, 'zz-second', 'actor-second', '');
     f.store.write(db => db.exec(`CREATE TRIGGER fail_second_ack
-      BEFORE DELETE ON derive_queue WHEN OLD.conv_key='zz-second'
+      BEFORE UPDATE OF state ON derive_queue WHEN NEW.state='clean' AND NEW.conv_key='zz-second'
       BEGIN SELECT RAISE(ABORT,'injected_second'); END`));
     expect(() => drainDerive(f.store)).toThrow('injected_second');
     // 本批全部组在同一个事务里，第二组失败连第一组一起回滚。
-    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_queue').get()).toEqual({ n: 2 });
+    expect(f.store.read.query("SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'").get())
+      .toEqual({ n: 2 });
     expect(snapshot(f.store, [1, 2])).toEqual(settled);
     f.store.write(db => db.exec('DROP TRIGGER fail_second_ack'));
     expect(drainDerive(f.store).remaining).toBe(0);
@@ -767,7 +769,8 @@ test('完整组重建关闭重开后保持增量', () => {
       const lastAfter = reopened.read.query<{ delta_ordinals: string }, [number]>(
         'SELECT delta_ordinals FROM request WHERE req_id=?').get(250);
       expect(lastAfter?.delta_ordinals).toBe(lastBefore?.delta_ordinals);
-      expect(reopened.read.query('SELECT count(*) AS n FROM derive_queue').get()).toEqual({ n: 0 });
+      expect(reopened.read.query("SELECT count(*) AS n FROM derive_queue WHERE state<>'clean'").get())
+        .toEqual({ n: 0 });
     } finally {
       reopened.close();
     }
@@ -805,7 +808,8 @@ test('未知归属的请求不入队', () => {
        VALUES (1,'k',NULL,'unknown',1,'2026-10-20','hook','pending',0,1,1,1,'t','model_time')`,
     ));
     enqueueDerive(f.store, 'k', 'unknown-sentinel', '');
-    expect(f.store.read.query('SELECT count(*) AS n FROM derive_queue').get()).toEqual({ n: 0 });
+    expect(f.store.read.query("SELECT count(*) AS n FROM derive_queue WHERE state<>'clean'").get())
+      .toEqual({ n: 0 });
   } finally {
     f.close();
   }
