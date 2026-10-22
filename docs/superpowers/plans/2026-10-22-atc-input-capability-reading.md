@@ -2367,7 +2367,7 @@ git commit -m "feat(reading): keep unknown request kinds neutral and aggregate s
 - Produces:
   - `messageCopyText(entry): string`
   - `restoreScroll(element, previous): number`
-  - 页面只使用服务端解释，不再有 `HARNESS_BLOCKS`、`cleanUserText`、`isAuxTitleRequest`。`titleOfReplyText` 只解析标题请求的回复文本，不参与输入清洗，保留原实现。
+  - 页面只使用服务端解释，不再有 `HARNESS_BLOCKS`、`cleanUserText`。`isAuxTitleRequest` 与 `titleOfReplyText` 已在 D 阶段删除，这里只需确认没有回潮。
 
 - [ ] **Step 1：写失败测试，锁定复制原文与滚动恢复。**
 
@@ -2404,7 +2404,7 @@ test('滚动恢复夹在可滚动范围内', () => {
 
 - [ ] **Step 2：运行测试确认失败。** Run: `bun test tests/web.test.ts tests/body-view.test.ts -t '复制文本|滚动恢复'`。Expected: FAIL，`messageCopyText` 与 `restoreScroll` 未导出。
 
-- [ ] **Step 3：页面消费服务端解释。** `messageEntries` 用 `page.interpretations` 按 ord 建表，`Entry.input` 直接取服务端结果；`isInput` 只认 `interpretation.is_input`，不再按 `role === 'user' && hasText` 猜一份。`renderConversation` 渲染 `entry.isInput` 的消息，多条用户消息逐条成气泡；`input.state === 'text'` 显示 `input.text`，`unrecognized` 显示原文并标 `包装未识别`；请求内没有可见输入时显示 `这一笔没有新的用户可见消息`。删除 `isAuxTitleRequest`、`HARNESS_BLOCKS`、`cleanUserText`；`titleOfReplyText` 保留，标题请求的回复仍按 `<title>` 标签或单键 `title` JSON 提取标题文本。`req_kind === 'title'` 才显示 `生成会话标题`。
+- [ ] **Step 3：页面消费服务端解释。** `messageEntries` 用 `page.interpretations` 按 ord 建表，`Entry.input` 直接取服务端结果；`isInput` 只认 `interpretation.is_input`，不再按 `role === 'user' && hasText` 猜一份。`renderConversation` 渲染 `entry.isInput` 的消息，多条用户消息逐条成气泡；`input.state === 'text'` 显示 `input.text`，`unrecognized` 显示原文并标 `包装未识别`；请求内没有可见输入时显示 `这一笔没有新的用户可见消息`。删除 `HARNESS_BLOCKS`、`cleanUserText`；`isAuxTitleRequest` 与 `titleOfReplyText` 已在 D 阶段删除，不重新引入。`req_kind === 'title'` 的辅助行沿用 D 的 `auxSummary`：显示 `标题生成` 标签与正式标题，这里不另起一套文案。
 
 `messageEntries` 改完后，`tests/body-view.test.ts` 里凡是没有 `interpretations` 的旧用例都会得到 `isInput: false`。其中只断言块形状、预览、转义或条数的用例可以保留；涉及 `isInput`、`renderMessages` 新增标记或 `deltaOrdinals` 的用例必须补解释。下面替换工具结果消息不算用户输入用例：
 

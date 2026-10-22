@@ -10,7 +10,8 @@
  * @typedef {import('../src/queries').RequestDetail} RequestDetail
  * @typedef {'system' | 'user' | 'assistant' | 'tool' | 'unknown'} Role
  * @typedef {{kind: string, text: string, index: number, raw: unknown}} Block
- * @typedef {{ord: number, role: Role, blocks: Block[], preview: string, isInput: boolean}} Entry
+ * @typedef {import('../src/input-interpretation').UserInputView} UserInputView
+ * @typedef {{ord: number, role: Role, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
  * @typedef {{id: string, name: string, inputText: string, ord: number}} ToolCallView
  * @typedef {{state: 'ok' | 'absent' | 'invalid', text: string, thinking: string[], calls: ToolCallView[], finish: string | null, model: string | null, raw: unknown}} ReplyView
  * @typedef {{call_id: string, name: string, inputText: string, ord: number, state: string, result_req: number | null, result_ord: number | null}} ToolEntry
@@ -227,25 +228,37 @@ function messagePreview(blocks) {
 
 /**
  * 把一页正文的消息归一化。page 为空时返回空表，调用方据此显示加载状态。
- * isInput 标记这条消息是否代表"人输入的话"：Anthropic 把 tool_result 放在
- * user 角色的消息里，这类消息在对话视图里是工具结果，不是用户提问。
+ * 输入解释只认服务端 `interpretations`：Anthropic 把 tool_result 放在 user
+ * 角色的消息里，这类消息在对话视图里不是用户提问；包装是否算用户输入也由
+ * 服务端同一套规则判定，页面不再按角色与文本自行猜测。
  * @param {BodyPage | null} page
  * @returns {Entry[]}
  */
 export function messageEntries(page) {
   if (page === null || page === undefined) return [];
+  const byOrd = new Map((page.interpretations ?? []).map(item => [item.ord, item]));
   return page.messages.map(message => {
     const blocks = messageBlocks(message.value);
     const role = roleOf(message.value);
-    const hasText = blocks.some(block => block.kind === 'text' && block.text.length > 0);
+    const interpretation = byOrd.get(message.ord) ?? null;
     return {
       ord: message.ord,
       role,
       blocks,
       preview: messagePreview(blocks),
-      isInput: role === 'user' && hasText,
+      input: interpretation === null ? null : interpretation.input,
+      isInput: interpretation !== null && interpretation.is_input === true,
     };
   });
+}
+
+/**
+ * 复制用的原文。取消息块里的原始文本，不做 HTML 转义，也不替换成解释后的文本；
+ * 页面展示路径仍然逐块转义，两条路径分开。
+ * @param {Entry} entry
+ */
+export function messageCopyText(entry) {
+  return entry.blocks.map(block => block.text).filter(text => text.length > 0).join('\n\n');
 }
 
 /**
@@ -409,6 +422,7 @@ export function renderMessageDetail(entry) {
     <div class="bp-head">
       <span class="kind ${roleTag(entry.role)} bp-kind">${roleTag(entry.role)}</span>
       <span class="bp-path">messages[${entry.ord}]</span>
+      <button class="chip-btn" data-copy-msg="${entry.ord}">复制原文</button>
     </div>
     <div class="bp-meta"><span>${entry.blocks.length} 个内容块</span><span>·</span><span>按协议字段顺序展示</span></div>
     ${blocks.length > 0 ? blocks : '<p class="note">这条消息没有内容块。</p>'}

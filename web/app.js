@@ -14,7 +14,7 @@
  */
 
 import {
-  bodyNotice, deltaOrdinals, mdToHtml, messageEntries, partColor, partLabel, roleTag,
+  bodyNotice, deltaOrdinals, mdToHtml, messageCopyText, messageEntries, partColor, partLabel, roleTag,
   renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools,
   replyView, toolEntries,
 } from './body-view.js';
@@ -165,6 +165,19 @@ export function auxSummary(row) {
   return label;
 }
 
+/**
+ * 重绘后把滚动位置放回去。内容变短时夹到新的可滚动上限内，
+ * 否则浏览器会把 scrollTop 留在旧值、首屏看起来像空白。
+ * @param {{scrollHeight?: number, clientHeight?: number, scrollTop: number}} element
+ * @param {number} previous
+ * @returns {number}
+ */
+export function restoreScroll(element, previous) {
+  const max = Math.max(0, (element.scrollHeight ?? 0) - (element.clientHeight ?? 0));
+  element.scrollTop = Math.min(Math.max(0, previous), max);
+  return element.scrollTop;
+}
+
 if (typeof document !== 'undefined') {
   /** @type {Record<string, string>} */
   const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -219,7 +232,7 @@ if (typeof document !== 'undefined') {
     reqId: qp.get('trace') ? Number(qp.get('trace')) : null,
     /** URL 指定的请求在库里不存在（可能被淘汰或从未存在）；界面显示未找到。 */
     missingReqId: /** @type {number | null} */ (null),
-    /** URL 指定的请求存在，但落在还没加载的更早页里；它不算缺失，只是不在当前列表。 */
+    /** URL 指定的请求存在，但落在还没加载的更晚页里；它不算缺失，只是不在当前列表。 */
     offPageReqId: /** @type {number | null} */ (null),
     view: qp.get('view') === 'ledger' ? 'ledger' : 'conversation',
     open: new Set(/** @type {number[]} */ ([])),
@@ -255,15 +268,12 @@ if (typeof document !== 'undefined') {
     return reader.getState().requests;
   }
   /**
-   * 请求序号按时间正序给：最早的一笔是 Request 01。
+   * 请求序号按 (started_ms, req_id) 的排名给：最早的一笔是 Request 01。
    *
-   * 序号不能拿"已加载页长度 - 下标"算：继续加载更早的请求后整页会变长，
-   * 同一笔请求会当场换号，URL 里的 trace 也跟着指向别的位置。这里改成
-   * 按 (started_ms, req_id) 的排名，并保证它只随真实数据变化。
-   *
-   * 已加载行是正序的（最早的在前），所以下标 + 1 就是排名。分页追加的是
-   * 更早的请求，追加后需要整体重算——所以这里每次都从当前行重新数，
-   * 而不是缓存一个序号。
+   * 已加载行是正序的（最早的在前），所以下标 + 1 就是排名。分页只向更晚的方向
+   * 追加，已经出现过的序号不会因为加载下一页而改变；每次重绘从当前行重新数，
+   * 不缓存序号，合并或淘汰之后也不会留下旧号。URL 里的 trace 用 req id，
+   * 不用序号，所以换页不会把链接指向别的位置。
    * @param {number} reqId
    * @returns {number} 1 起的序号；未加载时返回 0
    */
@@ -352,11 +362,23 @@ if (typeof document !== 'undefined') {
       try {
         const page = await reader.loadBody(id, from);
         const isFirst = from === 0;
-        const entries = isFirst ? messageEntries(page) : [...(bodies.get(id)?.entries ?? []), ...messageEntries(page)];
+        const previous = bodies.get(id);
+        // 解释只覆盖请求的那一片：后续片并入时必须保留前几片的解释表。
+        const interpretations = isFirst
+          ? page.interpretations
+          : [...(previous?.page?.interpretations ?? []), ...page.interpretations];
+        const entries = isFirst ? messageEntries(page) : [...(previous?.entries ?? []), ...messageEntries(page)];
+        const mergedPage = isFirst ? page : {
+          ...page,
+          request_fields: previous?.page?.request_fields ?? null,
+          reply: previous?.page?.reply ?? null,
+          capabilities: page.capabilities,
+          interpretations,
+          coverage: { ...page.coverage, from: 0 },
+        };
         const total = page.total;
-        const current = bodies.get(id);
         const merged = {
-          page: isFirst ? page : { ...page, request_fields: current?.page?.request_fields ?? null, reply: current?.page?.reply ?? null },
+          page: mergedPage,
           entries,
           nextFrom: from + page.messages.length,
           total,
@@ -579,35 +601,11 @@ if (typeof document !== 'undefined') {
           : '每行是一笔客户端请求；展开后读正文、读数与路由。'}</span>
       </div>
       ${unknown ? `<div class="session-note warn"><span>↳</span><span>链接里的会话 key 不在已加载的会话里：可能是已淘汰、从未记录，或者还在后面的会话页。下面没有用别的会话顶替。</span></div>` : ''}
-      ${missing > 0 ? `<div class="session-note warn"><span>↳</span><span>已加载请求中有 ${missing} 笔正文未到或没有回调；它们保留身份与读数，不用更早的请求替代。</span></div>` : ''}
+      ${missing > 0 ? `<div class="session-note warn"><span>↳</span><span>已加载请求中有 ${missing} 笔正文未到或没有回调；它们保留身份与读数，不用另一笔的正文替代。</span></div>` : ''}
       ${state.missingReqId !== null ? `<div class="session-note warn"><span>↳</span><span>链接里的 Request ${state.missingReqId} 在当前库里不存在，也没有别名指向它。下面显示的是本会话的请求，不是那一笔。</span></div>` : ''}
-      ${state.offPageReqId !== null ? `<div class="session-note"><span>↳</span><span>链接里的 Request ${state.offPageReqId} 存在，但落在还没加载的更早页里；继续加载请求后可以选到它。</span></div>` : ''}
-      ${reader.getState().requestsCursor !== null ? `<div class="session-note"><span>↳</span><span>这里只显示已加载的一页请求；继续加载会追加更早的请求。</span></div>` : ''}
+      ${state.offPageReqId !== null ? `<div class="session-note"><span>↳</span><span>链接里的 Request ${state.offPageReqId} 存在，但落在还没加载的更晚页里；继续加载请求后可以选到它。</span></div>` : ''}
+      ${reader.getState().requestsCursor !== null ? `<div class="session-note"><span>↳</span><span>这里只显示已加载的一页请求；继续加载会追加更晚的请求。</span></div>` : ''}
     </header>`;
-  }
-
-  // 与服务端 derive 的剥壳规则对齐：正文是原始消息，harness 注入的通知、回顾、
-  // 斜杠命令回显都不是用户说的话，对话视图不把它们铺进 USER 气泡。
-  const HARNESS_BLOCKS = [
-    /<system-reminder>[\s\S]*?<\/system-reminder>/gi,
-    /<system-notice>[\s\S]*?<\/system-notice>/gi,
-    /<recap>[\s\S]*?<\/recap>/gi,
-    /<transcript>[\s\S]*?<\/transcript>/gi,
-    /<command-name>[\s\S]*?<\/command-name>/gi,
-    /<command-message>[\s\S]*?<\/command-message>/gi,
-    /<command-args>[\s\S]*?<\/command-args>/gi,
-    /<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi,
-  ];
-
-  /** @param {string} text */
-  function cleanUserText(text) {
-    let out = text;
-    for (const pattern of HARNESS_BLOCKS) out = out.replace(pattern, '');
-    out = out.replace(/<\/?session>/gi, '').trim();
-    // 没有标签包裹的 harness 文本：技能注入正文与"用户离开又回来"的系统提示。
-    if (/^Base directory for this skill:/i.test(out)) return '';
-    if (/^The user stepped away and is coming back\b/i.test(out)) return '';
-    return out;
   }
 
   /**
@@ -631,14 +629,18 @@ if (typeof document !== 'undefined') {
       const delta = deltaOrdinals(detail);
       const relation = relationTextOf(r.req_id);
       const aux = isAuxRow(r);
-      // 正文是原始消息：先剥掉 harness 注入的块，再去掉空块。
+      // 输入解释只认服务端结果：页面不剥包装、不猜哪些消息是人说的话。
       // 辅助请求不是用户说的话，不铺输入气泡。
-      const rawUserBlocks = aux || loaded === null || delta === null
+      const inputEntries = aux || loaded === null || delta === null
         ? []
-        : loaded.entries.filter(entry => delta.has(entry.ord) && entry.isInput);
-      const userTexts = rawUserBlocks
-        .map(entry => cleanUserText(entry.blocks.filter(b => b.kind === 'text').map(b => b.text).join('\n') || entry.preview))
-        .filter(text => text.length > 0);
+        : loaded.entries.filter(entry => delta.has(entry.ord) && entry.input !== null);
+      /** @type {{text: string, unrecognized: boolean}[]} */
+      const userBubbles = [];
+      for (const entry of inputEntries) {
+        const input = entry.input;
+        if (input === null || !entry.isInput || input.text.length === 0) continue;
+        userBubbles.push({ text: input.text, unrecognized: input.state === 'unrecognized' });
+      }
       // 正文还没读时用派生摘要占位：对话视图不能因为"按需加载"就整屏空壳。
       const previewTag = r.input_preview_kind === 'tail' ? '<span class="tag">末轮上下文</span>'
         : aux ? '<span class="tag">辅助请求</span>' : '';
@@ -656,8 +658,8 @@ if (typeof document !== 'undefined') {
               </div>`
           : `<div class="conv-cont muted">${esc(r.body_state === 'available' ? '这一笔还没有派生摘要' : bodyStateText(r))}</div>`)
         : aux ? `<div class="conv-cont" data-select="${r.req_id}"><span class="tag">辅助请求</span>${esc(auxSummary(r))}</div>`
-          : userTexts.length > 0 ? ''
-            : rawUserBlocks.length > 0
+          : userBubbles.length > 0 ? ''
+            : inputEntries.length > 0
               ? '<div class="conv-cont">这一笔没有新的用户可见消息：输入是技能注入或系统提示。</div>'
               : delta === null ? `<div class="conv-cont">${esc(relation || '还未派生增量关系')}：不拆分新增消息，右侧可读整笔请求正文。</div>`
                 : r.input_preview_kind === 'tool_result' && r.input_preview !== null
@@ -669,9 +671,9 @@ if (typeof document !== 'undefined') {
       return `<section class="conv-req" data-req="${r.req_id}" data-current="${r.req_id === state.reqId}">
         <div class="conv-gutter"><b>${ordinal}</b><em>${esc(clock(r.started_ms))}</em></div>
         <div class="conv-main">
-          ${userTexts.map(text => `<div class="conv-user" data-select="${r.req_id}">
-                <div class="conv-who">USER</div>
-                <div class="conv-user-body">${esc(text)}</div>
+          ${userBubbles.map(bubble => `<div class="conv-user" data-select="${r.req_id}">
+                <div class="conv-who">USER${bubble.unrecognized ? ' <span class="tag">包装未识别</span>' : ''}</div>
+                <div class="conv-user-body">${esc(bubble.text)}</div>
               </div>`).join('')}
           ${inputNote}${contextHtml}
           ${convCard(r, detail, loaded)}
@@ -1055,8 +1057,7 @@ if (typeof document !== 'undefined') {
 
   function renderMain() {
     const main = el('main');
-    const keep = main.scrollTop;
-    const rows = currentRows();
+    const keep = main.scrollTop;    const rows = currentRows();
     const failed = reader.getState().requestsError;
     const unknown = state.session !== null && sessionRow(state.session) === null;
     const emptyText = state.session === null
@@ -1067,7 +1068,7 @@ if (typeof document !== 'undefined') {
     if (state.pendingSession !== null) {
       // 数据还没到时不渲染头部聚合：那会用上一个会话的行拼出新会话的读数。
       main.innerHTML = `<div class="conv"><p class="sess-empty">正在读取${esc(shortSession(state.pendingSession))}的请求…</p></div>`;
-      main.scrollTop = keep;
+      restoreScroll(main, keep);
       el('load-more-requests').hidden = true;
       return;
     }
@@ -1077,7 +1078,7 @@ if (typeof document !== 'undefined') {
       : state.view === 'ledger'
         ? `<div class="ledger">${ledgerRows(rows) || `<p class="sess-empty">${esc(emptyText)}</p>`}</div>`
         : renderConversation(emptyText));
-    main.scrollTop = keep;
+    restoreScroll(main, keep);
     el('load-more-requests').hidden = reader.getState().requestsCursor === null;
   }
 
@@ -1285,10 +1286,19 @@ if (typeof document !== 'undefined') {
       ${unread ? `<div style="margin-top:8px"><button class="chip-btn" data-body-more="${r.req_id}">加载下一片（已读 ${loaded.entries.length} / ${loaded.total}）</button></div>` : ''}`;
   }
 
+  /**
+   * 同一请求重绘（切页签、读下一片正文）保留右栏滚动；换请求才回到顶部。
+   * 直接归零会让"加载下一片"之后读者丢掉刚才的位置。
+   * @type {number | null}
+   */
+  let lastRailReq = null;
   function renderRail() {
     el('rail-head').innerHTML = railHead();
-    el('rail-body').innerHTML = railBody();
-    el('rail-body').scrollTop = 0;
+    const rail = el('rail-body');
+    const keep = state.reqId !== null && state.reqId === lastRailReq ? rail.scrollTop : 0;
+    rail.innerHTML = railBody();
+    restoreScroll(rail, keep);
+    lastRailReq = state.reqId;
   }
 
   /* ---------------- 交互 ---------------- */
@@ -1391,9 +1401,9 @@ if (typeof document !== 'undefined') {
       state.open = new Set();
       state.selected = null;
     } else if (!rows.some(row => row.req_id === state.reqId)) {
-      // URL 里的 req id 不在已加载页里：可能已被淘汰、从未存在、落在更早的页，
+      // URL 里的 req id 不在已加载页里：可能已被淘汰、从未存在、落在更晚的页，
       // 或者被合并到了另一个 canonical id（此时服务端会解析成后者）。
-      // 前两种要显式说明未找到；第三种只在更早的页里；第四种直接跳到 canonical。
+      // 前两种要显式说明未找到；第三种只在更晚的页里；第四种直接跳到 canonical。
       const requested = state.reqId;
       const detail = await ensureDetail(requested);
       const target = resolveTraceTarget(rows, requested, detail);
@@ -1533,6 +1543,20 @@ if (typeof document !== 'undefined') {
       const id = Number(/** @type {HTMLElement} */ (bodyMore).dataset.bodyMore);
       const loaded = bodyOf(id);
       if (loaded !== null) void readBody(id, loaded.nextFrom);
+      return;
+    }
+    const copyMsg = t.closest('[data-copy-msg]');
+    if (copyMsg) {
+      const ord = Number(/** @type {HTMLElement} */ (copyMsg).dataset.copyMsg);
+      const reqId = state.selected !== null ? state.selected.req : state.reqId;
+      const loaded = reqId === null ? null : bodyOf(reqId);
+      const entry = loaded === null ? null : loaded.entries.find(item => item.ord === ord) ?? null;
+      // 剪贴板只写原文；HTML 展示路径仍然逐块转义。
+      if (entry !== null && navigator.clipboard !== undefined) {
+        void navigator.clipboard.writeText(messageCopyText(entry)).then(() => {
+          /** @type {HTMLElement} */ (copyMsg).textContent = '已复制';
+        }).catch(() => {});
+      }
       return;
     }
     const msg = t.closest('[data-msg]');
