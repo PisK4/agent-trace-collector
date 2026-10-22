@@ -81,7 +81,7 @@
 - Consumes: 现有 `isRecord`、`optionalNumber`、`parseTimestamp`、`localDay`、`normalizeResponseId`。
 - Produces: `FieldState`、`CountedState`、`LedgerShape`、`RouteShape`；`LedgerFields` 新增 `err` 与 `shape`；`RouteFields` 新增 `shape`；`mapLedgerRow` 与 `mapRouteRow` 签名不变。
 
-- [ ] **Step 1：添加来源键与类型状态回归。**
+- [x] **Step 1：添加来源键与类型状态回归。**
 
 ```ts
 import { mapLedgerRow, mapRouteRow } from '../src/sources/magpie';
@@ -143,9 +143,9 @@ test('路由Prompt只在校准布尔与tokens合法时给出counted', () => {
 });
 ```
 
-- [ ] **Step 2：观察失败。** Run: `bun test tests/magpie.test.ts -t '账本来源字段|账本旧键|路由Prompt'`。Expected: FAIL，当前 `req`、`cost`、`err` 恒为 null，`shape` 未定义，`counted: true` 被 `optionalNumber` 读成 null。
+- [x] **Step 2：观察失败。** Run: `bun test tests/magpie.test.ts -t '账本来源字段|账本旧键|路由Prompt'`。Expected: FAIL，当前 `req`、`cost`、`err` 恒为 null，`shape` 未定义，`counted: true` 被 `optionalNumber` 读成 null。
 
-- [ ] **Step 3：实现字段状态与映射。**
+- [x] **Step 3：实现字段状态与映射。**
 
 ```ts
 export type FieldState = 'reported' | 'empty' | 'absent' | 'invalid';
@@ -285,12 +285,12 @@ shape: {
 
 非法类型不抛错，只把状态记为 `invalid` 并让值保持 null。空串状态是 `empty`，它既不是值也不是撤销。`req` 只读上游 `req`，`cost` 只读上游 `cost`；旧键 `requested`、`own_cost`、`ownCost` 不再作为来源。Provider model 的 `model` 保留在 `LedgerFields.model`，不进入 `requested` 或 `served`。
 
-- [ ] **Step 4：跑最窄测试与类型检查。**
+- [x] **Step 4：跑最窄测试与类型检查。**
 
 Run: `bun test tests/magpie.test.ts -t '账本来源字段|账本旧键|路由Prompt'`。Expected: PASS。
 Run: `bun run typecheck`。Expected: PASS，新增字段后所有消费方仍编译；若旧测试对 `LedgerFields` 做穷尽对象比较，按实际字段补断言，不改生产行为。
 
-- [ ] **Step 5：做 supersession check 并创建 note。** 在 `.agents/notes/implemented/` 与 `proposed/` 搜索覆盖同一决策的旧记录。[proposed 的字段保真提案](../../../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md) 只记录提案，不是已交付权威；[既有隐私边界](../../../.agents/notes/implemented/architecture/2026-10-20-privacy-and-local-access-boundary.md) 与[账本读数溢出](../../../.agents/notes/implemented/bug-fix/2026-10-21-ledger-readings-overflow.md) 只部分涉及，保持活跃并交叉链接。创建 `2026-10-22-source-projection-and-field-fidelity.md`，`Status: implemented`，正文写：req、provider model、served 三者各自的来源与缺失语义；字段状态不是撤销；counted 的合法省略等于未校准；长期 kind、hook 报告与映射版本交 C，链接 [C 计划](2026-10-22-atc-durable-rebuild.md)；否决的备选是继续用 `optionalString` 合并缺失与非法。获提交授权时提交 `fix(sources): read magpie field keys and shape states`，包含本任务源码、测试与 note，末尾使用规定 attribution。未获授权时保持未暂存；Task 1 起复用同一 note。
+- [x] **Step 5：做 supersession check 并创建 note。** 在 `.agents/notes/implemented/` 与 `proposed/` 搜索覆盖同一决策的旧记录。[proposed 的字段保真提案](../../../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md) 只记录提案，不是已交付权威；[既有隐私边界](../../../.agents/notes/implemented/architecture/2026-10-20-privacy-and-local-access-boundary.md) 与[账本读数溢出](../../../.agents/notes/implemented/bug-fix/2026-10-21-ledger-readings-overflow.md) 只部分涉及，保持活跃并交叉链接。创建 `2026-10-22-source-projection-and-field-fidelity.md`，`Status: implemented`，正文写：req、provider model、served 三者各自的来源与缺失语义；字段状态不是撤销；counted 的合法省略等于未校准；长期 kind、hook 报告与映射版本交 C，链接 [C 计划](2026-10-22-atc-durable-rebuild.md)；否决的备选是继续用 `optionalString` 合并缺失与非法。获提交授权时提交 `fix(sources): read magpie field keys and shape states`，包含本任务源码、测试与 note，末尾使用规定 attribution。未获授权时保持未暂存；Task 1 起复用同一 note。
 
 ## Task 1：统一隐私形态与 account 别名
 
@@ -303,7 +303,7 @@ Run: `bun run typecheck`。Expected: PASS，新增字段后所有消费方仍编
 - Consumes: 现有 `PLACEHOLDER`、`SENSITIVE_KEYS`、`placeholder`、`credentialValue`、`redact`。
 - Produces: `placeholder(kind, value, salt)` 对已是稳定占位符的字符串原样返回；`account` 与 `providerAccount` 都按敏感键处理并得到同一稳定占位符。
 
-- [ ] **Step 1：添加别名与幂等回归。**
+- [x] **Step 1：添加别名与幂等回归。**
 
 ```ts
 test('account别名共享占位符且已脱敏值不再散列', () => {
@@ -326,9 +326,9 @@ test('account别名共享占位符且已脱敏值不再散列', () => {
 });
 ```
 
-- [ ] **Step 2：观察失败。** Run: `bun test tests/privacy.test.ts -t 'account别名'`。Expected: FAIL，当前 `account` 保持明文，且敏感键分支把已有占位符再散列成另一个 digest。
+- [x] **Step 2：观察失败。** Run: `bun test tests/privacy.test.ts -t 'account别名'`。Expected: FAIL，当前 `account` 保持明文，且敏感键分支把已有占位符再散列成另一个 digest。
 
-- [ ] **Step 3：让占位符幂等并归一 account。**
+- [x] **Step 3：让占位符幂等并归一 account。**
 
 ```ts
 const SENSITIVE_KEYS = new Set([
@@ -346,12 +346,12 @@ function placeholder(kind: string, value: string, salt: Uint8Array): string {
 
 `account` 与 `providerAccount` 的别名归一不在这里做字符串替换，而是让两者都得到同一 `credential` 占位符；来源 Adapter 在脱敏后的对象上继续用 `account ?? providerAccount` 选择显示值。占位符幂等同时覆盖敏感键分支、请求头分支与普通字符串分支，因为三处都调用同一个 `placeholder`。
 
-- [ ] **Step 4：跑隐私与既有脱敏测试。**
+- [x] **Step 4：跑隐私与既有脱敏测试。**
 
 Run: `bun test tests/privacy.test.ts`。Expected: PASS，已有同类同值、白名单头、凭证形态断言保持。
 Run: `bun run typecheck`。Expected: PASS。
 
-- [ ] **Step 5：更新 note 并提交。** 在 Task 0 的 note 补记：account 与 providerAccount 两个入口使用同一稳定占位符；已脱敏值不二次散列；历史明文修复与变换版本交 C。获授权时提交 `fix(privacy): make account aliases share stable placeholders`，包含本任务文件与 note，使用规定 attribution。
+- [x] **Step 5：更新 note 并提交。** 在 Task 0 的 note 补记：account 与 providerAccount 两个入口使用同一稳定占位符；已脱敏值不二次散列；历史明文修复与变换版本交 C。获授权时提交 `fix(privacy): make account aliases share stable placeholders`，包含本任务文件与 note，使用规定 attribution。
 
 ## Task 2：来源投影 Module 与 owner 完整性判断
 
@@ -364,7 +364,7 @@ Run: `bun run typecheck`。Expected: PASS。
 - Consumes: `LedgerFields`、`RouteFields`、`mapLedgerRow`、`mapRouteRow`、`isRecord`、`localDay`。
 - Produces: 本文开头列出的 `projectRequestTx`、`collectOwnerEvidenceTx`、`ProjectionFamily`、`FamilyProjection`、`SelectedAttempt`、`AttemptProjection`、`PromptProjection`、`SourceKindProjection`、`HookProjection`、`LedgerIdentityProjection`、`RequestProjection`、`PreparedEvidence`、`OwnerEvidence`。
 
-- [ ] **Step 1：添加完整、部分、重复、顺序不可证与 hook 独立的投影回归。**
+- [x] **Step 1：添加完整、部分、重复、顺序不可证与 hook 独立的投影回归。**
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -710,9 +710,9 @@ test('在线投影重复调用得到相同事实且owner证据完整收集', () 
 });
 ```
 
-- [ ] **Step 2：观察失败。** Run: `bun test tests/projection.test.ts`。Expected: FAIL，模块尚不存在，import 报错；这是目标失败，fixture 或时区错误不计。
+- [x] **Step 2：观察失败。** Run: `bun test tests/projection.test.ts`。Expected: FAIL，模块尚不存在，import 报错；这是目标失败，fixture 或时区错误不计。
 
-- [ ] **Step 3：实现 Module。** 新建 `src/sources/projection.ts`，完整内容如下。所有 helper 在本文件内定义，不依赖未实现符号。
+- [x] **Step 3：实现 Module。** 新建 `src/sources/projection.ts`，完整内容如下。所有 helper 在本文件内定义，不依赖未实现符号。
 
 ```ts
 import type { Database } from 'bun:sqlite';
@@ -1408,12 +1408,12 @@ export function projectRequestTx(
 - identity 只在账本完整时更新：session、agent、subagent、parentAgent、nativeSession 对全部 present 行取非空唯一值，出现不同值即 conflict 并保留旧值（这些集合事实与尝试顺序无关）；startedMs 取最小 tMs；`orderState` 记录顺序是否可证，只有 `provable` 才写 sort_source/sort_key 与 responseIdNorm，`unprovable` 时清空 sort_source/sort_key，`unknown`（证据不完整）时保留旧键并由 C 标成非 current。partial 与 duplicate 不写这些字段。
 - `projectRequestTx` 只写现有 request 列；kind、hook、families、identity 的 nativeSession 只返回，不落库。B 不写 request.req_kind，不写任何长期版本列。
 
-- [ ] **Step 4：跑来源投影测试。**
+- [x] **Step 4：跑来源投影测试。**
 
 Run: `bun test tests/projection.test.ts`。Expected: PASS，全部断言包含完整、partial、duplicate、pending_final、failed、kind 冲突、hook 冲突、prompt 非法保留与重复调用一致。
 Run: `bun run typecheck`。Expected: PASS。
 
-- [ ] **Step 5：更新 note 并提交。** note 补记完整投影与部分投影的分界、重复尝试指纹、pending_final 与 failed 的差别、hook 报告的集合语义，以及后到 invalid 或 absent 时保留旧列但一律 `current=false` 并带 retained 原因的历史保留政策。获授权时提交 `feat(sources): add owner-complete request projection`，包含本任务源码、测试与 note，使用规定 attribution。
+- [x] **Step 5：更新 note 并提交。** note 补记完整投影与部分投影的分界、重复尝试指纹、pending_final 与 failed 的差别、hook 报告的集合语义，以及后到 invalid 或 absent 时保留旧列但一律 `current=false` 并带 retained 原因的历史保留政策。获授权时提交 `feat(sources): add owner-complete request projection`，包含本任务源码、测试与 note，使用规定 attribution。
 
 ## Task 3：新建原始行 helper 并让账本写入者走投影
 
@@ -1427,7 +1427,7 @@ Run: `bun run typecheck`。Expected: PASS。
 - Consumes: Task 2 的 `projectRequestTx`、`SOURCE_PROJECTION_VERSION`；现有 `FileBatch`、`Store`、`redact`。
 - Produces: 本文开头列出的 `insertPreparedLedgerTx`、`writePreparedLedgerTx`、`upsertPreparedRouteTx`、`writePreparedRouteTx`、`LedgerPhysicalRef`；`reconcile` 内部 `projectLedgerRequestTx`、`applyLedgerOwnershipTx`。
 
-- [ ] **Step 1：添加在线写入路径回归。**
+- [x] **Step 1：添加在线写入路径回归。**
 
 ```ts
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
@@ -1574,9 +1574,9 @@ test('同毫秒跨代际不证明顺序时清空排序键', () => {
 });
 ```
 
-- [ ] **Step 2：观察失败。** Run: `bun test tests/reconcile.test.ts -t '账本req与served|缺req保持NULL|同一脱敏对象|部分raw过期|后到非法账本行|清空排序键'`。Expected: FAIL，当前 `model_requested` 取 model、`served` 回退 model、`req` 与 `account` 未读、聚合在 raw 缺失时用部分行重算、排序键永远写 ledger 位置。
+- [x] **Step 2：观察失败。** Run: `bun test tests/reconcile.test.ts -t '账本req与served|缺req保持NULL|同一脱敏对象|部分raw过期|后到非法账本行|清空排序键'`。Expected: FAIL，当前 `model_requested` 取 model、`served` 回退 model、`req` 与 `account` 未读、聚合在 raw 缺失时用部分行重算、排序键永远写 ledger 位置。
 
-- [ ] **Step 3：新建 raw helper。**
+- [x] **Step 3：新建 raw helper。**
 
 ```ts
 import type { Database } from 'bun:sqlite';
@@ -1668,7 +1668,7 @@ export function writePreparedRouteTx(
 
 `writePreparedLedgerTx` 与 `writePreparedRouteTx` 只 UPDATE 既有行，不 INSERT、不碰 `request_evidence`、不调用 `redact`，因此 C 的迁移可以复用同一列清单而不复制 SQL。
 
-- [ ] **Step 4：让账本写入者调用投影。**
+- [x] **Step 4：让账本写入者调用投影。**
 
 `src/reconcile.ts` 删除 `RAW_LEDGER_INSERT`、`sumOrNull`、`applySingleLedger` 与 `applyLedgerAggregate`，改用以下结构与函数。
 
@@ -1762,7 +1762,7 @@ mergeLedgerRow(db, fields, refKey, now);
 accepted += 1;
 ```
 
-- [ ] **Step 5：跑账本路径与类型检查。**
+- [x] **Step 5：跑账本路径与类型检查。**
 
 Run: `bun test tests/reconcile.test.ts`。Expected: PASS，既有两条计费行、乱序、暂停缺口、淘汰墓碑断言保持；新增 req、served、缺 req、同源脱敏与部分过期断言通过。
 Run: `bun run typecheck`。Expected: PASS。
@@ -1781,7 +1781,7 @@ Run: `rg -n 'applySingleLedger|applyLedgerAggregate|sumOrNull|RAW_LEDGER_INSERT'
 - Consumes: Task 3 的 `upsertPreparedRouteTx`、`writePreparedRouteTx`、`projectLedgerRequestTx`；Task 2 的 `projectRequestTx`。
 - Produces: `reconcile` 内部 `attachRouteEvidenceTx`、`applyRouteOwnershipTx`；`saveRouteSummary(db, route: RouteFields, now: number): void`（不再接收 `redactedError`）。
 
-- [ ] **Step 1：添加路由字段、脱敏同源与到达顺序回归。**
+- [x] **Step 1：添加路由字段、脱敏同源与到达顺序回归。**
 
 ```ts
 import { zstdDecompressSync } from 'node:zlib';
@@ -1898,9 +1898,9 @@ test('到达顺序不改变请求事实与隐私形态', () => {
 });
 ```
 
-- [ ] **Step 2：观察失败。** Run: `bun test tests/reconcile.test.ts -t '同一脱敏对象|counted布尔|非法counted|到达顺序'`。Expected: FAIL，当前 route 在脱敏前映射、`counted: true` 丢失、非法 counted 不保留旧值，到达顺序会改变 prompt 形态。
+- [x] **Step 2：观察失败。** Run: `bun test tests/reconcile.test.ts -t '同一脱敏对象|counted布尔|非法counted|到达顺序'`。Expected: FAIL，当前 route 在脱敏前映射、`counted: true` 丢失、非法 counted 不保留旧值，到达顺序会改变 prompt 形态。
 
-- [ ] **Step 3：路由只挂证据与归属，prompt 走投影。**
+- [x] **Step 3：路由只挂证据与归属，prompt 走投影。**
 
 ```ts
 function attachRouteEvidenceTx(db: Database, reqId: number, routeId: number, now: number): void {
@@ -1966,7 +1966,7 @@ upsertPreparedRouteTx(db, route, JSON.stringify(redacted));
 saveRouteSummary(db, route, now);
 ```
 
-- [ ] **Step 4：跑路由测试。**
+- [x] **Step 4：跑路由测试。**
 
 Run: `bun test tests/reconcile.test.ts`。Expected: PASS。
 Run: `bun test tests/magpie.test.ts tests/reconcile.test.ts tests/projection.test.ts`。Expected: PASS。
@@ -1985,7 +1985,7 @@ Run: `bun run typecheck`。Expected: PASS。
 - Consumes: Task 2 的 `projectRequestTx`、`SOURCE_PROJECTION_VERSION`；现有 `HookEnvelope`、`acceptHook`、`mergeHookInto`、`reconcilePending`。
 - Produces: `insertHookRequest` 保持 `status`、`model_requested`、`model_served` 为 NULL；`acceptHook` 与 `mergeHookInto` 末尾对目标 reqId 调用投影；`HookProjection` 从 `raw_hook` 提供独立报告。
 
-- [ ] **Step 1：添加 hook 独立报告回归。**
+- [x] **Step 1：添加 hook 独立报告回归。**
 
 ```ts
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
@@ -2086,9 +2086,9 @@ test('hook证据过期后报告expired且current为false', () => {
 });
 ```
 
-- [ ] **Step 2：观察失败。** Run: `bun test tests/hook.test.ts -t 'hook-only不合成|缺req时hook报告|success为false'`。Expected: FAIL，当前 `insertHookRequest` 把 model 写入 model_requested 与 model_served，success 为 true 时 status 合成为 200。
+- [x] **Step 2：观察失败。** Run: `bun test tests/hook.test.ts -t 'hook-only不合成|缺req时hook报告|success为false'`。Expected: FAIL，当前 `insertHookRequest` 把 model 写入 model_requested 与 model_served，success 为 true 时 status 合成为 200。
 
-- [ ] **Step 3：改 hook 写入并调用投影。**
+- [x] **Step 3：改 hook 写入并调用投影。**
 
 `insertHookRequest` 的 INSERT 列表保持原样，但 `status`、`model_requested`、`model_served` 三个值改为 `null`；`raw_hook.model` 与 `raw_hook.success` 继续保存。
 
@@ -2120,12 +2120,12 @@ return { req_id: reqId, duplicate: false };
 
 `mergeHookInto` 在迁移证据、正文与归属之后、清理临时请求之前调用 `projectRequestTx(db, targetId, { now, mappingVersion: SOURCE_PROJECTION_VERSION })`。合并仍不迁移 hook 的 model 或 success；目标的 ledger 事实由投影按完整证据重算，hook 报告由 `raw_hook` 提供。
 
-- [ ] **Step 4：跑 hook 与账本联合测试。**
+- [x] **Step 4：跑 hook 与账本联合测试。**
 
 Run: `bun test tests/hook.test.ts tests/reconcile.test.ts tests/projection.test.ts`。Expected: PASS，既有重放不增行、命中合并、pending 调和、metadata_only 用例保持。
 Run: `bun run typecheck`。Expected: PASS。
 
-- [ ] **Step 5：更新 note 并提交。** note 补记：hook 只提供证据与独立报告；HTTP 状态只来自上游实得；旧 hook 行里写进 model_requested/model_served 的伪值由 C 迁移，B 不代它决定新存储。获授权时提交 `fix(hook): keep hook reports out of ledger facts`，包含本任务源码、测试与 note，使用规定 attribution。
+- [x] **Step 5：更新 note 并提交。** note 补记：hook 只提供证据与独立报告；HTTP 状态只来自上游实得；旧 hook 行里写进 model_requested/model_served 的伪值由 C 迁移，B 不代它决定新存储。获授权时提交 `fix(hook): keep hook reports out of ledger facts`，包含本任务源码、测试与 note，使用规定 attribution。
 
 ## Task 6：离线复用证明、文档同步与最终验收
 
@@ -2139,7 +2139,7 @@ Run: `bun run typecheck`。Expected: PASS。
 - Consumes: Task 0–5 的全部入口与 helper。
 - Produces: 离线迁移的复用证明；架构文档的现行行为描述；C 的明确接缝说明。
 
-- [ ] **Step 1：添加离线同路回归。**
+- [x] **Step 1：添加离线同路回归。**
 
 ```ts
 test('清空请求事实后同一入口重建出相同结果', () => {
@@ -2183,13 +2183,13 @@ test('清空请求事实后同一入口重建出相同结果', () => {
 });
 ```
 
-- [ ] **Step 2：跑离线复用与全量最窄集合。**
+- [x] **Step 2：跑离线复用与全量最窄集合。**
 
 Run: `bun test tests/projection.test.ts -t '清空请求事实'`。Expected: PASS。
 Run: `bun test tests/magpie.test.ts tests/privacy.test.ts tests/projection.test.ts tests/reconcile.test.ts tests/hook.test.ts`。Expected: PASS。
 Run: `bun run typecheck`。Expected: PASS。
 
-- [ ] **Step 3：同步架构文档。** 更新下列小节，只写现状，不写变更史。
+- [x] **Step 3：同步架构文档。** 更新下列小节，只写现状，不写变更史。
 
 - `### 原始层`：结构化列、payload 与长期摘要都来自同一脱敏对象；未知字段继续留在 payload；`req`、`cost`、`err` 的读取位置。
 - `### 读模型`：`model_requested` 存上游 req，`model_served` 存回复声明 served，provider model 留在 raw 与 route；缺失保持未知；尝试合计只在账本 owner 证据完整时重算，同毫秒无法证明顺序时不发布最终尝试；prompt 数以最大 `time_ms` 唯一的那条 route 为准，同毫秒并列或该 route 的 Prompt 缺失、非法时旧值只是历史保留，读模型不得当成本次事实（长期落列与隐藏由 C 交付）。
@@ -2198,9 +2198,9 @@ Run: `bun run typecheck`。Expected: PASS。
 - `### 版本与形状漂移`：来源 Adapter 记录必要键、合法省略、非法类型与未知键的状态；非法类型不降级整批。
 - `### 证据缺失`：部分 raw 或过期证据保留旧的最终尝试、开始时间、排序键与尝试合计；完整证据但同毫秒跨代际不可证时清空排序键、不发布最终尝试；重复尝试嫌疑保留旧值，不用 MAX 保住合计。
 
-- [ ] **Step 4：检查 note 与文档链接。** 确认 note 的 supersession check 已完成、交叉链接指向 still-active 记录、对 C 的链接指向 [C 长期信息与重建计划](2026-10-22-atc-durable-rebuild.md)。Run: `git diff --check`；Expected: PASS。Run: `bun run verify:notes:staged`（仅在已 stage 本任务文件且有提交授权时）；Expected: PASS。未获授权时报告未执行 staged 检查，不伪造结果。
+- [x] **Step 4：检查 note 与文档链接。** 确认 note 的 supersession check 已完成、交叉链接指向 still-active 记录、对 C 的链接指向 [C 长期信息与重建计划](2026-10-22-atc-durable-rebuild.md)。Run: `git diff --check`；Expected: PASS。Run: `bun run verify:notes:staged`（仅在已 stage 本任务文件且有提交授权时）；Expected: PASS。未获授权时报告未执行 staged 检查，不伪造结果。
 
-- [ ] **Step 5：完成 B 批次验收记录。** 执行结束后报告实际修改文件、逐任务失败到通过记录、旧行为保留与剩余限制；把本计划文末的执行记录按实际提交勾选并链接提交。获授权时提交 `docs(architecture): describe unified source projection`，包含文档、note 与计划勾选，使用规定 attribution。
+- [x] **Step 5：完成 B 批次验收记录。** 执行结束后报告实际修改文件、逐任务失败到通过记录、旧行为保留与剩余限制；把本计划文末的执行记录按实际提交勾选并链接提交。获授权时提交 `docs(architecture): describe unified source projection`，包含文档、note 与计划勾选，使用规定 attribution。
 
 ## C 接缝与未交付项
 
@@ -2278,15 +2278,16 @@ function remapOneRoute(db: Database, routeId: number): void {
 | 同毫秒与跨代际不伪造尝试顺序 | Task 2 `finalCandidate`（同代际 offset 才可证、跨代际 conflict、不发布 final）、`orderState` 与 `prompt_order_unprovable`；Task 3 清空排序键断言；Task 2 两条同毫秒 route 断言 |
 | 长期 kind、hook 报告、映射版本与历史迁移 | 交 [C 计划](2026-10-22-atc-durable-rebuild.md)，B 只返回报告与同一入口 |
 
-最终检查：已检查占位步骤与未定义 helper；每个任务有 Files、Consumes/Produces、失败断言、最小实现、FAIL/PASS 命令与提交信息；所有勾选保持未勾选。
+最终检查：已检查占位步骤与未定义 helper；每个任务有 Files、Consumes/Produces、失败断言、最小实现、FAIL/PASS 命令与提交信息。
 
 ## 执行与验收记录
 
-- [ ] Task 0：来源 Adapter 字段状态与真实键通过。
-- [ ] Task 1：account 别名与占位符幂等通过。
-- [ ] Task 2：来源投影 Module 的完整、部分、重复、冲突、顺序不可证、hook 独立与重复调用断言通过。
-- [ ] Task 3：新建 raw helper，账本在线路径全部走投影，部分过期不缩小合计。
-- [ ] Task 4：路由列、payload、摘要同源脱敏，到达顺序一致，counted 三态正确。
-- [ ] Task 5：hook 不写账本模型与合成状态，报告独立且合并后保持账本值。
-- [ ] Task 6：离线复用、文档同步、note 与最终最窄测试集合通过。
+- [x] Task 0：来源 Adapter 字段状态与真实键通过（658776a 前一提交）。
+- [x] Task 1：account 别名与占位符幂等通过（658776a）。
+- [x] Task 2：来源投影 Module 的完整、部分、重复、冲突、顺序不可证、hook 独立与重复调用断言通过（1e4446d）。
+- [x] Task 3：新建 raw helper，账本在线路径全部走投影，部分过期不缩小合计（3b7e92b）。
+- [x] Task 4：路由列、payload、摘要同源脱敏，到达顺序一致，counted 三态正确（712d45b）。
+- [x] Task 5：hook 不写账本模型与合成状态，报告独立且合并后保持账本值（a3a9f11）。
+- [x] Task 6：离线复用、文档同步、note 与最终最窄测试集合通过（本次提交）。
+- [ ] 真实库回填与历史结果对齐：B 未授权也不执行；C 计划单独验收。
 - [ ] C 接缝：schema、长期字段、历史迁移与真实库动作按 [C 计划](2026-10-22-atc-durable-rebuild.md) 单独验收，未执行前不得声称长期信息已迁移。
