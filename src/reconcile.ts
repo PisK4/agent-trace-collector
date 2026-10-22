@@ -227,7 +227,19 @@ function applyLedgerOwnershipTx(
   }
 }
 
-function applyRouteToRequest(db: Database, reqId: number, route: RouteFields, now: number): void {
+function attachRouteEvidenceTx(db: Database, reqId: number, routeId: number, now: number): void {
+  db.run(
+    'INSERT OR IGNORE INTO request_evidence(req_id,source_kind,ref_key,merge_state,match_rule,added_at) VALUES (?,?,?,?,?,?)',
+    [reqId, 'route', String(routeId), 'merged', null, now],
+  );
+}
+
+/**
+ * 路由证据给出的会话归属、actor 与标题。
+ *
+ * Prompt 列不在这里写：它由投影按"最新一条 route"决定，与到达顺序无关。
+ */
+function applyRouteOwnershipTx(db: Database, reqId: number, route: RouteFields, now: number): void {
   const current = currentRequest(db, reqId);
   const conv = route.session !== null
     ? { key: JSON.stringify(['session', route.session]), source: 'session' }
@@ -240,19 +252,13 @@ function applyRouteToRequest(db: Database, reqId: number, route: RouteFields, no
     (current.conv_source === 'conv' && route.session !== null)
   );
   const actor = route.subagentId ?? route.session ?? route.conv ?? null;
-  const title = current.title === null
-    ? modelTimeTitle(route.model ?? route.served, route.timeMs)
-    : current.title;
-  const parts = route.promptParts === null ? null : JSON.stringify(route.promptParts);
+  const title = current.title === null ? modelTimeTitle(route.model ?? route.served, route.timeMs) : current.title;
   db.run(
     `UPDATE request SET
        session=COALESCE(session,?), agent=COALESCE(agent,?),
        conv_key=?, conv_source=?,
        actor=CASE WHEN actor_state='known' THEN actor ELSE ? END,
        actor_state=CASE WHEN actor_state='known' THEN actor_state ELSE ? END,
-       prompt_tokens=COALESCE(?,prompt_tokens), prompt_counted=COALESCE(?,prompt_counted),
-       prompt_window=COALESCE(?,prompt_window), prompt_turns=COALESCE(?,prompt_turns),
-       parts_json=COALESCE(?,parts_json), attempt_count=COALESCE(?,attempt_count),
        sort_source=COALESCE(sort_source,'route'), sort_key=COALESCE(sort_key,?),
        title=?, have=have|4, updated_at=?
      WHERE req_id=?`,
@@ -260,16 +266,15 @@ function applyRouteToRequest(db: Database, reqId: number, route: RouteFields, no
       route.session, route.agent,
       convUpdate ? conv!.key : current.conv_key, convUpdate ? conv!.source : current.conv_source,
       actor, actor === null ? 'unknown' : 'known',
-      route.promptTokens, route.promptCounted, route.promptWindow, route.promptTurns,
-      parts, route.tries === null ? null : route.tries.length,
-      String(route.routeId).padStart(20, '0'),
-      title, now, reqId,
+      String(route.routeId).padStart(20, '0'), title, now, reqId,
     ],
   );
-  db.run(
-    'INSERT OR IGNORE INTO request_evidence(req_id,source_kind,ref_key,merge_state,match_rule,added_at) VALUES (?,?,?,?,?,?)',
-    [reqId, 'route', String(route.routeId), 'merged', null, now],
-  );
+}
+
+function applyRouteToRequest(db: Database, reqId: number, route: RouteFields, now: number): void {
+  attachRouteEvidenceTx(db, reqId, route.routeId, now);
+  applyRouteOwnershipTx(db, reqId, route, now);
+  projectLedgerRequestTx(db, reqId, now);
 }
 
 function linkRouteIfPresent(db: Database, reqId: number, routeId: number, now: number): void {
@@ -395,19 +400,7 @@ export function ingestLedger(
   });
 }
 
-const RAW_ROUTE_UPSERT = `INSERT INTO raw_route(
-  route_id,time_ms,day,agent,session,conv,folder,subagent_id,kind,for_json,model,provider,served,effort,
-  status,error,done,ms,ttft,first_text,flow,tokens,out_tok,reasoning,payload_json,magpie_version
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-ON CONFLICT(route_id) DO UPDATE SET
-  time_ms=excluded.time_ms,day=excluded.day,agent=excluded.agent,session=excluded.session,conv=excluded.conv,
-  folder=excluded.folder,subagent_id=excluded.subagent_id,kind=excluded.kind,for_json=excluded.for_json,
-  model=excluded.model,provider=excluded.provider,served=excluded.served,effort=excluded.effort,
-  status=excluded.status,error=excluded.error,done=excluded.done,ms=excluded.ms,ttft=excluded.ttft,
-  first_text=excluded.first_text,flow=excluded.flow,tokens=excluded.tokens,out_tok=excluded.out_tok,
-  reasoning=excluded.reasoning,payload_json=excluded.payload_json,magpie_version=excluded.magpie_version`;
-
-function saveRouteSummary(db: Database, route: RouteFields, now: number, redactedError: string | null): void {
+function saveRouteSummary(db: Database, route: RouteFields, now: number): void {
   const summary = {
     route_id: route.routeId,
     time_ms: route.timeMs,
@@ -423,7 +416,7 @@ function saveRouteSummary(db: Database, route: RouteFields, now: number, redacte
     order: route.order,
     tries: route.tries,
     affinity: route.affinity,
-    error: redactedError,
+    error: route.error,
     saved_at: now,
   };
   const z = zstdCompressSync(Buffer.from(JSON.stringify(summary)), {
@@ -456,23 +449,22 @@ export function ingestRoute(store: Store, records: unknown[], now: number, salt:
         recordIssue(db, 'route', JSON.stringify(['route-invalid', index]), 'route_invalid_object', now, null);
         continue;
       }
-      const route = mapRouteRow(record);
+      // 与账本同一条规则：raw 列、payload 与长期摘要都来自同一个已脱敏对象。
+      const redacted = redact(record, salt);
+      if (!isRecord(redacted)) {
+        recordIssue(db, 'route', JSON.stringify(['route-invalid', index]), 'route_invalid_redaction', now, null);
+        continue;
+      }
+      const route = mapRouteRow(redacted);
       if (route === null) {
-        const id = optionalNumber(record, 'id') ?? optionalNumber(record, 'route_id');
+        const id = optionalNumber(redacted, 'id') ?? optionalNumber(redacted, 'route_id');
         recordIssue(db, 'route', JSON.stringify(['route-invalid', id ?? index]), 'route_invalid_identity', now, null);
         continue;
       }
       if (seen.has(route.routeId)) continue;
       seen.add(route.routeId);
-      const redacted = redact(record, salt);
-      const redactedError = isRecord(redacted) && typeof redacted.error === 'string' ? redacted.error : route.error;
-      db.run(RAW_ROUTE_UPSERT, [
-        route.routeId, route.timeMs, route.day, route.agent, route.session, route.conv, route.folder,
-        route.subagentId, route.kind, route.forJson, route.model, route.provider, route.served, route.effort,
-        route.status, redactedError, route.done, route.ms, route.ttft, route.firstText, route.flow,
-        route.tokens, route.outTok, route.reasoning, JSON.stringify(redacted), route.magpieVersion,
-      ]);
-      saveRouteSummary(db, route, now, redactedError);
+      upsertPreparedRouteTx(db, route, JSON.stringify(redacted));
+      saveRouteSummary(db, route, now);
       const existing = db.query<{ req_id: number }, [number]>(
         "SELECT req_id FROM request WHERE route_id=? AND via!='rejected' ORDER BY req_id LIMIT 1",
       ).get(route.routeId);

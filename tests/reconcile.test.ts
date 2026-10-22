@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { zstdDecompressSync } from 'node:zlib';
 import { fixture } from './fixtures';
 import type { FileBatch } from '../src/sources/files';
 import { ingestLedger, ingestRoute, resumePausedLedger } from '../src/reconcile';
@@ -93,7 +94,7 @@ test('路由先到不增请求，账本到达后补齐摘要', () => {
       provider: 'p',
       status: 200,
       tries: [{ provider: 'p', model: 'm' }, { provider: 'p', model: 'm' }],
-      prompt: { tokens: 100, counted: 90, window: 200000, turns: 4, parts: [{ tokens: 10 }] },
+      prompt: { tokens: 100, counted: true, window: 200000, turns: 4, parts: [{ tokens: 10 }] },
       order: [{ provider: 'p', model: 'm' }],
     }], 1, salt);
     expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 0 });
@@ -464,4 +465,116 @@ test('同毫秒跨代际不证明顺序时清空排序键', () => {
   } finally {
     f.close();
   }
+});
+
+function routeSummaryText(f: ReturnType<typeof fixture>, routeId: number): string {
+  const row = f.store.read.query<{ z: Uint8Array }, [number]>(
+    'SELECT z FROM route_summary WHERE route_id=?').get(routeId)!;
+  return zstdDecompressSync(row.z).toString('utf8');
+}
+
+test('路由列、payload与长期摘要来自同一脱敏对象', () => {
+  const f = fixture();
+  try {
+    ingestRoute(f.store, [{
+      id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm', provider: 'p',
+      status: 200, error: 'failed sk-synthetic-abcdefgh',
+      tries: [{ provider: 'p', model: 'm', error: 'Bearer synthetic-secret-123' }],
+      prompt: { tokens: 100, counted: true, window: 200000, turns: 2, parts: [{ kind: 'system', tokens: 10 }] },
+    }], 1, salt);
+    const raw = f.store.read.query<{ error: string; payload_json: string }, []>(
+      'SELECT error,payload_json FROM raw_route WHERE route_id=7').get()!;
+    expect(raw.error).toContain('[redacted:api_key:');
+    expect(raw.payload_json).not.toContain('sk-synthetic-abcdefgh');
+    const text = routeSummaryText(f, 7);
+    expect(text).not.toContain('sk-synthetic-abcdefgh');
+    expect(text).not.toContain('synthetic-secret-123');
+    expect(JSON.parse(text)).toMatchObject({ error: raw.error });
+  } finally {
+    f.close();
+  }
+});
+
+test('counted布尔与合法省略映射为且仅为0或1', () => {
+  for (const [counted, expected] of [[true, 1], [false, 0], [undefined, 0]] as const) {
+    const f = fixture();
+    try {
+      ingestRoute(f.store, [{
+        id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200,
+        prompt: { tokens: 100, ...(counted === undefined ? {} : { counted }) },
+      }], 1, salt);
+      ingestLedger(f.store, 'usage.jsonl', batchOf([{
+        t: '2026-10-20T00:00:01Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 1,
+      }]), 2, salt);
+      expect(f.store.read.query('SELECT prompt_tokens,prompt_counted FROM request').get())
+        .toEqual({ prompt_tokens: 100, prompt_counted: expected });
+    } finally {
+      f.close();
+    }
+  }
+});
+
+test('非法counted不写prompt族且保留旧值并报告非current', () => {
+  const f = fixture();
+  try {
+    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+      t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 1,
+    }]), 1, salt);
+    f.store.write(db => db.run(
+      `UPDATE request SET prompt_tokens=50,prompt_counted=1,parts_json='[{"kind":"old","tokens":1}]'`));
+    ingestRoute(f.store, [{
+      id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200,
+      prompt: { tokens: 100, counted: 'yes' },
+    }], 2, salt);
+    const projection = f.store.write(db => projectRequestTx(db, 1, {
+      now: 3, mappingVersion: SOURCE_PROJECTION_VERSION,
+    }));
+    expect(projection.prompt.state).toBe('invalid');
+    expect(projection.families.prompt).toMatchObject({ state: 'invalid', current: false });
+    expect(projection.reasons).toContain('prompt_retained');
+    expect(f.store.read.query('SELECT prompt_tokens,prompt_counted,parts_json FROM request').get())
+      .toEqual({ prompt_tokens: 50, prompt_counted: 1, parts_json: '[{"kind":"old","tokens":1}]' });
+  } finally {
+    f.close();
+  }
+});
+
+test('到达顺序不改变请求事实与隐私形态', () => {
+  const ledger = {
+    t: '2026-10-20T00:00:02Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p',
+    status: 200, in: 10, req: 'req-model', served: 'served-model',
+    account: 'synthetic-account', providerAccount: 'synthetic-account',
+  };
+  const route = {
+    id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200,
+    error: 'failed sk-synthetic-abcdefgh',
+    prompt: { tokens: 100, counted: false, window: 200000, turns: 2, parts: [{ kind: 'system', tokens: 10 }] },
+  };
+  const build = (ledgerFirst: boolean) => {
+    const f = fixture();
+    try {
+      if (ledgerFirst) {
+        ingestLedger(f.store, 'usage.jsonl', batchOf([ledger]), 1, salt);
+        ingestRoute(f.store, [route], 2, salt);
+      } else {
+        ingestRoute(f.store, [route], 1, salt);
+        ingestLedger(f.store, 'usage.jsonl', batchOf([ledger]), 2, salt);
+      }
+      const request = f.store.read.query<Record<string, unknown>, []>(
+        'SELECT status,model_requested,model_served,prompt_tokens,prompt_counted,conv_key,actor FROM request').get()!;
+      const rawLedger = f.store.read.query<{ account: string; payload_json: string }, []>(
+        'SELECT account,payload_json FROM raw_ledger').get()!;
+      const rawRoute = f.store.read.query<{ payload_json: string }, [number]>(
+        'SELECT payload_json FROM raw_route WHERE route_id=7').get(7)!;
+      // saved_at 记的是本批写入时刻，与到达顺序无关地不同；比较其余字段。
+      const { saved_at: _savedAt, ...summary } = JSON.parse(routeSummaryText(f, 7)) as Record<string, unknown>;
+      return {
+        request, account: rawLedger.account, ledgerPayload: rawLedger.payload_json,
+        routePayload: rawRoute.payload_json, summary,
+      };
+    } finally {
+      f.close();
+    }
+  };
+  expect(build(true)).toEqual(build(false));
 });
