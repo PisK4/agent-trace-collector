@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
-  bodyNotice, deltaOrdinals, messageEntries, partColor, partLabel, renderAttemptChain, renderCapabilities,
-  renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools, replyView, toolEntries,
+  bodyNotice, deltaOrdinals, messageCopyText, messageEntries, partColor, partLabel, renderAttemptChain, renderCapabilities,
+  renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools, replyView, toolEntries,
 } from '../web/body-view.js';
 import type { BodyPage } from '../src/protocols';
 import type { CapabilityView } from '../src/capabilities';
@@ -214,10 +214,24 @@ test('工具结果消息不算用户输入，纯调用回复保留推理块', ()
       { ord: 1, value: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'read', input: {} }] } },
       { ord: 2, value: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] } },
     ],
+    interpretations: [
+      {
+        ord: 0, role: 'user', role_state: 'known', is_input: true,
+        input: { state: 'text', kind: 'plain', text: '读一下文件', original: '读一下文件', removed: [], agent: null, rule: 'generic' },
+      },
+      { ord: 1, role: 'assistant', role_state: 'known', input: null, is_input: false },
+      { ord: 2, role: 'user', role_state: 'known', input: null, is_input: false },
+    ],
   }));
   // Anthropic 的 tool_result 挂在 user 角色下，但它不是人在说话。
   expect(entries.map(entry => entry.isInput)).toEqual([true, false, false]);
   expect(entries[2]?.blocks.map(block => block.kind)).toEqual(['result']);
+  // 没有服务端解释的消息不按角色猜输入。
+  const uninterpreted = messageEntries(page({
+    messages: [{ ord: 0, value: { role: 'user', content: '看起来像输入' } }],
+  }));
+  expect(uninterpreted[0]?.isInput).toBe(false);
+  expect(uninterpreted[0]?.input).toBeNull();
 
   const callOnly = replyView(page({
     reply: {
@@ -393,4 +407,27 @@ test('链结果非 current 时不标记新增与 confirmed', () => {
   expect([...(deltaOrdinals(current) ?? [])]).toEqual([3]);
   // 没有派生视图的旧载荷同样不能冒充确定新增。
   expect(deltaOrdinals({ prev_relation: 'confirmed', delta_ordinals: [3] } as RequestDetail)).toBeNull();
+});
+
+test('复制文本保留原文，不做 HTML 转义', () => {
+  const payload = '<script>alert(1)</script>';
+  const entries = messageEntries(page({
+    messages: [{ ord: 0, value: { role: 'user', content: payload } }],
+    interpretations: [{
+      ord: 0,
+      role: 'user',
+      role_state: 'known',
+      input: {
+        state: 'text', kind: 'plain', text: payload,
+        original: payload, removed: [], agent: null, rule: 'generic',
+      },
+      is_input: true,
+    }],
+  }));
+  expect(messageCopyText(entries[0]!)).toBe(payload);
+  // 详情渲染仍转义；复制路径与 HTML 路径分开。
+  const html = renderMessageDetail(entries[0]!);
+  expect(html).toContain('&lt;script&gt;');
+  expect(html).toContain('data-copy-msg="0"');
+  expect(html).not.toContain('<script>');
 });

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { auxSummary, createReader, isAuxRow, purposeLabel, resolveTraceTarget } from '../web/app.js';
+import { auxSummary, createReader, isAuxRow, purposeLabel, resolveTraceTarget, restoreScroll } from '../web/app.js';
 
 test('较慢的旧详情不覆盖新选择', async () => {
   let finishFirst!: (response: Response) => void;
@@ -187,4 +187,11 @@ test('分类器摘要显示判定', () => {
   expect(auxSummary({
     req_kind: 'auto-mode-classifier', reply_preview: '<transcript>',
   })).toBe('自动模式分类 · 判定未知');
+});
+
+test('滚动恢复夹在可滚动范围内', () => {
+  expect(restoreScroll({ scrollHeight: 1000, clientHeight: 200, scrollTop: 0 }, 700)).toBe(700);
+  expect(restoreScroll({ scrollHeight: 1000, clientHeight: 200, scrollTop: 0 }, 900)).toBe(800);
+  expect(restoreScroll({ scrollHeight: 100, clientHeight: 200, scrollTop: 0 }, 50)).toBe(0);
+  expect(restoreScroll({ scrollTop: 0 }, 30)).toBe(0);
 });
