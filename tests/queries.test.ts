@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import { fixture, seedPurposeRequest } from './fixtures';
 import { loadBoundSalt, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
-import { getRequest, getStats, listRequests, listSessions } from '../src/queries';
+import { zstdCompressSync } from 'node:zlib';
+import { attemptChainOf, getRequest, getRoute, getStats, listRequests, listSessions, routeSummaryReading } from '../src/queries';
 import { persistBody } from '../src/body';
 import { drainDerive, enqueueDerive } from '../src/derive';
 import { markGroupDirtyTx } from '../src/derive-state';
@@ -412,4 +413,124 @@ test('未知用途与链角色原样返回', () => {
       req_kind: 'future-kind', chain_role: 'mystery',
     });
   } finally { f.close(); }
+});
+
+const routeColumns = {
+  route_id: 100, time_ms: 1000, model: 'm', served: 's', provider: 'p',
+  status: 200, ms: 10, ttft: 2, flow: 8, first_text: 3,
+  order_json: null, tries_json: null, affinity_json: null,
+};
+
+test('format 2 读取 kind、folder、effort、prompt 与 error', () => {
+  const reading = routeSummaryReading({
+    format: 2, route_id: 100, time_ms: 1000, model: 'm', served: 's', provider: 'p',
+    status: 200, ms: 10, ttft: 2, flow: 8, first_text: 3,
+    kind: 'chat', folder: '/tmp/project', effort: 'high',
+    prompt: { tokens: 100, counted: true, window: 1000, held: false, parts: [{ kind: 'chat', tokens: 60 }] },
+    error: 'synthetic error', order: [], tries: [], affinity: null, saved_at: 1,
+  }, routeColumns);
+  expect(reading.format).toBe(2);
+  expect(reading.kind).toBe('chat');
+  expect(reading.folder).toBe('/tmp/project');
+  expect(reading.effort).toBe('high');
+  expect(reading.prompt).toEqual({ tokens: 100, counted: true, window: 1000, held: false, parts: [{ kind: 'chat', tokens: 60 }] });
+  expect(reading.error).toBe('synthetic error');
+});
+
+test('安全挑选去掉 account、host、who 与 id', () => {
+  const reading = routeSummaryReading({
+    format: 2, route_id: 100, time_ms: 1000, model: 'm', served: 's', provider: 'p',
+    status: 200, ms: 10, ttft: 2, flow: 8, first_text: 3,
+    kind: 'chat', folder: null, effort: null, prompt: null, error: null,
+    order: [
+      { provider: 'p', name: 'n', model: 'm', who: 'secret-account', id: 'secret-id', host: 'secret-host' },
+      { provider: 'p2', name: { host: 'secret-host' }, model: 'm2', plan: { account: 'secret-account' } },
+    ],
+    tries: [{ model: 'm', status: 500, fail: 'synthetic_new_gate', who: 'secret-account' }],
+    affinity: { mode: 'session', why: 'kept', turn: { account: 'secret-account' }, last: 'secret-account', host: 'secret-host' },
+    saved_at: 1,
+  }, routeColumns);
+  const text = JSON.stringify(reading);
+  expect(text).not.toContain('secret-account');
+  expect(text).not.toContain('secret-host');
+  expect(text).not.toContain('secret-id');
+  expect(reading.order).toEqual([
+    { provider: 'p', name: 'n', model: 'm' },
+    { provider: 'p2', model: 'm2' },
+  ]);
+  expect(reading.attempts.items[0]?.fail).toBe('synthetic_new_gate');
+  expect(reading.affinity).toEqual({ mode: 'session', why: 'kept' });
+});
+
+test('旧 format 1 不补 kind、folder、effort 与 prompt', () => {
+  const reading = routeSummaryReading({ route_id: 100, order: [], tries: [] }, routeColumns);
+  expect(reading.format).toBe(1);
+  expect(reading.kind).toBeNull();
+  expect(reading.folder).toBeNull();
+  expect(reading.effort).toBeNull();
+  expect(reading.prompt).toBeNull();
+});
+
+test('getRoute 从 z 读取并保留列回退', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,route_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
+        VALUES (1,100,1,'2026-10-22','through','pending',0,1,1,1)`);
+      const z = zstdCompressSync(Buffer.from(JSON.stringify({
+        format: 2, route_id: 100, time_ms: 1, model: 'm', served: 's', provider: 'p',
+        status: 200, ms: 10, ttft: 2, flow: 8, first_text: 3, kind: 'chat',
+        folder: null, effort: null, prompt: null, error: null, order: [], tries: [], affinity: null, saved_at: 1,
+      })));
+      db.run(`INSERT INTO route_summary(route_id,time_ms,model,served,provider,status,ms,ttft,flow,first_text,z)
+        VALUES (100,1,'m','s','p',200,10,2,8,3,?)`, [z]);
+    });
+    const route = getRoute(f.store, 1);
+    expect(route.state).toBe('available');
+    expect((route.summary as { format: number }).format).toBe(2);
+    expect((route.summary as { kind: string }).kind).toBe('chat');
+  } finally {
+    f.close();
+  }
+});
+
+test('尝试链保留未知 fail 码与已记录时间', () => {
+  const chain = attemptChainOf([
+    { model: 'm1', provider: 'p1', status: 500, fail: 'synthetic_new_gate', start: '2026-10-22T00:00:00Z', ms: 100 },
+    { model: 'm2', provider: 'p2', status: 200, start: '2026-10-22T00:00:01Z', ms: 200 },
+  ]);
+  expect(chain.state).toBe('present');
+  expect(chain.items.map(item => item.fail)).toEqual(['synthetic_new_gate', null]);
+  expect(chain.timing.state).toBe('recorded');
+});
+
+test('缺时间证据时不补造重试间隔', () => {
+  const chain = attemptChainOf([
+    { model: 'm1', status: 500, fail: 'rate_limit' },
+    { model: 'm2', status: 200 },
+  ]);
+  expect(chain.items.map(item => item.start_ms)).toEqual([null, null]);
+  expect(chain.timing.state).toBe('partial');
+  const text = JSON.stringify(chain);
+  expect(text).not.toContain('again_ms');
+  expect(text).not.toContain('interval');
+});
+
+test('空尝试与非法输入分开', () => {
+  expect(attemptChainOf([]).state).toBe('empty');
+  expect(attemptChainOf(null).state).toBe('unavailable');
+  expect(attemptChainOf('oops').state).toBe('unavailable');
+  expect(attemptChainOf([null]).state).toBe('unavailable');
+  expect(attemptChainOf([null]).timing.state).toBe('absent');
+});
+
+test('尝试项只保留白名单字段', () => {
+  const chain = attemptChainOf([{
+    id: 'secret-id', model: 'm', provider: 'p', status: 500, fail: 'x',
+    who: 'secret-account', account: 'secret-account', host: 'secret-host', rest: { who: 'secret-account' },
+  }]);
+  const text = JSON.stringify(chain);
+  expect(text).not.toContain('secret-account');
+  expect(text).not.toContain('secret-host');
+  expect(text).not.toContain('secret-id');
 });
