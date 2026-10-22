@@ -91,6 +91,7 @@ export type RequestDetail = RequestRow & {
   model_provider: string | null;
   source_facts: SourceFactsReading;
   projection_meta: ProjectionMetaReading;
+  prompt: PromptReading;
   derivation: DerivationReading;
   tool_calls: ToolCallRow[];
   /**
@@ -441,6 +442,7 @@ type DetailDbRow = ProjectableRow & {
   source_facts_json: string | null;
   projection_meta_json: string | null;
   route_id: number | null; summary_exists: number | null;
+  summary_z: Uint8Array | null;
 };
 
 function parseJsonOrNull(text: string | null): unknown {
@@ -480,7 +482,8 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
   const snapshot = store.read.transaction(() => {
     const row = store.read.query<DetailDbRow, [number]>(`
       SELECT r.*, ${GROUP_READ_COLUMNS},
-             (SELECT 1 FROM route_summary s WHERE s.route_id = r.route_id) AS summary_exists
+             (SELECT 1 FROM route_summary s WHERE s.route_id = r.route_id) AS summary_exists,
+             (SELECT z FROM route_summary s WHERE s.route_id = r.route_id) AS summary_z
       FROM request r ${GROUP_READ_JOIN} WHERE r.req_id = ?`).get(canonical) as DetailDbRow | null;
     if (row == null) return null;
     const toolCalls = store.read.query<ToolCallRow, [number]>(`
@@ -492,6 +495,16 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
   const { row, toolCalls } = snapshot;
   const projected = projectRow(row);
   const current = projected.state === 'current';
+  let summaryRaw: unknown = null;
+  if (row.summary_z !== null) {
+    try {
+      summaryRaw = JSON.parse(zstdDecompressSync(row.summary_z).toString('utf8'));
+    } catch {
+      summaryRaw = null;
+    }
+  }
+  const sourceFacts = sourceFactsReading(parseJsonOrNull(row.source_facts_json));
+  const projectionMeta = projectionMetaReading(parseJsonOrNull(row.projection_meta_json));
   const routeState = row.route_id === null
     ? 'absent'
     : row.summary_exists === null ? 'expired' : 'available';
@@ -526,8 +539,14 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     summary_algorithm: row.summary_algorithm,
     summary_basis: row.summary_basis,
     model_provider: row.model_provider,
-    source_facts: sourceFactsReading(parseJsonOrNull(row.source_facts_json)),
-    projection_meta: projectionMetaReading(parseJsonOrNull(row.projection_meta_json)),
+    source_facts: sourceFacts,
+    projection_meta: projectionMeta,
+    prompt: promptReadingOf(
+      isRecord(summaryRaw) ? summaryRaw.prompt : null,
+      projectionMeta.prompt,
+      parseJsonOrNull(row.parts_json),
+      row.prompt_tokens,
+    ),
     derivation: derivationOf({
       derived_state: projected.state,
       summary_state: row.summary_state,
@@ -817,6 +836,20 @@ export type ProjectionMetaReading = {
   };
 };
 
+export type PromptReading = {
+  state: 'recomputed' | 'retained' | 'missing';
+  reason: 'complete' | 'expired_input' | 'invalid_input' | 'legacy_unknown';
+  actual_version: number | null;
+  tokens: number | null;
+  counted: boolean | null;
+  window: number | null;
+  held: boolean | null;
+  parts: { kind: string; tokens: number }[];
+  ratio: number | null;
+  legacy: boolean;
+  note: string | null;
+};
+
 export type DerivationReading = {
   state: 'clean' | 'dirty' | 'retained' | 'legacy' | 'unknown';
   chain_state: 'current' | 'retained' | 'unavailable';
@@ -934,6 +967,62 @@ export function derivationOf(input: {
     return { state: 'legacy', chain_state: 'unavailable', summary_state: 'retained', reason: 'derived_legacy' };
   }
   return { state: 'unknown', chain_state: 'unavailable', summary_state: 'retained', reason: 'derived_state_unknown' };
+}
+
+type PromptUse = {
+  tokens: number | null;
+  counted: boolean;
+  window: number | null;
+  held: boolean | null;
+  parts: { kind: string; tokens: number }[];
+};
+
+function legacyPrompt(parts: unknown, tokens: number | null): PromptUse | null {
+  if (!Array.isArray(parts) && tokens === null) return null;
+  const picked: { kind: string; tokens: number }[] = [];
+  if (Array.isArray(parts)) {
+    for (const part of parts) {
+      if (!isRecord(part) || typeof part.kind !== 'string') continue;
+      const count = finite(part.tokens);
+      if (count === null) continue;
+      picked.push({ kind: part.kind, tokens: count });
+    }
+  }
+  return { tokens, counted: false, window: null, held: null, parts: picked };
+}
+
+/**
+ * 上下文阅读。只有 `recomputed` 且窗口为正才计算占用比例；
+ * retained/missing 即使带旧值也只作为历史展示，不冒充当前分母。
+ */
+export function promptReadingOf(
+  prompt: unknown,
+  projection: ProjectionMetaReading['prompt'],
+  legacyParts: unknown,
+  legacyTokens: number | null,
+): PromptReading {
+  const normalized = projection.state;
+  const current = safePrompt(prompt);
+  const fallback = legacyPrompt(legacyParts, legacyTokens);
+  const use = normalized === 'recomputed' ? current : current ?? fallback;
+  const ratio = normalized === 'recomputed' && use !== null && use.tokens !== null
+    && use.window !== null && use.window > 0 ? use.tokens / use.window : null;
+  return {
+    state: normalized,
+    reason: projection.reason,
+    actual_version: projection.actualVersion,
+    tokens: use?.tokens ?? null,
+    counted: use?.counted ?? null,
+    window: use?.window ?? null,
+    held: use?.held ?? null,
+    parts: use?.parts ?? [],
+    ratio,
+    legacy: normalized !== 'recomputed' && use !== null && current === null,
+    note: normalized === 'recomputed' ? null
+      : projection.reason === 'invalid_input' ? '输入无法复核，不显示比例'
+        : normalized === 'retained' ? '旧结果，不按当前输入计算比例'
+          : '没有可用的上下文分析',
+  };
 }
 
 export function getRoute(store: Store, id: number): { state: 'available' | 'absent' | 'expired'; summary: unknown } {

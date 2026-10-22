@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
-  bodyNotice, deltaOrdinals, messageEntries, renderAttemptChain, renderCapabilities, renderMessages, renderRaw,
-  renderReply, renderReplyDetail, renderTools, replyView, toolEntries,
+  bodyNotice, deltaOrdinals, messageEntries, partColor, partLabel, renderAttemptChain, renderCapabilities,
+  renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools, replyView, toolEntries,
 } from '../web/body-view.js';
 import type { BodyPage } from '../src/protocols';
 import type { CapabilityView } from '../src/capabilities';
@@ -359,4 +359,19 @@ test('缺时间时只显示说明，不补造间隔', () => {
   expect(html).toContain('不推算间隔');
   expect(html).not.toContain('等待');
   expect(html).not.toContain('间隔 ');
+});
+
+test('未知 part kind 保留名称并使用有效颜色', () => {
+  expect(partLabel('synthetic_part')).toBe('synthetic_part');
+  expect(partColor('synthetic_part')).toBe('var(--p-unknown)');
+  expect(partColor('chat')).toBe('var(--p6)');
+  expect(partLabel('<img src=x>')).toBe('<img src=x>');
+});
+
+test('六类已知 part 各有颜色与标签', () => {
+  expect(['system', 'tools', 'memory', 'files', 'results', 'chat'].map(partColor))
+    .toEqual(['var(--p1)', 'var(--p2)', 'var(--p3)', 'var(--p4)', 'var(--p5)', 'var(--p6)']);
+  expect(partLabel('memory')).toBe('记忆与技能');
+  expect(partLabel('history')).toBe('history');
+  expect(partColor('history')).toBe('var(--p-unknown)');
 });

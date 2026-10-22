@@ -14,7 +14,7 @@
  */
 
 import {
-  bodyNotice, deltaOrdinals, mdToHtml, messageEntries, roleTag,
+  bodyNotice, deltaOrdinals, mdToHtml, messageEntries, partColor, partLabel, roleTag,
   renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools,
   replyView, toolEntries,
 } from './body-view.js';
@@ -206,11 +206,6 @@ if (typeof document !== 'undefined') {
   function shortId(value) {
     return value.length > 12 ? `${value.slice(0, 8)}…` : value;
   }
-
-  const PART_NAME = /** @type {Record<string,string>} */ ({ system: '系统提示', tools: '工具定义', history: '历史消息', user: '本轮输入', files: '文件引用', other: '其它' });
-  const PARTS_ORDER = ['system', 'tools', 'history', 'user', 'files', 'other'];
-  /** @param {string} kind */
-  const partColor = (kind) => `var(--p${PARTS_ORDER.indexOf(kind) + 1})`;
 
   const reader = createReader((url) => fetch(url));
   /** @type {Map<number, RequestDetail>} */
@@ -1176,21 +1171,32 @@ if (typeof document !== 'undefined') {
   /** @param {RequestRow} r */
   function promptSection(r) {
     const d = currentDetail();
-    const parts = d && Array.isArray(d.parts) ? d.parts.filter(p => p && typeof p === 'object') : [];
-    if (d === null || d.prompt_tokens === null || parts.length === 0) {
+    const p = d?.prompt ?? null;
+    if (p === null || (p.tokens === null && p.parts.length === 0)) {
       return `<section class="rail-section"><h3>上下文组成</h3>
-        <p class="rail-note">没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。</p></section>`;
+        <p class="rail-note">${esc(p?.note ?? '没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。')}</p></section>`;
     }
-    const list = /** @type {{kind:string, tokens:number}[]} */ (parts);
-    const sum = list.reduce((a, x) => a + (Number(x.tokens) || 0), 0) || 1;
+    const list = p.parts;
+    const sum = list.reduce((a, x) => a + x.tokens, 0) || 1;
     const ordered = [...list].sort((a, b) => b.tokens - a.tokens);
+    /** @type {Record<string,string>} */
+    const stateText = { recomputed: '当前结果', retained: '旧结果', missing: '缺失' };
+    const hint = `${stateText[p.state] ?? p.state} · ${p.counted === true ? '总量已校准' : '本地估计'}`;
+    const usage = p.ratio !== null
+      ? `<div class="usage-bar" aria-hidden="true"><i style="width:${Math.min(100, p.ratio * 100)}%;background:var(--accent)"></i></div>`
+      : '';
+    const ratioText = p.ratio !== null
+      ? `<span>占用 <b>${(p.ratio * 100).toFixed(1)}%</b></span>`
+      : '';
+    const note = p.note ?? (p.window === null ? '没有可用分母，不显示占用率。' : '分类是估计分配，不是逐类精确计数。');
     return `<section class="rail-section">
-      <h3>上下文组成<span class="grow"></span><span class="hint">${d.prompt_counted ? '总量已校准' : '本地估计'}</span></h3>
+      <h3>上下文组成<span class="grow"></span><span class="hint">${esc(hint)}</span></h3>
+      ${usage}
       <div class="comp-bar" aria-hidden="true">${list.filter(x => x.tokens > 0).map(x => `<i style="flex:${x.tokens / sum};background:${partColor(String(x.kind))}"></i>`).join('')}</div>
-      <div class="comp-legend">${ordered.map(x => `<span class="name"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${PART_NAME[String(x.kind)] || esc(String(x.kind))}</span></span>
+      <div class="comp-legend">${ordered.map(x => `<span class="name"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></span>
         <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>
-      <div class="u-total" style="margin-top:8px"><span>提示总量 <b>${n(d.prompt_tokens)}</b></span><span>${d.prompt_window ? `窗口 <b>${kk(d.prompt_window)}</b>` : '窗口未知'}</span></div>
-      <p class="rail-note">分类是估计分配，不是逐类精确计数。${d.prompt_window ? '' : ' 分母未知，不显示占用率。'}</p>
+      <div class="u-total" style="margin-top:8px"><span>提示总量 <b>${n(p.tokens ?? 0)}</b></span><span>${p.window ? `窗口 <b>${kk(p.window)}</b>` : '窗口未知'}</span>${ratioText}</div>
+      <p class="rail-note">${esc(note)}</p>
     </section>`;
   }
 

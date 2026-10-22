@@ -23,6 +23,7 @@
   --k-tool-bg:rgba(15,111,120,.10); --k-field-bg:rgba(92,108,122,.10);
   /* 六类上下文：固定槽位，不按大小重排；顺序即调色板校验过的相邻顺序 */
   --p1:#2a78d6; --p2:#eb6834; --p3:#1baf7a; --p4:#eda100; --p5:#e87ba4; --p6:#008300;
+  --p-unknown:#7a8794;
   --shadow:0 1px 2px rgba(16,32,48,.06);
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -40,6 +41,7 @@
     --k-system-bg:rgba(182,163,240,.13); --k-user-bg:rgba(143,216,174,.12); --k-assistant-bg:rgba(230,192,122,.13);
     --k-tool-bg:rgba(127,212,217,.12); --k-field-bg:rgba(147,165,179,.12);
     --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
+    --p-unknown:#93a5b3;
     --shadow:0 1px 2px rgba(0,0,0,.35);
   }
 }
@@ -55,6 +57,7 @@
   --k-system-bg:rgba(182,163,240,.13); --k-user-bg:rgba(143,216,174,.12); --k-assistant-bg:rgba(230,192,122,.13);
   --k-tool-bg:rgba(127,212,217,.12); --k-field-bg:rgba(147,165,179,.12);
   --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
+  --p-unknown:#93a5b3;
   --shadow:0 1px 2px rgba(0,0,0,.35);
 }
 
@@ -507,6 +510,8 @@ pre.raw{
 .time-legend .sw{width:7px;height:7px;border-radius:1.5px;flex:none}
 .time-legend .v{font:10.5px var(--mono);color:var(--text-2);text-align:right;white-space:nowrap}
 
+.usage-bar{display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--line);margin:8px 0 2px}
+.usage-bar i{display:block}
 .comp-bar{display:flex;gap:2px;height:9px;margin-bottom:9px}
 .comp-bar i{display:block;border-radius:1px;min-width:2px}
 .comp-legend{display:grid;grid-template-columns:1fr auto auto;gap:3px 8px;font-size:10.5px}

@@ -501,6 +501,28 @@ export function renderRaw(page) {
     + `<p class="note">消息正文按块单独分页读取；这里只展示请求顶层字段与回复。内容在写入前已脱敏，占位符不可逆。</p>`;
 }
 
+// —— 上下文组成：已知六类与未知类别 ——
+
+export const PARTS = [
+  { kind: 'system', label: '系统提示' },
+  { kind: 'tools', label: '工具定义' },
+  { kind: 'memory', label: '记忆与技能' },
+  { kind: 'files', label: '文件引用' },
+  { kind: 'results', label: '工具结果' },
+  { kind: 'chat', label: '对话内容' },
+];
+
+/** 未知 kind 原样显示，不折叠成"其它"。 @param {string} kind */
+export function partLabel(kind) {
+  return PARTS.find(part => part.kind === kind)?.label ?? String(kind);
+}
+
+/** 未知 kind 使用独立颜色变量，避免落到某个已知类别上。 @param {string} kind */
+export function partColor(kind) {
+  const index = PARTS.findIndex(part => part.kind === kind);
+  return index < 0 ? 'var(--p-unknown)' : `var(--p${index + 1})`;
+}
+
 // —— 请求能力：工具清单与技能清单 ——
 
 const TOOL_STATE_TEXT = {
