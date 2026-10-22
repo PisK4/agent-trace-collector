@@ -3,7 +3,8 @@ import { fixture, seedPurposeRequest } from './fixtures';
 import { loadBoundSalt, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
 import { zstdCompressSync } from 'node:zlib';
-import { attemptChainOf, getRequest, getRoute, getStats, listRequests, listSessions, routeSummaryReading } from '../src/queries';
+import { attemptChainOf, derivationOf, getRequest, getRoute, getStats, listRequests, listSessions,
+  projectionMetaReading, routeSummaryReading, sourceFactsReading } from '../src/queries';
 import { persistBody } from '../src/body';
 import { drainDerive, enqueueDerive } from '../src/derive';
 import { markGroupDirtyTx } from '../src/derive-state';
@@ -533,4 +534,100 @@ test('尝试项只保留白名单字段', () => {
   expect(text).not.toContain('secret-account');
   expect(text).not.toContain('secret-host');
   expect(text).not.toContain('secret-id');
+});
+
+test('source_facts 只挑白名单字段，hook 用有界值与成功分类', () => {
+  const reading = sourceFactsReading({
+    selected: {
+      ref: 'ledger:1', state: 'selected', modelProvider: 'p', served: 's', effort: 'high',
+      tier: 'pro', error: 'boom', errorType: 'rate_limit',
+      account: 'secret-account', host: 'secret-host', raw: { any: 'secret-raw' },
+    },
+    hook: {
+      models: { values: ['m1', 'm2'], overflow: true, missing: false, invalid: false },
+      successes: [true, true, false],
+      account: 'secret-account',
+    },
+    projection_meta: { families: { prompt: { state: 'retained', reason: 'expired_input' } } },
+    account: 'secret-account',
+  });
+  expect(reading.selected?.state).toBe('selected');
+  expect(reading.selected?.tier).toBe('pro');
+  expect(reading.selected?.errorType).toBe('rate_limit');
+  expect(reading.hook?.models).toEqual({ values: ['m1', 'm2'], overflow: true, missing: false, invalid: false });
+  expect(reading.hook?.successes).toEqual(['success', 'failure']);
+  const text = JSON.stringify(reading);
+  expect(text).not.toContain('secret-account');
+  expect(text).not.toContain('secret-host');
+  expect(text).not.toContain('secret-raw');
+  expect(text).not.toContain('projection_meta');
+});
+
+test('非法 source_facts 降级为缺失而不是猜测', () => {
+  const reading = sourceFactsReading('not-an-object');
+  expect(reading.selected).toBeNull();
+  expect(reading.hook).toBeNull();
+});
+
+test('projection_meta 只读 prompt family，state 三态与 reason 分开', () => {
+  const fresh = projectionMetaReading({
+    families: { prompt: { actualVersion: 3, state: 'recomputed', reason: 'complete', basis: ['req:1'] } },
+  });
+  expect(fresh.prompt.state).toBe('recomputed');
+  expect(fresh.prompt.reason).toBe('complete');
+  expect(fresh.prompt.basis).toEqual(['req:1']);
+  const retained = projectionMetaReading({
+    families: { prompt: { actualVersion: 2, state: 'retained', reason: 'invalid_input', basis: [1, 'req:2'] } },
+  });
+  expect(retained.prompt.state).toBe('retained');
+  expect(retained.prompt.reason).toBe('invalid_input');
+  expect(retained.prompt.basis).toEqual(['req:2']);
+  const missing = projectionMetaReading({});
+  expect(missing.prompt.state).toBe('missing');
+  expect(missing.prompt.reason).toBe('legacy_unknown');
+});
+
+test('组状态从 C 的 derived_state 与 summary_state 映射', () => {
+  expect(derivationOf({ derived_state: 'current', summary_state: 'recomputed' }))
+    .toEqual({ state: 'clean', chain_state: 'current', summary_state: 'current', reason: null });
+  expect(derivationOf({ derived_state: 'current', summary_state: 'retained' }))
+    .toEqual({ state: 'clean', chain_state: 'current', summary_state: 'retained', reason: null });
+  expect(derivationOf({ derived_state: 'dirty', summary_state: 'recomputed' }))
+    .toEqual({ state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' });
+  expect(derivationOf({ derived_state: 'retained', summary_state: 'retained' }))
+    .toEqual({ state: 'retained', chain_state: 'retained', summary_state: 'retained', reason: 'derived_retained' });
+  expect(derivationOf({ derived_state: 'legacy', summary_state: 'legacy' }))
+    .toEqual({ state: 'legacy', chain_state: 'unavailable', summary_state: 'retained', reason: 'derived_legacy' });
+  expect(derivationOf({ derived_state: 'synthetic_state', summary_state: null }))
+    .toEqual({ state: 'unknown', chain_state: 'unavailable', summary_state: 'retained', reason: 'derived_state_unknown' });
+});
+
+test('详情在同一个快照里带出安全来源事实与派生状态', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'detail-facts', agent: 'claude', purposePending: 0, purposeChain: 'participate',
+      summaryState: 'recomputed', summaryAlgorithm: 1, cleanGroup: true,
+    });
+    f.store.write(db => db.run(
+      `UPDATE request SET model_provider='provider-x',
+        source_facts_json='{"selected":{"state":"selected","modelProvider":"p","tier":"pro"},"hook":{"models":{"values":["m1"],"overflow":false,"missing":false,"invalid":false},"successes":[true]}}',
+        projection_meta_json='{"families":{"prompt":{"actualVersion":2,"state":"recomputed","reason":"complete","basis":["req:1"]}}}'
+       WHERE req_id=?`, [id],
+    ));
+    const detail = getRequest(f.store, id)!;
+    expect(detail.model_provider).toBe('provider-x');
+    expect(detail.source_facts.selected?.state).toBe('selected');
+    expect(detail.source_facts.selected?.tier).toBe('pro');
+    expect(detail.source_facts.hook?.successes).toEqual(['success']);
+    expect(detail.projection_meta.prompt).toEqual({
+      actualVersion: 2, state: 'recomputed', reason: 'complete', basis: ['req:1'],
+    });
+    expect(detail.derivation).toEqual({
+      state: 'clean', chain_state: 'current', summary_state: 'current', reason: null,
+    });
+    expect(detail.derived_state).toBe('current');
+  } finally {
+    f.close();
+  }
 });

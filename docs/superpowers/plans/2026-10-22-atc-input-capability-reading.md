@@ -112,32 +112,31 @@ E 对 `order`、`tries`、`affinity` 再做安全挑选，去掉 `who`、`id`、
 
 ### 发给 C 的 source_facts_json 与 projection_meta_json
 
-C 写两列：`source_facts_json` 只放来源事实，`projection_meta_json` 只放投影状态。两者都不放组状态。`selected.state` 只允许 `final`、`failed`、`pending_final`、`retained`、`missing`。`hook.models` 是有界值对象，`hook.successes` 是 `success` 与 `failure` 的字符串集合。`families.prompt.state` 只有 `recomputed`、`retained`、`missing`；`invalid_input` 是 `reason`，不是 state：
+C 写两列：`source_facts_json` 只放来源事实，`projection_meta_json` 只放投影状态。两者都不放组状态。实际交付的形状与初稿有三处差异，按 [`facts.ts` 的 `SourceFacts` 与 `ProjectionMeta`](../../../src/sources/facts.ts) 为准：`selected.state` 是 `selected`、`pending_final`、`retained`、`missing`；tier 是一个 `tier` 字段，不拆 asked/sent/served；`hook.models` 的 overflow/missing/invalid 是布尔标记，`hook.successes` 是布尔数组。`families.prompt.state` 只有 `recomputed`、`retained`、`missing`；`invalid_input` 是 `reason`，不是 state；`basis` 是字符串数组：
 
 ```ts
-type BoundedValues<T> = {
-  values: T[];
-  overflow: number;
-  missing: number;
-  invalid: number;
+type BoundedValues = {
+  values: string[];
+  overflow: boolean;
+  missing: boolean;
+  invalid: boolean;
 };
 
 type SourceFactsJson = {
+  format: 1;
   selected: {
     ref: string | null;
-    state: 'final' | 'failed' | 'pending_final' | 'retained' | 'missing';
+    state: 'selected' | 'pending_final' | 'retained' | 'missing';
     modelProvider: string | null;
     served: string | null;
     effort: string | null;
-    tierAsked: string | null;
-    tierSent: string | null;
-    tierServed: string | null;
+    tier: string | null;
     error: string | null;
     errorType: string | null;
   } | null;
   hook: {
-    models: BoundedValues<string>;
-    successes: ('success' | 'failure')[];
+    models: BoundedValues;
+    successes: boolean[];
   } | null;
 };
 
@@ -147,7 +146,7 @@ type ProjectionMetaJson = {
       actualVersion: number | null;
       state: 'recomputed' | 'retained' | 'missing';
       reason: 'complete' | 'expired_input' | 'invalid_input' | 'legacy_unknown';
-      basis: string | null;
+      basis: string[];
     };
   };
 };
@@ -1719,24 +1718,25 @@ git commit -m "feat(route): read format 2 summaries through a safe projection"
 ```ts
 import { derivationOf, projectionMetaReading, sourceFactsReading } from '../src/queries';
 
-test('source_facts 只挑白名单字段，hook 用字符串集合与有界值', () => {
+test('source_facts 只挑白名单字段，hook 用有界值与成功分类', () => {
   const reading = sourceFactsReading({
     selected: {
-      ref: 'ledger:1', state: 'final', modelProvider: 'p', served: 's', effort: 'high',
-      tierAsked: 'a', tierSent: 'b', tierServed: 'c', error: 'boom', errorType: 'rate_limit',
+      ref: 'ledger:1', state: 'selected', modelProvider: 'p', served: 's', effort: 'high',
+      tier: 'pro', error: 'boom', errorType: 'rate_limit',
       account: 'secret-account', host: 'secret-host', raw: { any: 'secret-raw' },
     },
     hook: {
-      models: { values: ['m1', 'm2'], overflow: 2, missing: 1, invalid: 3 },
-      successes: ['success', 'success', 'failure'],
+      models: { values: ['m1', 'm2'], overflow: true, missing: false, invalid: false },
+      successes: [true, true, false],
       account: 'secret-account',
     },
     projection_meta: { families: { prompt: { state: 'retained', reason: 'expired_input' } } },
     account: 'secret-account',
   });
-  expect(reading.selected?.state).toBe('final');
+  expect(reading.selected?.state).toBe('selected');
+  expect(reading.selected?.tier).toBe('pro');
   expect(reading.selected?.errorType).toBe('rate_limit');
-  expect(reading.hook?.models).toEqual({ values: ['m1', 'm2'], overflow: 2, missing: 1, invalid: 3 });
+  expect(reading.hook?.models).toEqual({ values: ['m1', 'm2'], overflow: true, missing: false, invalid: false });
   expect(reading.hook?.successes).toEqual(['success', 'failure']);
   const text = JSON.stringify(reading);
   expect(text).not.toContain('secret-account');
@@ -1753,15 +1753,17 @@ test('非法 source_facts 降级为缺失而不是猜测', () => {
 
 test('projection_meta 只读 prompt family，state 三态与 reason 分开', () => {
   const fresh = projectionMetaReading({
-    families: { prompt: { actualVersion: 3, state: 'recomputed', reason: 'complete', basis: 'req:1' } },
+    families: { prompt: { actualVersion: 3, state: 'recomputed', reason: 'complete', basis: ['req:1'] } },
   });
   expect(fresh.prompt.state).toBe('recomputed');
   expect(fresh.prompt.reason).toBe('complete');
+  expect(fresh.prompt.basis).toEqual(['req:1']);
   const retained = projectionMetaReading({
-    families: { prompt: { actualVersion: 2, state: 'retained', reason: 'invalid_input', basis: null } },
+    families: { prompt: { actualVersion: 2, state: 'retained', reason: 'invalid_input', basis: [1, 'req:2'] } },
   });
   expect(retained.prompt.state).toBe('retained');
   expect(retained.prompt.reason).toBe('invalid_input');
+  expect(retained.prompt.basis).toEqual(['req:2']);
   const missing = projectionMetaReading({});
   expect(missing.prompt.state).toBe('missing');
   expect(missing.prompt.reason).toBe('legacy_unknown');
@@ -1788,28 +1790,26 @@ test('组状态从 C 的 derived_state 与 summary_state 映射', () => {
 - [ ] **Step 3：实现白名单挑选与状态归一。** `source_facts_json` 与 `projection_meta_json` 分开读，不互相嵌套。`selected` 每个字段单独校验；`hook.models` 只保留值的数组与三个计数；`hook.successes` 只保留 `success` 与 `failure`；prompt family 的 `state` 三态、`reason` 四值分别校验。非法值降级为 `missing` 与 `legacy_unknown`。组状态不落库，由 C 的 `derived_state` 与 `summary_state` 映射。
 
 ```ts
-export type BoundedValues = {
+export type BoundedReading = {
   values: string[];
-  overflow: number;
-  missing: number;
-  invalid: number;
+  overflow: boolean;
+  missing: boolean;
+  invalid: boolean;
 };
 
 export type SourceFactsReading = {
   selected: {
     ref: string | null;
-    state: 'final' | 'failed' | 'pending_final' | 'retained' | 'missing';
+    state: 'selected' | 'pending_final' | 'retained' | 'missing';
     modelProvider: string | null;
     served: string | null;
     effort: string | null;
-    tierAsked: string | null;
-    tierSent: string | null;
-    tierServed: string | null;
+    tier: string | null;
     error: string | null;
     errorType: string | null;
   } | null;
   hook: {
-    models: BoundedValues;
+    models: BoundedReading;
     successes: ('success' | 'failure')[];
   } | null;
 };
@@ -1819,7 +1819,7 @@ export type ProjectionMetaReading = {
     actualVersion: number | null;
     state: 'recomputed' | 'retained' | 'missing';
     reason: 'complete' | 'expired_input' | 'invalid_input' | 'legacy_unknown';
-    basis: string | null;
+    basis: string[];
   };
 };
 
@@ -1830,41 +1830,41 @@ export type DerivationReading = {
   reason: string | null;
 };
 
-const SELECTED_STATES = new Set(['final', 'failed', 'pending_final', 'retained', 'missing']);
+const SELECTED_STATES = new Set(['selected', 'pending_final', 'retained', 'missing']);
 const PROMPT_STATES = new Set(['recomputed', 'retained', 'missing']);
 const PROMPT_REASONS = new Set(['complete', 'expired_input', 'invalid_input', 'legacy_unknown']);
 
-function boundedValues(value: unknown, limit = 8): BoundedValues {
+function boundedReading(value: unknown, limit = 8): BoundedReading {
   const record = isRecord(value) ? value : {};
-  const rawValues = Array.isArray(record.values) ? record.values : [];
-  const seen = new Set<string>();
   const values: string[] = [];
-  for (const item of rawValues) {
-    if (typeof item !== 'string' || seen.has(item)) continue;
-    seen.add(item);
-    values.push(item);
-    if (values.length >= limit) break;
+  const seen = new Set<string>();
+  if (Array.isArray(record.values)) {
+    for (const item of record.values) {
+      if (typeof item !== 'string' || seen.has(item)) continue;
+      seen.add(item);
+      values.push(item);
+      if (values.length >= limit) break;
+    }
   }
   return {
     values,
-    overflow: finite(record.overflow) ?? 0,
-    missing: finite(record.missing) ?? 0,
-    invalid: finite(record.invalid) ?? 0,
+    overflow: record.overflow === true,
+    missing: record.missing === true,
+    invalid: record.invalid === true,
   };
 }
 
-function successValues(value: unknown): ('success' | 'failure')[] {
+function successReading(value: unknown): ('success' | 'failure')[] {
   if (!Array.isArray(value)) return [];
   const out: ('success' | 'failure')[] = [];
-  for (const item of value) {
-    if ((item === 'success' || item === 'failure') && !out.includes(item)) out.push(item);
-  }
+  if (value.some(item => item === true)) out.push('success');
+  if (value.some(item => item === false)) out.push('failure');
   return out;
 }
 
-function selectedState(value: unknown): 'final' | 'failed' | 'pending_final' | 'retained' | 'missing' {
+function selectedState(value: unknown): 'selected' | 'pending_final' | 'retained' | 'missing' {
   return typeof value === 'string' && SELECTED_STATES.has(value)
-    ? value as 'final' | 'failed' | 'pending_final' | 'retained' | 'missing'
+    ? value as 'selected' | 'pending_final' | 'retained' | 'missing'
     : 'missing';
 }
 
@@ -1877,16 +1877,14 @@ export function sourceFactsReading(raw: unknown): SourceFactsReading {
     modelProvider: stringOrNull(selectedRaw.modelProvider),
     served: stringOrNull(selectedRaw.served),
     effort: stringOrNull(selectedRaw.effort),
-    tierAsked: stringOrNull(selectedRaw.tierAsked),
-    tierSent: stringOrNull(selectedRaw.tierSent),
-    tierServed: stringOrNull(selectedRaw.tierServed),
+    tier: stringOrNull(selectedRaw.tier),
     error: stringOrNull(selectedRaw.error),
     errorType: stringOrNull(selectedRaw.errorType),
   };
   const hookRaw = isRecord(record.hook) ? record.hook : null;
   const hook = hookRaw === null ? null : {
-    models: boundedValues(hookRaw.models),
-    successes: successValues(hookRaw.successes),
+    models: boundedReading(hookRaw.models),
+    successes: successReading(hookRaw.successes),
   };
   return { selected, hook };
 }
@@ -1895,6 +1893,9 @@ export function projectionMetaReading(raw: unknown): ProjectionMetaReading {
   const record = isRecord(raw) ? raw : {};
   const families = isRecord(record.families) ? record.families : {};
   const promptRaw = isRecord(families.prompt) ? families.prompt : {};
+  const basis = Array.isArray(promptRaw.basis)
+    ? promptRaw.basis.filter((item): item is string => typeof item === 'string').slice(0, 16)
+    : [];
   return {
     prompt: {
       actualVersion: finite(promptRaw.actualVersion),
@@ -1903,7 +1904,7 @@ export function projectionMetaReading(raw: unknown): ProjectionMetaReading {
       reason: typeof promptRaw.reason === 'string' && PROMPT_REASONS.has(promptRaw.reason)
         ? promptRaw.reason as 'complete' | 'expired_input' | 'invalid_input' | 'legacy_unknown'
         : 'legacy_unknown',
-      basis: stringOrNull(promptRaw.basis),
+      basis,
     },
   };
 }
@@ -1934,30 +1935,16 @@ export function derivationOf(input: {
 }
 ```
 
-`RequestDetail` 增加 `model_provider: string | null`、`source_facts: SourceFactsReading`、`projection_meta: ProjectionMetaReading`、`derivation: DerivationReading`。`DetailDbRow` 增加 `model_provider: string | null`、`source_facts_json: string | null`、`projection_meta_json: string | null`、`derived_state: string | null`、`summary_state: string | null`，其中后两列来自 C 的查询投影。`getRequest` 的 `SELECT req.*` 已带前三列；把 C 的两列以别名加进同一 SELECT，保证同一只读快照：
+`RequestDetail` 增加 `model_provider: string | null`、`source_facts: SourceFactsReading`、`projection_meta: ProjectionMetaReading`、`derivation: DerivationReading`。`DetailDbRow` 增加 `model_provider: string | null`、`source_facts_json: string | null`、`projection_meta_json: string | null`；`summary_state` 已在同一行上。`derived_state` 不是列：它由 `projectRow` 在同一只读快照里算出，直接传给 `derivationOf`，不另查 `derive_queue`，也不给 SQL 加一个不存在的别名：
 
 ```ts
-const row = store.read.query<DetailDbRow, [number]>(`
-  SELECT req.*,
-         (SELECT 1 FROM route_summary s WHERE s.route_id = req.route_id) AS summary_exists,
-         req.derived_state AS derived_state,
-         req.summary_state AS summary_state
-  FROM request req WHERE req.req_id = ?`).get(canonical) as DetailDbRow | null;
-```
-
-C 的投影列名不同时只改这两个别名，不改 `derivationOf`。返回对象增加：
-
-```ts
-model_provider: row.model_provider,
-source_facts: sourceFactsReading(parseJsonOrNull(row.source_facts_json)),
-projection_meta: projectionMetaReading(parseJsonOrNull(row.projection_meta_json)),
 derivation: derivationOf({
-  derived_state: row.derived_state ?? null,
-  summary_state: row.summary_state ?? null,
+  derived_state: projected.state,
+  summary_state: row.summary_state,
 }),
 ```
 
-不要另查 `derive_queue`。C 是前置依赖：缺任一列或 C 的 `derived_state` 投影未落地，就停止本任务并报告，不跳过集成断言，不从旧列补一份替代状态。详情响应只返回挑选后的对象，不返回原始 JSON。
+详情响应只返回挑选后的对象，不返回原始 JSON。
 
 - [ ] **Step 4：运行测试确认通过。** Run: `bun test tests/queries.test.ts -t 'source_facts|projection_meta|组状态'`。Expected: PASS。
 
