@@ -16,7 +16,9 @@
 | [architecture-review.md](architecture-review.md) | 基于设计提交的落地前评审：账本身份、持久化与恢复、正文预算和回收、乱序派生、协议与费用来源、安全边界及合成验收条件；文末两轮结论已逐条落进设计文档 |
 | [operations.md](operations.md) | 运维手册：维护命令与错误码、备份与恢复流程、维护锁、掉电边界、费用时钟冲突诊断、容量门槛、切换核对与 AVA 下线/回滚步骤 |
 | [AGENTS.md](AGENTS.md) | 文档分层、写作规则与文风禁区；note 与架构文档的接缝 |
-| [实施总入口](superpowers/plans/2026-10-20-collector-implementation.md) | 阶段依赖、共同接口、文件职责、架构矛盾的实施修正建议与验收对照；从这里开始执行 |
+| [架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md) | 下一轮分批交付、依赖与设计准入；当前可执行范围为同步派生正确性 |
+| [同步派生正确性](superpowers/plans/2026-10-22-atc-derive-correctness.md) | 正文可比较性、统一顺序、当前工具关联、摘要与事务完成；含调用者迁移、故障恢复和历史对齐验收 |
+| [首轮 Collector 实施总入口](superpowers/plans/2026-10-20-collector-implementation.md) | 首轮阶段依赖、共同接口、文件职责与验收；实际切换继续遵守 C3 授权要求 |
 | [持久化与真实页面](superpowers/plans/2026-10-20-collector-foundation.md) | A1–A5：SQLite、文件代际与恢复、账本路由和费用、访问控制、真实分页页面 |
 | [正文与关联派生](superpowers/plans/2026-10-20-collector-body.md) | B1–B5：脱敏内容库、协议适配、薄 hook、证据关联、乱序派生与正文阅读 |
 | [保留恢复与切换](superpowers/plans/2026-10-20-collector-retention.md) | C1–C3：预算回收、暂停与补采、备份恢复、并行核对、AVA 切换与回滚 |
@@ -35,6 +37,6 @@
 
 C3 的真实并行观察、停 AVA 与回滚演练尚未执行，需要单独授权。magpie 与现有 AVA 保持未修改。
 
-下一轮架构讨论从[架构演进方案 v2](architecture-evolution-v2.md)进入，统筹字段保真、事实重建、Agent 语义与容量；理由见[架构演进提案](../.agents/notes/proposed/architecture/2026-10-22-atc-architecture-evolution.md)。[Agent Profile 原提案](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)与[字段保真原提案](../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)保留为输入材料，具体事实修正见[联合评审](agent-request-kind-review.md#与字段保真方案的联合评估)，分类器形状证据见[auto mode 分类器研究](auto-mode-classifier-research.md)。
+下一轮实施从[架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md)进入，当前详细计划覆盖同步派生正确性；来源、schema、语义和容量批次先按入口中的条件完成各自计划。[架构演进方案 v2](architecture-evolution-v2.md)维护目标约束，理由见[架构演进提案](../.agents/notes/proposed/architecture/2026-10-22-atc-architecture-evolution.md)。[Agent Profile 原提案](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)与[字段保真原提案](../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)保留为输入材料，具体事实修正见[联合评审](agent-request-kind-review.md#与字段保真方案的联合评估)，分类器形状证据见[auto mode 分类器研究](auto-mode-classifier-research.md)。
 
 仍在等待确认的问题列在架构文档末尾：超大请求的回调为什么丢失、direct 是否还会新增、分级保留的切分点、推理正文是否入库、路由摘要是否保留 prompt 分解、多实例标识、长期元数据的实际成本、direct 的稳定身份、是否开启请求归档、`handed_on` 行会不会真出现。
