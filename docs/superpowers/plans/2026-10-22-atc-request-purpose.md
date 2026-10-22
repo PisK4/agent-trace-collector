@@ -2033,6 +2033,7 @@ Expected: PASS。再跑 `bun test tests/queries.test.ts`；Expected: PASS。
 
 **Files:**
 - Modify: `web/app.js`
+- Modify: `web/index.html`（新增 `.type-tag.aux` 配色）
 - Test: `tests/web.test.ts`
 
 **Interfaces:**
@@ -2132,7 +2133,7 @@ ${userTexts.map(text => `<div class="conv-user" data-select="${r.req_id}">
 </div>`).join('')}
 ```
 
-`renderLedgerRow` 的 `isTitle` 改为 `isAux = isAuxRow(r)`；`kind` 用 `isAux ? 'aux'`，标签用 `辅助`，主文本用 `auxSummary(r)`。`renderReply` 删除标题特判，直接按 `view.text` 渲染。删除 `isAuxTitleRequest`、`TITLE_REPLY`、`titleOfReplyText` 及所有 `startsWith('标题 · ')`。
+`ledgerRow` 的 `isTitle` 改为 `isAux = isAuxRow(r)`；`kind` 用 `isAux ? 'aux'`，标签用 `辅助`，主文本用 `auxSummary(r)`，`web/index.html` 补 `.type-tag.aux` 配色。`convCard` 删除标题特判，直接按 `view.text` 渲染（`web/body-view.js` 的 `renderReply` 本来就没有标题分支）。删除 `isAuxTitleRequest`、`TITLE_REPLY`、`titleOfReplyText` 及所有 `startsWith('标题 · ')`。
 
 - [ ] **Step 5：运行确认通过。**
 

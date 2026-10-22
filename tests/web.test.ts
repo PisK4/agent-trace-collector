@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { createReader, resolveTraceTarget } from '../web/app.js';
+import { auxSummary, createReader, isAuxRow, purposeLabel, resolveTraceTarget } from '../web/app.js';
 
 test('较慢的旧详情不覆盖新选择', async () => {
   let finishFirst!: (response: Response) => void;
@@ -159,4 +159,32 @@ test('合并后的旧 id 跳到 canonical 而不是报未在已加载页', async
   expect(resolveTraceTarget(rows, 7, { req_id: 3 })).toEqual({ kind: 'off-page', reqId: null });
   // 库里没有：未找到。
   expect(resolveTraceTarget(rows, 7, null)).toEqual({ kind: 'missing', reqId: null });
+});
+
+test('辅助行只由派生用途决定', () => {
+  expect(isAuxRow({ purpose_chain: 'participate', chain_role: 'main' })).toBe(false);
+  expect(isAuxRow({ purpose_chain: 'exclude', chain_role: 'aux' })).toBe(true);
+  expect(isAuxRow({ purpose_chain: 'participate', chain_role: 'aux' })).toBe(true);
+  expect(isAuxRow({
+    purpose_chain: 'participate', chain_role: 'main',
+    req_kind: 'chat', reply_preview: '标题 · 普通内容',
+  })).toBe(false);
+});
+
+test('未知用途保留原始 ID', () => {
+  expect(purposeLabel('source:compaction')).toBe('source:compaction');
+  expect(purposeLabel('title')).toBe('标题生成');
+  expect(purposeLabel('auto-mode-classifier')).toBe('自动模式分类');
+});
+
+test('分类器摘要显示判定', () => {
+  expect(auxSummary({
+    req_kind: 'auto-mode-classifier', reply_preview: '<block>no',
+  })).toBe('自动模式分类 · 放行');
+  expect(auxSummary({
+    req_kind: 'auto-mode-classifier', reply_preview: '<block>yes',
+  })).toBe('自动模式分类 · 拦截');
+  expect(auxSummary({
+    req_kind: 'auto-mode-classifier', reply_preview: '<transcript>',
+  })).toBe('自动模式分类 · 判定未知');
 });
