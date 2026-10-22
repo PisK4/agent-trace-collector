@@ -6,7 +6,8 @@ import { fixture } from './fixtures';
 import { openStore } from '../src/store';
 import { runMaintenance } from '../src/maintenance';
 import type { Store } from '../src/store';
-import { compareSequence, deriveTitle, drainDerive, enqueueDerive, matchPredecessor } from '../src/derive';
+import { compareSequence, deriveTitle, drainDerive, drainDeriveTx, enqueueDerive,
+  LEGACY_PURPOSE_VERSION, matchPredecessor } from '../src/derive';
 import { GROUP_ALGORITHM } from '../src/derive-state';
 import { listSessions } from '../src/queries';
 import { modelTimeTitle } from '../src/sources/magpie';
@@ -822,6 +823,97 @@ test('未知归属的请求不入队', () => {
   } finally {
     f.close();
   }
+});
+
+test('未知归属的请求也能完成兼容用途且不建哨兵组', () => {
+  const f = fixture();
+  try {
+    // hook 先到：只知道会话，不知道 actor。它不进组，但它的用途是有效事实。
+    f.store.write(db => db.run(
+      `INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+         body_state,derive_version,have,created_at,updated_at)
+       VALUES (1,'k',NULL,'unknown',1000,'2026-10-20','hook','pending',0,1,1,1)`,
+    ));
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'synthetic prompt' }] }] },
+      reply: { id: 'msg_title', content: [{ type: 'text', text: '<title>合成标题</title>' }] },
+      redact_version: 1,
+    });
+    const result = drainDerive(f.store);
+    expect(result.purpose_processed).toBe(1);
+    expect(result.purpose_remaining).toBe(0);
+    expect(f.store.read.query(`SELECT req_kind,purpose_pending,purpose_version,
+      purpose_status,purpose_rule,purpose_chain,model_title FROM request WHERE req_id=1`).get())
+      .toEqual({
+        req_kind: 'title', purpose_pending: 0, purpose_version: LEGACY_PURPOSE_VERSION,
+        purpose_status: 'recognized', purpose_rule: 'legacy.title', purpose_chain: 'exclude',
+        model_title: '合成标题',
+      });
+    // 未知归属不产生组：没有哨兵，也没有替它编一个 actor。
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_queue').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT actor FROM request WHERE req_id=1').get())
+      .toEqual({ actor: null });
+  } finally { f.close(); }
+});
+
+test('正文回收后保留原用途版本并消费当前修订', () => {
+  const f = fixture();
+  try {
+    seedChain(f.store, [['synthetic']]);
+    drainDerive(f.store);
+    const before = f.store.read.query<{ input_revision: number }, []>(
+      'SELECT input_revision FROM request WHERE req_id=1').get()!;
+    // 正文回收后再来一次输入变化：读不出可比内容，但结论曾经算过，保留原值而不是降级成 missing。
+    f.store.write(db => db.run(
+      `UPDATE request SET body_state='evicted',skeleton_z=NULL,msg_count=NULL,
+         input_revision=input_revision+1,purpose_pending=1,purpose_retry=0 WHERE req_id=1`));
+    const result = drainDerive(f.store);
+    expect(result.purpose_processed).toBe(1);
+    const row = f.store.read.query<{
+      purpose_status: string; purpose_version: number; purpose_revision: number;
+      input_revision: number; req_kind: string;
+    }, []>(`SELECT purpose_status,purpose_version,purpose_revision,input_revision,req_kind
+      FROM request WHERE req_id=1`).get()!;
+    expect(row.input_revision).toBe(before.input_revision + 1);
+    expect(row).toEqual({
+      purpose_status: 'retained', purpose_version: LEGACY_PURPOSE_VERSION,
+      // 消费的是当前修订，不是"上次判定的那一版"：留着旧修订等于没判。
+      purpose_revision: row.input_revision, input_revision: row.input_revision,
+      req_kind: 'chat',
+    });
+  } finally { f.close(); }
+});
+
+test('从未判定过又读不出正文的请求标missing', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(
+      `INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+         body_state,derive_version,have,created_at,updated_at)
+       VALUES (1,'k','actor-a','known',1000,'2026-10-20','hook','pending',0,1,1,1)`,
+    ));
+    drainDerive(f.store);
+    expect(f.store.read.query(`SELECT purpose_status,purpose_version,purpose_rule,
+      purpose_pending FROM request WHERE req_id=1`).get()).toEqual({
+      purpose_status: 'missing', purpose_version: null, purpose_rule: null, purpose_pending: 0,
+    });
+  } finally { f.close(); }
+});
+
+test('组内仍有待判定用途时不完成该组', () => {
+  const f = fixture();
+  try {
+    seedChain(f.store, [['synthetic a'], ['synthetic a', 'synthetic b']]);
+    enqueueDerive(f.store, JSON.stringify(['session', 'chain']), 'actor-a', '');
+    // 用途阶段只判一批，且这批判不出进展：模拟"组已 dirty、成员仍 pending"。
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=1'));
+    const result = drainDeriveTx(f.store.db, { limit: 10, purposeLimit: 1 });
+    // 一批准完了用途，组才能算：这里两笔各占一批，循环推进到没有 pending 为止。
+    expect(result.purpose_remaining).toBe(0);
+    expect(result.remaining).toBe(0);
+    expect(result.groups.length).toBe(1);
+  } finally { f.close(); }
 });
 
 test('工具调用按同actor配对，跨请求不串', () => {

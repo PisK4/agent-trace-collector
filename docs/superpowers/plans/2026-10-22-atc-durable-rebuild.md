@@ -428,9 +428,9 @@ test('在线摄入的原始行带映射与隐私版本',()=>{
 
 **Interfaces:** C 的 `LEGACY_PURPOSE_VERSION=1` 仅迁移现有title/chat行为；D替换为版本2，不在C新增classifier。`DrainResult` 在 A 返回值上增加 `purpose_processed:number,purpose_remaining:number`；remaining仍表示dirty组数。提取 `drainDeriveTx(db: Database, options: { limit: number; scope?: DeriveScope; purposeLimit?: number }): DrainResult`，原 `drainDerive(store, limit=100, scope?)` 仅校验参数后 `store.write(db=>drainDeriveTx(db,{limit,scope}))`。这是迁移与在线共用的事务 Seam，不导出链/工具/摘要的单独完成入口。`DeriveScope={convKey:string}` 沿用 A，scope存在时请求待处理筛conv_key，未知actor不被排除。用途阶段 C 内部 `drainLegacyPurposeTx(db:Database,limit:number,scope?:DeriveScope):{processed:number;remaining:number}`；D 用同一事务内的 `drainRequestPurposesTx` 替换该调用，不能同时运行两种分类器。
 
-- [ ] **Step 1：固定actor未知也能完成兼容用途。** 用hook-only fixture存title回复，调用drain一次，断言req_kind=title、purpose_pending=0、purpose_version=1、无actor哨兵组。回收后再次标记，保留title及原version、status=retained且purpose_revision消费当前修订。query在组dirty时前驱/delta/链角色/tool结果不得作为当前确认返回，事实和原文可读。
-- [ ] **Step 2：观察FAIL。** Run `bun test tests/derive.test.ts tests/queries.test.ts -t '待处理|dirty|未知归属'`，测试名与新增测试对应；Expected未排请求pending或旧关系仍confirmed。
-- [ ] **Step 3：实现兼容请求阶段。** 在drain同一同步writer开始，按req_id取最多100个pending请求；先复用A可比较性及现有replyInfo读取，识别title行为保持。可读按既有title规则写 recognized/title 或 unrecognized/chat，rule为legacy.title/legacy.default；不可读有旧purpose_version保留原值，status retained，否则missing；purpose_chain来自结果，pending清0、revision=input_revision。该阶段不标自己请求输入变化；若用途/chain/model_title实际改变，只标所属组。组阶段选择前先执行请求阶段，组内仍有purpose_pending时跳过保留dirty，不允许完成；main/backfill继续调用drain同一入口，maintenance用purpose_remaining和remaining都为0作排空条件，遇无进度显式错误。
+- [x] **Step 1：固定actor未知也能完成兼容用途。** 用hook-only fixture存title回复，调用drain一次，断言req_kind=title、purpose_pending=0、purpose_version=1、无actor哨兵组。回收后再次标记，保留title及原version、status=retained且purpose_revision消费当前修订。query在组dirty时前驱/delta/链角色/tool结果不得作为当前确认返回，事实和原文可读。
+- [ ] **Step 2：观察FAIL。** Run `bun test tests/derive.test.ts tests/queries.test.ts -t '待处理|dirty|未知归属'`，测试名与新增测试对应；Expected未排请求pending或旧关系仍confirmed。**未执行**：本轮先落地实现再补测试，没有先跑失败态；新增用例的覆盖以 Step 4 的通过结果为准。
+- [x] **Step 3：实现兼容请求阶段。** 在drain同一同步writer开始，按req_id取最多100个pending请求；先复用A可比较性及现有replyInfo读取，识别title行为保持。可读按既有title规则写 recognized/title 或 unrecognized/chat，rule为legacy.title/legacy.default；不可读有旧purpose_version保留原值，status retained，否则missing；purpose_chain来自结果，pending清0、revision=input_revision。该阶段不标自己请求输入变化；若用途/chain/model_title实际改变，只标所属组。组阶段选择前先执行请求阶段，组内仍有purpose_pending时跳过保留dirty，不允许完成；main/backfill继续调用drain同一入口，maintenance用purpose_remaining和remaining都为0作排空条件，遇无进度显式错误。
 
 ```ts
 function drainLegacyPurposeTx(db:Database,limit:number,scope?:DeriveScope):{
@@ -513,8 +513,8 @@ const safe={...row,derived_state:state,
 
 REQUEST_COLUMNS 同时显式加入 `summary_state`、`summary_algorithm`、`summary_basis`，[E 计划](2026-10-22-atc-input-capability-reading.md) 从 detail 的同一快照读取 `summary_state`，缺列会让 E 收到 undefined 并按 `unavailable` 静默降级；list 不携带这三列。实际响应不spread原SQL内部行。上述safe构造描述白名单字段替换，回归以接口现有白名单为基准，移除source_facts_json、projection_meta_json、组内部列和account/host；只有detail在显式historical键下附原title/preview/relation/delta并标状态，list不携带它们。`derivedStateOf` 的retained/legacy也不被当confirmed；actor未知当前关系视图为dirty，中性用途仍可展示。会话标题的当前性筛选由 [D 计划](2026-10-22-atc-request-purpose.md) 统一替换，C 只提供 `derived_state` 与列；本任务不保留第二份标题 SQL。
 
-- [ ] **Step 4：运行目标回归及类型。** `bun test tests/derive.test.ts tests/queries.test.ts tests/maintenance.test.ts`，Expected PASS。D会替换兼容请求阶段，不能留下两个竞争用途写入者；C组循环移除旧的重新识别并覆盖req_kind分支，消费已存purpose_chain、model_title。query未知ID保持原字符串，不折回chat/main。
-- [ ] **Step 5：更新读模型与note。** 有授权时提交 `feat(derive): complete request work before publishing group results`。
+- [x] **Step 4：运行目标回归及类型。** `bun test tests/derive.test.ts tests/queries.test.ts tests/maintenance.test.ts`，Expected PASS。D会替换兼容请求阶段，不能留下两个竞争用途写入者；C组循环移除旧的重新识别并覆盖req_kind分支，消费已存purpose_chain、model_title。query未知ID保持原字符串，不折回chat/main。
+- [x] **Step 5：更新读模型与note。** 有授权时提交 `feat(derive): complete request work before publishing group results`。
 
 ## Task 5：显式盐绑定与可恢复备份
 

@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
-import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
+import { GROUP_ALGORITHM, markGroupDirtyTx, markRequestGroupsTx } from './derive-state';
 
 /** 从回复里取工具调用；两种协议结构都认。 */
 function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
@@ -361,7 +361,7 @@ type ChainRow = {
   sort_source: string | null; sort_key: string | null;
   prev_req_id: number | null; prev_relation: string | null;
   title_source: string | null; title: string | null; model_served: string | null;
-  req_kind: string | null; model_title: string | null;
+  req_kind: string | null; model_title: string | null; purpose_chain: string;
   input_preview: string | null; input_preview_kind: string | null; reply_preview: string | null;
 };
 
@@ -755,6 +755,14 @@ function assignChainRoles(db: Database, convKey: string, actor: string): void {
 /** 离线维护只处理目标会话，不消费其它会话的任务。 */
 export type DeriveScope = { convKey: string };
 
+/**
+ * 兼容用途判定的版本。
+ *
+ * C 只把现有 title/chat 行为固化成可重放的结论：它不新增分类器，也不解释
+ * 新的用途类别。D 会把这个版本整体替换成版本 2 的实现，两者不能同时运行。
+ */
+export const LEGACY_PURPOSE_VERSION = 1;
+
 export type DrainResult = {
   processed: number;
   /** 当前 scope 内未完成组；省略 scope 时是全队列。 */
@@ -765,7 +773,74 @@ export type DrainResult = {
   recomputed: number;
   /** 消息序列不可比较、标题与摘要按旧值保留的请求。 */
   retained: number;
+  /** 本批完成用途判定的请求数。 */
+  purpose_processed: number;
+  /** 当前 scope 内仍待判定用途的请求数；未完成时组不能被宣布为最新。 */
+  purpose_remaining: number;
 };
+
+type LegacyPurposeRow = {
+  req_id: number; conv_key: string | null; actor: string | null; input_revision: number;
+  purpose_version: number | null; purpose_chain: string; req_kind: string; model_title: string | null;
+};
+
+/**
+ * 请求用途阶段：在同一事务里、组阶段之前完成。
+ *
+ * 用途与组是两个粒度：请求的用途只依赖它自己的输入，组的结果依赖全部成员的
+ * 用途与关系。先定用途，组才有稳定的输入；因此这里不标"请求输入变化"，
+ * 只在用途、链归属或正式标题真的变了时标所属组。
+ *
+ * 正文不可读时：有旧版本就保留原值并标 retained，从未判定过则标 missing。
+ * 未知归属的请求同样要完成用途——它不是组的一部分，但它自己的用途是有效事实。
+ */
+function drainLegacyPurposeTx(
+  db: Database,
+  limit: number,
+  scope?: DeriveScope,
+): { processed: number; remaining: number } {
+  const rows = scope === undefined
+    ? db.query<LegacyPurposeRow, [number]>(`
+        SELECT req_id, conv_key, actor, input_revision, purpose_version, purpose_chain,
+               req_kind, model_title
+        FROM request WHERE purpose_pending=1 ORDER BY req_id LIMIT ?`).all(limit)
+    : db.query<LegacyPurposeRow, [string, number]>(`
+        SELECT req_id, conv_key, actor, input_revision, purpose_version, purpose_chain,
+               req_kind, model_title
+        FROM request WHERE purpose_pending=1 AND conv_key=? ORDER BY req_id LIMIT ?`)
+      .all(scope.convKey, limit);
+  for (const row of rows) {
+    const readable = fingerprintsOf(db, row.req_id) !== null;
+    const reply = readable ? replyInfoOf(db, row.req_id) : null;
+    const retained = !readable && row.purpose_version !== null;
+    const isTitle = readable && (reply?.modelTitle !== null || row.req_kind === 'title');
+    const status = readable ? (isTitle ? 'recognized' : 'unrecognized') : (retained ? 'retained' : 'missing');
+    // 版本只在真的重新解释时更新；保留行仍是它当时的版本。
+    const version = readable ? LEGACY_PURPOSE_VERSION : row.purpose_version;
+    const kind = readable ? (isTitle ? 'title' : 'chat') : row.req_kind;
+    const chain = readable ? (isTitle ? 'exclude' : 'participate') : row.purpose_chain;
+    const modelTitle = readable ? (reply?.modelTitle ?? (isTitle ? row.model_title : null)) : row.model_title;
+    db.run(
+      `UPDATE request SET purpose_pending=0, purpose_retry=0, purpose_revision=input_revision,
+         purpose_status=?, purpose_version=?, purpose_rule=?, purpose_chain=?, req_kind=?, model_title=?
+       WHERE req_id=?`,
+      [
+        status, version, readable ? (isTitle ? 'legacy.title' : 'legacy.default') : null,
+        chain, kind, modelTitle, row.req_id,
+      ],
+    );
+    if (chain !== row.purpose_chain || kind !== row.req_kind || modelTitle !== row.model_title) {
+      markRequestGroupsTx(db, row.req_id);
+    }
+  }
+  const remaining = scope === undefined
+    ? (db.query('SELECT COUNT(*) AS n FROM request WHERE purpose_pending=1').get() as { n: number }).n
+    : db.query<{ n: number }, [string]>(
+      'SELECT COUNT(*) AS n FROM request WHERE purpose_pending=1 AND conv_key=?').get(scope.convKey)!.n;
+  return { processed: rows.length, remaining };
+}
+
+export type DrainOptions = { limit: number; scope?: DeriveScope; purposeLimit?: number };
 
 /**
  * 处理队列里的一批分组。每个分组按稳定顺序从头重算整条链：
@@ -774,117 +849,153 @@ export type DrainResult = {
  * 链、主链角色、工具配对、摘要与队列确认在同一个同步事务内按序完成；
  * 任一阶段失败，整批回滚并保留任务。
  *
- * @param scope 只处理该会话的组，用于离线维护
+ * 这是迁移与在线共用的唯一完成入口：链、工具与摘要都没有各自的完成出口，
+ * 因为任何一段单独提交都会留下"部分更新"的组。
+ */
+export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult {
+  const { limit, scope } = options;
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid_derive_limit');
+  if (scope !== undefined && (typeof scope.convKey !== 'string' || scope.convKey.length === 0)) {
+    throw new Error('invalid_derive_scope');
+  }
+  // 先完成请求用途：组阶段只消费已经定下来的用途，不在组里再识别一次。
+  //
+  // 分批推进直到这一轮没有待判定请求为止：组的完成条件就是"组内没有 pending"，
+  // 只判一批会让大组永远等不到完成。`purposeLimit` 是每批大小，不是总量上限；
+  // 没有进展（剩下的都读不出来）才停。
+  const purposeLimit = options.purposeLimit ?? 100;
+  let purposeProcessed = 0;
+  let purposeRemaining = 0;
+  for (;;) {
+    const batch = drainLegacyPurposeTx(db, purposeLimit, scope);
+    purposeProcessed += batch.processed;
+    purposeRemaining = batch.remaining;
+    if (batch.remaining === 0 || batch.processed === 0) break;
+  }
+  const columns = 'conv_key,actor,group_epoch,input_revision,target_algorithm';
+  const groups = scope === undefined
+    ? db.query<QueuedGroup, [number]>(`SELECT ${columns} FROM derive_queue
+        WHERE state<>'clean' ORDER BY conv_key,actor LIMIT ?`).all(limit)
+    : db.query<QueuedGroup, [string, number]>(`SELECT ${columns} FROM derive_queue
+        WHERE conv_key=? AND state<>'clean' ORDER BY actor LIMIT ?`).all(scope.convKey, limit);
+  const touched: Group[] = [];
+  let processed = 0;
+  let recomputed = 0;
+  let retained = 0;
+  for (const group of groups) {
+    // 组里还有未判定用途的请求时不能完成：把组算干净等于替它们猜了一个用途。
+    const waiting = db.query<{ n: number }, [string, string]>(`
+      SELECT COUNT(*) AS n FROM request
+      WHERE conv_key=? AND actor=? AND actor_state='known' AND purpose_pending=1`)
+      .get(group.conv_key, group.actor)!.n;
+    if (waiting > 0) continue;
+    const rows = db.query<ChainRow, [string, string]>(`
+      SELECT req_id, actor, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
+             title_source, title, model_served, req_kind, model_title, purpose_chain,
+             input_preview, input_preview_kind, reply_preview
+      FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
+    const ordered = [...rows].sort(compareTraversalOrder);
+    // 同毫秒且没有来源位置证据的请求：可以遍历，但不能用来证明先后。
+    const uncertain = uncertainOrderIds(ordered);
+    // 本组已处理过的请求，供后面每一笔在链上找前驱。按正序推进，
+    // 所以这里只会看到"早于本笔"的祖先。
+    const ancestors: { reqId: number; fingerprints: readonly string[] }[] = [];
+    // 有正文不可读的祖先时，链是断的：后面那些请求即使对不上已知祖先，
+    // 也只能算"没法比"，不能断言成"另起一支"。
+    let sawEarlier = false;
+    let unreadableEarlier = false;
+    // 链阶段只收集；工具与摘要依赖本次配对，必须等全部关系确定后再写。
+    const pairRows: PairRow[] = [];
+    const presentations: PresentationInput[] = [];
+    for (const row of ordered) {
+      const current = fingerprintsOf(db, row.req_id);
+      const replyInfo = current === null
+        ? { preview: row.reply_preview, modelTitle: null }
+        : replyInfoOf(db, row.req_id);
+      // 用途已在请求阶段定下来：组阶段只消费 purpose_chain，不再自己认一遍标题请求。
+      // 两处各认一次就会出现"用途说是 chat、关系却按 title 算"的分裂。
+      const isTitleRequest = row.purpose_chain === 'exclude';
+      const modelTitle = row.model_title;
+      let match: PredecessorMatch;
+      if (isTitleRequest) {
+        match = { parent: null, relation: 'aux', delta: null, near: null };
+      } else if (current === null) {
+        // 本笔正文不可读：没法比，但也不能把上一笔的结论照抄过来。
+        match = { parent: null, relation: 'unknown', delta: null, near: null };
+      } else if (uncertain.has(row.req_id)) {
+        // 顺序未证实：同毫秒的来源身份只够排序，不够当因果证据。
+        match = { parent: null, relation: 'unknown', delta: null, near: null };
+      } else {
+        const found = matchPredecessor(ancestors, current, sawEarlier);
+        match = found.relation === 'branch' && unreadableEarlier
+          ? { ...found, relation: 'unknown' }
+          : found;
+      }
+      if (!isTitleRequest) {
+        // 标题请求是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
+        sawEarlier = true;
+        if (current === null || uncertain.has(row.req_id)) unreadableEarlier = true;
+      }
+
+      const delta = match.delta;
+      const deltaJson = delta === null ? null : JSON.stringify(delta);
+      // 关系是本阶段唯一的写入；标题、摘要与版本留到工具配对之后。
+      // req_kind/model_title 属于请求用途，不在这里覆盖。
+      db.run(`UPDATE request SET prev_req_id=?,prev_relation=?,delta_ordinals=?,
+        chain_role=? WHERE req_id=?`, [
+        match.parent, match.relation, deltaJson,
+        isTitleRequest ? 'aux' : 'main', row.req_id,
+      ]);
+      pairRows.push({ ...row, req_kind: row.req_kind,
+        prev_relation: match.relation, delta_ordinals: deltaJson });
+      presentations.push({ row, current, replyInfo, isTitleRequest, modelTitle, match });
+      if (current === null) retained += 1;
+      else recomputed += 1;
+      if (!isTitleRequest && current !== null && !uncertain.has(row.req_id)) {
+        ancestors.push({ reqId: row.req_id, fingerprints: current });
+      }
+      processed += 1;
+    }
+    assignChainRoles(db, group.conv_key, group.actor);
+    const paired = pairToolCallsTx(db, group, pairRows, uncertain);
+    for (const input of presentations) {
+      writePresentationTx(db, input, paired.associations, group);
+    }
+    // 完成只在消费的修订仍是当前修订时才成立：同一事务里后到的输入变化
+    // 会抬高 input_revision，CAS 失败即整批回滚，旧完成记录不会覆盖新输入。
+    const changed = db.run(
+      `UPDATE derive_queue SET state='clean',dirty_since_ms=NULL,
+         published_revision=?,published_algorithm=?
+       WHERE conv_key=? AND actor=? AND group_epoch=? AND input_revision=? AND target_algorithm=?`,
+      [group.input_revision, group.target_algorithm, group.conv_key, group.actor,
+        group.group_epoch, group.input_revision, group.target_algorithm],
+    ).changes;
+    if (changed !== 1) throw new Error('derive_input_changed');
+    touched.push({ conv_key: group.conv_key, actor: group.actor });
+  }
+  // clean 行是持久完成记录，不是积压。
+  const remaining = scope === undefined
+    ? db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'`).get()!.n
+    : db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM derive_queue
+        WHERE conv_key=? AND state<>'clean'`).get(scope.convKey)!.n;
+  return {
+    processed, remaining, groups: touched, recomputed, retained,
+    purpose_processed: purposeProcessed, purpose_remaining: purposeRemaining,
+  };
+}
+
+/**
+ * 在线入口：校验参数后在自己的写事务里跑一次完整排空。
+ *
+ * 迁移与维护直接调用 `drainDeriveTx`，因为它们要把多个批次放进同一个事务；
+ * 在线调度只需要"一批一组事务"，不需要知道事务边界。
  */
 export function drainDerive(store: Store, limit = 100, scope?: DeriveScope): DrainResult {
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid_derive_limit');
   if (scope !== undefined && (typeof scope.convKey !== 'string' || scope.convKey.length === 0)) {
     throw new Error('invalid_derive_scope');
   }
-  return store.write(db => {
-    const columns = 'conv_key,actor,group_epoch,input_revision,target_algorithm';
-    const groups = scope === undefined
-      ? db.query<QueuedGroup, [number]>(`SELECT ${columns} FROM derive_queue
-          WHERE state<>'clean' ORDER BY conv_key,actor LIMIT ?`).all(limit)
-      : db.query<QueuedGroup, [string, number]>(`SELECT ${columns} FROM derive_queue
-          WHERE conv_key=? AND state<>'clean' ORDER BY actor LIMIT ?`).all(scope.convKey, limit);
-    const touched: Group[] = [];
-    let processed = 0;
-    let recomputed = 0;
-    let retained = 0;
-    for (const group of groups) {
-      const rows = db.query<ChainRow, [string, string]>(`
-        SELECT req_id, actor, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
-               title_source, title, model_served, req_kind, model_title,
-               input_preview, input_preview_kind, reply_preview
-        FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
-      const ordered = [...rows].sort(compareTraversalOrder);
-      // 同毫秒且没有来源位置证据的请求：可以遍历，但不能用来证明先后。
-      const uncertain = uncertainOrderIds(ordered);
-      // 本组已处理过的请求，供后面每一笔在链上找前驱。按正序推进，
-      // 所以这里只会看到"早于本笔"的祖先。
-      const ancestors: { reqId: number; fingerprints: readonly string[] }[] = [];
-      // 有正文不可读的祖先时，链是断的：后面那些请求即使对不上已知祖先，
-      // 也只能算"没法比"，不能断言成"另起一支"。
-      let sawEarlier = false;
-      let unreadableEarlier = false;
-      // 链阶段只收集；工具与摘要依赖本次配对，必须等全部关系确定后再写。
-      const pairRows: PairRow[] = [];
-      const presentations: PresentationInput[] = [];
-      for (const row of ordered) {
-        const current = fingerprintsOf(db, row.req_id);
-        const replyInfo = current === null
-          ? { preview: row.reply_preview, modelTitle: null }
-          : replyInfoOf(db, row.req_id);
-        // 回复是 <title> 或 {"title":…} 的请求就是 harness 的 Title Generator。
-        // 它是旁路：不参与主链，也不能拿它的输入当用户标题。
-        const isTitleRequest = replyInfo.modelTitle !== null || row.req_kind === 'title';
-        const modelTitle = replyInfo.modelTitle ?? row.model_title;
-        let match: PredecessorMatch;
-        if (isTitleRequest) {
-          match = { parent: null, relation: 'aux', delta: null, near: null };
-        } else if (current === null) {
-          // 本笔正文不可读：没法比，但也不能把上一笔的结论照抄过来。
-          match = { parent: null, relation: 'unknown', delta: null, near: null };
-        } else if (uncertain.has(row.req_id)) {
-          // 顺序未证实：同毫秒的来源身份只够排序，不够当因果证据。
-          match = { parent: null, relation: 'unknown', delta: null, near: null };
-        } else {
-          const found = matchPredecessor(ancestors, current, sawEarlier);
-          match = found.relation === 'branch' && unreadableEarlier
-            ? { ...found, relation: 'unknown' }
-            : found;
-        }
-        if (!isTitleRequest) {
-          // 标题请求是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
-          sawEarlier = true;
-          if (current === null || uncertain.has(row.req_id)) unreadableEarlier = true;
-        }
-
-        const delta = match.delta;
-        const reqKind = isTitleRequest ? 'title' : 'chat';
-        const deltaJson = delta === null ? null : JSON.stringify(delta);
-        // 关系是本阶段唯一的写入；标题、摘要与版本留到工具配对之后。
-        db.run(`UPDATE request SET prev_req_id=?,prev_relation=?,delta_ordinals=?,
-          req_kind=?,chain_role=?,model_title=? WHERE req_id=?`, [
-          match.parent, match.relation, deltaJson, reqKind,
-          isTitleRequest ? 'aux' : 'main',
-          isTitleRequest ? modelTitle : null, row.req_id,
-        ]);
-        pairRows.push({ ...row, req_kind: reqKind,
-          prev_relation: match.relation, delta_ordinals: deltaJson });
-        presentations.push({ row, current, replyInfo, isTitleRequest, modelTitle, match });
-        if (current === null) retained += 1;
-        else recomputed += 1;
-        if (!isTitleRequest && current !== null && !uncertain.has(row.req_id)) {
-          ancestors.push({ reqId: row.req_id, fingerprints: current });
-        }
-        processed += 1;
-      }
-      assignChainRoles(db, group.conv_key, group.actor);
-      const paired = pairToolCallsTx(db, group, pairRows, uncertain);
-      for (const input of presentations) {
-        writePresentationTx(db, input, paired.associations, group);
-      }
-      // 完成只在消费的修订仍是当前修订时才成立：同一事务里后到的输入变化
-      // 会抬高 input_revision，CAS 失败即整批回滚，旧完成记录不会覆盖新输入。
-      const changed = db.run(
-        `UPDATE derive_queue SET state='clean',dirty_since_ms=NULL,
-           published_revision=?,published_algorithm=?
-         WHERE conv_key=? AND actor=? AND group_epoch=? AND input_revision=? AND target_algorithm=?`,
-        [group.input_revision, group.target_algorithm, group.conv_key, group.actor,
-          group.group_epoch, group.input_revision, group.target_algorithm],
-      ).changes;
-      if (changed !== 1) throw new Error('derive_input_changed');
-      touched.push({ conv_key: group.conv_key, actor: group.actor });
-    }
-    // clean 行是持久完成记录，不是积压。
-    const remaining = scope === undefined
-      ? (db.query(`SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'`).get() as { n: number }).n
-      : db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM derive_queue
-          WHERE conv_key=? AND state<>'clean'`).get(scope.convKey)!.n;
-    return { processed, remaining, groups: touched, recomputed, retained };
-  });
+  return store.write(db => drainDeriveTx(db, { limit, scope }));
 }
 
 type TxBody = { request: unknown; reply: unknown } | null;

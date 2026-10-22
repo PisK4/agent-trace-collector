@@ -843,6 +843,40 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 完成用比较交换而不是无条件写：drain 读到 `{group_epoch, input_revision, target_algorithm}` 后，全部阶段在同一事务里完成才把状态改成 clean 并记下这两个值；若同事务里后到的输入变化抬高了修订，交换失败即整批回滚，旧完成记录不会覆盖新输入。
 
+#### 两个粒度：请求用途先于组结果
+
+同一事务里先跑请求阶段、再跑组阶段，入口只有一个 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`，在线调度、维护与迁移都走它。
+
+请求阶段按 `req_id` 取 `purpose_pending=1` 的行，判完写 `purpose_status`（`recognized`/`unrecognized`/`retained`/`missing`）、`purpose_version`、`purpose_rule`、`purpose_chain`、`req_kind` 与 `model_title`，把 `purpose_pending` 清 0 并让 `purpose_revision` 追上当前 `input_revision`。正文不可读时：有旧 `purpose_version` 就保留原值并标 `retained`，从未判过则标 `missing`。该阶段不推进自己请求的输入修订——它消费输入，不改变输入；只在用途、链归属或正式标题真的变了时标所属组。
+
+组阶段只消费已经定下来的 `purpose_chain`，不再自己识别一遍标题请求。组内仍有 `purpose_pending=1` 的成员时整组跳过、保持 dirty：把组算干净等于替那些请求猜了一个用途。`limit` 按组计，`purposeLimit` 是请求阶段的每批大小，drain 会连续推进到没有待判请求为止。
+
+未知归属的请求也要完成用途：它不在任何组里，但"这一笔是标题生成"是它自己的事实，与它属于谁无关。
+
+`DrainResult` 因此有两个排空条件：`remaining`（未完成组数）与 `purpose_remaining`（未判用途的请求数）。维护的排空循环要求两者都为 0，任一阶段无进展即报 `derive_no_progress`。
+
+### 读模型里的派生状态
+
+行级列里有"上一次算出来是什么"，没有"这还算不算当前结论"。两者混在一起时，界面只能靠猜：正文已回收的行与刚重算的行长得一模一样。
+
+`derivedStateOf` 用四个输入回答这件事：请求的 `purpose_pending`、所属组的 `state`/`input_revision`/`published_revision`、`target_algorithm`/`published_algorithm`、以及摘要的 `summary_state`/`summary_algorithm`。
+
+| 取值 | 含义 |
+| --- | --- |
+| `current` | 用途已判、组已完成且修订与算法都追上。唯一可以当已确认结论读的取值 |
+| `dirty` | 用途未判、组未完成或修订/算法没追上；未知归属的请求没有组，也只能是 dirty |
+| `retained` | 组完成了，但正文已回收，标题与摘要按旧值保留 |
+| `legacy` | 从未按当前算法算过 |
+
+`listRequests` 与 `getRequest` 各自在一个只读事务里取行、组状态与工具行，投影按同一个 `current` 判定做替换：
+
+- 关系、增量、`chain_role`、折叠行摘要与工具结果位置只在 `current` 时出现在顶层；否则为 `null`、`unknown` 与 `pending`。
+- 标题退到不依赖正文的那一档：标题请求用已判定的 `model_title`，其余用模型时间占位。
+- 独立事实（耗时、费用、正文状态、回复摘要、模型、时间）不受状态影响。
+- 详情另带 `historical` 白名单，把旧的标题、摘要、关系与增量连同 `derived_state` 一起给出；列表不携带它。
+
+`summary_state`/`summary_algorithm`/`summary_basis` 只在详情返回，供后续能力读取区分"当前摘要"与"保留摘要"。
+
 ## 缺失与健康
 
 ### 证据缺失
@@ -925,6 +959,8 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | `GET /api/stats` | 体积、覆盖位统计、健康状态、探针结果 | 无 |
 
 列表接口不返回骨架。会话内 1,825 笔的列表，每笔骨架 9.5 KB，全取就是 17 MB，列表只返回 `req_id`、时间、状态、模型、四个读数、标题、`have`、`body_state`。
+
+列表与详情都带 `derived_state`，并只在该值为 `current` 时把关系、增量与折叠行摘要放在顶层。详情另带 `historical`（旧派生结论连同状态）与摘要的算法三列；列表不携带这几项。判定的具体规则见[读模型里的派生状态](#读模型里的派生状态)。
 
 分页用 keyset 不用 offset。摄入一直在写，offset 会漂移，游标是本页最后一行的 `(started_ms, req_id)`。
 
