@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
+import { modelTimeTitle } from './sources/magpie';
 
 /** 从回复里取工具调用；两种协议结构都认。 */
 function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
@@ -467,23 +468,76 @@ function firstUserPreview(db: Database, reqId: number): string | null {
   return null;
 }
 
-/** 从一条消息里取工具结果：Anthropic 的 tool_result 块与 chat 的 role=tool。 */
-function toolResultsOf(message: unknown): { callId: string; value: unknown }[] {
-  if (message === null || typeof message !== 'object' || Array.isArray(message)) return [];
-  const record = message as Record<string, unknown>;
-  if (record.role === 'tool') {
-    if (typeof record.tool_call_id !== 'string') return [];
-    return [{ callId: record.tool_call_id, value: record.content ?? null }];
+/** 链阶段为摘要准备的输入：本轮关系、当前可读序列与回复信息。 */
+type PresentationInput = {
+  row: ChainRow; current: readonly string[] | null;
+  replyInfo: ReplyInfo; isTitleRequest: boolean; modelTitle: string | null;
+  match: PredecessorMatch;
+};
+
+/**
+ * 写标题与折叠行摘要。必须在工具配对之后调用：增量里的工具结果轮次
+ * 只能消费本次确定下来的关联，不能跨组按 call_id 取首行。
+ *
+ * 正文可读时标题从当前输入重算，不沿用旧派生值；正文不可读时旧标题与旧摘要
+ * 原样保留——那是当时按正文算出来的，没有正文重算只会把它们降级成时间兜底。
+ */
+function writePresentationTx(db: Database, input: PresentationInput,
+  associations: readonly ResolvedTool[]): void {
+  const { row, current, replyInfo, isTitleRequest, modelTitle, match } = input;
+  const delta = match.delta;
+  const fallback = modelTimeTitle(row.model_served, row.started_ms);
+  let title = fallback;
+  let source: 'user_delta' | 'model_time' | 'model_title' = 'model_time';
+  let inputPreview: string | null = null;
+  let inputKind: 'delta' | 'tail' | 'tool_result' | 'title' | null = null;
+  if (isTitleRequest) {
+    // 标题请求不产生用户标题；它自己的标题来自回复里的正式标题。
+    title = modelTitle ?? (current === null ? row.title ?? fallback : fallback);
+    source = modelTitle !== null ? 'model_title'
+      : current === null && row.title_source === 'model_title' ? 'model_title' : 'model_time';
+    inputPreview = firstUserPreview(db, row.req_id) ?? '生成会话标题';
+    inputKind = 'title';
+  } else if (current === null) {
+    // 正文已回收：旧标题与旧摘要都是当时按正文算出来的，原样保留。
+    title = row.title ?? fallback;
+    source = row.title_source === 'user_delta' || row.title_source === 'model_time'
+      || row.title_source === 'model_title' ? row.title_source : 'model_time';
+    inputPreview = row.input_preview;
+    inputKind = row.input_preview_kind === 'delta' || row.input_preview_kind === 'tail'
+      || row.input_preview_kind === 'tool_result' || row.input_preview_kind === 'title'
+      ? row.input_preview_kind : null;
+  } else if (delta !== null && delta.length > 0) {
+    // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
+    const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
+    const derived = deriveTitle(messages, delta.map((_, index) => index), fallback);
+    title = derived.title;
+    source = derived.source;
+    // 增量里常常只有工具结果或系统消息，没有用户文本。
+    // 有用户文本才标成"新增"；否则照实说这一轮回传了什么工具结果。
+    // 不要回退到"末轮输入"——那会把同一句旧用户消息重复到每一笔请求上。
+    const fresh = previewOf(messages);
+    if (fresh !== null) {
+      inputPreview = fresh;
+      inputKind = 'delta';
+    } else {
+      inputPreview = toolResultPreview(db, row.req_id, delta, associations);
+      inputKind = inputPreview === null ? null : 'tool_result';
+    }
+  } else if (delta !== null) {
+    // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
+    inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
+    inputKind = 'tool_result';
+  } else {
+    // 关系未知或另起一支：没有"新增"可言，但折叠行仍要有东西可读。
+    // 取正文里最后一条用户消息，界面会把它标成"末轮输入"而不是"新增"。
+    inputPreview = tailUserPreview(db, row.req_id);
+    inputKind = inputPreview === null ? null : 'tail';
   }
-  if (!Array.isArray(record.content)) return [];
-  const out: { callId: string; value: unknown }[] = [];
-  for (const block of record.content) {
-    if (block === null || typeof block !== 'object' || Array.isArray(block)) continue;
-    const entry = block as Record<string, unknown>;
-    if (entry.type !== 'tool_result' || typeof entry.tool_use_id !== 'string') continue;
-    out.push({ callId: entry.tool_use_id, value: entry.content ?? null });
-  }
-  return out;
+  const replyPreview = current === null ? row.reply_preview : replyInfo.preview;
+  db.run(`UPDATE request SET title=?,title_source=?,input_preview=?,
+    input_preview_kind=?,reply_preview=?,derive_version=derive_version+1
+    WHERE req_id=?`, [title, source, inputPreview, inputKind, replyPreview, row.req_id]);
 }
 
 /** 工具结果内容压平；数组形状里只取 text 块。 */
@@ -513,21 +567,24 @@ function flattenToolContent(value: unknown): string {
 /**
  * 增量里没有用户文本时的输入摘要：这一笔回传的工具结果。
  *
- * 名字从 tool_call 表按 call_id 查；derive 早于本轮的 pairToolCalls，查不到
- * 是预期情况，此时退回结果内容本身。顺序按消息出现顺序，同名合并计数。
+ * 名字只从本次配对确定下来的关联取，按调用位置与结果 path 精确定位；
+ * 不查上一轮表、其它组或不可重算的保留行。顺序按消息出现顺序，同名合并计数。
  */
-function toolResultPreview(db: Database, reqId: number, delta: readonly number[]): string | null {
+function toolResultPreview(db: Database, reqId: number, delta: readonly number[],
+  associations: readonly ResolvedTool[]): string | null {
   const names: string[] = [];
   let content: string | null = null;
-  for (const ordinal of delta) {
-    for (const result of toolResultsOf(messageAt(db, reqId, ordinal))) {
-      const row = db.query<{ tool_name: string | null }, [string]>(
-        'SELECT tool_name FROM tool_call WHERE call_id=? LIMIT 1').get(result.callId);
-      if (row?.tool_name != null && row.tool_name.length > 0) names.push(row.tool_name);
-      if (content !== null) continue;
-      const flat = flattenToolContent(result.value).replace(/\s+/g, ' ').trim();
-      if (flat.length > 0) content = flat;
-    }
+  // 稀疏位留给结果提取跳过：ord 必须保持原位置，不能压缩。
+  const messages: unknown[] = [];
+  for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal);
+  for (const result of anthropicRequestResults({ messages })) {
+    const matches = associations.filter(link => link.resultReq === reqId
+      && link.resultOrd === result.ord && link.resultPath === result.path
+      && link.callId === result.id);
+    if (matches.length === 1 && matches[0]!.name.length > 0) names.push(matches[0]!.name);
+    if (content !== null) continue;
+    const flat = flattenToolContent(result.value).replace(/\s+/g, ' ').trim();
+    if (flat.length > 0) content = flat;
   }
   if (names.length > 0) {
     const counts = new Map<string, number>();
@@ -711,6 +768,9 @@ export function drainDerive(store: Store, limit = 100): {
       // 也只能算"没法比"，不能断言成"另起一支"。
       let sawEarlier = false;
       let unreadableEarlier = false;
+      // 链阶段只收集；工具与摘要依赖本次配对，必须等全部关系确定后再写。
+      const pairRows: PairRow[] = [];
+      const presentations: PresentationInput[] = [];
       for (const row of ordered) {
         const current = fingerprintsOf(db, row.req_id);
         const replyInfo = current === null
@@ -741,89 +801,35 @@ export function drainDerive(store: Store, limit = 100): {
           if (current === null || uncertain.has(row.req_id)) unreadableEarlier = true;
         }
 
-        const relation: SequenceRelation = match.relation;
         const delta = match.delta;
-
-        const fallback = row.title ?? `${row.model_served ?? '模型'} · ${clock(row.started_ms)}`;
-        let title = fallback;
-        let source: 'user_delta' | 'model_time' | 'model_title' = 'model_time';
-        let inputPreview: string | null = null;
-        let inputKind: 'delta' | 'tail' | 'tool_result' | 'title' | null = null;
-        if (isTitleRequest) {
-          // 标题请求不产生用户标题；它自己的标题来自回复里的正式标题。
-          title = modelTitle ?? fallback;
-          source = modelTitle !== null ? 'model_title' : 'model_time';
-          inputPreview = firstUserPreview(db, row.req_id) ?? '生成会话标题';
-          inputKind = 'title';
-        } else if (current === null) {
-          // 正文已回收：旧标题与旧摘要都是当时按正文算出来的，没有正文重算
-          // 只会把它们降级成时间兜底，所以原样保留。
-          title = row.title ?? fallback;
-          source = (row.title_source === 'user_delta' || row.title_source === 'model_time'
-            || row.title_source === 'model_title') ? row.title_source : 'model_time';
-          inputPreview = row.input_preview;
-          inputKind = row.input_preview_kind === 'delta' || row.input_preview_kind === 'tail'
-            || row.input_preview_kind === 'tool_result' || row.input_preview_kind === 'title'
-            ? row.input_preview_kind : null;
-        } else if (delta !== null && delta.length > 0) {
-          // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
-          const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
-          const derived = deriveTitle(messages, delta.map((_, index) => index), fallback);
-          title = derived.title;
-          source = derived.source;
-          // 增量里常常只有工具结果或系统消息，没有用户文本。
-          // 有用户文本才标成"新增"；否则照实说这一轮回传了什么工具结果。
-          // 不要回退到"末轮输入"——那会把同一句旧用户消息重复到每一笔请求上。
-          const fresh = previewOf(messages);
-          if (fresh !== null) {
-            inputPreview = fresh;
-            inputKind = 'delta';
-          } else {
-            inputPreview = toolResultPreview(db, row.req_id, delta);
-            inputKind = inputPreview !== null ? 'tool_result' : null;
-          }
-        } else if (delta !== null) {
-          // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
-          inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
-          inputKind = 'tool_result';
-        } else {
-          // 关系未知或另起一支：没有"新增"可言，但折叠行仍要有东西可读。
-          // 取正文里最后一条用户消息，界面会把它标成"末轮输入"而不是"新增"。
-          inputPreview = tailUserPreview(db, row.req_id);
-          inputKind = inputPreview !== null ? 'tail' : null;
-        }
-        const replyPreview = current === null ? row.reply_preview : replyInfo.preview;
-        db.run(
-          `UPDATE request SET prev_req_id=?, prev_relation=?, delta_ordinals=?, title=?, title_source=?,
-             req_kind=?, chain_role=?, model_title=?,
-             input_preview=?, input_preview_kind=?, reply_preview=?, derive_version=derive_version+1 WHERE req_id=?`,
-          [
-            match.parent, relation,
-            delta === null ? null : JSON.stringify(delta),
-            title, source,
-            isTitleRequest ? 'title' : 'chat',
-            isTitleRequest ? 'aux' : 'main',
-            isTitleRequest ? modelTitle : null,
-            inputPreview, inputKind, replyPreview, row.req_id,
-          ],
-        );
+        const reqKind = isTitleRequest ? 'title' : 'chat';
+        const deltaJson = delta === null ? null : JSON.stringify(delta);
+        // 关系是本阶段唯一的写入；标题、摘要与版本留到工具配对之后。
+        db.run(`UPDATE request SET prev_req_id=?,prev_relation=?,delta_ordinals=?,
+          req_kind=?,chain_role=?,model_title=? WHERE req_id=?`, [
+          match.parent, match.relation, deltaJson, reqKind,
+          isTitleRequest ? 'aux' : 'main',
+          isTitleRequest ? modelTitle : null, row.req_id,
+        ]);
+        pairRows.push({ ...row, req_kind: reqKind,
+          prev_relation: match.relation, delta_ordinals: deltaJson });
+        presentations.push({ row, current, replyInfo, isTitleRequest, modelTitle, match });
         if (!isTitleRequest && current !== null && !uncertain.has(row.req_id)) {
           ancestors.push({ reqId: row.req_id, fingerprints: current });
         }
         processed += 1;
       }
       assignChainRoles(db, group.conv_key, group.actor);
+      const paired = pairToolCallsTx(db, group, pairRows, uncertain);
+      for (const input of presentations) {
+        writePresentationTx(db, input, paired.associations);
+      }
       db.run('DELETE FROM derive_queue WHERE conv_key=? AND actor=?', [group.conv_key, group.actor]);
       touched.push(group);
     }
     const remaining = (db.query('SELECT COUNT(*) AS n FROM derive_queue').get() as { n: number }).n;
     return { processed, remaining, groups: touched };
   });
-}
-
-function clock(ms: number): string {
-  const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
 type TxBody = { request: unknown; reply: unknown } | null;
@@ -852,133 +858,177 @@ function bodyInTx(db: Database, reqId: number): TxBody {
   return { request, reply: skeleton.reply ?? null };
 }
 
+type Group = { conv_key: string; actor: string };
+
+/** 工具配对消费的行：链阶段刚写下的关系与顺序。 */
+export type PairRow = LogicalRow & {
+  req_kind: string | null; prev_relation: string | null; delta_ordinals: string | null;
+};
+
+/** 本次确定下来的一个工具往返：调用位置与结果位置都精确到 ord 与 path。 */
+export type ResolvedTool = {
+  callReq: number; callOrd: number; callId: string; name: string;
+  resultReq: number; resultOrd: number; resultPath: string;
+};
+
+type PairResult = {
+  resolved: number; ambiguous: number; pending: number;
+  associations: ResolvedTool[];
+};
+
 /**
  * 工具往返：调用来自回复，结果出现在后续同 conv/actor 的请求里。
  *
  * 只配已有确定增量覆盖的结果（confirmed/first）；unknown 请求里的结果最多
  * 建候选，不标 resolved。同一 call_id 命中多个发起请求时标 ambiguous，
  * 不挑最近的一个，也不跨 actor 配对。
+ *
+ * @param ordered 已按 `compareTraversalOrder` 排好、且刚写完本轮关系的本组请求
+ * @param uncertain 同毫秒顺序未证实的请求；它们之间的先后不能作为配对证据
+ * @returns 本次新建且最终 resolved 的关联，供摘要按调用位置与结果 path 取名
  */
-export function pairToolCalls(store: Store, convKey: string, actor: string): { resolved: number; ambiguous: number; pending: number } {
-  return store.write(db => {
-    const rows = db.query<{
-      req_id: number; prev_relation: string | null; delta_ordinals: string | null;
-      started_ms: number; sort_source: string | null; sort_key: string | null;
-    }, [string, string]>(`
-      SELECT req_id, prev_relation, delta_ordinals, started_ms, sort_source, sort_key FROM request
-      WHERE conv_key=? AND actor=? AND actor_state='known'`).all(convKey, actor);
-    if (rows.length === 0) return { resolved: 0, ambiguous: 0, pending: 0 };
-    // 与链阶段同一个遍历顺序；同毫秒缺来源证据的请求另算一集合。
-    rows.sort(compareTraversalOrder);
-    const uncertain = uncertainOrderIds(rows);
+function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[],
+  uncertain: ReadonlySet<number>): PairResult {
+  const rows = ordered;
+  if (rows.length === 0) return { resolved: 0, ambiguous: 0, pending: 0, associations: [] };
 
-    // 先清空本组旧配对，再按当前数据重建；配对是可变状态，重算比增量修补更不容易漂移。
-    // 正文已回收的请求不在重算范围内：它们的块已经不在，从空数据重配只会把原有关系抹掉，
-    // 所以只删正文仍可读的那部分，其余行保持原样。
-    db.run(`
-      DELETE FROM tool_call WHERE req_id IN (
-        SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known'
-          AND body_state IN ('available','partial'))`,
-    [convKey, actor]);
+  // 先清空本组旧配对，再按当前数据重建；配对是可变状态，重算比增量修补更不容易漂移。
+  // 正文已回收的请求不在重算范围内：它们的块已经不在，从空数据重配只会把原有关系抹掉，
+  // 所以只删正文仍可读的那部分，其余行保持原样。
+  db.run(`
+    DELETE FROM tool_call WHERE req_id IN (
+      SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known'
+        AND body_state IN ('available','partial'))`,
+  [group.conv_key, group.actor]);
 
-    type Call = { req_id: number; ord: number; call_id: string; name: string; index: number };
-    const calls: Call[] = [];
-    const results: { req_id: number; index: number; ord: number; path: string; call_id: string; value: unknown; confirmed: boolean }[] = [];
+  type Call = { req_id: number; ord: number; call_id: string; name: string; index: number };
+  const calls: Call[] = [];
+  const results: { req_id: number; index: number; ord: number; path: string; call_id: string; value: unknown; confirmed: boolean }[] = [];
 
-    for (const [index, row] of rows.entries()) {
-      const body = bodyInTx(db, row.req_id);
-      if (body === null) continue;
-      // 结果是否落在确定增量的 ord 上；unknown/first 的规则不同。
-      const delta = row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[];
-      const ordinalConfirmed = (ord: number): boolean =>
-        row.prev_relation === 'first' || row.prev_relation === 'confirmed'
-          ? (row.prev_relation === 'first' ? true : delta !== null && delta.includes(ord))
-          : false;
-      for (const block of anthropicReplyCalls(body.reply)) {
-        calls.push({ req_id: row.req_id, ord: block.ord, call_id: block.id, name: block.name, index });
-      }
-      for (const result of anthropicRequestResults(body.request)) {
-        results.push({
-          req_id: row.req_id, index, ord: result.ord, path: result.path,
-          call_id: result.id, value: result.value, confirmed: ordinalConfirmed(result.ord),
-        });
-      }
+  for (const [index, row] of rows.entries()) {
+    // 标题请求是旁路：不进入工具候选，与它不进祖先集合同一个理由。
+    if (row.req_kind === 'title') continue;
+    const body = bodyInTx(db, row.req_id);
+    if (body === null) continue;
+    // 结果是否落在确定增量的 ord 上；unknown/first 的规则不同。
+    const delta = row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[];
+    const ordinalConfirmed = (ord: number): boolean =>
+      row.prev_relation === 'first' || row.prev_relation === 'confirmed'
+        ? (row.prev_relation === 'first' ? true : delta !== null && delta.includes(ord))
+        : false;
+    for (const block of anthropicReplyCalls(body.reply)) {
+      calls.push({ req_id: row.req_id, ord: block.ord, call_id: block.id, name: block.name, index });
     }
-
-    const byCallId = new Map<string, Call[]>();
-    for (const call of calls) {
-      const list = byCallId.get(call.call_id) ?? [];
-      list.push(call);
-      byCallId.set(call.call_id, list);
+    for (const result of anthropicRequestResults(body.request)) {
+      results.push({
+        req_id: row.req_id, index, ord: result.ord, path: result.path,
+        call_id: result.id, value: result.value, confirmed: ordinalConfirmed(result.ord),
+      });
     }
+  }
 
-    let resolved = 0;
-    let ambiguous = 0;
-    let pending = 0;
-    for (const call of calls) {
-      const candidates = byCallId.get(call.call_id) ?? [];
-      const state = candidates.length > 1 ? 'ambiguous' : 'pending';
-      if (state === 'ambiguous') ambiguous += 1;
-      else pending += 1;
-      db.run(
-        `INSERT INTO tool_call(call_id,req_id,ord,tool_name,result_req,result_ord,result_path,state,derive_version)
-         VALUES (?,?,?,?,NULL,NULL,NULL,?,1)`,
-        [call.call_id, call.req_id, call.ord, call.name, state],
-      );
-    }
+  const byCallId = new Map<string, Call[]>();
+  for (const call of calls) {
+    const list = byCallId.get(call.call_id) ?? [];
+    list.push(call);
+    byCallId.set(call.call_id, list);
+  }
 
-    for (const result of results) {
-      const candidates = byCallId.get(result.call_id) ?? [];
-      if (candidates.length === 0) continue;
-      if (candidates.length > 1) {
-        // 多候选保持 ambiguous，结果位置仍然记下，便于人工核对。
-        for (const call of candidates) {
-          db.run(
-            `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='ambiguous'
-             WHERE req_id=? AND ord=?`,
-            [result.req_id, result.ord, result.path, call.req_id, call.ord],
-          );
-        }
-        continue;
-      }
-      const call = candidates[0]!;
-      // 结果必须晚于调用。同一毫秒且顺序未证实时不配对：身份字典序不是证据。
-      const callRow = rows[call.index]!;
-      const resultRow = rows[result.index]!;
-      if (compareLogicalOrder(callRow, resultRow) >= 0) continue;
-      if (callRow.started_ms === resultRow.started_ms
-        && (uncertain.has(callRow.req_id) || uncertain.has(resultRow.req_id))) continue;
-      // 后续请求会重发整段历史，同一结果会反复出现。已确认的配对是终态，
-      // 重发样本只可能把它降级成 pending，因此直接跳过。
-      const paired = db.query<{ state: string }, [number, number]>(
-        'SELECT state FROM tool_call WHERE req_id=? AND ord=?',
-      ).get(call.req_id, call.ord);
-      if (paired?.state === 'resolved') continue;
-      if (!result.confirmed) {
-        // 增量关系未知：只建立候选，不标 resolved。若这一格此前已有候选位置，
-        // 保留更早的那个位置——候选只记首次见到的地方。
-        if (paired?.state === 'pending') continue;
+  let resolved = 0;
+  let ambiguous = 0;
+  let pending = 0;
+  for (const call of calls) {
+    const candidates = byCallId.get(call.call_id) ?? [];
+    const state = candidates.length > 1 ? 'ambiguous' : 'pending';
+    if (state === 'ambiguous') ambiguous += 1;
+    else pending += 1;
+    db.run(
+      `INSERT INTO tool_call(call_id,req_id,ord,tool_name,result_req,result_ord,result_path,state,derive_version)
+       VALUES (?,?,?,?,NULL,NULL,NULL,?,1)`,
+      [call.call_id, call.req_id, call.ord, call.name, state],
+    );
+  }
+
+  for (const result of results) {
+    const candidates = byCallId.get(result.call_id) ?? [];
+    if (candidates.length === 0) continue;
+    if (candidates.length > 1) {
+      // 多候选保持 ambiguous，结果位置仍然记下，便于人工核对。
+      for (const call of candidates) {
         db.run(
-          `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='pending'
+          `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='ambiguous'
            WHERE req_id=? AND ord=?`,
           [result.req_id, result.ord, result.path, call.req_id, call.ord],
         );
-        continue;
       }
+      continue;
+    }
+    const call = candidates[0]!;
+    // 结果必须晚于调用。同一毫秒且顺序未证实时不配对：身份字典序不是证据。
+    const callRow = rows[call.index]!;
+    const resultRow = rows[result.index]!;
+    if (compareLogicalOrder(callRow, resultRow) >= 0) continue;
+    if (callRow.started_ms === resultRow.started_ms
+      && (uncertain.has(callRow.req_id) || uncertain.has(resultRow.req_id))) continue;
+    // 后续请求会重发整段历史，同一结果会反复出现。已确认的配对是终态，
+    // 重发样本只可能把它降级成 pending，因此直接跳过。
+    const paired = db.query<{ state: string }, [number, number]>(
+      'SELECT state FROM tool_call WHERE req_id=? AND ord=?',
+    ).get(call.req_id, call.ord);
+    if (paired?.state === 'resolved') continue;
+    if (!result.confirmed) {
+      // 增量关系未知：只建立候选，不标 resolved。若这一格此前已有候选位置，
+      // 保留更早的那个位置——候选只记首次见到的地方。
+      if (paired?.state === 'pending') continue;
       db.run(
-        `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='resolved'
+        `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='pending'
          WHERE req_id=? AND ord=?`,
         [result.req_id, result.ord, result.path, call.req_id, call.ord],
       );
-      resolved += 1;
+      continue;
     }
-
     db.run(
-      `UPDATE tool_call SET derive_version=derive_version+1 WHERE req_id IN (
-        SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known')`,
-      [convKey, actor],
+      `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='resolved'
+       WHERE req_id=? AND ord=?`,
+      [result.req_id, result.ord, result.path, call.req_id, call.ord],
     );
-    return { resolved, ambiguous, pending };
+    resolved += 1;
+  }
+
+  // 本次确定下来的关联：只从本轮新建且最终 resolved 的调用行形成。
+  const associations: ResolvedTool[] = [];
+  for (const call of calls) {
+    const row = db.query<{
+      state: string; result_req: number | null; result_ord: number | null; result_path: string | null;
+    }, [number, number]>(`SELECT state,result_req,result_ord,result_path
+      FROM tool_call WHERE req_id=? AND ord=?`).get(call.req_id, call.ord);
+    if (row?.state !== 'resolved' || row.result_req === null
+      || row.result_ord === null || row.result_path === null) continue;
+    associations.push({
+      callReq: call.req_id, callOrd: call.ord, callId: call.call_id, name: call.name,
+      resultReq: row.result_req, resultOrd: row.result_ord, resultPath: row.result_path,
+    });
+  }
+
+  // 版本写入留在原位置：它覆盖本组全部工具行，包括正文已回收、本轮没重建的那些。
+  db.run(
+    `UPDATE tool_call SET derive_version=derive_version+1 WHERE req_id IN (
+      SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known')`,
+    [group.conv_key, group.actor],
+  );
+  return { resolved, ambiguous, pending, associations };
+}
+
+/** 工具往返的独立入口：维护与回填脚本迁移完成前仍可用，不参与摘要。 */
+export function pairToolCalls(store: Store, convKey: string, actor: string): { resolved: number; ambiguous: number; pending: number } {
+  return store.write(db => {
+    const rows = db.query<PairRow, [string, string]>(`
+      SELECT req_id, started_ms, sort_source, sort_key,
+             prev_relation, delta_ordinals, req_kind FROM request
+      WHERE conv_key=? AND actor=? AND actor_state='known'`).all(convKey, actor);
+    rows.sort(compareTraversalOrder);
+    const result = pairToolCallsTx(db, { conv_key: convKey, actor }, rows, uncertainOrderIds(rows));
+    return { resolved: result.resolved, ambiguous: result.ambiguous, pending: result.pending };
   });
 }
 
