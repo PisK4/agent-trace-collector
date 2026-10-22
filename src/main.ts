@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path';
 import type { Config } from './config';
 import { loadBoundSalt, loadLocalSecret } from './config';
 import { openStore } from './store';
+import { createCapacityMetrics } from './capacity';
 import type { Store } from './store';
 import { readBatch, readRouteFiles } from './sources/files';
 import type { FileCursor } from './sources/files';
@@ -70,6 +71,9 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   }
   const readToken = loadReadToken(config.dataDir);
   const hookToken = Buffer.from(loadLocalSecret(config.dataDir, 'hook.token')).toString('base64url');
+  // 观测只依赖进程：拒绝计数、写事务与事件循环样本都从启动时刻重新开始。
+  const metrics = createCapacityMetrics(store, config.dataDir, Date.now());
+  metrics.eventLoop.start();
   // 准入闸门在每个写入点共用：模式变了才落库，量测按 TTL 缓存。
   const gate = createAdmissionGate(store, config.dataDir, {
     bodyBudget: config.bodyBudget,
@@ -228,7 +232,7 @@ export async function startCollector(config: Config): Promise<{ port: number; st
     token: hookToken,
     salt,
     admission: () => gate.check(0),
-  });
+  }, metrics);
 
   timers.push(setInterval(ledgerTick, LEDGER_INTERVAL_MS));
   timers.push(setInterval(routeTick, ROUTE_INTERVAL_MS));
@@ -252,6 +256,7 @@ export async function startCollector(config: Config): Promise<{ port: number; st
     if (stopped) return;
     stopped = true;
     for (const timer of timers) clearInterval(timer);
+    metrics.eventLoop.stop();
     await server.stop(true);
     store.close();
   };
