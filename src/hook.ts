@@ -5,6 +5,7 @@ import type { BodyInput } from './body';
 import { redact } from './privacy';
 import { localDay, modelTimeTitle, normalizeResponseId } from './sources/magpie';
 import { enqueueDeriveTx } from './derive';
+import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
 
 /**
  * hook 回调的接收与证据关联。
@@ -131,8 +132,9 @@ function insertHookRequest(
     [
       responseIdNorm, envelope.agent, envelope.session, conv.key, conv.source,
       actor, 'unknown',
-      started, localDay(started), 'hook', envelope.success ? 200 : null,
-      envelope.model, envelope.model,
+      // HTTP 状态与模型列只来自账本实得；hook 的成功标记进 raw_hook，不合成 200。
+      started, localDay(started), 'hook', null,
+      null, null,
       envelope.body_omitted ? 'partial' : 'pending', 0, 1, now, now, title, 'model_time',
       'absent', 'known', 'hook', envelope.hook_id, envelope.magpie_version ?? null, null, null,
     ],
@@ -271,6 +273,7 @@ export function acceptHook(
 
     savePending(db, envelope, responseIdNorm, joined.candidates, now);
     db.run('UPDATE request SET have=have|1, updated_at=? WHERE req_id=?', [now, reqId]);
+    projectRequestTx(db, reqId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
     return { req_id: reqId, duplicate: false };
   });
 }
@@ -335,11 +338,15 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
     [sourceId, sourceId, sourceId, now, targetId],
   );
 
-  // 6) 清掉临时请求与 pending 行。
+  // 6) 证据已迁到目标，按完整证据重算目标的行级事实与 Prompt 族；hook 的 model 与 success
+  // 只留在 raw_hook 里作为独立报告，不迁移成账本事实。
+  projectRequestTx(db, targetId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
+
+  // 7) 清掉临时请求与 pending 行。
   db.run('DELETE FROM pending_hook WHERE hook_id=?', [hookId]);
   db.run('DELETE FROM request WHERE req_id=?', [sourceId]);
 
-  // 7) 正文可能刚迁到目标请求，按目标已确认的归属重算这一组。
+  // 8) 正文可能刚迁到目标请求，按目标已确认的归属重算这一组。
   const target = db.query<{ conv_key: string | null; actor: string | null; actor_state: string }, [number]>(
     'SELECT conv_key, actor, actor_state FROM request WHERE req_id=?',
   ).get(targetId);

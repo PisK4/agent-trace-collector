@@ -55,6 +55,8 @@ Status: implemented
 
 **路由只挂证据与归属。** `applyRouteToRequest` 只登记 `request_evidence`、写会话归属与标题，然后调一次投影取 Prompt 族。Prompt 不再由 route 到达顺序决定，同一 route 先到还是后到得到相同列。
 
+**hook 不合成账本事实。** hook 请求插入时 `status`、`model_requested`、`model_served` 都是 NULL：`success` 是"这个 hook 观察到调用成功"，不是 HTTP 状态码；`model` 是 hook 侧看到的模型，不是 provider 侧账本读数。两者都留在 `raw_hook` 里，由 `HookProjection` 作为独立报告给出。`acceptHook` 与 `mergeHookInto` 末尾各调一次投影，合并时按目标已完整的证据重算，不迁移 hook 的 model 或 success。旧行里已经写进这两列的 hook 伪值由[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)的迁移处理。
+
 账号脱敏归一到同一形态：`account` 与 `providerAccount` 都是敏感键，都得到同一个 `credential` 占位符，所以同一个订阅身份在两个入口下不会看起来像两个人。`placeholder` 对已经是占位符的值原样返回，敏感键、请求头与普通字符串三处分支都调用它，重复脱敏不会把占位符再散列成另一个 digest。历史明文账号的修复与隐私变换版本由[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)交付。
 
 ## Alternatives considered
@@ -77,4 +79,4 @@ Status: implemented
 
 ## Testing
 
-`tests/magpie.test.ts` 的「账本来源字段按 req 与 cost 读取并给出类型状态」「账本旧键、空串与非法类型分开记录且都不当新值」「路由 Prompt 只在校准布尔与 tokens 合法时给出 counted」锁定读取与状态；`tests/privacy.test.ts` 的「account 别名共享占位符且已脱敏值不再散列」锁定账号归一与占位符幂等；`tests/projection.test.ts` 的十四条用例锁定完整选择、pending_final、failed、同毫秒可证与跨代际不可证、缺 req、partial 保留、duplicate 保留、后到非法 counted 保留、当前 route 缺 Prompt、同毫秒 route 冲突、kind 冲突、hook 独立与重复投影幂等；`tests/reconcile.test.ts` 的「账本 req 与 served 分别落列」「缺 req 保持 NULL」「同一脱敏对象」「部分 raw 过期」「后到非法账本行」「清空排序键」锁定账本写入路径，「路由列、payload 与长期摘要来自同一脱敏对象」「counted 布尔与合法省略」「非法 counted 不写 prompt 族」「到达顺序不改变请求事实」锁定路由写入路径。上游键名以锚定检出 `开源源码@magpie-2374ffe` 的 `internal/usage/usage.go` 与 `internal/gateway/prompt.go` 为准。
+`tests/magpie.test.ts` 的「账本来源字段按 req 与 cost 读取并给出类型状态」「账本旧键、空串与非法类型分开记录且都不当新值」「路由 Prompt 只在校准布尔与 tokens 合法时给出 counted」锁定读取与状态；`tests/privacy.test.ts` 的「account 别名共享占位符且已脱敏值不再散列」锁定账号归一与占位符幂等；`tests/projection.test.ts` 的十四条用例锁定完整选择、pending_final、failed、同毫秒可证与跨代际不可证、缺 req、partial 保留、duplicate 保留、后到非法 counted 保留、当前 route 缺 Prompt、同毫秒 route 冲突、kind 冲突、hook 独立与重复投影幂等；`tests/reconcile.test.ts` 的「账本 req 与 served 分别落列」「缺 req 保持 NULL」「同一脱敏对象」「部分 raw 过期」「后到非法账本行」「清空排序键」锁定账本写入路径，「路由列、payload 与长期摘要来自同一脱敏对象」「counted 布尔与合法省略」「非法 counted 不写 prompt 族」「到达顺序不改变请求事实」锁定路由写入路径；`tests/hook.test.ts` 的「hook-only 不合成 HTTP 状态」「账本缺 req 时 hook 报告独立」「success 为 false 同样不产生失败状态」「hook 证据过期」锁定 hook 与账本事实的分离。上游键名以锚定检出 `开源源码@magpie-2374ffe` 的 `internal/usage/usage.go` 与 `internal/gateway/prompt.go` 为准。
