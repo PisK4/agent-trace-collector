@@ -13,6 +13,7 @@ import { GROUP_ALGORITHM } from '../src/derive-state';
 import { listSessions } from '../src/queries';
 import { modelTimeTitle } from '../src/sources/magpie';
 import { messageFingerprint } from '../src/fingerprint';
+import { interpretMessage } from '../src/input-interpretation';
 import { persistBody } from '../src/body';
 import type { BodyInput } from '../src/body';
 
@@ -61,6 +62,32 @@ test('缓存断点移动不打断增量', () => {
   // 数组与裸字符串两种写法压成同一种。
   expect(messageFingerprint({ role: 'user', content: [{ type: 'text', text: 'x' }] }))
     .toBe(messageFingerprint({ role: 'user', content: 'x' }));
+});
+
+test('同一请求的多条新增用户消息逐条保留，标题取首条', () => {
+  const messages = [
+    { role: 'user', content: [{ type: 'text', text: '<system-reminder>x</system-reminder>\n第一条' }] },
+    { role: 'user', content: [{ type: 'text', text: '第二条' }] },
+  ];
+  expect(deriveTitle(messages, [0, 1], 'fallback')).toEqual({ title: '第一条', source: 'user_delta' });
+  expect(interpretMessage(messages[1], null, 1).input?.text).toBe('第二条');
+});
+
+test('未知 agent 不改变既有标题清洗', () => {
+  expect(deriveTitle(
+    [{ role: 'user', content: '<session>旧规则仍生效</session>' }],
+    [0],
+    'fallback',
+    null,
+  )).toEqual({ title: '旧规则仍生效', source: 'user_delta' });
+});
+
+test('展示解释不改写消息对象与指纹', () => {
+  const message = { role: 'user', content: '<session>原文</session>' };
+  const before = messageFingerprint(message);
+  expect(interpretMessage(message, 'claude', 0).input?.text).toBe('原文');
+  expect(messageFingerprint(message)).toBe(before);
+  expect(message).toEqual({ role: 'user', content: '<session>原文</session>' });
 });
 
 test('标题取首个新增用户文本并去掉 harness 包装', () => {
