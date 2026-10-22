@@ -6,6 +6,7 @@ import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
 import { drainRequestPurposesTx } from './request-purpose';
 import { readBodyTx } from './body';
 import { assistantText } from './protocols';
+import { interpretMessage } from './input-interpretation';
 
 /** 从回复里取工具调用；两种协议结构都认。 */
 function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
@@ -178,98 +179,25 @@ export function matchPredecessor(
   return { parent: null, relation: 'branch', delta: null, near: best };
 }
 
-const SYSTEM_TAG = /^\s*<(?:system-reminder|command-[a-z-]+)>[\s\S]*?<\/(?:system-reminder|command-[a-z-]+)>\s*/i;
-const CWD_WRAPPER = /^\s*(?:工作目录|working directory|cwd)[:：][^\n]*\n?/i;
-/**
- * 会话进行中用户插话时 harness 加的前缀。后面紧跟的才是用户真正说的话，
- * 所以只剥这句提示，不整行丢弃。
- */
-const MIDTURN_PREFIX = /^\s*The user sent a new message while you were working:\s*/i;
-const MIDTURN_NOTICE = /This is how Claude Code surfaces messages[\s\S]*$/i;
 const TITLE_UNICODE_LIMIT = 60;
-
-/**
- * harness 注入的包装：不是用户说的话，不能拿来当标题。
- *
- * `<session>` 是 Claude Code 给会话首轮套的外壳，里面才是用户输入，所以只剥
- * 标签、留内容。其余几种是回显或机器输出，整段丢掉：`<transcript>` 是历史重放，
- * `<command-name>` / `<command-args>` / `<local-command-stdout>` 是斜杠命令的
- * 回显与输出，技能注入以 "Base directory for this skill:" 开头，harness 的
- * "The user stepped away..." 也是它自己生成的。
- */
-const UNWRAP_WRAPPERS = [
-  // 不能锚定行尾：`</session>` 之后常跟着 harness 追加的一句指令。
-  /^\s*<session>([\s\S]*?)<\/session>\s*/i,
-];
-const DROP_WRAPPERS = [
-  /^\s*<transcript>[\s\S]*?<\/transcript>\s*/i,
-  /^\s*<local-command-stdout>[\s\S]*?<\/local-command-stdout>\s*/i,
-  /^\s*<local-command-caveat>[\s\S]*?<\/local-command-caveat>\s*/i,
-  /^\s*<command-name>[\s\S]*?<\/command-name>\s*/i,
-  /^\s*<command-message>[\s\S]*?<\/command-message>\s*/i,
-  /^\s*<command-args>[\s\S]*?<\/command-args>\s*/i,
-  // harness 自己塞的整段通知与回顾，不是用户输入。`<title-request>` 不丢：
-  // 它是辅助请求，界面要靠它打标签。
-  /^\s*<system-notice>[\s\S]*?<\/system-notice>\s*/i,
-  /^\s*<recap>[\s\S]*?<\/recap>\s*/i,
-  /^\s*Base directory for this skill:[\s\S]*$/i,
-  /^\s*The user stepped away and is coming back\.[\s\S]*$/i,
-];
-
-/** 反复剥到不再变化：一次请求里可能连着套好几层包装。 */
-function stripHarnessWrappers(text: string): string {
-  let current = text.replace(SYSTEM_TAG, '').replace(CWD_WRAPPER, '');
-  for (let round = 0; round < 6; round++) {
-    const before = current;
-    for (const pattern of UNWRAP_WRAPPERS) current = current.replace(pattern, '$1');
-    for (const pattern of DROP_WRAPPERS) current = current.replace(pattern, '');
-    current = current
-      .replace(SYSTEM_TAG, '')
-      .replace(CWD_WRAPPER, '')
-      .replace(MIDTURN_PREFIX, '')
-      .replace(MIDTURN_NOTICE, '')
-      .trim();
-    if (current === before) break;
-  }
-  return current;
-}
 
 /** 取第一个确定新增 USER 文本的首行；没有可用增量时回落到模型时间。 */
 export function deriveTitle(
   messages: readonly unknown[],
   delta: readonly number[] | null,
   fallback: string,
+  agent: string | null = null,
 ): { title: string; source: 'user_delta' | 'model_time' } {
   if (delta === null) return { title: fallback, source: 'model_time' };
   for (const ordinal of delta) {
-    const text = userText(messages[ordinal]);
-    if (text === null) continue;
-    // 先剥包装再取首行：首行往往正好是被包起来的那一行。
-    const cleaned = stripHarnessWrappers(text)
-      .split('\n')[0]
-      ?.replace(/\s+/g, ' ')
-      .trim();
+    const view = interpretMessage(messages[ordinal], agent, ordinal);
+    if (view.input === null || view.input.state !== 'text') continue;
+    // 解释已经剥掉外层包装，这里只取首行并压空白。
+    const cleaned = view.input.text.split('\n')[0]?.replace(/\s+/g, ' ').trim();
     if (cleaned === undefined || cleaned.length === 0) continue;
     return { title: [...cleaned].slice(0, TITLE_UNICODE_LIMIT).join(''), source: 'user_delta' };
   }
   return { title: fallback, source: 'model_time' };
-}
-
-function userText(message: unknown): string | null {
-  if (message === null || typeof message !== 'object' || Array.isArray(message)) return null;
-  const record = message as Record<string, unknown>;
-  if (record.role !== 'user') return null;
-  const content = record.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return null;
-  const parts: string[] = [];
-  for (const block of content) {
-    if (block !== null && typeof block === 'object' && !Array.isArray(block)) {
-      const value = (block as Record<string, unknown>).text;
-      if (typeof value === 'string') parts.push(value);
-    }
-  }
-  return parts.length === 0 ? null : parts.join('\n');
 }
 
 /** 只接受已确认归属的分组；调用方先守卫，这里再挡一层。 */
@@ -360,7 +288,7 @@ export function uncertainOrderIds(rows: readonly LogicalRow[]): Set<number> {
 }
 
 type ChainRow = {
-  req_id: number; actor: string; actor_state: string; started_ms: number;
+  req_id: number; actor: string; agent: string | null; actor_state: string; started_ms: number;
   sort_source: string | null; sort_key: string | null;
   prev_req_id: number | null; prev_relation: string | null;
   title_source: string | null; title: string | null; model_served: string | null;
@@ -413,11 +341,11 @@ function clip(text: string): string {
 }
 
 /** 折叠行摘要：本轮新增的用户输入，剥掉 harness 包装后取首段。 */
-function previewOf(messages: readonly (unknown | null)[]): string | null {
-  for (const message of messages) {
-    const text = userText(message);
-    if (text === null) continue;
-    const cleaned = stripHarnessWrappers(text).trim();
+function previewOf(messages: readonly (unknown | null)[], agent: string | null): string | null {
+  for (const [ordinal, message] of messages.entries()) {
+    const input = interpretMessage(message, agent, ordinal).input;
+    if (input === null || input.state !== 'text') continue;
+    const cleaned = input.text.trim();
     if (cleaned.length > 0) return clip(cleaned);
   }
   return null;
@@ -430,8 +358,11 @@ function previewOf(messages: readonly (unknown | null)[]): string | null {
  * 但折叠行空着同样有害：读者无从判断这笔请求在做什么。
  */
 function tailUserPreview(db: Database, reqId: number): string | null {
-  const rows = db.query<{ z: Uint8Array }, [number]>(`
-    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+  const agent = db.query<{ agent: string | null }, [number]>(
+    'SELECT agent FROM request WHERE req_id=?',
+  ).get(reqId)?.agent ?? null;
+  const rows = db.query<{ ord: number; z: Uint8Array }, [number]>(`
+    SELECT rb.ord AS ord, b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord DESC LIMIT 5`).all(reqId);
   for (const row of rows) {
     let message: unknown;
@@ -440,18 +371,21 @@ function tailUserPreview(db: Database, reqId: number): string | null {
     } catch {
       continue;
     }
-    const text = userText(message);
-    if (text === null) continue;
-    const cleaned = stripHarnessWrappers(text).trim();
-    if (cleaned.length > 0) return clip(cleaned);
+    const input = interpretMessage(message, agent, row.ord).input;
+    if (input !== null && input.state === 'text' && input.text.trim().length > 0) {
+      return clip(input.text.trim());
+    }
   }
   return null;
 }
 
 /** 标题生成请求的输入里只有被 harness 包起来的用户文本；取第一段可读的。 */
 function firstUserPreview(db: Database, reqId: number): string | null {
-  const rows = db.query<{ z: Uint8Array }, [number]>(`
-    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+  const agent = db.query<{ agent: string | null }, [number]>(
+    'SELECT agent FROM request WHERE req_id=?',
+  ).get(reqId)?.agent ?? null;
+  const rows = db.query<{ ord: number; z: Uint8Array }, [number]>(`
+    SELECT rb.ord AS ord, b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord ASC LIMIT 5`).all(reqId);
   for (const row of rows) {
     let message: unknown;
@@ -460,10 +394,10 @@ function firstUserPreview(db: Database, reqId: number): string | null {
     } catch {
       continue;
     }
-    const text = userText(message);
-    if (text === null) continue;
-    const cleaned = stripHarnessWrappers(text).trim();
-    if (cleaned.length > 0) return clip(cleaned);
+    const input = interpretMessage(message, agent, row.ord).input;
+    if (input !== null && input.state === 'text' && input.text.trim().length > 0) {
+      return clip(input.text.trim());
+    }
   }
   return null;
 }
@@ -518,14 +452,14 @@ function writePresentationTx(db: Database, input: PresentationInput,
       // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
       const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
       if (!isAux) {
-        const derived = deriveTitle(messages, delta.map((_, index) => index), fallback);
+        const derived = deriveTitle(messages, delta.map((_, index) => index), fallback, row.agent);
         title = derived.title;
         source = derived.source;
       }
       // 增量里常常只有工具结果或系统消息，没有用户文本。
       // 有用户文本才标成"新增"；否则照实说这一轮回传了什么工具结果。
       // 不要回退到"末轮输入"——那会把同一句旧用户消息重复到每一笔请求上。
-      const fresh = previewOf(messages);
+      const fresh = previewOf(messages, row.agent);
       if (fresh !== null) {
         inputPreview = fresh;
         inputKind = 'delta';
@@ -774,7 +708,7 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
       .get(group.conv_key, group.actor)!.n;
     if (waiting > 0) continue;
     const rows = db.query<ChainRow, [string, string]>(`
-      SELECT req_id, actor, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
+      SELECT req_id, actor, agent, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
              title_source, title, model_served, req_kind, model_title, purpose_chain,
              input_preview, input_preview_kind, reply_preview
       FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);

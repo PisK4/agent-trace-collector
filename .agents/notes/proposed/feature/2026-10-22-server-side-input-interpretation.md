@@ -36,4 +36,4 @@ Status: proposed
 
 ## Testing
 
-`bun test tests/input-interpretation.test.ts` 起步；后续任务扩展合成用例，覆盖嵌套畸形包装、多条用户消息、未知 agent、能力状态、route z 白名单、未知 fail、retained 比例、未知 part 颜色、flags 与滚动恢复。
+`bun test tests/input-interpretation.test.ts` 起步；`tests/derive.test.ts` 固定标题与折叠行摘要复用同一解释、且消息对象与指纹不被改写。后续任务扩展合成用例，覆盖嵌套畸形包装、多条用户消息、未知 agent、能力状态、route z 白名单、未知 fail、retained 比例、未知 part 颜色、flags 与滚动恢复。
