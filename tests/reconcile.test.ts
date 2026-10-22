@@ -3,6 +3,7 @@ import { fixture } from './fixtures';
 import type { FileBatch } from '../src/sources/files';
 import { ingestLedger, ingestRoute, resumePausedLedger } from '../src/reconcile';
 import { purgeMetadata } from '../src/maintenance';
+import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
 
 function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatch {
   let offset = startOffset;
@@ -317,6 +318,149 @@ test('已主动淘汰的证据在来源回放时计purged_skip而不复活', () 
     expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 0 });
     expect(f.store.read.query('SELECT count(*) AS n FROM request_evidence').get()).toEqual({ n: 0 });
     expect(f.store.read.query('SELECT count(*) AS n FROM purged_evidence').get()).toEqual({ n: 1 });
+  } finally {
+    f.close();
+  }
+});
+
+test('账本req与served分别落列而provider model不冒充请求模型', () => {
+  const f = fixture();
+  try {
+    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+      t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', session: 'sess-a',
+      req: 'req-model', model: 'provider-model', served: 'served-model',
+      provider: 'p', status: 200, in: 10, out: 5,
+    }]), 1, salt);
+    expect(f.store.read.query(
+      'SELECT status,model_requested,model_served,in_tok,attempt_in,attempt_billed FROM request',
+    ).get()).toEqual({
+      status: 200, model_requested: 'req-model', model_served: 'served-model',
+      in_tok: 10, attempt_in: 10, attempt_billed: 1,
+    });
+    expect(f.store.read.query('SELECT model FROM raw_ledger').get()).toEqual({ model: 'provider-model' });
+  } finally {
+    f.close();
+  }
+});
+
+test('缺req保持NULL且不拿provider model补齐', () => {
+  const f = fixture();
+  try {
+    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+      t: '2026-10-20T00:00:00Z', route_id: 8, agent: 'demo', session: 'sess-a',
+      model: 'provider-only', provider: 'p', status: 200, in: 4,
+    }]), 1, salt);
+    expect(f.store.read.query('SELECT model_requested,model_served FROM request').get())
+      .toEqual({ model_requested: null, model_served: null });
+  } finally {
+    f.close();
+  }
+});
+
+test('账本行与payload来自同一脱敏对象且未知键保留', () => {
+  const f = fixture();
+  try {
+    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+      t: '2026-10-20T00:00:00Z', route_id: 9, agent: 'demo', session: 'sess-a',
+      account: 'synthetic-account', providerAccount: 'synthetic-account',
+      future_field: { note: 'Bearer synthetic-secret-123' },
+      future_nested: { authorization: 'synthetic-secret-456' },
+      model: 'm', provider: 'p', status: 200, in: 1,
+    }]), 1, salt);
+    const row = f.store.read.query<{ account: string; payload_json: string }, []>(
+      'SELECT account,payload_json FROM raw_ledger').get()!;
+    expect(row.account).toMatch(/^\[redacted:credential:[0-9a-f]{16}\]$/);
+    expect(row.payload_json).not.toContain('synthetic-secret-123');
+    expect(row.payload_json).not.toContain('synthetic-secret-456');
+    const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+    expect(payload.account).toBe(row.account);
+    expect(payload.providerAccount).toBe(row.account);
+    expect(JSON.stringify(payload)).toContain('future_field');
+    expect(JSON.stringify(payload)).toContain('future_nested');
+    // 普通字符串里的令牌走形态规则，敏感键走 credential 占位符
+    expect(JSON.stringify(payload)).toContain('[redacted:bearer:');
+    expect(JSON.stringify(payload)).toContain('[redacted:credential:');
+  } finally {
+    f.close();
+  }
+});
+
+test('部分raw过期后旧尝试合计不缩小', () => {
+  const f = fixture();
+  try {
+    const batch = batchOf([
+      { t: '2026-10-20T00:00:00Z', route_id: 10, agent: 'demo', session: 's', handed_on: true, status: 429, model: 'm', provider: 'p', in: 10 },
+      { t: '2026-10-20T00:00:01Z', route_id: 10, agent: 'demo', session: 's', status: 200, model: 'm', provider: 'p', in: 20 },
+    ]);
+    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    expect(f.store.read.query('SELECT attempt_in,attempt_billed FROM request').get())
+      .toEqual({ attempt_in: 30, attempt_billed: 2 });
+    const second = batch.lines[1]!.offset;
+    f.store.write(db => {
+      db.run('DELETE FROM raw_ledger WHERE file_generation=? AND byte_offset=?', [batch.generation, second]);
+      db.run(
+        `UPDATE request_evidence SET payload_state='expired' WHERE source_kind='ledger' AND ref_key=?`,
+        [JSON.stringify(['file', batch.generation, second])],
+      );
+      const projection = projectRequestTx(db, 1, { now: 3, mappingVersion: SOURCE_PROJECTION_VERSION });
+      expect(projection.attempts.state).toBe('partial');
+      expect(projection.families.attempts).toMatchObject({ state: 'partial', current: false });
+      expect(projection.reasons).toContain('ledger_partial');
+    });
+    expect(f.store.read.query('SELECT attempt_in,attempt_billed FROM request').get())
+      .toEqual({ attempt_in: 30, attempt_billed: 2 });
+  } finally {
+    f.close();
+  }
+});
+
+test('后到非法账本行保留旧尝试合计并报告非current', () => {
+  const f = fixture();
+  try {
+    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+      t: '2026-10-20T00:00:00Z', route_id: 11, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 10,
+    }]), 1, salt);
+    expect(f.store.read.query('SELECT attempt_in,attempt_billed FROM request').get())
+      .toEqual({ attempt_in: 10, attempt_billed: 1 });
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO raw_ledger(source_kind,file_generation,byte_offset,t_text,t_ms,source,payload_json)
+         VALUES ('file','g:0',500,'not-a-time',0,'through','{}')`,
+      );
+      db.run(
+        `INSERT INTO request_evidence(req_id,source_kind,ref_key,merge_state,added_at) VALUES (1,'ledger',?,'merged',1)`,
+        [JSON.stringify(['file', 'g:0', 500])],
+      );
+      const projection = projectRequestTx(db, 1, { now: 4, mappingVersion: SOURCE_PROJECTION_VERSION });
+      expect(projection.attempts.state).toBe('invalid');
+      expect(projection.families.attempts).toMatchObject({ state: 'invalid', current: false });
+      expect(projection.reasons).toContain('ledger_invalid');
+    });
+    expect(f.store.read.query('SELECT attempt_in,attempt_billed FROM request').get())
+      .toEqual({ attempt_in: 10, attempt_billed: 1 });
+  } finally {
+    f.close();
+  }
+});
+
+test('同毫秒跨代际不证明顺序时清空排序键', () => {
+  const f = fixture();
+  try {
+    const row = (status: number, inTok: number) => ({
+      t: '2026-10-20T00:00:00Z', route_id: 11, agent: 'demo', session: 's',
+      model: 'm', provider: 'p', status, in: inTok,
+    });
+    ingestLedger(f.store, 'usage.jsonl', batchOf([row(200, 10)], '1:2:3:0'), 1, salt);
+    expect(f.store.read.query('SELECT sort_source,sort_key,attempt_in FROM request').get())
+      .toEqual({ sort_source: 'ledger', sort_key: '1:2:3:0|00000000000000000000', attempt_in: 10 });
+    ingestLedger(f.store, 'usage-2.jsonl', batchOf([row(500, 20)], '1:2:3:1'), 2, salt);
+    // 两行同毫秒且跨代际：不发布 final，清空排序键，避免 A 只看一把 key 就当成可证顺序
+    expect(f.store.read.query(
+      'SELECT status,model_requested,sort_source,sort_key,attempt_in,attempt_billed,attempt_state FROM request',
+    ).get()).toEqual({
+      status: null, model_requested: null, sort_source: null, sort_key: null,
+      attempt_in: 30, attempt_billed: 2, attempt_state: 'pending_final',
+    });
   } finally {
     f.close();
   }
