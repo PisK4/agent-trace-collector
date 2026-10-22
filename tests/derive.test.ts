@@ -7,6 +7,7 @@ import { openStore } from '../src/store';
 import type { Store } from '../src/store';
 import { compareSequence, deriveTitle, drainDerive, enqueueDerive, matchPredecessor, pairToolCalls } from '../src/derive';
 import { listSessions } from '../src/queries';
+import { modelTimeTitle } from '../src/sources/magpie';
 import { messageFingerprint } from '../src/fingerprint';
 import { persistBody } from '../src/body';
 import type { BodyInput } from '../src/body';
@@ -364,6 +365,176 @@ for (const [index, sources] of unsupportedOrders.entries()) {
     } finally { a.close(); b.close(); }
   });
 }
+
+test('完整派生首次即使用本次工具关联且重建不漂移', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]); rebuild(f.store);
+    const first = snapshot(f.store, [1, 2]);
+    expect(first.tools[0]).toMatchObject({ state: 'resolved', result_req: 'second' });
+    expect(first.requests[1]?.input_preview).toBe('工具结果 · read_file');
+    rebuild(f.store);
+    expect(snapshot(f.store, [1, 2])).toEqual(first);
+    f.store.write(db => {
+      db.run('DELETE FROM tool_call WHERE req_id IN (1,2)');
+      db.run(`UPDATE request SET prev_req_id=NULL,prev_relation=NULL,
+        delta_ordinals=NULL,title=NULL,title_source=NULL,input_preview=NULL,
+        input_preview_kind=NULL,reply_preview=NULL WHERE req_id IN (1,2)`);
+    });
+    rebuild(f.store);
+    expect(snapshot(f.store, [1, 2])).toEqual(first);
+  } finally { f.close(); }
+});
+
+test('其它组同call_id不能污染本次摘要', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,
+        day,via,body_state,derive_version,have,created_at,updated_at)
+        VALUES (99,'other','other','known',0,'2026-10-22','hook','pending',0,1,1,1)`);
+      db.run(`INSERT INTO tool_call(call_id,req_id,ord,tool_name,state,derive_version)
+        VALUES ('synthetic_call',99,0,'unrelated_tool','resolved',1)`);
+    });
+    rebuild(f.store);
+    expect(snapshot(f.store, [1, 2]).requests[1]?.input_preview).toBe('工具结果 · read_file');
+  } finally { f.close(); }
+});
+
+test('可读工具轮次标题不依赖旧值且缺正文标题保留', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    f.store.write(db => {
+      db.run(`UPDATE request SET title='stale derived title',title_source='user_delta'
+        WHERE req_id=2`);
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,
+        day,via,body_state,derive_version,have,created_at,updated_at,title,title_source)
+        VALUES (3,?,?,'known',3000,'2026-10-22','hook','evicted',0,1,1,1,
+        'retained title','user_delta')`, [GROUP, ACTOR]);
+    });
+    rebuild(f.store);
+    const first = snapshot(f.store, [1, 2]);
+    expect(first.requests[1]).toMatchObject({
+      title: modelTimeTitle(null, 1000), title_source: 'model_time',
+    });
+    expect(first.requests[1]?.title?.startsWith('unknown · ')).toBe(true);
+    rebuild(f.store);
+    expect(snapshot(f.store, [1, 2])).toEqual(first);
+    f.store.write(db => db.run(`UPDATE request SET title=NULL,title_source=NULL
+      WHERE req_id IN (1,2)`));
+    rebuild(f.store);
+    expect(snapshot(f.store, [1, 2])).toEqual(first);
+    expect(f.store.read.query(`SELECT title,title_source FROM request WHERE req_id=3`).get())
+      .toEqual({ title: 'retained title', title_source: 'user_delta' });
+  } finally { f.close(); }
+});
+
+test('工具版本保持旧写入口径直到显式版本迁移', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,
+        day,via,body_state,derive_version,have,created_at,updated_at)
+        VALUES (3,?,?,'known',3000,'2026-10-22','hook','evicted',0,1,1,1)`, [GROUP, ACTOR]);
+      db.run(`INSERT INTO tool_call(call_id,req_id,ord,tool_name,state,derive_version)
+        VALUES ('old-retained',3,0,'old','resolved',7)`);
+    });
+    for (const expected of [8, 9]) {
+      rebuild(f.store);
+      expect(f.store.read.query(`SELECT derive_version FROM tool_call WHERE req_id=1`).get())
+        .toEqual({ derive_version: 2 });
+      expect(f.store.read.query(`SELECT derive_version FROM tool_call WHERE req_id=3`).get())
+        .toEqual({ derive_version: expected });
+    }
+  } finally { f.close(); }
+});
+
+test('同一消息里第二个工具结果按精确path取到调用名', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    // 第二笔的增量消息里放两个结果：第一个指向别的调用，第二个才是本次调用。
+    persistBody(f.store, 2, { protocol: 'anthropic', request: { messages: [
+      { role: 'user', content: [{ type: 'text', text: 'synthetic input' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'synthetic_call',
+        name: 'read_file', input: {} }] },
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'other_call', content: 'unrelated' },
+        { type: 'tool_result', tool_use_id: 'synthetic_call', content: 'synthetic output' },
+      ] },
+    ] }, reply: { content: [] }, redact_version: 1 });
+    rebuild(f.store);
+    expect(snapshot(f.store, [1, 2]).tools[0]).toMatchObject({
+      state: 'resolved', result_ord: 2,
+      result_path: 'request.messages[2].content[1]',
+    });
+    expect(snapshot(f.store, [1, 2]).requests[1]?.input_preview).toBe('工具结果 · read_file');
+  } finally { f.close(); }
+});
+
+test('chat协议工具结果位置与名称由本次关联给出', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    const user = { role: 'user', content: 'synthetic input' };
+    const call = { id: 'synthetic_call', type: 'function',
+      function: { name: 'read_file', arguments: '{}' } };
+    const assistant = { role: 'assistant', content: null, tool_calls: [call] };
+    persistBody(f.store, 1, { protocol: 'chat', request: { messages: [user] },
+      reply: { choices: [{ message: assistant }] }, redact_version: 1 });
+    persistBody(f.store, 2, { protocol: 'chat', request: { messages: [user, assistant,
+      { role: 'tool', tool_call_id: 'synthetic_call', content: 'synthetic output' }] },
+      reply: { choices: [{ message: { role: 'assistant', content: 'done' } }] }, redact_version: 1 });
+    rebuild(f.store);
+    expect(snapshot(f.store, [1, 2]).tools[0]).toMatchObject({
+      state: 'resolved', result_ord: 2, result_path: 'request.messages[2]',
+    });
+    expect(snapshot(f.store, [1, 2]).requests[1]?.input_preview).toBe('工具结果 · read_file');
+  } finally { f.close(); }
+});
+
+test('标题请求的回复含工具调用也不产生工具行', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    persistBody(f.store, 1, { protocol: 'anthropic', request: { messages: [
+      { role: 'user', content: [{ type: 'text', text: '<session>synthetic</session>' }] },
+    ] }, reply: { content: [
+      { type: 'text', text: '{"title":"合成标题"}' },
+      { type: 'tool_use', id: 'title_side_call', name: 'side_tool', input: {} },
+    ] }, redact_version: 1 });
+    rebuild(f.store);
+    expect(f.store.read.query(`SELECT req_kind,chain_role FROM request WHERE req_id=1`).get())
+      .toEqual({ req_kind: 'title', chain_role: 'aux' });
+    expect(f.store.read.query(`SELECT call_id FROM tool_call
+      WHERE call_id='title_side_call'`).get()).toBeNull();
+  } finally { f.close(); }
+});
+
+test('被回收调用的旧resolved行保留且不参与本次摘要', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    // 旧行：正文已回收的请求 3，用相同 call_id 指向本次结果。
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,
+        day,via,body_state,derive_version,have,created_at,updated_at)
+        VALUES (3,?,?,'known',3000,'2026-10-22','hook','evicted',0,1,1,1)`, [GROUP, ACTOR]);
+      db.run(`INSERT INTO tool_call(call_id,req_id,ord,tool_name,result_req,result_ord,
+        result_path,state,derive_version) VALUES
+        ('synthetic_call',3,0,'retained_tool',2,2,'request.messages[2].content[0]','resolved',1)`);
+    });
+    rebuild(f.store);
+    // 旧行原样保留，不被本轮重建抹掉。
+    expect(f.store.read.query(`SELECT tool_name,state FROM tool_call WHERE req_id=3`).get())
+      .toEqual({ tool_name: 'retained_tool', state: 'resolved' });
+    // 本次摘要只认本次关联，不取旧行的名字。
+    expect(snapshot(f.store, [1, 2]).requests[1]?.input_preview).toBe('工具结果 · read_file');
+  } finally { f.close(); }
+});
 
 test('稳定排序重算得到确定增量与标题', () => {
   const f = fixture();

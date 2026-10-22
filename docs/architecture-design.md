@@ -743,7 +743,9 @@ CREATE TABLE tool_call (
 CREATE INDEX i_tool_call_id ON tool_call(call_id, req_id);
 ```
 
-结果到达时更新 `result_req` / `result_ord`。同一 `call_id` 命中多个候选时标 `ambiguous`，不按时间或位置猜。只在同一 `actor` 内配对，跨子代理不串。
+结果到达时更新 `result_req` / `result_ord` / `result_path`。同一 `call_id` 命中多个候选时标 `ambiguous`，不按时间或位置猜。只在同一 `actor` 内配对，跨子代理不串。标题请求是旁路，不进工具候选。
+
+配对在派生的同一个事务里完成，排在链阶段之后、摘要之前：摘要里"这一轮回传了哪个工具的结果"只消费本次确定下来的关联（调用位置 + 结果 ord + 结果 path），不跨组按 `call_id` 取首行。本组正文仍可读的工具行每轮清空重建；正文已回收的行原样保留，既不参与重建，也不充当本次摘要的依据。
 
 ### 协议适配
 
