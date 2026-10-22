@@ -417,6 +417,12 @@ hook 的 `model` 与 `success` 只作为独立报告保留在 `raw_hook`：前�
 
 SQLite，WAL，单文件，放仓库外。默认路径 `~/Library/Application Support/agent-trace-collector/trace.db`，可用环境变量或配置改。
 
+### 版本与显式迁移
+
+当前结构版本是 v5。普通 `openStore` 从不做 `ALTER`：空库直接建到 v5；低版本报 `schema_rebuild_required`；高版本报 `schema_version_unsupported`；v5 结构存在但迁移标记未完成时，除非显式传 `allowIncompleteMigration`，否则报 `migration_incomplete`。
+
+v4→v5 只能由显式迁移执行，结构与标记在同一个事务里落地，中途失败不留半套列。标记存在 `collector_state['migration:v5']`，记录格式、目标版本、阶段、游标、是否完成、守恒摘要与累计扫描计数。新库在建表事务内直接写入 `complete=true` 的标记。
+
 ### 原始层
 
 三张表，互不覆盖。`payload_json` 保留整行原文，应对 magpie 改字段：不用提前把所有字段解析成列，出现新字段时先从原始载荷补，再改表。

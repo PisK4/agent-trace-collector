@@ -38,11 +38,14 @@ CREATE TABLE raw_ledger (
   sent_ms INTEGER, retried_ms INTEGER, queued_ms INTEGER,
   own_ms INTEGER, reasoning_hidden INTEGER,
   tier_asked TEXT, tier_sent TEXT, tier_served TEXT,
+  err TEXT,
   err_type TEXT, computer TEXT, via TEXT,
   archive TEXT,
   tries INTEGER,
   credits REAL, own_cost REAL,
   magpie_version TEXT,
+  mapping_version INTEGER,
+  privacy_version INTEGER,
   payload_json TEXT NOT NULL,
   PRIMARY KEY (source_kind, file_generation, byte_offset)
 ) WITHOUT ROWID;
@@ -62,7 +65,9 @@ CREATE TABLE raw_route (
   ms INTEGER, ttft INTEGER, first_text INTEGER, flow INTEGER,
   tokens INTEGER, out_tok INTEGER, reasoning INTEGER,
   payload_json     TEXT NOT NULL,
-  magpie_version   TEXT
+  magpie_version   TEXT,
+  mapping_version  INTEGER,
+  privacy_version  INTEGER
 );
 
 CREATE TABLE raw_hook (
@@ -154,7 +159,26 @@ CREATE TABLE request (
   pricing_version TEXT,
   cost_reason TEXT,
   attempt_state TEXT NOT NULL DEFAULT 'known',
-  instance_key TEXT NOT NULL DEFAULT 'local'
+  instance_key TEXT NOT NULL DEFAULT 'local',
+  -- v5：来源事实、投影元数据与请求修订
+  model_provider TEXT,
+  source_facts_json TEXT,
+  projection_meta_json TEXT,
+  input_epoch TEXT NOT NULL DEFAULT '',
+  input_revision INTEGER NOT NULL DEFAULT 0,
+  purpose_revision INTEGER NOT NULL DEFAULT -1,
+  purpose_target INTEGER NOT NULL DEFAULT 1,
+  purpose_version INTEGER,
+  purpose_pending INTEGER NOT NULL DEFAULT 1,
+  purpose_status TEXT NOT NULL DEFAULT 'missing',
+  purpose_rule TEXT,
+  purpose_signals TEXT NOT NULL DEFAULT '[]',
+  purpose_chain TEXT NOT NULL DEFAULT 'participate'
+    CHECK(purpose_chain IN ('participate','exclude')),
+  purpose_retry INTEGER NOT NULL DEFAULT 0,
+  summary_algorithm INTEGER,
+  summary_basis TEXT,
+  summary_state TEXT NOT NULL DEFAULT 'legacy'
 );
 CREATE INDEX i_req_conv ON request(conv_key, actor, started_ms DESC, req_id DESC);
 CREATE INDEX i_req_session_time ON request(conv_key, started_ms DESC, req_id DESC);
@@ -165,6 +189,8 @@ CREATE INDEX i_req_day  ON request(day);
 CREATE INDEX i_req_body ON request(body_state) WHERE body_state != 'available';
 CREATE INDEX i_req_fail ON request(started_ms DESC) WHERE status >= 400;
 CREATE INDEX i_req_model_title ON request(conv_key, started_ms DESC, req_id DESC) WHERE req_kind = 'title';
+CREATE INDEX i_req_purpose_pending ON request(purpose_pending,req_id)
+  WHERE purpose_pending=1;
 
 CREATE TABLE request_evidence (
   req_id      INTEGER NOT NULL,
@@ -216,6 +242,9 @@ CREATE TABLE tool_call (
   result_path TEXT,
   state      TEXT NOT NULL,
   derive_version INTEGER NOT NULL DEFAULT 1,
+  algorithm_version INTEGER,
+  basis_json TEXT,
+  retention_state TEXT NOT NULL DEFAULT 'legacy',
   PRIMARY KEY (req_id, ord)
 ) WITHOUT ROWID;
 CREATE INDEX i_tool_call_id ON tool_call(call_id, req_id);
@@ -232,10 +261,21 @@ CREATE TABLE request_alias (
 );
 CREATE INDEX i_request_alias_target ON request_alias(new_id);
 
+-- 持久组状态：clean 行保留，待办查询一律 state<>'clean'。
+-- input_revision 随输入变化增长，完成时记 published_revision 与 published_algorithm；
+-- dirty_since_ms 只表示首次未完成触发时间，重复 dirty 保最早值，clean 后清 NULL。
 CREATE TABLE derive_queue (
   conv_key TEXT NOT NULL, actor TEXT NOT NULL, from_sort TEXT NOT NULL,
+  group_epoch TEXT NOT NULL DEFAULT '',
+  input_revision INTEGER NOT NULL DEFAULT 0,
+  published_revision INTEGER NOT NULL DEFAULT -1,
+  target_algorithm INTEGER NOT NULL DEFAULT 1,
+  published_algorithm INTEGER,
+  state TEXT NOT NULL DEFAULT 'dirty',
+  dirty_since_ms INTEGER,
   PRIMARY KEY(conv_key, actor)
 ) WITHOUT ROWID;
+CREATE INDEX i_derive_dirty ON derive_queue(state,conv_key,actor) WHERE state='dirty';
 
 CREATE TABLE ingest_issue (
   source_kind TEXT NOT NULL, ref_key TEXT NOT NULL, reason TEXT NOT NULL,
