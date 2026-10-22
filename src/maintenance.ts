@@ -461,15 +461,19 @@ export async function runMaintenance(argv: string[], io: {
         let drained: ReturnType<typeof drainDerive>;
         let recomputedRequests = 0;
         let retainedRequests = 0;
+        let purposeProcessed = 0;
         // 只排空目标会话：其它会话的积压留给它自己的维护窗口。
+        // 两个阶段都要排空：组没算完是积压，请求用途没判完也是——组的输入依赖用途。
         do {
           drained = drainDerive(store, 100, { convKey: session });
           recomputedRequests += drained.recomputed;
           retainedRequests += drained.retained;
-          if (drained.remaining > 0 && drained.groups.length === 0) {
+          purposeProcessed += drained.purpose_processed;
+          if ((drained.remaining > 0 || drained.purpose_remaining > 0)
+            && drained.groups.length === 0 && drained.purpose_processed === 0) {
             throw new Error('derive_no_progress');
           }
-        } while (drained.remaining > 0);
+        } while (drained.remaining > 0 || drained.purpose_remaining > 0);
         const version = store.read.query<{ v: number | null }, [string]>(
           'SELECT MAX(derive_version) AS v FROM request WHERE conv_key=?').get(session);
         // 目标版本、实际算法分布与保留行分开报告：`derive_version` 已经不再逐次累加，
@@ -488,7 +492,8 @@ export async function runMaintenance(argv: string[], io: {
         out(JSON.stringify({
           ok: true, session, queued: report.queued, unavailable: report.unavailable,
           reasons: report.reasons, derive_version: version?.v ?? 0,
-          queue_remaining: drained.remaining,
+          queue_remaining: drained.remaining, purpose_remaining: drained.purpose_remaining,
+          purpose_processed: purposeProcessed,
           recomputed_requests: recomputedRequests, retained_requests: retainedRequests,
           target_algorithm: GROUP_ALGORITHM, actual_algorithms: actualAlgorithms,
           legacy_requests: legacy, pending_groups: pending,

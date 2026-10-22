@@ -254,7 +254,10 @@ test('详情不返回账户字段也不返回骨架', () => {
     for (const forbidden of ['account', 'host', 'providerKeyId', 'skeleton_z', 'skeleton', 'provider']) {
       expect(keys).not.toContain(forbidden);
     }
-    expect(detail!.prev_relation).toBe('first');
+    expect(detail!.derived_state).toBe('dirty');
+    // 未完成的行不把旧关系当当前值：当前字段为 null，旧值只在 historical 里。
+    expect(detail!.prev_relation).toBeNull();
+    expect(detail!.historical).toMatchObject({ derived_state: 'dirty', prev_relation: 'first' });
   } finally {
     f.close();
   }

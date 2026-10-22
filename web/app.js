@@ -359,6 +359,9 @@ if (typeof document !== 'undefined') {
   function relationTextOf(reqId) {
     const detail = reqId === null ? null : details.get(reqId) ?? null;
     if (detail === null) return '';
+    // 非当前行没有可确认的关系：接口已经把 prev_relation 清成 null，
+    // 这里只说清为什么，不拿 historical 里的旧关系冒充当前。
+    if (detail.derived_state !== 'current') return '派生结果还没追上当前输入';
     if (detail.prev_relation === 'first') return '会话首笔';
     if (detail.prev_relation === 'confirmed') return '续自上一笔';
     if (detail.prev_relation === 'branch') return '另起一支';
@@ -818,9 +821,17 @@ if (typeof document !== 'undefined') {
       : '<span class="req-row reply" aria-hidden="true"></span>';
     const chainFlag = r.chain_role === 'branch'
       ? '<span class="req-flag mute" title="与主链不相接；主链以时间最早的真实请求为准">⎇ 分支</span>' : '';
+    // 派生没追上的行不显示旧关系与旧摘要，只说明它还没算完；标题退到模型时间占位。
+    const deriveFlag = r.derived_state === 'dirty'
+      ? '<span class="req-flag mute" title="输入已变，派生结果还没追上">待派生</span>'
+      : r.derived_state === 'retained'
+        ? '<span class="req-flag mute" title="正文已回收，标题与摘要按旧值保留">保留</span>'
+        : r.derived_state === 'legacy'
+          ? '<span class="req-flag mute" title="从未按当前算法算过">未重算</span>' : '';
     // 标志位留在内容行右端：读数列只放数字，固定列宽不再被变长的异常标志挤爆。
     const flags = [
       chainFlag,
+      deriveFlag,
       anomaly,
       r.status !== null && r.status >= 400 ? `<span class="num bad-text">HTTP ${r.status}</span>` : '',
     ].join('');
