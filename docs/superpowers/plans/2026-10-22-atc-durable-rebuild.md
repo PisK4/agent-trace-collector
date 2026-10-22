@@ -322,7 +322,7 @@ if(changed!==1) throw new Error('derive_input_changed');
 
 **Interfaces:** `mergeValues(old: BoundedValues, observed: unknown): BoundedValues`、`mergeSourceFacts(left: SourceFacts, right: SourceFacts): SourceFacts` 为纯函数；投影读写source_facts_json与projection_meta_json仍在原事务。选定尝试由B完整owner证据收集决定；事实JSON不接管身份分配或费用API。
 
-- [ ] **Step 1：落集合顺序及raw过期回归。** 8值上限、重复输入、非法值、缺失输入、两来源冲突都用集合排列测同结果；不将到达时间列计入比较。
+- [x] **Step 1：落集合顺序及raw过期回归。** 8值上限、重复输入、非法值、缺失输入、两来源冲突都用集合排列测同结果；不将到达时间列计入比较。
 
 ```ts
 const empty=():BoundedValues=>({values:[],overflow:false,missing:false,invalid:false});
@@ -338,8 +338,8 @@ test('有界kind集合不受排列和重复影响',()=>{
 
 在reconcile既有多行ledger fixture上先得合计30，expire一个owner raw再重放另一最终行，断言仍30且attempts retained/expired_input，不得变20或MAX新旧；再按完整raw恢复重算，断言actualVersion=1。hook-only、直接命中、merge和ledger到达排列均保留独立hook模型及success，status不再由success补200。
 
-- [ ] **Step 2：运行。** Run `bun test tests/derive-state.test.ts tests/reconcile.test.ts tests/hook.test.ts`；Expected对应新断言FAIL。
-- [ ] **Step 3：实现集合与来源记录。** 共享placeholder幂等用B修复，不在这里再次redact全payload。
+- [x] **Step 2：运行。** Run `bun test tests/derive-state.test.ts tests/reconcile.test.ts tests/hook.test.ts`；Expected对应新断言FAIL。
+- [x] **Step 3：实现集合与来源记录。** 共享placeholder幂等用B修复，不在这里再次redact全payload。
 
 ```ts
 export function mergeValues(old:BoundedValues, observed:unknown):BoundedValues {
@@ -398,7 +398,7 @@ B 的 `identity.orderState` 是 C 读模型的必须输入：`provable` 才允�
 
 短集合、selected、版本和basis须给F报告每请求字节分布，不以SQL TEXT无上限当预算。`source_facts_json`上限16KiB、`projection_meta_json`上限16KiB；序列化超过上限先移除仅展示的error/errorType并标invalid，仍超限则拒绝该投影事务 `source_facts_budget_exceeded`，不截断JSON或清空旧事实。basis超过预算只保存稳定样本并降为retained；不把样本的actualVersion提升到本次版本。
 
-- [ ] **Step 4：让在线原始行写入版本列。** 先写会失败的回归，再按上面的说明改 helper。
+- [x] **Step 4：让在线原始行写入版本列。** 先写会失败的回归，再按上面的说明改 helper。
 
 ```ts
 test('在线摄入的原始行带映射与隐私版本',()=>{
@@ -419,8 +419,8 @@ test('在线摄入的原始行带映射与隐私版本',()=>{
 
 在B的`LEDGER_COLUMNS`补`err`，并在`ledgerColumns`与`routeColumns`末尾补三个值与两个版本值；映射本身不改，字段读取仍由B的`mapLedgerRow`/`mapRouteRow`决定。`insertPreparedLedgerTx`、`writePreparedLedgerTx`、`upsertPreparedRouteTx`、`writePreparedRouteTx`四个入口走同一份列清单，不能只改其中一个。`src/sources/raw.ts`从`./projection`导入`SOURCE_PROJECTION_VERSION`、从`./privacy`导入`PRIVACY_TRANSFORM_VERSION`；回归文件同样导入这两个常量，不从测试里写字面量。Run: `bun test tests/reconcile.test.ts`；Expected PASS。
 
-- [ ] **Step 5：验证报告。** maintenance输出 `{target_algorithm, recomputed_requests, retained_requests, legacy_requests, pending_groups, actual_algorithms}`；actual_algorithms按所有实际行分组计数，null归legacy，不能MAX。保留queued/unavailable/reasons兼容字段并说明只表示body状态。在混合可读/回收用例断言recomputed1/retained1/legacy1和旧版本null；重复运行结果稳定。Run上述相关测试与 `bun run typecheck`；Expected PASS。
-- [ ] **Step 6：补文档与note。** 版本目标、实际和保留分别描述，有提交授权时提交 `feat(projection): retain bounded source facts and result provenance`。
+- [x] **Step 5：验证报告。** maintenance输出 `{target_algorithm, recomputed_requests, retained_requests, legacy_requests, pending_groups, actual_algorithms}`；actual_algorithms按所有实际行分组计数，null归legacy，不能MAX。保留queued/unavailable/reasons兼容字段并说明只表示body状态。在混合可读/回收用例断言recomputed1/retained1/legacy1和旧版本null；重复运行结果稳定。Run上述相关测试与 `bun run typecheck`；Expected PASS。
+- [x] **Step 6：补文档与note。** 版本目标、实际和保留分别描述，有提交授权时提交 `feat(projection): retain bounded source facts and result provenance`。
 
 ## Task 4：同一入口完成请求待处理与安全读取
 

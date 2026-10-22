@@ -806,7 +806,26 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 ### 派生算法版本
 
-`request.derive_version` 记录产生当前派生值的算法版本。算法改动后按会话或按天批量重算，`/api/stats` 显示还有多少行低于当前版本。整体重建入口：从 `request_evidence` 找到原始记录，按当前算法重跑，写回同一 `req_id`。
+`request.derive_version` 记录这一行被重算过几次，只是历史计数，不再表示"按哪版算出来"。算法改动后按会话或按天批量重算，整体重建入口：从 `request_evidence` 找到原始记录，按当前算法重跑，写回同一 `req_id`。目标版本、实际算法与保留行由下面两节的三类记录回答。
+
+### 有界来源事实与结果依据
+
+原始层按保留期删除，但有些结论删了 raw 就再也推不出来：来源用途集合、hook 的独立报告、选定尝试的身份与模型。这些结论落在两列 JSON 上，与行级事实同一事务写：
+
+| 列 | 内容 | 上限 |
+| --- | --- | --- |
+| `source_facts_json` | `format`、按来源分开的有界用途集合（`ledger`/`route`/`state`/`value`）、hook 的模型与成功集合、`selected` 整对象 | 16 KiB |
+| `projection_meta_json` | `order`（顺序是否可证）与 models/attempts/prompt 三个族的 `actualVersion`/`state`/`reason`/`basis` | 16 KiB |
+
+集合是有界的：单值 256 字节、每来源 8 个值、basis 16 条，按字节序去重排序，所以同一批观测无论到达顺序与重复次数都得到同一个集合。溢出标 `overflow` 而不是悄悄少几个值；非法值标 `invalid`。集合只增不减——raw 过期是本次证据缺失，不是"从没观测过"，长期集合不能因此撤销。
+
+`selected` 是整对象替换，不做字段级拼接：两笔不同请求的模型、供应商与错误拼在一起会造出一条不存在的记录。顺序不可证时 `pending_final` 保存全 null 字段，不沿用旧值假装知道。
+
+三个族分开记版本：`recomputed` 的 `actualVersion` 是本次版本；`retained` 保留原实际版本，不把本次版本冒充成它算出来的；从未观测过的族是 `missing`，`actualVersion` 为空。序列化超预算时先去掉只用于展示的 `error`/`errorType`，仍超限则拒绝整个投影事务（`source_facts_budget_exceeded`），不截断 JSON，也不清空旧事实。
+
+原始行与证据行记下 `mapping_version` 与 `privacy_version`：脱敏规则或字段映射改动后，旧行是按旧规则变换的，读模型与迁移要能分辨，而不是假设库里所有行同口径。
+
+摘要与工具配对也记自己的依据。`summary_state='recomputed'` 时写 `summary_algorithm` 与 `summary_basis`（输入修订、组世代、算法）；正文不可读时 `summary_state='retained'`，原算法与 basis 原样保留。工具行写 `algorithm_version` 与 `basis_json`，正文已回收、本轮没有重建的行只标 `retention_state='retained'`。`derive_version` 不再逐次累加，也不再被当作"当前算法"读：维护报告用 `target_algorithm`、`actual_algorithms`（按实际算法分组计数，null 归 `legacy`）与 `legacy_requests` 分开回答目标、实际与保留。
 
 ### 组完成与输入修订
 

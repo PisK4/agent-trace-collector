@@ -16,6 +16,7 @@ import {
 import { loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
 import { persistBody } from '../src/body';
+import { GROUP_ALGORITHM } from '../src/derive-state';
 
 test('维护重建排空目标会话且不消费其它会话积压', async () => {
   const f = fixture();
@@ -61,10 +62,29 @@ test('维护报告分别计入可重算与缺正文保留请求', async () => {
     const code = await runMaintenance(['rebuild', '--db', join(f.dir, 'trace.db'),
       '--session', 'mixed'], { out: line => lines.push(line), err: () => {} });
     expect(code).toBe(0);
-    expect(JSON.parse(lines[0]!)).toMatchObject({ queue_remaining: 0,
-      recomputed_requests: 1, retained_requests: 1 });
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      queue_remaining: 0, recomputed_requests: 1, retained_requests: 1,
+      target_algorithm: GROUP_ALGORITHM, pending_groups: 0,
+      // 实际算法只统计真正重算过的行；保留行与迁移前旧行分开计。
+      actual_algorithms: { [String(GROUP_ALGORITHM)]: 1 },
+      // 这一笔是"重算过但正文已回收"，属 retained，不是从未重算的 legacy。
+      legacy_requests: 0,
+    });
     expect(f.store.read.query(`SELECT title,title_source FROM request WHERE req_id=2`).get())
       .toEqual({ title: 'retained title', title_source: 'user_delta' });
+    expect(f.store.read.query(
+      `SELECT req_id,summary_algorithm,summary_state FROM request ORDER BY req_id`).all()).toEqual([
+      { req_id: 1, summary_algorithm: GROUP_ALGORITHM, summary_state: 'recomputed' },
+      // 正文已回收：旧算法与旧 basis 原样保留，不提升到本次版本。
+      { req_id: 2, summary_algorithm: null, summary_state: 'retained' },
+    ]);
+    // 重复运行结果稳定。
+    const second: string[] = [];
+    expect(await runMaintenance(['rebuild', '--db', join(f.dir, 'trace.db'),
+      '--session', 'mixed'], { out: line => second.push(line), err: () => {} })).toBe(0);
+    expect(JSON.parse(second[0]!)).toMatchObject({
+      actual_algorithms: { [String(GROUP_ALGORITHM)]: 1 }, legacy_requests: 0,
+    });
   } finally {
     f.close();
   }

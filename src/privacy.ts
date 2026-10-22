@@ -2,6 +2,14 @@ import { createHmac } from 'node:crypto';
 
 export type RedactRule = { path: string; pattern: string };
 
+/**
+ * 脱敏变换的版本。
+ *
+ * 原始行与证据行都记下这个值：脱敏规则改动后，旧行是按旧规则变换的，
+ * 读模型与迁移都要能分辨，而不是假设库里所有占位符都同口径。
+ */
+export const PRIVACY_TRANSFORM_VERSION = 1;
+
 const PLACEHOLDER = /^\[redacted:[a-z_]+:[0-9a-f]{16}\]$/;
 const SENSITIVE_KEYS = new Set([
   'authorization', 'x-api-key', 'api-key', 'api_key', 'apikey', 'cookie', 'set-cookie',
