@@ -1018,7 +1018,7 @@ test('工具结果轮次不重复末轮用户输入，纯工具调用回复有�
   }
 });
 
-test('标题请求的回复只留标题文本', () => {
+test('标题回复不再在预览里解析，标题由用途列提供', () => {
   const f = fixture();
   try {
     const key = JSON.stringify(['session', 'title-reply']);
@@ -1045,10 +1045,13 @@ test('标题请求的回复只留标题文本', () => {
     });
     enqueueDerive(f.store, key, 'actor-a', '');
     drainDerive(f.store);
-    const rows = f.store.read.query<{ reply_preview: string | null }, []>(
-      'SELECT reply_preview FROM request ORDER BY req_id').all();
-    expect(rows[0]?.reply_preview).toBe('标题 · 压缩机制选型');
-    expect(rows[1]?.reply_preview).toBe('标题 · Compaction 工程选型');
+    const rows = f.store.read.query<{ reply_preview: string | null; model_title: string | null }, []>(
+      'SELECT reply_preview, model_title FROM request ORDER BY req_id').all();
+    // 预览只展示回复原文；正式标题由用途阶段写入 model_title。
+    expect(rows[0]?.reply_preview).toBe('<title nf="nf-md-git" emoji="🗂️">压缩机制选型</title>');
+    expect(rows[1]?.reply_preview).toBe('{"title":"Compaction 工程选型"}');
+    expect(rows[0]?.model_title).toBe('压缩机制选型');
+    expect(rows[1]?.model_title).toBe('Compaction 工程选型');
   } finally {
     f.close();
   }
@@ -1313,5 +1316,109 @@ test('范围派生只处理目标会话的待定用途', () => {
     expect(f.store.read.query<{ purpose_pending: number }, [number]>(
       'SELECT purpose_pending FROM request WHERE req_id=?').get(other))
       .toEqual({ purpose_pending: 1 });
+  } finally { f.close(); }
+});
+
+test('排除用途不进入主链也不写工具配对', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'excluded-tools', purposePending: 0, purposeVersion: 2,
+      purposeStatus: 'recognized', reqKind: 'auto-mode-classifier',
+      purposeChain: 'exclude', purposeRule: 'claude.auto-mode-classifier.v1',
+      reply: { content: [
+        { type: 'tool_use', id: 'tool-excluded', name: 'Bash', input: { command: 'ls' } },
+      ] },
+    });
+    enqueueDerive(f.store, 'excluded-tools', 'actor', '');
+    drainDerive(f.store, 100);
+    expect(f.store.read.query<{ n: number }, [number]>(
+      'SELECT COUNT(*) AS n FROM tool_call WHERE req_id=?').get(id)).toEqual({ n: 0 });
+    expect(f.store.read.query<{ chain_role: string }, [number]>(
+      'SELECT chain_role FROM request WHERE req_id=?').get(id))
+      .toEqual({ chain_role: 'aux' });
+  } finally { f.close(); }
+});
+
+test('非标题的排除用途不从用户增量取标题', () => {
+  const f = fixture();
+  try {
+    seedPurposeRequest(f.store, {
+      convKey: 'aux-delta', purposePending: 0, purposeVersion: 2,
+      purposeStatus: 'recognized', reqKind: 'chat', purposeChain: 'participate',
+      messages: [{ role: 'user', content: [{ type: 'text', text: '第一轮' }] }],
+    });
+    const aux = seedPurposeRequest(f.store, {
+      convKey: 'aux-delta', purposePending: 0, purposeVersion: 2, startedMs: 2,
+      purposeStatus: 'recognized', reqKind: 'auto-mode-classifier', purposeChain: 'exclude',
+      purposeRule: 'claude.auto-mode-classifier.v1', modelTitle: '分类器标题',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: '第一轮' }] },
+        { role: 'user', content: [{ type: 'text', text: '这段文本不应成为标题' }] },
+      ],
+    });
+    enqueueDerive(f.store, 'aux-delta', 'actor', '');
+    drainDerive(f.store, 100);
+    // aux 与主链没有可比关系，输入摘要按末轮输入展示；标题只来自用途列。
+    expect(f.store.read.query<{ title: string; title_source: string;
+      input_preview_kind: string | null }, [number]>(
+      'SELECT title,title_source,input_preview_kind FROM request WHERE req_id=?').get(aux))
+      .toEqual({ title: '分类器标题', title_source: 'model_title',
+        input_preview_kind: 'tail' });
+  } finally { f.close(); }
+});
+
+test('标题由用途列驱动而不是回复形状', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'title-source', purposePending: 0, purposeVersion: 2,
+      purposeStatus: 'recognized', reqKind: 'title', purposeChain: 'exclude',
+      modelTitle: '存储标题',
+      reply: { content: [{ type: 'text', text: '<title>回复标题</title>' }] },
+    });
+    enqueueDerive(f.store, 'title-source', 'actor', '');
+    drainDerive(f.store, 100);
+    const row = f.store.read.query<{
+      model_title: string | null; title: string; reply_preview: string | null;
+    }, [number]>(
+      'SELECT model_title, title, reply_preview FROM request WHERE req_id=?').get(id)!;
+    expect(row.model_title).toBe('存储标题');
+    expect(row.title).toBe('存储标题');
+    expect(row.reply_preview?.startsWith('标题 · ')).toBe(false);
+  } finally { f.close(); }
+});
+
+test('来源类别保持原始 req_kind 并参与链', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'neutral', purposePending: 0, purposeVersion: 2,
+      purposeStatus: 'recognized', reqKind: 'source:compaction',
+      purposeChain: 'participate', purposeRule: 'source.kind.v1',
+    });
+    enqueueDerive(f.store, 'neutral', 'actor', '');
+    drainDerive(f.store, 100);
+    expect(f.store.read.query<{ req_kind: string; chain_role: string }, [number]>(
+      'SELECT req_kind, chain_role FROM request WHERE req_id=?').get(id))
+      .toEqual({ req_kind: 'source:compaction', chain_role: 'main' });
+  } finally { f.close(); }
+});
+
+test('派生不再从回复形状识别标题', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'no-redetect', purposePending: 0, purposeVersion: 2,
+      purposeStatus: 'unrecognized', reqKind: 'chat', purposeChain: 'participate',
+      reply: { content: [{ type: 'text', text: '<title>不应成为标题</title>' }] },
+    });
+    enqueueDerive(f.store, 'no-redetect', 'actor', '');
+    drainDerive(f.store, 100);
+    expect(f.store.read.query<{
+      req_kind: string; chain_role: string; model_title: string | null;
+    }, [number]>(
+      'SELECT req_kind, chain_role, model_title FROM request WHERE req_id=?').get(id))
+      .toEqual({ req_kind: 'chat', chain_role: 'main', model_title: null });
   } finally { f.close(); }
 });

@@ -4,6 +4,8 @@ import type { Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
 import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
 import { drainRequestPurposesTx } from './request-purpose';
+import { readBodyTx } from './body';
+import { assistantText } from './protocols';
 
 /** 从回复里取工具调用；两种协议结构都认。 */
 function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
@@ -466,10 +468,10 @@ function firstUserPreview(db: Database, reqId: number): string | null {
   return null;
 }
 
-/** 链阶段为摘要准备的输入：本轮关系、当前可读序列与回复信息。 */
+/** 链阶段为摘要准备的输入：本轮关系、当前可读序列与用途结论。 */
 type PresentationInput = {
   row: ChainRow; current: readonly string[] | null;
-  replyInfo: ReplyInfo; isTitleRequest: boolean; modelTitle: string | null;
+  replyInfo: ReplyInfo; isAux: boolean; isTitle: boolean; modelTitle: string | null;
   match: PredecessorMatch;
 };
 
@@ -482,15 +484,15 @@ type PresentationInput = {
  */
 function writePresentationTx(db: Database, input: PresentationInput,
   associations: readonly ResolvedTool[], group: QueuedGroup): void {
-  const { row, current, replyInfo, isTitleRequest, modelTitle, match } = input;
+  const { row, current, replyInfo, isAux, isTitle, modelTitle, match } = input;
   const delta = match.delta;
   const fallback = modelTimeTitle(row.model_served, row.started_ms);
   let title = fallback;
   let source: 'user_delta' | 'model_time' | 'model_title' = 'model_time';
   let inputPreview: string | null = null;
   let inputKind: 'delta' | 'tail' | 'tool_result' | 'title' | null = null;
-  if (isTitleRequest) {
-    // 标题请求不产生用户标题；它自己的标题来自回复里的正式标题。
+  if (isTitle) {
+    // 标题请求不产生用户标题；它的正式标题只来自用途阶段写下的 model_title。
     title = modelTitle ?? (current === null ? row.title ?? fallback : fallback);
     source = modelTitle !== null ? 'model_title'
       : current === null && row.title_source === 'model_title' ? 'model_title' : 'model_time';
@@ -505,32 +507,42 @@ function writePresentationTx(db: Database, input: PresentationInput,
     inputKind = row.input_preview_kind === 'delta' || row.input_preview_kind === 'tail'
       || row.input_preview_kind === 'tool_result' || row.input_preview_kind === 'title'
       ? row.input_preview_kind : null;
-  } else if (delta !== null && delta.length > 0) {
-    // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
-    const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
-    const derived = deriveTitle(messages, delta.map((_, index) => index), fallback);
-    title = derived.title;
-    source = derived.source;
-    // 增量里常常只有工具结果或系统消息，没有用户文本。
-    // 有用户文本才标成"新增"；否则照实说这一轮回传了什么工具结果。
-    // 不要回退到"末轮输入"——那会把同一句旧用户消息重复到每一笔请求上。
-    const fresh = previewOf(messages);
-    if (fresh !== null) {
-      inputPreview = fresh;
-      inputKind = 'delta';
-    } else {
-      inputPreview = toolResultPreview(db, row.req_id, delta, associations);
-      inputKind = inputPreview === null ? null : 'tool_result';
-    }
-  } else if (delta !== null) {
-    // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
-    inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
-    inputKind = 'tool_result';
   } else {
-    // 关系未知或另起一支：没有"新增"可言，但折叠行仍要有东西可读。
-    // 取正文里最后一条用户消息，界面会把它标成"末轮输入"而不是"新增"。
-    inputPreview = tailUserPreview(db, row.req_id);
-    inputKind = inputPreview === null ? null : 'tail';
+    // 排除用途但不是标题请求：不把用户增量变成标题，只用已存的模型标题或时间兜底。
+    // 输入摘要仍按同一套关系取值，不为 aux 另写一份规则。
+    if (isAux) {
+      title = modelTitle ?? fallback;
+      source = modelTitle !== null ? 'model_title' : 'model_time';
+    }
+    if (delta !== null && delta.length > 0) {
+      // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
+      const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
+      if (!isAux) {
+        const derived = deriveTitle(messages, delta.map((_, index) => index), fallback);
+        title = derived.title;
+        source = derived.source;
+      }
+      // 增量里常常只有工具结果或系统消息，没有用户文本。
+      // 有用户文本才标成"新增"；否则照实说这一轮回传了什么工具结果。
+      // 不要回退到"末轮输入"——那会把同一句旧用户消息重复到每一笔请求上。
+      const fresh = previewOf(messages);
+      if (fresh !== null) {
+        inputPreview = fresh;
+        inputKind = 'delta';
+      } else {
+        inputPreview = toolResultPreview(db, row.req_id, delta, associations);
+        inputKind = inputPreview === null ? null : 'tool_result';
+      }
+    } else if (delta !== null) {
+      // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
+      inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
+      inputKind = 'tool_result';
+    } else {
+      // 关系未知、另起一支或排除用途：没有"新增"可言，但折叠行仍要有东西可读。
+      // 取正文里最后一条用户消息，界面会把它标成"末轮输入"而不是"新增"。
+      inputPreview = tailUserPreview(db, row.req_id);
+      inputKind = inputPreview === null ? null : 'tail';
+    }
   }
   const replyPreview = current === null ? row.reply_preview : replyInfo.preview;
   // 摘要与标题是派生结果，不是来源事实：可比较时记下算法与本次消费的输入身份，
@@ -622,75 +634,14 @@ function replyToolSummary(reply: unknown): string | null {
   return `工具调用 · ${names.join(', ')}`;
 }
 
-/**
- * 标题请求的回复是 `<title>` 标签或 `{"title":"…"}` JSON；折叠行里展示内容，
- * 不展示标签属性或 JSON 外壳。其余回复原样返回。
- */
-const TITLE_TAG_REPLY = /^<title\b[^>]*>([\s\S]*?)<\/title>\s*$/i;
-
-function titleOfReply(text: string): string | null {
-  const trimmed = text.trim();
-  const tagged = TITLE_TAG_REPLY.exec(trimmed)?.[1]?.replace(/\s+/g, ' ').trim();
-  if (tagged !== undefined && tagged.length > 0) return tagged;
-  if (!trimmed.startsWith('{')) return null;
-  try {
-    const value: unknown = JSON.parse(trimmed);
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-    const record = value as Record<string, unknown>;
-    if (Object.keys(record).length !== 1 || typeof record.title !== 'string') return null;
-    const title = record.title.replace(/\s+/g, ' ').trim();
-    return title.length > 0 ? title : null;
-  } catch {
-    return null;
-  }
-}
-
-/** 折叠行摘要：回复文本首段；标题回复只留标题，并单独返回给会话标题用。 */
-type ReplyInfo = { preview: string | null; modelTitle: string | null };
+/** 折叠行摘要：回复文本首段；没有文本时退到工具调用名。 */
+type ReplyInfo = { preview: string | null };
 
 function replyInfoOf(db: Database, reqId: number): ReplyInfo {
-  const row = db.query<{ skeleton_z: Uint8Array | null }, [number]>(
-    'SELECT skeleton_z FROM request WHERE req_id=?').get(reqId);
-  if (row == null || row.skeleton_z == null) return { preview: null, modelTitle: null };
-  let skeleton: unknown;
-  try {
-    skeleton = JSON.parse(zstdDecompressSync(row.skeleton_z).toString('utf8'));
-  } catch {
-    return { preview: null, modelTitle: null };
-  }
-  if (skeleton === null || typeof skeleton !== 'object') return { preview: null, modelTitle: null };
-  const reply = (skeleton as Record<string, unknown>).reply;
-  const text = assistantText(reply) ?? replyToolSummary(reply);
-  if (text === null) return { preview: null, modelTitle: null };
-  const title = titleOfReply(text);
-  if (title !== null) return { preview: clip(`标题 · ${title}`), modelTitle: title };
-  return { preview: clip(text), modelTitle: null };
-}
-
-/** 两种协议里的回复文本；只取第一段非空文本，不拼工具调用。 */
-function assistantText(reply: unknown): string | null {
-  if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return null;
-  const record = reply as Record<string, unknown>;
-  const fromBlocks = (blocks: unknown): string | null => {
-    if (!Array.isArray(blocks)) return null;
-    for (const block of blocks) {
-      if (block === null || typeof block !== 'object') continue;
-      const value = (block as Record<string, unknown>).text;
-      if (typeof value === 'string' && value.trim().length > 0) return value;
-    }
-    return null;
-  };
-  const direct = fromBlocks(record.content);
-  if (direct !== null) return direct;
-  const choices = record.choices;
-  if (!Array.isArray(choices) || choices.length === 0) return null;
-  const first = choices[0];
-  if (first === null || typeof first !== 'object') return null;
-  const message = (first as Record<string, unknown>).message;
-  if (message === null || typeof message !== 'object') return null;
-  const content = (message as Record<string, unknown>).content;
-  if (typeof content === 'string') return content.trim().length > 0 ? content : null;
-  return fromBlocks(content);
+  const body = readBodyTx(db, reqId);
+  if (body === null) return { preview: null };
+  const text = assistantText(body.reply) ?? replyToolSummary(body.reply);
+  return { preview: text === null ? null : clip(text) };
 }
 
 function messageAt(db: Database, reqId: number, ordinal: number): unknown | null {
@@ -721,7 +672,7 @@ function assignChainRoles(db: Database, convKey: string, actor: string): void {
   const rows = db.query<{ req_id: number; prev_req_id: number | null; started_ms: number;
     sort_source: string | null; sort_key: string | null }, [string, string]>(`
     SELECT req_id, prev_req_id, started_ms, sort_source, sort_key FROM request
-    WHERE conv_key=? AND actor=? AND actor_state='known' AND req_kind='chat'
+    WHERE conv_key=? AND actor=? AND actor_state='known' AND purpose_chain='participate'
       AND (prev_relation IS NULL OR prev_relation != 'unknown')
     ORDER BY started_ms ASC, req_id ASC`).all(convKey, actor);
   // 按时间与来源位置遍历，第一个根就是逻辑上最早的根；req_id 只兜底同位置。
@@ -845,12 +796,14 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
       const replyInfo = current === null
         ? { preview: row.reply_preview, modelTitle: null }
         : replyInfoOf(db, row.req_id);
-      // 用途已在请求阶段定下来：组阶段只消费 purpose_chain，不再自己认一遍标题请求。
-      // 两处各认一次就会出现"用途说是 chat、关系却按 title 算"的分裂。
-      const isTitleRequest = row.purpose_chain === 'exclude';
+      // 用途已在请求阶段定下来：组阶段只消费 purpose_chain 与 req_kind，
+      // 不再自己认一遍标题或分类器请求。两处各认一次就会出现"用途说是 chat、
+      // 关系却按 title 算"的分裂。
+      const isAux = row.purpose_chain === 'exclude';
+      const isTitle = row.req_kind === 'title';
       const modelTitle = row.model_title;
       let match: PredecessorMatch;
-      if (isTitleRequest) {
+      if (isAux) {
         match = { parent: null, relation: 'aux', delta: null, near: null };
       } else if (current === null) {
         // 本笔正文不可读：没法比，但也不能把上一笔的结论照抄过来。
@@ -864,8 +817,8 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
           ? { ...found, relation: 'unknown' }
           : found;
       }
-      if (!isTitleRequest) {
-        // 标题请求是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
+      if (!isAux) {
+        // 排除用途是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
         sawEarlier = true;
         if (current === null || uncertain.has(row.req_id)) unreadableEarlier = true;
       }
@@ -877,14 +830,14 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
       db.run(`UPDATE request SET prev_req_id=?,prev_relation=?,delta_ordinals=?,
         chain_role=? WHERE req_id=?`, [
         match.parent, match.relation, deltaJson,
-        isTitleRequest ? 'aux' : 'main', row.req_id,
+        isAux ? 'aux' : 'main', row.req_id,
       ]);
-      pairRows.push({ ...row, req_kind: row.req_kind,
+      pairRows.push({ ...row,
         prev_relation: match.relation, delta_ordinals: deltaJson });
-      presentations.push({ row, current, replyInfo, isTitleRequest, modelTitle, match });
+      presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match });
       if (current === null) retained += 1;
       else recomputed += 1;
-      if (!isTitleRequest && current !== null && !uncertain.has(row.req_id)) {
+      if (!isAux && current !== null && !uncertain.has(row.req_id)) {
         ancestors.push({ reqId: row.req_id, fingerprints: current });
       }
       processed += 1;
@@ -931,32 +884,6 @@ export function drainDerive(store: Store, limit = 100, scope?: DeriveScope): Dra
   return store.write(db => drainDeriveTx(db, { limit, scope }));
 }
 
-type TxBody = { request: unknown; reply: unknown } | null;
-
-/**
- * 事务内读取正文。必须用事务自己的连接：只读连接是另一个快照，
- * 看不到本事务刚写入的块。
- */
-function bodyInTx(db: Database, reqId: number): TxBody {
-  const row = db.query<{ skeleton_z: Uint8Array | null; body_state: string }, [number]>(
-    'SELECT skeleton_z, body_state FROM request WHERE req_id=?',
-  ).get(reqId);
-  if (row == null || row.skeleton_z == null) return null;
-  if (row.body_state !== 'available' && row.body_state !== 'partial') return null;
-  const skeleton = JSON.parse(zstdDecompressSync(row.skeleton_z).toString('utf8')) as {
-    request_without_messages?: unknown; reply?: unknown; has_messages?: boolean;
-  };
-  let request = skeleton.request_without_messages ?? null;
-  if (skeleton.has_messages === true) {
-    const refs = db.query<{ z: Uint8Array }, [number]>(
-      'SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block WHERE rb.req_id=? ORDER BY rb.ord',
-    ).all(reqId);
-    const messages = refs.map(ref => JSON.parse(zstdDecompressSync(ref.z).toString('utf8')));
-    request = { ...((request ?? {}) as Record<string, unknown>), messages };
-  }
-  return { request, reply: skeleton.reply ?? null };
-}
-
 type Group = { conv_key: string; actor: string };
 
 /** 取组时一并读出的完成身份；ack 用它与当前行比对，防止覆盖后到的输入变化。 */
@@ -964,9 +891,10 @@ type QueuedGroup = Group & {
   group_epoch: string; input_revision: number; target_algorithm: number;
 };
 
-/** 工具配对消费的行：链阶段刚写下的关系与顺序。 */
+/** 工具配对消费的行：链阶段刚写下的关系、顺序与用途结论。 */
 export type PairRow = LogicalRow & {
-  req_kind: string | null; prev_relation: string | null; delta_ordinals: string | null;
+  req_kind: string | null; purpose_chain: string;
+  prev_relation: string | null; delta_ordinals: string | null;
 };
 
 /** 本次确定下来的一个工具往返：调用位置与结果位置都精确到 ord 与 path。 */
@@ -1003,9 +931,9 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
   const results: { req_id: number; index: number; ord: number; path: string; call_id: string; value: unknown; confirmed: boolean }[] = [];
 
   for (const [index, row] of rows.entries()) {
-    // 标题请求是旁路：不进入工具候选，与它不进祖先集合同一个理由。
-    if (row.req_kind === 'title') continue;
-    const body = bodyInTx(db, row.req_id);
+    // 排除用途是旁路：不进入工具候选，与它不进祖先集合同一个理由。
+    if (row.purpose_chain === 'exclude') continue;
+    const body = readBodyTx(db, row.req_id);
     if (body === null) continue;
     // 结果是否落在确定增量的 ord 上；unknown/first 的规则不同。
     const delta = row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[];
