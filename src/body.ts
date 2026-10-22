@@ -151,38 +151,156 @@ export function persistBody(store: Store, reqId: number, body: BodyInput): void 
   store.write(db => persistBodyTx(db, reqId, body));
 }
 
-/** 按请求还原脱敏协议对象；正文已被回收或从未写入时返回 null。 */
-export function restoreBody(store: Store, id: number): BodyInput | null {
-  const reqId = resolveRequestId(store, id);
-  if (reqId === null) return null;
-  const row = store.read.query<{ skeleton_z: Uint8Array | null; body_state: string }, [number]>(
-    'SELECT skeleton_z, body_state FROM request WHERE req_id=?',
+/**
+ * 已保存正文的骨架视图：协议、不可拆的请求字段与回复，加上消息条数。
+ *
+ * 消息条数取自 request 行——骨架只描述拆块方式，条数由同一事务里的行维护。
+ * 读取端拿它核对引用数与连续 ord，不一致就视为不可读。
+ */
+export type BodyMeta = {
+  protocol: string;
+  request: unknown;
+  reply: unknown;
+  hasMessages: boolean;
+  messageCount: number;
+  redact_version: number;
+};
+
+export type StoredBody = {
+  protocol: string;
+  request: unknown;
+  reply: unknown;
+  redact_version: number;
+};
+
+type SkeletonFields = {
+  format?: unknown;
+  protocol?: unknown;
+  request_without_messages?: unknown;
+  reply?: unknown;
+  has_messages?: unknown;
+  redact_version?: unknown;
+};
+
+/**
+ * 严格读取骨架。任何一项不符合写入契约都返回 null：正文要么完整可读，
+ * 要么不可读，不能把结构损坏的对象交给派生或用途判定去猜。
+ */
+function readSkeletonTx(db: Database, reqId: number): {
+  protocol: string; request: unknown; reply: unknown;
+  hasMessages: boolean; messageCount: number; redactVersion: number;
+} | null {
+  const row = db.query<{
+    skeleton_z: Uint8Array | null; body_state: string; msg_count: number | null;
+  }, [number]>(
+    'SELECT skeleton_z, body_state, msg_count FROM request WHERE req_id=?',
   ).get(reqId);
   if (row == null || row.skeleton_z == null) return null;
   if (row.body_state !== 'available' && row.body_state !== 'partial') return null;
 
-  const skeleton = JSON.parse(zstdDecompressSync(row.skeleton_z).toString('utf8')) as Skeleton;
-  if (skeleton.format !== 1) throw new Error('body_skeleton_unsupported');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(zstdDecompressSync(row.skeleton_z).toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const skeleton = parsed as SkeletonFields;
+  if (skeleton.format !== 1) return null;
+  if (typeof skeleton.protocol !== 'string' || skeleton.protocol.length === 0) return null;
+  if (typeof skeleton.has_messages !== 'boolean') return null;
+  if (typeof skeleton.redact_version !== 'number'
+    || !Number.isInteger(skeleton.redact_version) || skeleton.redact_version < 1) return null;
 
-  let request = skeleton.request_without_messages;
+  let messageCount = 0;
   if (skeleton.has_messages) {
-    const refs = store.read.query<{ ord: number; z: Uint8Array }, [number]>(`
-      SELECT rb.ord AS ord, b.z AS z FROM request_block rb
-      JOIN block b ON b.id = rb.block
-      WHERE rb.req_id=? ORDER BY rb.ord`).all(reqId);
-    const messages: unknown[] = [];
-    for (const ref of refs) messages[ref.ord] = JSON.parse(zstdDecompressSync(ref.z).toString('utf8'));
-    // 引用按 ord 连续写入；若中间缺行，说明库被外部改动过，宁可报错也不补空位。
-    if (messages.length !== refs.length || messages.some(value => value === undefined)) {
-      throw new Error('body_blocks_incomplete');
-    }
-    if (request === null || typeof request !== 'object' || Array.isArray(request)) request = {};
-    request = { ...(request as Record<string, unknown>), messages };
+    if (typeof row.msg_count !== 'number'
+      || !Number.isInteger(row.msg_count) || row.msg_count < 0) return null;
+    messageCount = row.msg_count;
+  } else if (row.msg_count !== null && row.msg_count !== 0) {
+    return null;
   }
   return {
     protocol: skeleton.protocol,
-    request,
-    reply: skeleton.reply,
-    redact_version: skeleton.redact_version,
+    request: skeleton.request_without_messages ?? null,
+    reply: skeleton.reply ?? null,
+    hasMessages: skeleton.has_messages,
+    messageCount,
+    redactVersion: skeleton.redact_version,
   };
+}
+
+/** 引用必须恰好覆盖 0..n-1，且每个引用指向存在的块；只看索引，不解压。 */
+function bodyRefsValid(db: Database, reqId: number, messageCount: number): boolean {
+  const refs = db.query<{ ord: number; block: number | null }, [number]>(`
+    SELECT rb.ord AS ord, b.id AS block FROM request_block rb
+    LEFT JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? ORDER BY rb.ord`).all(reqId);
+  if (refs.length !== messageCount) return false;
+  for (let index = 0; index < refs.length; index += 1) {
+    if (refs[index]!.ord !== index || refs[index]!.block === null) return false;
+  }
+  return true;
+}
+
+/**
+ * 只解骨架与引用索引，不解压任何消息块。用途判定只需要 system、stop、
+ * 回复与条数，不需要正文全文，因此这条路径的成本不随消息大小增长。
+ */
+export function readBodyMetaTx(db: Database, reqId: number): BodyMeta | null {
+  const skeleton = readSkeletonTx(db, reqId);
+  if (skeleton === null) return null;
+  if (!bodyRefsValid(db, reqId, skeleton.messageCount)) return null;
+  return {
+    protocol: skeleton.protocol,
+    request: skeleton.request,
+    reply: skeleton.reply,
+    hasMessages: skeleton.hasMessages,
+    messageCount: skeleton.messageCount,
+    redact_version: skeleton.redactVersion,
+  };
+}
+
+/** 完整读出已保存正文；结构不一致返回 null，不补空位也不抛错。 */
+export function readBodyTx(db: Database, reqId: number): StoredBody | null {
+  const meta = readBodyMetaTx(db, reqId);
+  if (meta === null) return null;
+  if (!meta.hasMessages) {
+    return {
+      protocol: meta.protocol,
+      request: meta.request,
+      reply: meta.reply,
+      redact_version: meta.redact_version,
+    };
+  }
+  // 带消息时骨架必须原本就是对象，否则无法无损合并 messages。
+  if (meta.request === null || typeof meta.request !== 'object' || Array.isArray(meta.request)) {
+    return null;
+  }
+  let messages: unknown[] = [];
+  if (meta.messageCount > 0) {
+    const refs = db.query<{ z: Uint8Array }, [number]>(`
+      SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+      WHERE rb.req_id=? ORDER BY rb.ord`).all(reqId);
+    if (refs.length !== meta.messageCount) return null;
+    try {
+      messages = refs.map(ref => JSON.parse(zstdDecompressSync(ref.z).toString('utf8')));
+    } catch {
+      return null;
+    }
+  }
+  return {
+    protocol: meta.protocol,
+    request: { ...(meta.request as Record<string, unknown>), messages },
+    reply: meta.reply,
+    redact_version: meta.redact_version,
+  };
+}
+
+/** 按请求还原脱敏协议对象；正文已被回收、从未写入或结构损坏时返回 null。 */
+export function restoreBody(store: Store, id: number): BodyInput | null {
+  const reqId = resolveRequestId(store, id);
+  if (reqId === null) return null;
+  const body = readBodyTx(store.read, reqId);
+  return body === null ? null : { ...body };
 }

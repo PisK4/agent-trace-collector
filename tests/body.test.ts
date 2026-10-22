@@ -226,3 +226,16 @@ test('骨架不含 messages 且记录块大小', () => {
     f.close();
   }
 });
+
+test('末条块引用缺失时正文不可还原', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, 1);
+    persistBody(f.store, 1, twoRepeats);
+    f.store.write(db => db.run(
+      'DELETE FROM request_block WHERE req_id=1 AND ord=1'));
+    expect(restoreBody(f.store, 1)).toBeNull();
+  } finally {
+    f.close();
+  }
+});
