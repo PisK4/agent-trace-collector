@@ -7,6 +7,8 @@ import {
   metadataSnapshot, summarizeDurations,
 } from '../src/capacity';
 import { intervalOf, loadConfig, type Config } from '../src/config';
+import { createPeakTracker, requiresLongRunAck, scenarioPlan } from '../scripts/capacity';
+import type { Args } from '../scripts/capacity';
 import { buildCapacityConfig, makeHookEnvelope, makeLedgerLine, mulberry32 } from '../scripts/capacity-support';
 import { fixture } from './fixtures';
 
@@ -144,4 +146,54 @@ test('合成 hook 与账本行形状可被真实解析器接受', () => {
   expect(JSON.stringify(envelope.request)).toContain('synthetic');
   const line = makeLedgerLine({ routeId: 7, session: 'session-1', responseId: envelope.hook_id, startedMs: 1_700_000_000_000 });
   expect(JSON.parse(line)).toMatchObject({ route_id: 7, session: 'session-1', response_id: envelope.hook_id });
+});
+
+test('场景矩阵固定请求速率、时长与正文混合', () => {
+  // 任何 full=true 都要求显式确认；闸门的否定分支由最后两条断言覆盖。
+  expect(scenarioPlan('baseline-1rps', { full: true, acknowledgeLongRun: true })).toMatchObject({
+    durationMs: 600_000, rps: 1, bodyMix: [350 * 1024, 2 * 1024 * 1024], concurrency: 1,
+  });
+  expect(scenarioPlan('baseline-5rps', { full: true, acknowledgeLongRun: true })).toMatchObject({
+    durationMs: 600_000, rps: 5, concurrency: 1,
+  });
+  expect(scenarioPlan('burst', { full: false })).toMatchObject({ concurrency: 10, requestBytes: 4 * 1024 * 1024 });
+  expect(scenarioPlan('long', { full: false, requests: 2_000 })).toMatchObject({ requests: 2_000 });
+  expect(scenarioPlan('long', { full: false, requests: 10_000, acknowledgeLongRun: true }))
+    .toMatchObject({ requests: 10_000 });
+  expect(() => scenarioPlan('long', { full: false, requests: 10_000 }))
+    .toThrow('capacity_long_run_not_acknowledged');
+  expect(() => scenarioPlan('baseline-5rps', { full: true, acknowledgeLongRun: false }))
+    .toThrow('capacity_long_run_not_acknowledged');
+});
+
+test('长跑确认覆盖全场景、10 分钟与 10,000 笔长组', () => {
+  const base: Args = {
+    scenario: 'smoke', full: false, acknowledgeLongRun: false,
+    seed: 1, report: '/tmp/report.json',
+    bodyBudget: 1, bodyBudgetExplicit: false, diskLimit: 2,
+  };
+  expect(requiresLongRunAck(base)).toBe(false);
+  expect(requiresLongRunAck({ ...base, scenario: 'all' })).toBe(true);
+  expect(requiresLongRunAck({ ...base, durationMs: 600_000 })).toBe(true);
+  expect(requiresLongRunAck({ ...base, scenario: 'long', requests: 10_000 })).toBe(true);
+  expect(requiresLongRunAck({ ...base, scenario: 'long', requests: 2_000 })).toBe(false);
+  expect(requiresLongRunAck({ ...base, full: true })).toBe(true);
+});
+
+test('峰值追踪只取实际观测到的快照', () => {
+  const peaks = createPeakTracker();
+  const snapshot = (rss: number, db: number, body: number, total: number) => ({
+    rss_bytes: rss,
+    storage: {
+      db_bytes: db, wal_bytes: 1, temp_bytes: 0,
+      body_bytes: body, total_bytes: total, freelist_count: 0,
+    },
+  }) as never;
+  peaks.observe(snapshot(100, 10, 5, 11));
+  peaks.observe(snapshot(90, 20, 4, 21));
+  expect(peaks.samples).toBe(2);
+  expect(peaks.rss_bytes).toBe(100);
+  expect(peaks.storage.db_bytes).toBe(20);
+  expect(peaks.storage.body_bytes).toBe(5);
+  expect(peaks.storage.total_bytes).toBe(21);
 });
