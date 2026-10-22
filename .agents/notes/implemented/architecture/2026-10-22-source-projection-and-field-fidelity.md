@@ -23,6 +23,8 @@ Status: implemented
 
 `LedgerShape` 与 `RouteShape` 随字段一起返回，供投影层判断完整性；本批只把它们带到 `mapLedgerRow` / `mapRouteRow` 的返回值，消费它们的完整性判断与事实选择归[来源投影计划](../../../../docs/superpowers/plans/2026-10-22-atc-source-projection.md)后续任务。
 
+账号脱敏归一到同一形态：`account` 与 `providerAccount` 都是敏感键，都得到同一个 `credential` 占位符，所以同一个订阅身份在两个入口下不会看起来像两个人。`placeholder` 对已经是占位符的值原样返回，敏感键、请求头与普通字符串三处分支都调用它，重复脱敏不会把占位符再散列成另一个 digest。历史明文账号的修复与隐私变换版本由[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)交付。
+
 ## Alternatives considered
 
 **继续用 `optionalString` / `optionalNumber`。** 它们把缺失、空串与非法类型合并成 null，正是这轮要修的问题；保留它们只会让下游无法区分"上游没报"与"上游报了读不懂"。
@@ -42,4 +44,4 @@ Status: implemented
 
 ## Testing
 
-`tests/magpie.test.ts` 的「账本来源字段按 req 与 cost 读取并给出类型状态」「账本旧键、空串与非法类型分开记录且都不当新值」「路由 Prompt 只在校准布尔与 tokens 合法时给出 counted」锁定读取与状态；上游键名以锚定检出 `开源源码@magpie-2374ffe` 的 `internal/usage/usage.go` 与 `internal/gateway/prompt.go` 为准。
+`tests/magpie.test.ts` 的「账本来源字段按 req 与 cost 读取并给出类型状态」「账本旧键、空串与非法类型分开记录且都不当新值」「路由 Prompt 只在校准布尔与 tokens 合法时给出 counted」锁定读取与状态；`tests/privacy.test.ts` 的「account 别名共享占位符且已脱敏值不再散列」锁定账号归一与占位符幂等。上游键名以锚定检出 `开源源码@magpie-2374ffe` 的 `internal/usage/usage.go` 与 `internal/gateway/prompt.go` 为准。
