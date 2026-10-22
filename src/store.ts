@@ -2,10 +2,14 @@ import { Database } from 'bun:sqlite';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+export type WriteStats = { count: number; total_ms: number; max_ms: number };
+
 export type Store = {
   db: Database;
   read: Database;
   write<T>(fn: (db: Database) => T): T;
+  /** 进程内所有写事务的累计计时；失败与回滚同样计数。 */
+  writeStats: WriteStats;
   close(): void;
 };
 
@@ -94,16 +98,29 @@ export function openStore(path: string): Store {
   read.exec('PRAGMA busy_timeout=1000');
 
   let closed = false;
-  const write = <T>(fn: (db: Database) => T): T => db.transaction(() => {
-    const result = fn(db);
-    if (result instanceof Promise) throw new TypeError('async writer');
-    return result;
-  }).immediate();
+  const writeStats: WriteStats = { count: 0, total_ms: 0, max_ms: 0 };
+  const write = <T>(fn: (db: Database) => T): T => {
+    const started = performance.now();
+    try {
+      return db.transaction(() => {
+        const result = fn(db);
+        if (result instanceof Promise) throw new TypeError('async writer');
+        return result;
+      }).immediate();
+    } finally {
+      // 失败事务也计入：回滚与锁等待同样占用写通道。
+      const elapsed = performance.now() - started;
+      writeStats.count += 1;
+      writeStats.total_ms += elapsed;
+      writeStats.max_ms = Math.max(writeStats.max_ms, elapsed);
+    }
+  };
 
   return {
     db,
     read,
     write,
+    writeStats,
     close() {
       if (closed) return;
       closed = true;

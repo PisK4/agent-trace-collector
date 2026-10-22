@@ -251,3 +251,20 @@ test('低版本库拒绝打开，空库建到当前版本', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('写事务统计覆盖成功与回滚', () => {
+  const f = fixture();
+  try {
+    const before = f.store.writeStats.count;
+    f.store.write(db => db.run("INSERT INTO collector_state(key,value_json) VALUES ('a','1')"));
+    expect(f.store.writeStats.count).toBe(before + 1);
+    expect(f.store.writeStats.max_ms).toBeGreaterThanOrEqual(0);
+    expect(() => f.store.write(db => {
+      db.run("INSERT INTO collector_state(key,value_json) VALUES ('b','1')");
+      throw new Error('synthetic_rollback');
+    })).toThrow('synthetic_rollback');
+    expect(f.store.writeStats.count).toBe(before + 2);
+    expect(f.store.read.query("SELECT COUNT(*) AS n FROM collector_state WHERE key='b'").get())
+      .toEqual({ n: 0 });
+  } finally { f.close(); }
+});
