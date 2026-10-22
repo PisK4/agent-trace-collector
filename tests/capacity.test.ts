@@ -6,7 +6,7 @@ import {
   REJECT_REASONS, assertCapacityIsolation, createCapacityMetrics, createIngestMetrics,
   metadataSnapshot, summarizeDurations,
 } from '../src/capacity';
-import { loadConfig } from '../src/config';
+import { intervalOf, loadConfig, type Config } from '../src/config';
 import { fixture } from './fixtures';
 
 test('最近秩分位与空样本', () => {
@@ -98,4 +98,14 @@ test('隔离断言拒绝默认配置与真实上游端口', () => {
     expect(() => assertCapacityIsolation({ root, config: isolated, upstreamPort: 3425 }))
       .toThrow('capacity_upstream_is_real_magpie');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('容量间隔只由显式 Config 注入，缺省保持常量', () => {
+  const base = {} as Pick<Config, 'intervals'>;
+  expect(intervalOf(base, 'retention', 3_600_000)).toBe(3_600_000);
+  const configured = { intervals: { retention: 5_000, rawPrune: 5_000 } };
+  expect(intervalOf(configured, 'retention', 3_600_000)).toBe(5_000);
+  expect(intervalOf(configured, 'derive', 1_000)).toBe(1_000);
+  expect(() => intervalOf({ intervals: { retention: 0 } }, 'retention', 1))
+    .toThrow('invalid_capacity_interval');
 });

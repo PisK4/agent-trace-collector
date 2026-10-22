@@ -3,6 +3,7 @@ import type { Config } from './config';
 import { loadBoundSalt, loadLocalSecret } from './config';
 import { openStore } from './store';
 import { createCapacityMetrics } from './capacity';
+import { intervalOf } from './config';
 import type { Store } from './store';
 import { readBatch, readRouteFiles } from './sources/files';
 import type { FileCursor } from './sources/files';
@@ -94,6 +95,7 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   const guard = (name: string, task: () => Promise<void> | void) => async () => {
     if (stopped || running.has(name)) return;
     running.add(name);
+    const started = performance.now();
     try {
       await task();
     } catch (error) {
@@ -102,6 +104,7 @@ export async function startCollector(config: Config): Promise<{ port: number; st
       const code = error instanceof Error ? error.message : 'unknown';
       process.stderr.write(`${name}_failed:${code}\n`);
     } finally {
+      metrics.jobs.record(name, performance.now() - started);
       running.delete(name);
     }
   };
@@ -130,6 +133,12 @@ export async function startCollector(config: Config): Promise<{ port: number; st
 
   const routeTick = guard('route', async () => {
     const files = await readRouteFiles(config.routingDir);
+    metrics.route.record({
+      files: files.length,
+      decoded: files.filter(file => file.error === null).length,
+      unchanged: 0,
+      errors: files.filter(file => file.error !== null).length,
+    });
     for (const file of files) {
       if (file.error !== null) {
         process.stderr.write(`route_file_error:${file.name}\n`);
@@ -234,15 +243,15 @@ export async function startCollector(config: Config): Promise<{ port: number; st
     admission: () => gate.check(0),
   }, metrics);
 
-  timers.push(setInterval(ledgerTick, LEDGER_INTERVAL_MS));
-  timers.push(setInterval(routeTick, ROUTE_INTERVAL_MS));
-  timers.push(setInterval(costTick, COST_INTERVAL_MS));
-  timers.push(setInterval(probeTick, PROBE_INTERVAL_MS));
-  timers.push(setInterval(pendingTick, LEDGER_INTERVAL_MS));
-  timers.push(setInterval(deriveTick, DERIVE_INTERVAL_MS));
-  timers.push(setInterval(retentionTick, RETENTION_INTERVAL_MS));
-  timers.push(setInterval(rawPruneTick, RAW_PRUNE_INTERVAL_MS));
-  timers.push(setInterval(gapTick, LEDGER_INTERVAL_MS));
+  timers.push(setInterval(ledgerTick, intervalOf(config, 'ledger', LEDGER_INTERVAL_MS)));
+  timers.push(setInterval(routeTick, intervalOf(config, 'route', ROUTE_INTERVAL_MS)));
+  timers.push(setInterval(costTick, intervalOf(config, 'cost', COST_INTERVAL_MS)));
+  timers.push(setInterval(probeTick, intervalOf(config, 'probe', PROBE_INTERVAL_MS)));
+  timers.push(setInterval(pendingTick, intervalOf(config, 'pending', LEDGER_INTERVAL_MS)));
+  timers.push(setInterval(deriveTick, intervalOf(config, 'derive', DERIVE_INTERVAL_MS)));
+  timers.push(setInterval(retentionTick, intervalOf(config, 'retention', RETENTION_INTERVAL_MS)));
+  timers.push(setInterval(rawPruneTick, intervalOf(config, 'rawPrune', RAW_PRUNE_INTERVAL_MS)));
+  timers.push(setInterval(gapTick, intervalOf(config, 'gap', LEDGER_INTERVAL_MS)));
   void ledgerTick();
   void routeTick();
   void probeTick();
