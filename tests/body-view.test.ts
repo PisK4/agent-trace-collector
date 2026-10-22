@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test';
 import {
-  bodyNotice, deltaOrdinals, messageEntries, renderCapabilities, renderMessages, renderRaw,
+  bodyNotice, deltaOrdinals, messageEntries, renderAttemptChain, renderCapabilities, renderMessages, renderRaw,
   renderReply, renderReplyDetail, renderTools, replyView, toolEntries,
 } from '../web/body-view.js';
 import type { BodyPage } from '../src/protocols';
 import type { CapabilityView } from '../src/capabilities';
+import type { AttemptChain } from '../src/queries';
 import type { RequestDetail } from '../src/queries';
 
 const missingCapabilities: CapabilityView = {
@@ -317,4 +318,45 @@ test('能力区块的动态内容只作为文本转义', () => {
   expect(html).not.toContain('<img');
   expect(html).toContain('&lt;img');
   expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+});
+
+test('尝试链渲染未知 fail 码与已记录时间', () => {
+  const chain: AttemptChain = {
+    state: 'present',
+    items: [
+      {
+        index: 0, model: 'm1', provider: 'p1', effort: 'high', status: 500,
+        fail: 'synthetic_new_gate', error: null, start_ms: 1761091200000,
+        ms: 100, ttft_ms: null, flow_ms: null, served: null,
+        queued_ms: null, replan: null, gone: false, earlier: false,
+      },
+      {
+        index: 1, model: 'm2', provider: 'p2', effort: null, status: 200,
+        fail: null, error: null, start_ms: 1761091201000,
+        ms: 200, ttft_ms: null, flow_ms: null, served: 's',
+        queued_ms: null, replan: null, gone: false, earlier: false,
+      },
+    ],
+    timing: { state: 'recorded', note: '时间来自各次尝试的开始时间' },
+  };
+  const html = renderAttemptChain(chain);
+  expect(html).toContain('synthetic_new_gate');
+  expect(html).toContain('m1');
+  expect(html).toContain('m2');
+});
+
+test('缺时间时只显示说明，不补造间隔', () => {
+  const html = renderAttemptChain({
+    state: 'present',
+    items: [{
+      index: 0, model: 'm1', provider: null, effort: null, status: 500,
+      fail: 'rate_limit', error: null, start_ms: null, ms: null,
+      ttft_ms: null, flow_ms: null, served: null, queued_ms: null,
+      replan: null, gone: false, earlier: false,
+    }],
+    timing: { state: 'partial', note: '部分尝试没有开始时间，不推算间隔' },
+  });
+  expect(html).toContain('不推算间隔');
+  expect(html).not.toContain('等待');
+  expect(html).not.toContain('间隔 ');
 });

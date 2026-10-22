@@ -15,7 +15,7 @@
 
 import {
   bodyNotice, deltaOrdinals, mdToHtml, messageEntries, roleTag,
-  renderCapabilities, renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools,
+  renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools,
   replyView, toolEntries,
 } from './body-view.js';
 
@@ -1015,13 +1015,13 @@ if (typeof document !== 'undefined') {
       return `<p class="note">原始路由已过期，长期摘要也没有留下。这里不返回空对象冒充已取得。</p>`;
     }
     const s = /** @type {Record<string, unknown>} */ (route.summary);
-    const tries = Array.isArray(s.tries) ? s.tries : [];
     const order = Array.isArray(s.order) ? s.order : [];
+    const attempts = /** @type {import('../src/queries').AttemptChain | null} */ (s.attempts ?? null);
     return `<dl class="chain">
       <div class="chain-row"><dt>候选顺序</dt><dd class="mono" style="font-size:10px">${order.map(o => esc(raw(o))).join(' → ') || '<span class="muted">未报告</span>'}</dd></div>
       <div class="chain-row"><dt>实际去向</dt><dd>${s.served ? `<code>${esc(s.served)}</code>` : '<span class="muted">未报告</span>'} · <code>${esc(s.provider ?? 'unknown')}</code></dd></div>
       <div class="chain-row"><dt>状态</dt><dd>HTTP ${esc(s.status ?? '—')} · ${secs(/** @type {number|null} */ (s.ms))}</dd></div>
-      ${tries.length > 0 ? `<div class="chain-row"><dt>尝试链</dt><dd>${tries.map((t, i) => `<span class="attempt-name">${i + 1}. ${esc(raw(t))}</span>`).join('<br>')}</dd></div>` : ''}
+      ${attempts !== null && attempts.state !== 'empty' ? `<div class="chain-row"><dt>尝试链</dt><dd>${renderAttemptChain(attempts)}</dd></div>` : ''}
     </dl>
     <p class="note" style="margin-top:8px">只显示已记录的决策与尝试。窗口过滤不保证完整留痕；用量条目数量也不等于尝试次数。</p>`;
   }

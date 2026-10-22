@@ -537,6 +537,34 @@ function renderSkillItem(skill) {
 }
 
 /**
+ * 尝试链。每一行只用服务端白名单字段；未知 fail 原样转义。
+ * 缺开始时间时只附说明，不计算任何相邻尝试的时间差。
+ * @param {import('../src/queries').AttemptChain | null | undefined} chain
+ * @returns {string}
+ */
+export function renderAttemptChain(chain) {
+  if (chain === null || chain === undefined || chain.state !== 'present') {
+    return '<p class="note">没有可读取的尝试记录。</p>';
+  }
+  const rows = chain.items.map(item => {
+    const bits = [item.model ?? '模型未报告'];
+    if (item.provider !== null) bits.push(item.provider);
+    if (item.status !== null) bits.push(`HTTP ${item.status}`);
+    if (item.fail !== null) bits.push(`fail ${item.fail}`);
+    if (item.effort !== null) bits.push(`effort ${item.effort}`);
+    if (item.start_ms !== null) {
+      const started = new Date(item.start_ms);
+      if (!Number.isNaN(started.getTime())) bits.push(started.toISOString());
+    }
+    if (item.ms !== null) bits.push(`${item.ms} ms`);
+    return `<span class="attempt-name">${item.index + 1}. ${bits.map(esc).join(' · ')}</span>`;
+  }).join('<br>');
+  const note = chain.timing.state === 'partial'
+    ? `<p class="note">${esc(chain.timing.note)}</p>` : '';
+  return `${rows}${note}`;
+}
+
+/**
  * 请求能力区块。只渲染服务端给出的能力视图；两类都为空时仍保留 section
  * 并说明原因，不输出空 details。
  * @param {BodyPage | null} page
