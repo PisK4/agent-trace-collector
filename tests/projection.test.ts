@@ -337,3 +337,43 @@ test('在线投影重复调用得到相同事实且owner证据完整收集', () 
     expect(collectOwnerEvidenceTx(f.store.read, 1).evidence.length).toBe(2);
   } finally { f.close(); }
 });
+
+test('清空请求事实后同一入口重建出相同结果', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, 1);
+    addLedger(f.store, 1, 0, {
+      t: '2026-10-22T00:00:00Z', handed_on: true, status: 429, model: 'provider-a',
+      req: 'req-a', in: 10, cost: 0.25, err: 'rate limited', err_type: 'rate_limit',
+    });
+    addLedger(f.store, 1, 100, {
+      t: '2026-10-22T00:00:01Z', status: 200, model: 'provider-b',
+      req: 'req-b', served: 'served-b', provider: 'p', in: 20, out: 5, cost: 0,
+    });
+    addRoute(f.store, 1, 7, {
+      id: 7, time: '2026-10-22T00:00:00Z', kind: 'compact',
+      prompt: { tokens: 100, counted: true, window: 200000, turns: 2, parts: [{ kind: 'system', tokens: 10 }] },
+    });
+    project(f.store, 1);
+    const first = {
+      facts: facts(f.store, 1),
+      request: f.store.read.query('SELECT req_id,cost FROM request ORDER BY req_id').all(),
+      owners: f.store.read.query('SELECT req_id,source_kind,ref_key FROM request_evidence ORDER BY req_id,source_kind,ref_key').all(),
+      raw: f.store.read.query('SELECT source_kind,file_generation,byte_offset FROM raw_ledger ORDER BY byte_offset').all(),
+    };
+    f.store.write(db => db.run(
+      `UPDATE request SET status=NULL,model_requested=NULL,model_served=NULL,in_tok=NULL,
+       attempt_in=NULL,attempt_billed=NULL,prompt_tokens=NULL,prompt_counted=NULL,parts_json=NULL WHERE req_id=1`));
+    const again = project(f.store, 1);
+    expect(facts(f.store, 1)).toEqual(first.facts);
+    expect(again.selected?.fields.errType).toBeNull();
+    expect(again.kind).toMatchObject({ state: 'single', values: ['compact'] });
+    expect({
+      request: f.store.read.query('SELECT req_id,cost FROM request ORDER BY req_id').all(),
+      owners: f.store.read.query('SELECT req_id,source_kind,ref_key FROM request_evidence ORDER BY req_id,source_kind,ref_key').all(),
+      raw: f.store.read.query('SELECT source_kind,file_generation,byte_offset FROM raw_ledger ORDER BY byte_offset').all(),
+    }).toEqual({ request: first.request, owners: first.owners, raw: first.raw });
+  } finally {
+    f.close();
+  }
+});

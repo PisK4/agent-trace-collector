@@ -379,10 +379,14 @@ hook 独有：   只有 1，超时未对上账本则停在 1，标记为待关�
 | 字段 | 取哪个来源 | 理由 |
 | --- | --- | --- |
 | 状态、用量、`response_id`、`provider` | 账本文件 | 网关记账的结果，hook 的 `success` 只是布尔 |
+| 请求模型 `model_requested` | 账本 `req` | agent 请求的模型（别名、路由组或 `provider/model`），与 provider 实得的 `model` 是两件事 |
+| 服务模型 `model_served` | 账本 `served` | 厂商回复里声明它答了哪个模型；缺失保持未知，不用 provider `model` 顶替 |
 | 费用 `cost`、`priced` | 账本 API，按 `route_id` 补齐 | 文件里没有这两个键；API 的 `Row` 才算得出 |
 | 正文、请求结构、回复 | hook | 账本没有正文 |
 | `prompt` 分解、`tries`、`affinity`、`order`、`conv` | 路由 | 只有路由有 |
 | agent、session、cwd | hook 优先，账本兜底 | 两处覆盖一致（3,435 对匹配里两边 session 都非空 3,405） |
+
+hook 的 `model` 与 `success` 只作为独立报告保留在 `raw_hook`：前者是 hook 侧看到的模型，不是 provider 侧读数；后者是"这次观察到成功"，不是 HTTP 状态码，两者都不写进 `request` 的模型列或 `status`。
 
 费用必须区分三种状态，不能合并成一个数：
 
@@ -416,6 +420,10 @@ SQLite，WAL，单文件，放仓库外。默认路径 `~/Library/Application Su
 ### 原始层
 
 三张表，互不覆盖。`payload_json` 保留整行原文，应对 magpie 改字段：不用提前把所有字段解析成列，出现新字段时先从原始载荷补，再改表。
+
+结构化列、`payload_json` 与路由长期摘要都来自同一个已脱敏对象：先 `redact` 再 `mapLedgerRow` / `mapRouteRow`。否则列与载荷会各说一套，而载荷里会留着未脱敏副本。
+
+字段按上游真实键读取：请求模型是 `req`（不是 `requested`），客户自报费用是 `cost`（不是 `own_cost`），vendor 错误原话是 `err`（`err_type` 是另一个字段），`prompt.counted` 是布尔。读不到的键保持 NULL，不拿相邻字段顶替。
 
 ```sql
 CREATE TABLE raw_ledger (
@@ -583,6 +591,18 @@ CREATE INDEX i_req_fail ON request(started_ms DESC) WHERE status >= 400;
 保留这组字段的依据是上游可能改写行为：`handed_on` 的类型定义就在 `usage.Record` 里，本机只是还没写过。真出现时，没有 `attempt_*` 就没有地方承接前一次的消耗，而原始账本又会在第 8 天过期。
 
 逐尝试的费用明细不放进 `request`。页面要按尝试解释时再取 `route_summary` 的 `tries_json` 与 `attempt_*` 对照；确实需要逐次金额时，在摘要层加用量与费用状态，不回原始层。
+
+#### 行级事实由来源投影决定
+
+`request` 的行级事实列不由各写入路径自己拼，而由 `src/sources/projection.ts` 的 `projectRequestTx` 从 `request_evidence` 重读证据后统一写。在线摄入与离线重建走同一入口。
+
+`model_requested` 存上游 `req`，`model_served` 存回复声明的 `served`，provider 侧 `model` 只留在 `raw_ledger` 与路由里。三者不互相顶替；缺失保持 NULL。
+
+尝试合计（`attempt_billed`、`attempt_*`、起始时间）只在账本 owner 证据完整时重算。任一条物理证据过期或读不懂、或同一行被两条证据指到（重复记账嫌疑）时，旧值与旧合计原样保留，不用部分行重算，也不取 MAX 掩盖。
+
+同毫秒的先后只有同一账本代际内的不同偏移能证明。跨代际的同毫秒无法证明顺序时，合计照常发布（它与顺序无关），但最终尝试不发布：`status`、模型三列与响应身份写 NULL，排序键清空，`attempt_state` 写 `pending_final`。
+
+`prompt_tokens`、`prompt_counted`、`prompt_window`、`prompt_turns` 与 `parts_json` 取 `time_ms` 唯一最大的那条原始 route，与到达顺序无关。两条 route 同毫秒并列，或该 route 的 Prompt 缺失、非法时，旧值只是历史保留，读模型不得当成本次事实；长期落列与隐藏由[长期信息与显式重建计划](superpowers/plans/2026-10-22-atc-durable-rebuild.md)交付。
 
 ### 请求与证据的关联
 
@@ -795,6 +815,8 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | 无路由 | `have & 4 == 0` | 路由段显示当前来源不提供 |
 | 收到 null 回复 | `raw_hook.success = 0` 且 `response_z IS NULL` | 显示上游未给出回复，与没收到 hook 分开 |
 
+原始证据过期或被回收时，保留旧的最终尝试、开始时间、排序键与尝试合计：证据不完整不等于旧事实已被推翻。只有证据完整而顺序不可证这一种情形会清空排序键与响应身份，因为留着它们等于声称知道顺序。重复尝试嫌疑同样保留旧值，不用 MAX 保住合计。
+
 ### 正文缺失
 
 `body_state` 独立于 `have`：
@@ -970,7 +992,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 缺字段分两种处理。整批都缺、且与版本变化同时发生，判为形状漂移，进入降级模式并标记新采集的数据。个别记录缺某个可选字段，按该字段合法缺失处理，不触发降级。本地升级与按类型缺字段不能混为一谈。
 
-未知字段不丢弃，进 `payload_json`。字段名映射集中在一个模块里，magpie 改名时只改那处。
+未知字段不丢弃，进 `payload_json`。字段名映射集中在一个模块里，magpie 改名时只改那处。每个字段同时记录读取状态：读到值、空串、没有键、类型不对，四者分开。空串既不是值也不是撤销；类型不对不抛错、不转类型，值保持 NULL 并记下状态，一条坏字段不降级整批。`prompt.counted` 省略时写 0 但状态记作未校准——合法省略不等于 false。
 
 ## 安全边界
 
@@ -999,7 +1021,7 @@ hook 拿到的是脱敏前的正文。collector 自己实现一层，规则分�
 | 敏感字段路径 | 按字段路径匹配，不用宽泛键名。凭证路径替换，用量字段（`usage.*`、token 计数）保留 |
 | 用户自定义 | 配置文件里的正则列表 |
 
-占位符要保持稳定。同类同值映射到同一个占位符，正文仍可读，去重也不会因为脱敏变得零碎。
+占位符要保持稳定。同类同值映射到同一个占位符，正文仍可读，去重也不会因为脱敏变得零碎。`account` 与 `providerAccount` 指向同一订阅身份，两者都得到同一个 `credential` 占位符，否则同一个人在两个入口下看起来像两个人。已经是占位符的值原样返回，重复脱敏不会把占位符再散列成另一个 digest。
 
 脱敏在分块之前做。块哈希基于脱敏后的内容，同一份内容不会因为一次带凭证一次不带而存两份。
 
