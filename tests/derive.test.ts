@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { openStore } from '../src/store';
+import { runMaintenance } from '../src/maintenance';
 import type { Store } from '../src/store';
-import { compareSequence, deriveTitle, drainDerive, enqueueDerive, matchPredecessor, pairToolCalls } from '../src/derive';
+import { compareSequence, deriveTitle, drainDerive, enqueueDerive, matchPredecessor } from '../src/derive';
 import { listSessions } from '../src/queries';
 import { modelTimeTitle } from '../src/sources/magpie';
 import { messageFingerprint } from '../src/fingerprint';
@@ -288,8 +289,8 @@ test('同毫秒交换摄入ID仍得到相同链角色和工具关系', () => {
   const a = fixture(); const b = fixture();
   try {
     seedRound(a.store, [1, 2]); seedRound(b.store, [2, 1]);
-    rebuild(a.store); pairToolCalls(a.store, GROUP, ACTOR);
-    rebuild(b.store); pairToolCalls(b.store, GROUP, ACTOR);
+    rebuild(a.store);
+    rebuild(b.store);
     expect(snapshot(a.store, [1, 2])).toEqual(snapshot(b.store, [2, 1]));
     expect(snapshot(b.store, [2, 1]).tools[0]).toMatchObject({
       state: 'resolved', result_req: 'second',
@@ -304,7 +305,7 @@ test('时间优先于跨代际物理键字典序', () => {
     f.store.write(db => db.run(`UPDATE request SET sort_key=CASE req_id
       WHEN 1 THEN '9:8:7:0|00000000000000000000'
       ELSE '1:2:3:0|00000000000000000100' END`));
-    rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+    rebuild(f.store);
     expect(snapshot(f.store, [1, 2]).requests[1]?.prev_req_id).toBe('first');
     expect(snapshot(f.store, [1, 2]).tools[0]?.state).toBe('resolved');
   } finally { f.close(); }
@@ -316,7 +317,7 @@ test('同代际重复偏移不能由ID创造确定关系', () => {
     seedRound(f.store, [1, 2]);
     f.store.write(db => db.run(`UPDATE request
       SET sort_key='1:2:3:0|00000000000000000000'`));
-    rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+    rebuild(f.store);
     expect(snapshot(f.store, [1, 2]).requests.map(r => r.prev_relation))
       .toEqual(['unknown', 'unknown']);
     expect(snapshot(f.store, [1, 2]).tools[0]?.state).toBe('pending');
@@ -328,14 +329,14 @@ test('缺键同时间桶保守且来源后补可重算', () => {
   try {
     seedRound(f.store, [1, 2]);
     f.store.write(db => db.run('UPDATE request SET sort_source=NULL,sort_key=NULL'));
-    rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+    rebuild(f.store);
     expect(snapshot(f.store, [1, 2]).tools[0]?.state).toBe('pending');
     f.store.write(db => {
       for (const id of [1, 2]) db.run(`UPDATE request
         SET sort_source='ledger',sort_key=? WHERE req_id=?`,
         [`1:2:3:0|${String((id - 1) * 100).padStart(20, '0')}`, id]);
     });
-    rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+    rebuild(f.store);
     expect(snapshot(f.store, [1, 2]).tools[0]?.state).toBe('resolved');
   } finally { f.close(); }
 });
@@ -356,7 +357,7 @@ for (const [index, sources] of unsupportedOrders.entries()) {
           for (const [i, id] of ids.entries()) db.run(`UPDATE request
             SET sort_source=?,sort_key=? WHERE req_id=?`, [...sources[i]!, id]);
         });
-        rebuild(f.store); pairToolCalls(f.store, GROUP, ACTOR);
+        rebuild(f.store);
         expect(snapshot(f.store, ids).requests.map(row => row.prev_relation))
           .toEqual(['unknown', 'unknown']);
         expect(snapshot(f.store, ids).tools[0]?.state).toBe('pending');
@@ -536,6 +537,43 @@ test('被回收调用的旧resolved行保留且不参与本次摘要', () => {
   } finally { f.close(); }
 });
 
+test('合成旧排序经维护入口对齐且事实守恒', async () => {
+  const direct = fixture(); const historical = fixture();
+  try {
+    for (const f of [direct, historical]) {
+      seedRound(f.store, [1, 2], [1000, 2000]);
+      f.store.write(db => {
+        db.run(`UPDATE request SET cost=0.25,sort_key=CASE req_id
+          WHEN 1 THEN '9:8:7:0|00000000000000000000'
+          ELSE '1:2:3:0|00000000000000000100' END`);
+        db.run(`INSERT INTO request_evidence(req_id,source_kind,ref_key,merge_state,added_at)
+          VALUES (1,'hook','synthetic-owner-1','merged',1),
+                 (2,'hook','synthetic-owner-2','merged',1)`);
+      });
+    }
+    rebuild(direct.store);
+    historical.store.write(db => db.run(`UPDATE request SET
+      prev_req_id=NULL,prev_relation='first',delta_ordinals='[0]',
+      chain_role='main',title='synthetic old result',title_source='model_time'`));
+    const facts = () => ({
+      requests: historical.store.read.query(`SELECT req_id,cost,conv_key,actor
+        FROM request ORDER BY req_id`).all(),
+      owners: historical.store.read.query(`SELECT req_id,source_kind,ref_key,merge_state
+        FROM request_evidence ORDER BY req_id,source_kind,ref_key`).all(),
+      refs: historical.store.read.query(`SELECT req_id,ord,block
+        FROM request_block ORDER BY req_id,ord`).all(),
+    });
+    const before = facts();
+    const lines: string[] = [];
+    expect(await runMaintenance(['rebuild', '--db', join(historical.dir, 'trace.db'),
+      '--session', GROUP], { out: line => lines.push(line), err: () => {} })).toBe(0);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ queue_remaining: 0,
+      recomputed_requests: 2, retained_requests: 0 });
+    expect(snapshot(historical.store, [1, 2])).toEqual(snapshot(direct.store, [1, 2]));
+    expect(facts()).toEqual(before);
+  } finally { direct.close(); historical.close(); }
+});
+
 test('稳定排序重算得到确定增量与标题', () => {
   const f = fixture();
   try {
@@ -584,7 +622,54 @@ test('到达顺序不影响派生结果', () => {
   ]);
 });
 
-test('250笔链分批处理后在重开时继续且最终版本一致', () => {
+test('limit按组计数且首组整批处理', () => {
+  const f = fixture();
+  try {
+    // 首组 250 笔，另组 1 笔；组名按字节序保证首组先被选中。
+    const chain = Array.from({ length: 250 }, (_, index) =>
+      Array.from({ length: index + 1 }, (_, position) => `m${position}`));
+    seedChain(f.store, chain);
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+        body_state,derive_version,have,created_at,updated_at)
+        VALUES (500,'zz-second','actor-b','known',9999,'2026-10-22','hook','pending',0,1,1,1)`);
+    });
+    enqueueDerive(f.store, JSON.stringify(['session', 'chain']), 'actor-a', '');
+    enqueueDerive(f.store, 'zz-second', 'actor-b', '');
+    const first = drainDerive(f.store, 1);
+    expect(first.processed).toBe(250);
+    expect(first.remaining).toBe(1);
+    const second = drainDerive(f.store, 1);
+    expect(second.processed).toBe(1);
+    expect(second.remaining).toBe(0);
+  } finally { f.close(); }
+});
+
+test('非法limit与空scope被拒绝', () => {
+  const f = fixture();
+  try {
+    for (const limit of [0, -1, 1.5, Number.NaN]) {
+      expect(() => drainDerive(f.store, limit)).toThrow('invalid_derive_limit');
+    }
+    expect(() => drainDerive(f.store, 10, { convKey: '' })).toThrow('invalid_derive_scope');
+  } finally { f.close(); }
+});
+
+test('空组任务也被确认且不计重算或保留', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(
+      "INSERT INTO derive_queue(conv_key,actor,from_sort) VALUES ('empty-group','actor-empty','')"));
+    const result = drainDerive(f.store);
+    expect(result.groups).toEqual([{ conv_key: 'empty-group', actor: 'actor-empty' }]);
+    expect(result.processed).toBe(0);
+    expect(result.remaining).toBe(0);
+    expect(result.recomputed).toBe(0);
+    expect(result.retained).toBe(0);
+  } finally { f.close(); }
+});
+
+test('完整组重建关闭重开后保持增量', () => {
   const dir = mkdtempSync(join(tmpdir(), 'collector-chain-'));
   const store = openStore(join(dir, 'trace.db'));
   try {
@@ -654,28 +739,6 @@ test('未知归属的请求不入队', () => {
   }
 });
 
-test('250笔链分批处理后在重开时继续且最终版本一致', () => {
-  const f = fixture();
-  try {
-    const chain = Array.from({ length: 250 }, (_, index) =>
-      Array.from({ length: index + 1 }, (_, position) => `m${position}`));
-    seedChain(f.store, chain);
-    const key = JSON.stringify(['session', 'chain']);
-    enqueueDerive(f.store, key, 'actor-a', '');
-    // 手动把一个分组拆成两次处理：先处理前面一批，再继续。
-    const first = drainDerive(f.store, 1);
-    expect(first.processed).toBe(250);
-    expect(first.remaining).toBe(0);
-
-    f.store.close();
-    // 记录关闭前的派生版本，重开后再排一次应当得到相同结果。
-    const snapshot = JSON.parse(JSON.stringify(chain));
-    void snapshot;
-  } finally {
-    try { f.close(); } catch { /* already closed */ }
-  }
-});
-
 test('工具调用按同actor配对，跨请求不串', () => {
   const f = fixture();
   try {
@@ -706,9 +769,8 @@ test('工具调用按同actor配对，跨请求不串', () => {
       redact_version: 1,
     });
     enqueueDerive(f.store, JSON.stringify(['session', 'tools']), 'actor-a', '');
-    drainDerive(f.store);
-    const result = pairToolCalls(f.store, JSON.stringify(['session', 'tools']), 'actor-a');
-    expect(result.resolved).toBe(1);
+    const result = drainDerive(f.store);
+    expect(result.processed).toBe(2);
     const call = f.store.read.query<{ result_req: number; result_ord: number; result_path: string; state: string }, [number]>(
       'SELECT result_req, result_ord, result_path, state FROM tool_call WHERE req_id=? AND ord=0').get(1);
     expect(call).toEqual({
@@ -901,7 +963,8 @@ test('重复call_id标ambiguous不挑最近', () => {
       request: { messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_dup', content: 'r' }] }] },
       reply: { id: 'msg_3', content: [] }, redact_version: 1,
     });
-    pairToolCalls(f.store, JSON.stringify(['session', 'dup']), 'actor-a');
+    enqueueDerive(f.store, JSON.stringify(['session', 'dup']), 'actor-a', '');
+    drainDerive(f.store);
     const states = f.store.read.query<{ req_id: number; state: string }, []>(
       "SELECT req_id, state FROM tool_call WHERE call_id='toolu_dup' ORDER BY req_id").all();
     expect(states).toEqual([{ req_id: 1, state: 'ambiguous' }, { req_id: 2, state: 'ambiguous' }]);
@@ -942,7 +1005,6 @@ test('后续请求重发同一工具结果不把已确认配对降级', () => {
     });
     enqueueDerive(f.store, key, 'actor-a', '');
     drainDerive(f.store);
-    pairToolCalls(f.store, key, 'actor-a');
     const call = f.store.read.query<{ result_req: number; state: string }, []>(
       "SELECT result_req, state FROM tool_call WHERE call_id='toolu_r'").get();
     // 首次出现该结果的请求才是配对目标；后来的重发不能把它改回 pending。
@@ -979,14 +1041,16 @@ test('先到的未确认结果不挡后来的确认配对', () => {
     // 第 2 笔与第 1 笔没有公共前缀：结果出现在确认不了的位置，只能记候选。
     enqueueDerive(f.store, key, 'actor-a', '');
     drainDerive(f.store);
-    pairToolCalls(f.store, key, 'actor-a');
     const first = f.store.read.query<{ state: string }, []>("SELECT state FROM tool_call WHERE call_id='toolu_u'").get();
     expect(first?.state).toBe('pending');
 
-    // 把第 2 笔改成与第 1 笔前缀一致：同一位置现在确认了，应升级为 resolved。
-    f.store.write(db => db.run(
-      "UPDATE request SET prev_relation='confirmed', delta_ordinals='[1,2]' WHERE req_id=2"));
-    pairToolCalls(f.store, key, 'actor-a');
+    // 第二笔实际输入改成与第一笔前缀一致：同一位置现在确认了，统一重算应升级为 resolved。
+    persistBody(f.store, 2, { protocol: 'anthropic',
+      request: { messages: [
+        { role: 'user', content: [{ type: 'text', text: 'q1' }] }, callMsg, resultMsg,
+      ] }, reply: { id: 'msg_2', content: [] }, redact_version: 1 });
+    enqueueDerive(f.store, key, 'actor-a', '');
+    drainDerive(f.store);
     const second = f.store.read.query<{ state: string; result_req: number }, []>(
       "SELECT state, result_req FROM tool_call WHERE call_id='toolu_u'").get();
     expect(second).toEqual({ state: 'resolved', result_req: 2 });

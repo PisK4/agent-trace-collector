@@ -739,19 +739,45 @@ function assignChainRoles(db: Database, convKey: string, actor: string): void {
   for (const row of rows) update.run(trunk.has(row.req_id) ? 'main' : 'branch', row.req_id);
 }
 
+/** 离线维护只处理目标会话，不消费其它会话的任务。 */
+export type DeriveScope = { convKey: string };
+
+export type DrainResult = {
+  processed: number;
+  /** 当前 scope 内未完成组；省略 scope 时是全队列。 */
+  remaining: number;
+  /** 全部阶段已提交的组。 */
+  groups: Group[];
+  /** 本批具有可比较消息序列的请求，包括真实空数组。 */
+  recomputed: number;
+  /** 消息序列不可比较、标题与摘要按旧值保留的请求。 */
+  retained: number;
+};
+
 /**
  * 处理队列里的一批分组。每个分组按稳定顺序从头重算整条链：
  * 这样乱序到达、迟到正文与归属变化都收敛到同一个结果，与到达顺序无关。
- * 返回本批处理过的分组，供调用方只重配这些分组的工具往返。
+ *
+ * 链、主链角色、工具配对、摘要与队列确认在同一个同步事务内按序完成；
+ * 任一阶段失败，整批回滚并保留任务。
+ *
+ * @param scope 只处理该会话的组，用于离线维护
  */
-export function drainDerive(store: Store, limit = 100): {
-  processed: number; remaining: number; groups: { conv_key: string; actor: string }[];
-} {
+export function drainDerive(store: Store, limit = 100, scope?: DeriveScope): DrainResult {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid_derive_limit');
+  if (scope !== undefined && (typeof scope.convKey !== 'string' || scope.convKey.length === 0)) {
+    throw new Error('invalid_derive_scope');
+  }
   return store.write(db => {
-    const groups = db.query<{ conv_key: string; actor: string }, [number]>(
-      'SELECT conv_key, actor FROM derive_queue ORDER BY conv_key, actor LIMIT ?').all(limit);
-    const touched: { conv_key: string; actor: string }[] = [];
+    const groups = scope === undefined
+      ? db.query<Group, [number]>(`SELECT conv_key,actor FROM derive_queue
+          ORDER BY conv_key,actor LIMIT ?`).all(limit)
+      : db.query<Group, [string, number]>(`SELECT conv_key,actor FROM derive_queue
+          WHERE conv_key=? ORDER BY actor LIMIT ?`).all(scope.convKey, limit);
+    const touched: Group[] = [];
     let processed = 0;
+    let recomputed = 0;
+    let retained = 0;
     for (const group of groups) {
       const rows = db.query<ChainRow, [string, string]>(`
         SELECT req_id, actor, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
@@ -814,6 +840,8 @@ export function drainDerive(store: Store, limit = 100): {
         pairRows.push({ ...row, req_kind: reqKind,
           prev_relation: match.relation, delta_ordinals: deltaJson });
         presentations.push({ row, current, replyInfo, isTitleRequest, modelTitle, match });
+        if (current === null) retained += 1;
+        else recomputed += 1;
         if (!isTitleRequest && current !== null && !uncertain.has(row.req_id)) {
           ancestors.push({ reqId: row.req_id, fingerprints: current });
         }
@@ -827,8 +855,11 @@ export function drainDerive(store: Store, limit = 100): {
       db.run('DELETE FROM derive_queue WHERE conv_key=? AND actor=?', [group.conv_key, group.actor]);
       touched.push(group);
     }
-    const remaining = (db.query('SELECT COUNT(*) AS n FROM derive_queue').get() as { n: number }).n;
-    return { processed, remaining, groups: touched };
+    const remaining = scope === undefined
+      ? (db.query('SELECT COUNT(*) AS n FROM derive_queue').get() as { n: number }).n
+      : db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM derive_queue
+          WHERE conv_key=?`).get(scope.convKey)!.n;
+    return { processed, remaining, groups: touched, recomputed, retained };
   });
 }
 
@@ -877,15 +908,8 @@ type PairResult = {
 };
 
 /**
- * 工具往返：调用来自回复，结果出现在后续同 conv/actor 的请求里。
- *
- * 只配已有确定增量覆盖的结果（confirmed/first）；unknown 请求里的结果最多
- * 建候选，不标 resolved。同一 call_id 命中多个发起请求时标 ambiguous，
- * 不挑最近的一个，也不跨 actor 配对。
- *
- * @param ordered 已按 `compareTraversalOrder` 排好、且刚写完本轮关系的本组请求
- * @param uncertain 同毫秒顺序未证实的请求；它们之间的先后不能作为配对证据
- * @returns 本次新建且最终 resolved 的关联，供摘要按调用位置与结果 path 取名
+ * 工具往返的事务内实现。外部不再导出独立入口：完整的完成入口是 `drainDerive`，
+ * 它保证配对之后还有摘要与队列确认。
  */
 function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[],
   uncertain: ReadonlySet<number>): PairResult {
@@ -1020,18 +1044,6 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
 }
 
 /** 工具往返的独立入口：维护与回填脚本迁移完成前仍可用，不参与摘要。 */
-export function pairToolCalls(store: Store, convKey: string, actor: string): { resolved: number; ambiguous: number; pending: number } {
-  return store.write(db => {
-    const rows = db.query<PairRow, [string, string]>(`
-      SELECT req_id, started_ms, sort_source, sort_key,
-             prev_relation, delta_ordinals, req_kind FROM request
-      WHERE conv_key=? AND actor=? AND actor_state='known'`).all(convKey, actor);
-    rows.sort(compareTraversalOrder);
-    const result = pairToolCallsTx(db, { conv_key: convKey, actor }, rows, uncertainOrderIds(rows));
-    return { resolved: result.resolved, ambiguous: result.ambiguous, pending: result.pending };
-  });
-}
-
 export type RebuildReport = {
   queued: number;
   unavailable: number;

@@ -15,6 +15,59 @@ import {
 } from '../src/maintenance';
 import { loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
+import { persistBody } from '../src/body';
+
+test('维护重建排空目标会话且不消费其它会话积压', async () => {
+  const f = fixture();
+  try {
+    f.store.write(db => {
+      for (let i = 0; i < 101; i++) db.run(`INSERT INTO request(
+        conv_key,actor,actor_state,started_ms,day,via,body_state,
+        derive_version,have,created_at,updated_at)
+        VALUES ('zz-target',?,'known',?,'2026-10-22','hook','available',0,1,1,1)`,
+        [`actor-${i}`, i]);
+      db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort)
+        VALUES ('aa-other','actor-other','')`);
+    });
+    const lines: string[] = [];
+    const code = await runMaintenance(['rebuild','--db',join(f.dir,'trace.db'),
+      '--session','zz-target'], { out: line => lines.push(line), err: () => {} });
+    expect(code).toBe(0);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ ok: true, queue_remaining: 0,
+      recomputed_requests: 0, retained_requests: 101 });
+    expect(f.store.read.query(`SELECT COUNT(*) AS n FROM derive_queue
+      WHERE conv_key='zz-target'`).get()).toEqual({ n: 0 });
+    expect(f.store.read.query(`SELECT conv_key FROM derive_queue`).all())
+      .toEqual([{ conv_key: 'aa-other' }]);
+  } finally {
+    f.close();
+  }
+});
+
+test('维护报告分别计入可重算与缺正文保留请求', async () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(`INSERT INTO request(req_id,conv_key,actor,
+      actor_state,started_ms,day,via,body_state,derive_version,have,created_at,
+      updated_at,title,title_source) VALUES
+      (1,'mixed','actor','known',1000,'2026-10-22','hook','pending',0,1,1,1,NULL,NULL),
+      (2,'mixed','actor','known',2000,'2026-10-22','hook','evicted',0,1,1,1,
+       'retained title','user_delta')`));
+    persistBody(f.store, 1, { protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: 'synthetic input' }] },
+      reply: { content: [] }, redact_version: 1 });
+    const lines: string[] = [];
+    const code = await runMaintenance(['rebuild', '--db', join(f.dir, 'trace.db'),
+      '--session', 'mixed'], { out: line => lines.push(line), err: () => {} });
+    expect(code).toBe(0);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ queue_remaining: 0,
+      recomputed_requests: 1, retained_requests: 1 });
+    expect(f.store.read.query(`SELECT title,title_source FROM request WHERE req_id=2`).get())
+      .toEqual({ title: 'retained title', title_source: 'user_delta' });
+  } finally {
+    f.close();
+  }
+});
 
 test('备份包含已提交状态且不覆盖已有目标', () => {
   const f = fixture();

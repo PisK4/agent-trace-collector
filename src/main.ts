@@ -9,7 +9,7 @@ import { ingestLedger, ingestRoute } from './reconcile';
 import { probeMagpie, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
 import { reconcilePending } from './hook';
-import { drainDerive, pairToolCalls } from './derive';
+import { drainDerive } from './derive';
 import {
   DISK_METADATA_RATIO,
   EVICT_TARGET_RATIO,
@@ -207,11 +207,7 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   });
 
   const deriveTick = guard('derive', () => {
-    const result = drainDerive(store);
-    // 只重配本批真正处理过的分组，不扫描全库。
-    for (const group of result.groups) {
-      pairToolCalls(store, group.conv_key, group.actor);
-    }
+    drainDerive(store);
   });
 
   const server = Bun.serve({

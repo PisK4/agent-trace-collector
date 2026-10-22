@@ -9,7 +9,7 @@
 import { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import { fingerprintHash, messageFingerprint } from '../src/fingerprint';
-import { drainDerive, enqueueDerive, pairToolCalls } from '../src/derive';
+import { drainDerive, enqueueDerive } from '../src/derive';
 import type { Store } from '../src/store';
 
 const path = process.env.ATC_BACKFILL_DB ?? `${process.env.HOME}/Library/Application Support/agent-trace-collector/trace.db`;
@@ -93,8 +93,6 @@ for (;;) {
   if (result.remaining === 0) break;
 }
 process.stderr.write(`derived:${processed}\n`);
-
-for (const group of groups) pairToolCalls(store, group.conv_key, group.actor);
 
 // 4. 回填后的分布，用来核对这次修复到底改变了多少。
 const relations = db.query<{ prev_relation: string; n: number }, []>(`
