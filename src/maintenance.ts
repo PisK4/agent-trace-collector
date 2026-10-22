@@ -5,7 +5,7 @@ import {
 import { dirname, join } from 'node:path';
 import { openStore } from './store';
 import type { Store } from './store';
-import { drainDerive, pairToolCalls, rebuildDerived } from './derive';
+import { drainDerive, rebuildDerived } from './derive';
 
 /**
  * 离线维护。这些命令都要求在 collector 停止后运行：
@@ -431,14 +431,26 @@ export async function runMaintenance(argv: string[], io: {
         }
         store = openStore(dbPath);
         const report = rebuildDerived(store, session);
-        const drained = drainDerive(store);
-        for (const group of drained.groups) pairToolCalls(store, group.conv_key, group.actor);
+        let drained: ReturnType<typeof drainDerive>;
+        let recomputedRequests = 0;
+        let retainedRequests = 0;
+        // 只排空目标会话：其它会话的积压留给它自己的维护窗口。
+        do {
+          drained = drainDerive(store, 100, { convKey: session });
+          recomputedRequests += drained.recomputed;
+          retainedRequests += drained.retained;
+          if (drained.remaining > 0 && drained.groups.length === 0) {
+            throw new Error('derive_no_progress');
+          }
+        } while (drained.remaining > 0);
         const version = store.read.query<{ v: number | null }, [string]>(
           'SELECT MAX(derive_version) AS v FROM request WHERE conv_key=?').get(session);
         // 正文与 raw 都没了的分组只报告数量和原因，旧标题与工具关系保持原样。
         out(JSON.stringify({
           ok: true, session, queued: report.queued, unavailable: report.unavailable,
-          reasons: report.reasons, derive_version: version?.v ?? 0, queue_remaining: drained.remaining,
+          reasons: report.reasons, derive_version: version?.v ?? 0,
+          queue_remaining: drained.remaining,
+          recomputed_requests: recomputedRequests, retained_requests: retainedRequests,
         }));
         return 0;
       }

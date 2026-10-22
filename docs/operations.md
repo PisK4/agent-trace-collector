@@ -71,13 +71,17 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 
 ### rebuild
 
-整链重排一个会话的派生结果，只重算正文仍可读（`available` / `partial`）的请求。输出包含：
+整链重排一个会话的派生结果，只重算正文仍可读（`available` / `partial`）的请求。只排空目标会话的任务；其它会话的积压留给它自己的维护窗口。输出包含：
 
 - `queued`：处理的分组数（按 `conv_key` + `actor` 拆）。
 - `unavailable`：正文不可用的请求数；它们保持原样。
 - `reasons`：不可用的原因分类。`body_evicted_raw_present` 表示正文已回收但 raw 层还有原文，可以按物理身份重放后再重建；`body_evicted_raw_expired` 表示两边都没了，重算不出任何东西。
-- `derive_version`：重排后该会话的最大派生版本。
-- `queue_remaining`：重排后队列剩余量，正常为 0。
+- `derive_version`：重排后该会话的最大派生版本。它不表示算法覆盖率。
+- `queue_remaining`：目标会话重排后队列剩余量，正常为 0；其它会话的积压不计入。
+- `recomputed_requests`：本次真正按可比较消息序列重算的请求数。
+- `retained_requests`：本次消息序列不可比较、标题与摘要按旧值保留的请求数。
+
+`unavailable` 与 `reasons` 按正文状态统计，`recomputed_requests` 与 `retained_requests` 按实际比较结果统计，两者不能互相替代：正文状态为 `partial` 但没有骨架的请求计入后者，而不是重算。
 
 正文已回收的请求不会因为重建而丢掉旧标题与已确认的工具配对：没有正文可读时，派生层保留原值，不把它们改写成时间兜底或空。
 
