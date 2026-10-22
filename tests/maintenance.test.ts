@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fixture } from './fixtures';
+import { fixture, seedPurposeRequest } from './fixtures';
 import { openStore } from '../src/store';
 import {
   acquireMaintenanceLock,
@@ -620,4 +620,43 @@ test('正文已回收但raw仍在时重建报告可补采原因', async () => {
   } finally {
     f.close();
   }
+});
+
+test('重建只升级目标会话的用途目标并排空两类工作', async () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 's-target', purposeTarget: 1, purposeVersion: 1,
+      purposeStatus: 'recognized', purposeRule: 'legacy.title',
+      purposeChain: 'exclude', reqKind: 'title', modelTitle: '旧标题',
+      purposePending: 0, cleanGroup: true,
+      reply: { content: [{ type: 'text', text: '<title>旧标题</title>' }] },
+    });
+    const other = seedPurposeRequest(f.store, {
+      convKey: 's-other', purposeTarget: 1, purposeVersion: 1,
+      purposeStatus: 'recognized', purposePending: 0, cleanGroup: true,
+    });
+    const lines: string[] = [];
+    const code = await runMaintenance(['rebuild', '--db', join(f.dir, 'trace.db'),
+      '--session', 's-target'], { out: line => lines.push(line), err: () => {} });
+    expect(code).toBe(0);
+    const report = JSON.parse(lines[0]!);
+    expect(report).toMatchObject({
+      ok: true, session: 's-target', queue_remaining: 0, purpose_remaining: 0,
+    });
+    expect(report.purpose_upgraded).toBeGreaterThanOrEqual(1);
+    expect(f.store.read.query<{
+      purpose_target: number; purpose_pending: number; purpose_version: number | null;
+      req_kind: string;
+    }, [number]>(`
+      SELECT purpose_target, purpose_pending, purpose_version, req_kind
+      FROM request WHERE req_id=?`).get(id)).toMatchObject({
+      purpose_target: 2, purpose_pending: 0, purpose_version: 2, req_kind: 'title',
+    });
+    expect(f.store.read.query<{
+      purpose_target: number; purpose_pending: number;
+    }, [number]>(`
+      SELECT purpose_target, purpose_pending FROM request WHERE req_id=?`).get(other))
+      .toEqual({ purpose_target: 1, purpose_pending: 0 });
+  } finally { f.close(); }
 });

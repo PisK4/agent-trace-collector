@@ -46,7 +46,7 @@ Status: implemented
 - 组阶段只读用途列：`purpose_chain` 决定是否参与链与工具配对，`req_kind` 决定是否走标题字段，回复预览不再解析 `<title>`。派生不写 `req_kind`/`model_title`，避免与用途阶段形成两个标题来源。
 - 查询原样返回未知的 `req_kind` 与 `chain_role`，不折叠成 chat/main；会话标题只取已完成组且用途已结算的行，排除用途提供 `model_title`，参与链提供用户标题。
 - 页面按 `purpose_chain`/`chain_role` 认辅助请求，按 `req_kind` 给分类器与标题生成贴标签；摘要字符串不再参与类别判断。
-- 本批交付纯解释与单笔结算；接入维护入口由后续变更补齐，同一时间只有一个用途写入者。
+- 只有显式 `rebuild --session` 会把该会话 `purpose_target<2` 的行置为待判并排空；普通 tick 不升级 clean 的历史行，避免一次例行调度把整库重判。同一时间只有一个用途写入者。
 
 ## Testing
 

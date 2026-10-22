@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { openStore } from './store';
 import type { Store } from './store';
 import { drainDerive, rebuildDerived } from './derive';
+import { upgradePurposeTargetTx } from './request-purpose';
 import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
 import { readLocalSecret, saltId } from './config';
 
@@ -772,6 +773,9 @@ export async function runMaintenance(argv: string[], io: {
           return 1;
         }
         store = openStore(dbPath);
+        // 显式重建是唯一升级历史用途目标的入口：把目标会话里旧目标的行重新
+        // 排进用途阶段，再按当前规则重算；普通 tick 不碰已结算的 clean 行。
+        const purposeUpgraded = store.write(db => upgradePurposeTargetTx(db, session));
         const report = rebuildDerived(store, session);
         let drained: ReturnType<typeof drainDerive>;
         let recomputedRequests = 0;
@@ -808,7 +812,7 @@ export async function runMaintenance(argv: string[], io: {
           ok: true, session, queued: report.queued, unavailable: report.unavailable,
           reasons: report.reasons, derive_version: version?.v ?? 0,
           queue_remaining: drained.remaining, purpose_remaining: drained.purpose_remaining,
-          purpose_processed: purposeProcessed,
+          purpose_processed: purposeProcessed, purpose_upgraded: purposeUpgraded,
           recomputed_requests: recomputedRequests, retained_requests: retainedRequests,
           target_algorithm: GROUP_ALGORITHM, actual_algorithms: actualAlgorithms,
           legacy_requests: legacy, pending_groups: pending,
