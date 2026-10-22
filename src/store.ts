@@ -1,6 +1,9 @@
 import { Database } from 'bun:sqlite';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { conservationDigest } from './conservation';
+import { readMigrationState } from './migrate-v5';
+import type { MigrationState } from './migrate-v5';
 
 export type Store = {
   db: Database;
@@ -10,7 +13,7 @@ export type Store = {
 };
 
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -23,7 +26,9 @@ function pragmaNumber(db: Database, name: string): number {
   return row === null ? Number.NaN : Number(Object.values(row)[0]);
 }
 
-function migrate(db: Database): void {
+export type OpenOptions = { allowIncompleteMigration?: boolean };
+
+function migrate(db: Database, options: OpenOptions): void {
   const version = pragmaNumber(db, 'user_version');
   const tables = tableNames(db);
   if (version === 0 && tables.length === 0) {
@@ -31,16 +36,29 @@ function migrate(db: Database): void {
     db.exec('PRAGMA journal_mode=WAL');
     db.transaction(() => {
       db.exec(SCHEMA);
+      // 新库直接是完整的 v5：标记与建表同事务，不存在"结构有、标记无"的中间态。
+      const state: MigrationState = {
+        format: 1, target: 5, phase: 'complete', cursor: null, scope: 'all', complete: true,
+        baseline: conservationDigest(db),
+        report: { scanned: 0, remapped: 0, projected: 0 },
+      };
+      db.run("INSERT INTO collector_state(key,value_json) VALUES ('migration:v5',?)",
+        [JSON.stringify(state)]);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
     return;
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
-  // v4 增加了请求类别、链角色与模型标题；v3 改了块指纹与摘要列。
-  // 两者都没有原地升级路径：旧库里的派生结果本身就不可信，
-  // 就地改写只会把错误固化下来。要求删库重建，由来源重放补齐。
+  // 低版本没有原地升级路径：普通启动不做 ALTER，也不假装列已经补上。
+  // v4→v5 只能由显式迁移脚本执行，未完成时拒绝启动。
   if (version < SCHEMA_VERSION) throw new Error('schema_rebuild_required');
+  // v5 之后结构存在不等于迁移完成：普通启动只认 complete=true，
+  // 未完成的库必须由显式迁移续跑，否则在线写入会往半迁移数据上追加事实。
+  const state = readMigrationState(db);
+  if (!state.complete && options.allowIncompleteMigration !== true) {
+    throw new Error('migration_incomplete');
+  }
   const requestSql = db.query(
     "SELECT sql FROM sqlite_master WHERE type='table' AND name='request'",
   ).get() as { sql: string } | null;
@@ -50,7 +68,7 @@ function migrate(db: Database): void {
   if (pragmaNumber(db, 'auto_vacuum') !== 2) throw new Error('auto_vacuum_requires_migration');
 }
 
-export function openStore(path: string): Store {
+export function openStore(path: string, options: OpenOptions = {}): Store {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
@@ -66,7 +84,13 @@ export function openStore(path: string): Store {
     // See the directory note above.
   }
 
-  migrate(db);
+  try {
+    migrate(db, options);
+  } catch (error) {
+    // 迁移或标记校验失败时关闭写连接，否则调用方重试会撞上一个已打开的库。
+    db.close();
+    throw error;
+  }
   db.exec('PRAGMA journal_mode=WAL');
   // 切到 WAL 不等于文件已就位：第一次写事务之前不会创建 -wal/-shm，
   // 而只读连接打不开这两个文件缺失的库（SQLITE_CANTOPEN）。

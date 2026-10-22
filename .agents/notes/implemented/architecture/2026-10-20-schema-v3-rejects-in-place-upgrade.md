@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-这条策略在 schema 升到 v3 时确立；当前版本为 v4，v4 的派生列变更沿用同一路径。`openStore` 遇到低版本直接报 `schema_rebuild_required`，不提供启动时自动升级；遇到更高版本报 `schema_version_unsupported`；空库首次打开时建到当前版本。旧库由 [scripts/backfill-fingerprint.ts](../../../../scripts/backfill-fingerprint.ts) 显式升级：它自己开 SQLite 连接，绕过版本检查，补齐 v3 的块指纹与预览列、v4 的链角色相关列与索引，重算块指纹，再整库重跑派生与工具配对。脚本可重复执行，只处理还没有指纹的块；解不开的块指纹留空，派生把它当成不可比。
+这条策略在 schema 升到 v3 时确立；当前版本为 v5，v5 由显式迁移落地，见[v5 结构与显式迁移](2026-10-22-durable-input-and-explicit-migration.md)。`openStore` 遇到低版本直接报 `schema_rebuild_required`，不提供启动时自动升级；遇到更高版本报 `schema_version_unsupported`；空库首次打开时建到当前版本。v3 与 v4 的旧库由 [scripts/backfill-fingerprint.ts](../../../../scripts/backfill-fingerprint.ts) 显式升级：它自己开 SQLite 连接，绕过版本检查，补齐 v3 的块指纹与预览列、v4 的链角色相关列与索引，重算块指纹，再整库重跑派生与工具配对。脚本可重复执行，只处理还没有指纹的块；解不开的块指纹留空，派生把它当成不可比。
 
 版本常量与拒绝逻辑见 [src/store.ts](../../../../src/store.ts)，表结构见 [src/schema.sql](../../../../src/schema.sql)。
 
@@ -26,7 +26,7 @@ Status: implemented
 
 - 旧库不能直接启动，必须先停采集器再跑回填。这是有意的摩擦，避免错误派生被继续使用。
 - 回填脚本绕开 `openStore` 的版本检查，因为它的职责就是升级旧库；它自己开连接、自己设 WAL 与 `auto_vacuum`。
-- 版本号在补列后写入，派生重算在其后执行。重算中断时库已经标成当前版本，直接启动会使用未完成的派生，必须重跑脚本。
+- 回填脚本在补列后写版本号，派生重算在其后执行；中断时库已经标成当前版本，直接启动会使用未完成的派生，必须重跑脚本。v5 起这条缺口由迁移标记补上：未完成时普通启动直接拒绝。
 - v3 与 v4 都可以由回填脚本保住已有正文，不需要删库重建；只有正文本身也不可挽回时才删除重建。
 - 回填按块是否已有指纹判断是否重算，重复执行不会重复计算；派生全量重跑，耗时随库大小增长。
 - 回填后的关系分布与标题来源会打印出来，用来核对这次修复改变了多少；它不是验收门槛，只是变更前后的对照。
