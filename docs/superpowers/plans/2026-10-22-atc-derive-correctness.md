@@ -76,7 +76,7 @@ export function drainDerive(store: Store, limit = 100, scope?: DeriveScope): Dra
 - Consumes: 已有 `seedChain(store, sessions)`、`bodyFor(texts)`、`fixture()`、`persistBody`、`matchPredecessor`、`enqueueDerive` 与 `drainDerive`。
 - Produces: 内部 `fingerprintsOf(db: Database, reqId: number): string[] | null` 保持签名；null 表示不可比较，[] 仅表示已保存的真实空消息数组。`matchPredecessor` 不从零长度祖先生成父节点。
 
-- [ ] **Step 1：添加无骨架主链及合法空序列回归。** 在已有派生测试 helper 后加入以下断言。分别让不可读行位于旧裸键顺序之前与之后，覆盖空祖先和错误主链根；available 无骨架作为防御用例，partial 无骨架对应生产降级形态。
+- [x] **Step 1：添加无骨架主链及合法空序列回归。** 在已有派生测试 helper 后加入以下断言。分别让不可读行位于旧裸键顺序之前与之后，覆盖空祖先和错误主链根；available 无骨架作为防御用例，partial 无骨架对应生产降级形态。
 
 ```ts
 for (const state of ['partial', 'available'] as const) {
@@ -121,9 +121,9 @@ test('合法空messages可读但不证明后续请求的父节点', () => {
 });
 ```
 
-- [ ] **Step 2：观察对应断言失败。** Run: `bun test tests/derive.test.ts -t '无骨架|合法空messages'`。Expected: FAIL，旧代码把无骨架当 []，或从空祖先生成 parent。fixture、语法或 import 错误不计为目标失败。
+- [x] **Step 2：观察对应断言失败。** Run: `bun test tests/derive.test.ts -t '无骨架|合法空messages'`。Expected: FAIL，旧代码把无骨架当 []，或从空祖先生成 parent。fixture、语法或 import 错误不计为目标失败。
 
-- [ ] **Step 3：修正可比较性和正长度前缀。** 不按 refs 为空一律判不可读；使用已持久化的消息数量区分无消息序列与真实空数组，检查引用数量与 ordinal 连续性，避免缺引用缩成空祖先。此操作不解压全组正文。
+- [x] **Step 3：修正可比较性和正长度前缀。** 不按 refs 为空一律判不可读；使用已持久化的消息数量区分无消息序列与真实空数组，检查引用数量与 ordinal 连续性，避免缺引用缩成空祖先。此操作不解压全组正文。
 
 ```ts
 function fingerprintsOf(db: Database, reqId: number): string[] | null {
@@ -149,7 +149,7 @@ if (shared > 0 && shared === ancestor.fingerprints.length && shared <= current.l
 
 合法空请求仍可是第一笔真实请求并占主链根；禁止它成为任意后续请求的已确认父节点属于明确的语义调整。它与无骨架中性处理分别验收，不能为了让后续链变 main 将真实空请求伪装成缺正文。`msg_count=null` 的历史行先保守保留旧摘要，不在此批隐式补数；持久化写入正常时 msg_count 与 skeleton.has_messages 一致，损坏骨架的全面校验不在此批承诺内。
 
-- [ ] **Step 4：覆盖无消息序列及实际 hook 降级入口。** 加入下面的无 messages 和缺消息引用用例，区分不完整与合法空数组。
+- [x] **Step 4：覆盖无消息序列及实际 hook 降级入口。** 加入下面的无 messages 和缺消息引用用例，区分不完整与合法空数组。
 
 ```ts
 test('有骨架但无messages不参与消息前驱比较', () => {
@@ -216,7 +216,7 @@ for (const mode of ['body_omitted', 'metadata_only'] as const) {
 
 该测试证明后续入队后的可达性，不声称直接 hook 路径已经修复自动触发。Run: `bun test tests/derive.test.ts tests/hook.test.ts`。Expected: PASS，既有 pending/回收中性处理保持。
 
-- [ ] **Step 5：记录理由与独立提交。** 先做活跃 note supersession check，再创建上述 bug-fix note，记录缺失与空序列分离、空前缀不作父节点证据及保留旧结果的代价。任意祖先与标题记录仅部分涉及，交叉链接且保持活跃。获提交授权时提交 `fix(derive): distinguish missing bodies from empty message sequences`，包含本任务源码、测试、架构与 note，末尾使用规定 attribution。未获授权保持未暂存；Task 1 复用该 note。
+- [x] **Step 5：记录理由与独立提交。** 先做活跃 note supersession check，再创建上述 bug-fix note，记录缺失与空序列分离、空前缀不作父节点证据及保留旧结果的代价。任意祖先与标题记录仅部分涉及，交叉链接且保持活跃。获提交授权时提交 `fix(derive): distinguish missing bodies from empty message sequences`，包含本任务源码、测试、架构与 note，末尾使用规定 attribution。未获授权保持未暂存；Task 1 复用该 note。
 
 ## Task 1：固定统一逻辑顺序
 
@@ -231,7 +231,7 @@ for (const mode of ['body_omitted', 'metadata_only'] as const) {
 - Produces: `compareLogicalOrder(left: LogicalRow, right: LogicalRow): number`、`compareTraversalOrder(left: LogicalRow, right: LogicalRow): number`；前者按时间和来源身份稳定遍历，不含 req_id，也不能单独证明同时间先后；后者仅在时间和身份相同时用 req_id 兜底。关系判断同时消费 `uncertainOrderIds`，仅认可同代际的不同账本偏移。
 - Produces（供 [F 的条件切片](2026-10-22-atc-capacity-convergence.md) import，不复制第二份实现）：`type LogicalRow`、`type ResolvedTool`、`uncertainOrderIds`、`fingerprintsOf`、`toolResultPreview`，以及 `src/derive.ts` 既有的 `firstUserPreview`、`tailUserPreview`、`messageAt`、`deriveTitle`、`previewOf`、`replyInfoOf` 一并导出（`modelTimeTitle` 已是 `src/sources/magpie.ts` 的导出，无需改动）。这些符号只暴露既有取值与格式化，不暴露事务步骤；切片路径只 import 它们，不得复刻名称合并、内容兜底、字符截断与兜底标题。
 
-- [ ] **Step 1：添加同时间、生产形状键的回归与 helper。** 在测试文件沿用已有 Bun/import，补 `Store` 类型和以下本地 helper。显式 ID 只用于模拟不同摄入顺序，生产写入继续由 SQLite 分配。
+- [x] **Step 1：添加同时间、生产形状键的回归与 helper。** 在测试文件沿用已有 Bun/import，补 `Store` 类型和以下本地 helper。显式 ID 只用于模拟不同摄入顺序，生产写入继续由 SQLite 分配。
 
 ```ts
 type TestStore = ReturnType<typeof fixture>['store'];
@@ -301,9 +301,9 @@ test('同毫秒交换摄入ID仍得到相同链角色和工具关系', () => {
 });
 ```
 
-- [ ] **Step 2：确认回归失败。** Run: `bun test tests/derive.test.ts -t '同毫秒交换摄入ID'`。Expected: FAIL，逆序 ID 的工具关系为 pending。首次摘要此时允许仍是内容兜底，Task 2 再修依赖。
+- [x] **Step 2：确认回归失败。** Run: `bun test tests/derive.test.ts -t '同毫秒交换摄入ID'`。Expected: FAIL，逆序 ID 的工具关系为 pending。首次摘要此时允许仍是内容兜底，Task 2 再修依赖。
 
-- [ ] **Step 3：集中比较器，三阶段消费同一顺序。** 替换 `sortKeyOf(...).localeCompare(...)`，角色和暂时独立配对使用同一 traversal 比较器。时间不同按时间；同毫秒只有同一账本代际的不同偏移提供本轮采用的来源次序。跨代际身份、route ID 与随机 hook UUID 仅用于确定遍历，不证明先后，不使用来源 rank 推导关系。
+- [x] **Step 3：集中比较器，三阶段消费同一顺序。** 替换 `sortKeyOf(...).localeCompare(...)`，角色和暂时独立配对使用同一 traversal 比较器。时间不同按时间；同毫秒只有同一账本代际的不同偏移提供本轮采用的来源次序。跨代际身份、route ID 与随机 hook UUID 仅用于确定遍历，不证明先后，不使用来源 rank 推导关系。
 
 ```ts
 type LogicalRow = {
@@ -380,7 +380,7 @@ if (!isTitleRequest && current !== null && !uncertain.has(row.req_id)) {
 }
 ```
 
-- [ ] **Step 4：加入并运行边界断言。** 用 `seedRound` 建独立 fixture，以下各项分别为一个 test；每次修改后 enqueue 再计算。Task 2 完成前暂保留显式 pair；Task 3 迁走。
+- [x] **Step 4：加入并运行边界断言。** 用 `seedRound` 建独立 fixture，以下各项分别为一个 test；每次修改后 enqueue 再计算。Task 2 完成前暂保留显式 pair；Task 3 迁走。
 
 ```ts
 test('时间优先于跨代际物理键字典序', () => {
@@ -456,7 +456,7 @@ for (const [index, sources] of unsupportedOrders.entries()) {
 
 Run: `bun test tests/derive.test.ts`，Expected: 既有断言及新增排序断言 PASS。
 
-- [ ] **Step 5：同步设计与 note，形成排序修复提交。** 复用 Task 0 创建的 bug-fix note，说明时间优先是对当前链运行时的规则改变，跨代际既有关系可能变化；来源身份不保证先后，同毫秒保守处理可能降低可确认比例。标题/祖先等旧记录仅部分涉及，交叉链接并保持活跃。历史对齐必须按[上线与历史结果对齐](#上线与历史结果对齐)完成，代码合成验收不等于真实库已经重建。Run: `bun run typecheck`；Expected: PASS。获授权时提交 `fix(derive): share deterministic request ordering`，包含本任务源码、测试、架构与 note，附规定 attribution。
+- [x] **Step 5：同步设计与 note，形成排序修复提交。** 复用 Task 0 创建的 bug-fix note，说明时间优先是对当前链运行时的规则改变，跨代际既有关系可能变化；来源身份不保证先后，同毫秒保守处理可能降低可确认比例。标题/祖先等旧记录仅部分涉及，交叉链接并保持活跃。历史对齐必须按[上线与历史结果对齐](#上线与历史结果对齐)完成，代码合成验收不等于真实库已经重建。Run: `bun run typecheck`；Expected: PASS。获授权时提交 `fix(derive): share deterministic request ordering`，包含本任务源码、测试、架构与 note，附规定 attribution。
 
 ## Task 2：在当前事务内完成工具与摘要
 
@@ -485,7 +485,7 @@ function toolResultPreview(db: Database, reqId: number,
   delta: readonly number[], associations: readonly ResolvedTool[]): string | null;
 ```
 
-- [ ] **Step 1：添加首次即有工具名与重建等价回归。** 复用 Task 1 helper，不再显式 pair，断言 `drainDerive` 返回即是完整结果。
+- [x] **Step 1：添加首次即有工具名与重建等价回归。** 复用 Task 1 helper，不再显式 pair，断言 `drainDerive` 返回即是完整结果。
 
 ```ts
 test('完整派生首次即使用本次工具关联且重建不漂移', () => {
@@ -558,9 +558,9 @@ test('可读工具轮次标题不依赖旧值且缺正文标题保留', () => {
 });
 ```
 
-- [ ] **Step 2：验证失败。** Run: `bun test tests/derive.test.ts -t '完整派生首次|其它组同call_id|可读工具轮次标题'`。Expected: FAIL，工具未在 drain 完成、摘要内容兜底或串名，或标题仍依赖旧值。记录实际失败，不能把语法或 fixture 失败计作目标缺陷。
+- [x] **Step 2：验证失败。** Run: `bun test tests/derive.test.ts -t '完整派生首次|其它组同call_id|可读工具轮次标题'`。Expected: FAIL，工具未在 drain 完成、摘要内容兜底或串名，或标题仍依赖旧值。记录实际失败，不能把语法或 fixture 失败计作目标缺陷。
 
-- [ ] **Step 3：将 pair 算法内移，按依赖拆写入。** 把现有 pair 的 writer 回调体搬到 `pairToolCallsTx`，去掉它内部重新按 SQL 时间/ID排序的读取，函数开头使用 `const rows = ordered`，空组返回下列完整 `PairResult`，传入当前 ordered 请求的最新关系。遍历每笔 body 前增加 `if (row.req_kind === 'title') continue`，使已有标题旁路政策同样覆盖工具候选。仍只删除正文 available/partial 的旧工具行；历史行保留。`associations` 从本次新建且最终 resolved 的 call 行形成，不从全表收集，逐个包含调用位置与最终结果位置。
+- [x] **Step 3：将 pair 算法内移，按依赖拆写入。** 把现有 pair 的 writer 回调体搬到 `pairToolCallsTx`，去掉它内部重新按 SQL 时间/ID排序的读取，函数开头使用 `const rows = ordered`，空组返回下列完整 `PairResult`，传入当前 ordered 请求的最新关系。遍历每笔 body 前增加 `if (row.req_kind === 'title') continue`，使已有标题旁路政策同样覆盖工具候选。仍只删除正文 available/partial 的旧工具行；历史行保留。`associations` 从本次新建且最终 resolved 的 call 行形成，不从全表收集，逐个包含调用位置与最终结果位置。
 
 ```ts
 const rows = ordered;
@@ -723,7 +723,7 @@ for (const result of anthropicRequestResults({ messages })) {
 
 沿用原名称合并计数、内容兜底和字符截断；不查上一轮表、其它组或不可重算保留行。数组稀疏位会被结果提取跳过，不改 ord。空名、pending、ambiguous 和无法定位结果均使用内容兜底。
 
-- [ ] **Step 4：验证歧义与两个协议的结果位置。** 增补同一消息中两个工具结果，第二个与本次唯一调用匹配；断言准确 path 的工具名只计一次。Anthropic path 为 `request.messages[2].content[1]`，chat path 为 `request.messages[2]`。chat 构造使用以下对象，fixture 的两请求关系仍为普通前缀；两者逐项查询 result_ord/result_path 和 input_preview。
+- [x] **Step 4：验证歧义与两个协议的结果位置。** 增补同一消息中两个工具结果，第二个与本次唯一调用匹配；断言准确 path 的工具名只计一次。Anthropic path 为 `request.messages[2].content[1]`，chat path 为 `request.messages[2]`。chat 构造使用以下对象，fixture 的两请求关系仍为普通前缀；两者逐项查询 result_ord/result_path 和 input_preview。
 
 ```ts
 const user = { role: 'user', content: 'synthetic input' };
@@ -744,7 +744,7 @@ expect(snapshot(f.store, [1, 2]).requests[1]?.input_preview).toBe('工具结果 
 
 同组重复 call_id 沿用当前 ambiguous 测试，并增加结果内容兜底断言；若其关系为 unknown，只断言摘要不出现调用名，不能要求 delta 分支文案。保留 title 旁路测试，另构造标题请求回复中含工具调用并检查没有该请求的 tool_call。未知前驱沿用 pending 测试，摘要不得取工具名。加入一个被回收调用的旧 resolved 行，用相同 call_id 指向当前结果，断言它本身保留，当前摘要仍只由本次关联决定。Run: `bun test tests/derive.test.ts`，Expected: PASS。清空重建只清可重算请求的结果，缺正文历史值不参与清空。
 
-- [ ] **Step 5：更新拥有决策的 note 与架构后提交。** 说明摘要从当前确定关联得名、调用位置与结果 path 均限定、历史保留行不充当本次确认。加以下版本兼容回归，锁定现有 UPDATE 的实际行为，不将其解读为算法版本或可靠累计重建次数。新建可重算工具行每轮先插入 1 再增至 2；被回收的旧工具行仍按旧逻辑递增，[C 批次](2026-10-22-atc-durable-rebuild.md)再修正该口径。
+- [x] **Step 5：更新拥有决策的 note 与架构后提交。** 说明摘要从当前确定关联得名、调用位置与结果 path 均限定、历史保留行不充当本次确认。加以下版本兼容回归，锁定现有 UPDATE 的实际行为，不将其解读为算法版本或可靠累计重建次数。新建可重算工具行每轮先插入 1 再增至 2；被回收的旧工具行仍按旧逻辑递增，[C 批次](2026-10-22-atc-durable-rebuild.md)再修正该口径。
 
 ```ts
 test('工具版本保持旧写入口径直到显式版本迁移', () => {
@@ -785,7 +785,7 @@ Run: `bun test tests/derive.test.ts -t '工具版本保持旧写入口径'` 及 
 - Consumes: Task 2 的完整 `drainDerive`；`rebuildDerived(store: Store, convKey: string): RebuildReport` 保持原状。
 - Produces: 本文开头的 `DeriveScope`、`DrainResult` 与三参数 drain；外部不再导出或调用 `pairToolCalls`。
 
-- [ ] **Step 1：增加范围及批量维护回归。** 在 maintenance 测试复用已有 `fixture`、`runMaintenance`、`join`；添加 101 个 actor 的目标会话和一个排序更早的其它会话任务。
+- [x] **Step 1：增加范围及批量维护回归。** 在 maintenance 测试复用已有 `fixture`、`runMaintenance`、`join`；添加 101 个 actor 的目标会话和一个排序更早的其它会话任务。
 
 ```ts
 test('维护重建排空目标会话且不消费其它会话积压', async () => {
@@ -843,7 +843,7 @@ test('维护报告分别计入可重算与缺正文保留请求', async () => {
 
 Run: `bun test tests/maintenance.test.ts -t '维护重建排空目标会话|维护报告分别计入'`。Expected: FAIL，旧代码消费其它任务且留下目标组，或没有重算/保留计数。available 无骨架是首个测试刻意构造的防御形态，Task 0 修复后才按不可比较处理；当前未修代码会误当空序列。rebuildDerived 不论 body_state 都会为已知 actor 入队，测试无需假称 available 是入队前提，也不把队列排空称为正文复核成功。
 
-- [ ] **Step 2：实现范围与参数校验。** drain 的选组与 remaining 查询使用相同 scope；其它会话任务不影响目标排空。
+- [x] **Step 2：实现范围与参数校验。** drain 的选组与 remaining 查询使用相同 scope；其它会话任务不影响目标排空。
 
 ```ts
 if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid_derive_limit');
@@ -901,7 +901,7 @@ out(JSON.stringify({
 
 main 的 derive tick 只调用 `drainDerive(store)`；保留原日志和错误处理，删除配对 for 循环及 import。backfill 保留现有 `drainDerive(store,50)` 循环，删最终 groups 配对及 import；本计划不执行该脚本，也不顺带改其旧迁移行为。
 
-- [ ] **Step 3：通过完整 Interface 迁移旧工具测试并取消导出。** 删除所有测试里的后置 pair；原仅调用 pair 的重复 ID 测试先 enqueue 再 drain。原手改 prev_relation 的候选升级测试改为补充真实正文后重算，避免绕过链阶段：
+- [x] **Step 3：通过完整 Interface 迁移旧工具测试并取消导出。** 删除所有测试里的后置 pair；原仅调用 pair 的重复 ID 测试先 enqueue 再 drain。原手改 prev_relation 的候选升级测试改为补充真实正文后重算，避免绕过链阶段：
 
 ```ts
 // pending 初始断言保持。随后替换第二笔实际输入，再统一重算：
@@ -917,7 +917,7 @@ expect(f.store.read.query(`SELECT state,result_req FROM tool_call
 
 删除 :270 的空壳；:200 的有效测试改名为完整组重建关闭重开后保持增量。将 limit=1 的有效契约放到有两个真实组的测试：首组 250 请求，另组一请求，断言第一次 processed=250、remaining=1，再调用得到 processed=1、remaining=0；组名确保首组按字节序先选中。Task 1 helper 的回归也删除显式 pair。最后删除导出的 pair 包装，仅保留内部事务函数。
 
-- [ ] **Step 4：补参数与空组断言后验证。** 使用 `fixture`：对 `limit` 为 0、-1、1.5、NaN 分别 `expect(() => drainDerive(f.store, limit)).toThrow('invalid_derive_limit')`；空 scope 字符串抛 `invalid_derive_scope`。直接插空组队列，drain 后 groups 包含该空组、processed=0、remaining=0、recomputed=0、retained=0，避免将其误判无进展。Run: `bun test tests/derive.test.ts tests/maintenance.test.ts` 与 `bun run typecheck`。Expected: PASS。Run: `rg -n 'pairToolCalls' src tests scripts`；Expected: 仅 derive 内部 `pairToolCallsTx` 定义与调用，外部无命中。
+- [x] **Step 4：补参数与空组断言后验证。** 使用 `fixture`：对 `limit` 为 0、-1、1.5、NaN 分别 `expect(() => drainDerive(f.store, limit)).toThrow('invalid_derive_limit')`；空 scope 字符串抛 `invalid_derive_scope`。直接插空组队列，drain 后 groups 包含该空组、processed=0、remaining=0、recomputed=0、retained=0，避免将其误判无进展。Run: `bun test tests/derive.test.ts tests/maintenance.test.ts` 与 `bun run typecheck`。Expected: PASS。Run: `rg -n 'pairToolCalls' src tests scripts`；Expected: 仅 derive 内部 `pairToolCallsTx` 定义与调用，外部无命中。
 
 补充 `import { runMaintenance } from '../src/maintenance'`，在 `tests/derive.test.ts` 验证合成旧结果经过维护入口后与直接完整入口一致，同时保留费用、证据 owner 与正文引用：
 
@@ -962,7 +962,7 @@ test('合成旧排序经维护入口对齐且事实守恒', async () => {
 
 Run: `bun test tests/derive.test.ts -t '合成旧排序经维护入口'`；Expected: PASS。这里通过 `runMaintenance` 测试 CLI 使用的命令处理入口，未启动真实采集进程。
 
-- [ ] **Step 5：同步运维说明并提交。** rebuild 的 queue_remaining 定义为目标会话未完成组；其它会话积压不被维护消费。保留 unavailable/reasons 字段和缺正文历史断言；不把当前 MAX 计数描述成算法覆盖率。获授权时提交 `fix(derive): route all callers through complete group execution`，附所属 note 与 attribution。
+- [x] **Step 5：同步运维说明并提交。** rebuild 的 queue_remaining 定义为目标会话未完成组；其它会话积压不被维护消费。保留 unavailable/reasons 字段和缺正文历史断言；不把当前 MAX 计数描述成算法覆盖率。获授权时提交 `fix(derive): route all callers through complete group execution`，附所属 note 与 attribution。
 
 ## Task 4：用事务故障和重开验证完成恢复
 
@@ -974,7 +974,7 @@ Run: `bun test tests/derive.test.ts -t '合成旧排序经维护入口'`；Expec
 - Consumes: 完整 `drainDerive`、`fixture`、`openStore(path)`、Task 1 的 seed/snapshot；使用 SQLite trigger 注入失败，无生产测试开关。
 - Produces: 工具插入、摘要更新和队列确认任一阶段失败，都回滚本批产物并保留持久任务；关闭重开可继续。
 
-- [ ] **Step 1：加入三个阶段故障的参数化回归。** 测试补 `openStore` 与 `join` import。触发器 SQL 为固定测试常量，不接受任意用户输入。
+- [x] **Step 1：加入三个阶段故障的参数化回归。** 测试补 `openStore` 与 `join` import。触发器 SQL 为固定测试常量，不接受任意用户输入。
 
 ```ts
 const injectedStages = [
@@ -1008,9 +1008,9 @@ for (const [stage, event] of injectedStages) {
 }
 ```
 
-- [ ] **Step 2：运行并解释结果。** Run: `bun test tests/derive.test.ts -t '失败保留队列且重开可恢复'`。Expected: Task 2 后 PASS；若在之前代码上运行，工具触发器不会在 drain 内触发，断言失败。该测试验证 SQLite 事务失败与重开恢复，不冒称执行了 kill/power-loss 实验。
+- [x] **Step 2：运行并解释结果。** Run: `bun test tests/derive.test.ts -t '失败保留队列且重开可恢复'`。Expected: Task 2 后 PASS；若在之前代码上运行，工具触发器不会在 drain 内触发，断言失败。该测试验证 SQLite 事务失败与重开恢复，不冒称执行了 kill/power-loss 实验。
 
-- [ ] **Step 3：验证旧结果、整批回滚和读连接可见性。** 第一次完整 rebuild 后记 snapshot；再次入队，在工具阶段失败，断言旧结果完全保留、队列仍在；移除触发器重新排空，snapshot 相同。再用两个组在第二组 ack 触发失败，断言本批两组均回滚，因为现有事务包围本批全部组；不对外宣称逐组独立提交。成功返回后 `store.read` 看到完整工具与摘要，不能看到完成队列已删而工具未写的状态。
+- [x] **Step 3：验证旧结果、整批回滚和读连接可见性。** 第一次完整 rebuild 后记 snapshot；再次入队，在工具阶段失败，断言旧结果完全保留、队列仍在；移除触发器重新排空，snapshot 相同。再用两个组在第二组 ack 触发失败，断言本批两组均回滚，因为现有事务包围本批全部组；不对外宣称逐组独立提交。成功返回后 `store.read` 看到完整工具与摘要，不能看到完成队列已删而工具未写的状态。
 
 ```ts
 // 两组回滚测试中的固定触发器：
@@ -1023,9 +1023,9 @@ expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_queue').get()).toEqu
 
 构造第二组时复用 seed 的两笔模式但使用不同 ID、conv_key/actor 与工具 ID；snapshot 分别按身份归一。只有测试创建的可读派生允许清空，缺正文保留断言继续使用 maintenance 已有测试。Run: `bun test tests/derive.test.ts tests/maintenance.test.ts`；Expected: PASS。若 Task 3 已跑过同一源码版本的 typecheck，此处只新增测试时按实际类型改动决定是否重跑，不机械重复。
 
-- [ ] **Step 4：完成文档与 note 验收。** 架构明确本批所有组选取在一个同步事务内，异常回滚本批、保留队列；不写成每组一个事务。note 记录合成回滚、重开、重复重建、历史保留的实际检查范围，以及没有切片、算法版本迁移和容量结果。保留统筹 proposed note，不能因 A 完成把整份 v2 标为 implemented。
+- [x] **Step 4：完成文档与 note 验收。** 架构明确本批所有组选取在一个同步事务内，异常回滚本批、保留队列；不写成每组一个事务。note 记录合成回滚、重开、重复重建、历史保留的实际检查范围，以及没有切片、算法版本迁移和容量结果。保留统筹 proposed note，不能因 A 完成把整份 v2 标为 implemented。
 
-- [ ] **Step 5：检查并形成最终任务提交。** Run: `git diff --check`、`bun run verify:notes`；Expected: PASS。获提交授权时逐文件 stage 本任务，执行 `bun run verify:notes:staged` 后提交 `test(derive): verify transactional completion and restart recovery`，附 attribution；没有授权时报告未执行 staged 检查。不要运行默认路径的回填脚本或维护命令作为测试。
+- [x] **Step 5：检查并形成最终任务提交。** Run: `git diff --check`、`bun run verify:notes`；Expected: PASS。获提交授权时逐文件 stage 本任务，执行 `bun run verify:notes:staged` 后提交 `test(derive): verify transactional completion and restart recovery`，附 attribution；没有授权时报告未执行 staged 检查。不要运行默认路径的回填脚本或维护命令作为测试。
 
 ## 上线与历史结果对齐
 
@@ -1040,8 +1040,8 @@ bun run maintain rebuild --db /private/tmp/atc-synthetic-plan/trace.db --session
 
 验收记录包含代码提交、目标会话清单、逐会话命令退出码、queue_remaining、recomputed_requests、retained_requests 和 unavailable/reasons。queue_remaining=0 只表示目标组执行完毕；retained_requests 必须单列，不把旧 derive_version 的 MAX 当作规则覆盖率。当前计数按请求描述本次执行，不提供逐字段或历史算法证明；[C 批次](2026-10-22-atc-durable-rebuild.md)再交付持久的目标/实际版本及原输入依据。
 
-- [ ] Task 3 的混合报告回归通过：recomputed_requests=1、retained_requests=1、queue_remaining=0，旧标题保留；101 个无骨架请求全部计入 retained_requests。
-- [ ] Task 3 的合成旧排序对齐回归通过：维护命令处理入口与直接完整入口的前驱、角色、工具和摘要一致，费用、owner 与正文引用不变。
+- [x] Task 3 的混合报告回归通过：recomputed_requests=1、retained_requests=1、queue_remaining=0，旧标题保留；101 个无骨架请求全部计入 retained_requests。
+- [x] Task 3 的合成旧排序对齐回归通过：维护命令处理入口与直接完整入口的前驱、角色、工具和摘要一致，费用、owner 与正文引用不变。
 - [ ] 部署前确认批准范围已经重建或明确列为未对齐；不以正常持续摄入最终会触发所有旧组为依据。若没有真实库授权，停在代码与合成验收，报告历史对齐未执行。
 
 ## 计划自审与最终交付
