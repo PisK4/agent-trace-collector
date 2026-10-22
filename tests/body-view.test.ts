@@ -114,9 +114,12 @@ test('空回复与无法结构化的回复分开报', () => {
 });
 
 test('只有确定增量才标记新增，未知关系返回空', () => {
-  const detail = { prev_relation: 'confirmed', delta_ordinals: [3, 4] } as RequestDetail;
+  const current = { state: 'clean', chain_state: 'current', summary_state: 'current', reason: null };
+  const detail = { prev_relation: 'confirmed', delta_ordinals: [3, 4], derivation: current } as RequestDetail;
   expect([...(deltaOrdinals(detail) ?? [])]).toEqual([3, 4]);
-  expect(deltaOrdinals({ prev_relation: 'unknown', delta_ordinals: null } as unknown as RequestDetail)).toBeNull();
+  expect(deltaOrdinals({
+    prev_relation: 'unknown', delta_ordinals: [3], derivation: current,
+  } as unknown as RequestDetail)).toBeNull();
   expect(deltaOrdinals(null)).toBeNull();
 
   const entries = messageEntries(page({
@@ -374,4 +377,20 @@ test('六类已知 part 各有颜色与标签', () => {
   expect(partLabel('memory')).toBe('记忆与技能');
   expect(partLabel('history')).toBe('history');
   expect(partColor('history')).toBe('var(--p-unknown)');
+});
+
+test('链结果非 current 时不标记新增与 confirmed', () => {
+  const dirty = {
+    prev_relation: 'confirmed',
+    delta_ordinals: [3],
+    derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
+  } as unknown as RequestDetail;
+  expect(deltaOrdinals(dirty)).toBeNull();
+  const current = {
+    ...dirty,
+    derivation: { state: 'clean', chain_state: 'current', summary_state: 'current', reason: null },
+  } as RequestDetail;
+  expect([...(deltaOrdinals(current) ?? [])]).toEqual([3]);
+  // 没有派生视图的旧载荷同样不能冒充确定新增。
+  expect(deltaOrdinals({ prev_relation: 'confirmed', delta_ordinals: [3] } as RequestDetail)).toBeNull();
 });

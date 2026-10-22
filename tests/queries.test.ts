@@ -661,3 +661,45 @@ test('缺分母、invalid_input 与 missing 都不显示比例', () => {
   expect(promptReadingOf(null, missingPrompt, [{ kind: 'chat', tokens: 10 }], null).tokens).toBeNull();
   expect(promptReadingOf(null, missingPrompt, null, null).state).toBe('missing');
 });
+
+test('未知 req_kind 与 chain_role 原样返回，不折叠成 chat 或 main', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'unknown-kind']);
+    f.store.write(db => {
+      db.run(`
+        INSERT INTO request(req_id,conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,req_kind,chain_role)
+        VALUES (1,?,'session','actor-a','claude','known',1000,'2026-10-22','through','available',1,7,1,1,'t','user_delta','synthetic_probe','synthetic_role')`,
+      [key]);
+      // 让这一笔成为当前结果：用途已结算、组干净、摘要按当前算法算过。
+      db.run(`UPDATE request SET purpose_pending=0, summary_state='recomputed', summary_algorithm=3 WHERE req_id=1`);
+      db.run(`
+        INSERT INTO derive_queue(conv_key,actor,from_sort,input_revision,published_revision,target_algorithm,published_algorithm,state)
+        VALUES (?,'actor-a','',1,1,3,3,'clean')`, [key]);
+    });
+    const detail = getRequest(f.store, 1);
+    expect(detail?.derived_state).toBe('current');
+    expect(detail?.req_kind).toBe('synthetic_probe');
+    expect(detail?.chain_role).toBe('synthetic_role');
+  } finally {
+    f.close();
+  }
+});
+
+test('会话 flags 按确定状态聚合且顺序固定', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'flags']);
+    f.store.write(db => {
+      const insert = db.prepare(`INSERT INTO request(req_id,conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,status,prev_relation)
+        VALUES (?,?,'session','actor-a','claude',?,?,'2026-10-22','through',?,1,?,1,1,'t','user_delta',?,?)`);
+      insert.run(1, key, 'known', 1000, 'available', 7, 500, 'confirmed');
+      insert.run(2, key, 'unknown', 2000, 'pending', 0, 200, 'unknown');
+      insert.run(3, key, 'known', 3000, 'available', 7, 200, 'confirmed');
+    });
+    const session = listSessions(f.store, 10, null).items.find(row => row.conv_key === key);
+    expect(session?.flags).toEqual(['failed', 'unknown', 'missing_body']);
+  } finally {
+    f.close();
+  }
+});

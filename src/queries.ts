@@ -139,7 +139,18 @@ function checkLimit(limit: number, max: number): number {
 
 type SessionDbRow = {
   conv_key: string; last_ms: number; request_count: number; title: string | null; agents: string | null;
+  has_failed: number; has_unknown: number; has_missing: number;
 };
+
+/**
+ * 会话状态只从确定事实聚合，三个标志固定按失败、待确认、缺正文的顺序输出。
+ * 失败看 HTTP 状态；待确认看身份未知或前驱关系未知；缺正文看正文不在可读状态
+ * 或没拿到回调（`have` 第 1 位是回调位）。
+ */
+const SESSION_FLAG_COLUMNS = `
+  MAX(CASE WHEN status IS NOT NULL AND status >= 400 THEN 1 ELSE 0 END) AS has_failed,
+  MAX(CASE WHEN actor_state = 'unknown' OR prev_relation = 'unknown' THEN 1 ELSE 0 END) AS has_unknown,
+  MAX(CASE WHEN body_state <> 'available' OR (have & 1) = 0 THEN 1 ELSE 0 END) AS has_missing`;
 
 /**
  * 会话标题只取已经结算的当前结果：排除用途提供模型标题，参与链提供用户标题。
@@ -199,7 +210,8 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
                ${SESSION_TITLE_SQL} AS title,
                -- agents 取 magpie 的客户端标签（claude / omp 等）；actor 是会话/子代理身份，
                -- 拿 actor 当 agents 会把 UUID 当成客户端名展示。
-               GROUP_CONCAT(DISTINCT agent) AS agents
+               GROUP_CONCAT(DISTINCT agent) AS agents,
+               ${SESSION_FLAG_COLUMNS}
         FROM request
         WHERE conv_key IS NOT NULL
         GROUP BY conv_key
@@ -207,11 +219,12 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
         LIMIT ?`)
       .all(size + 1)
     : store.read.query<SessionDbRow, [number, string, number]>(`
-        SELECT conv_key, last_ms, request_count, title, agents FROM (
+        SELECT conv_key, last_ms, request_count, title, agents, has_failed, has_unknown, has_missing FROM (
           SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
                  ${SESSION_TITLE_SQL} AS title,
                  -- 同首查：agents 是 magpie 的客户端标签，不是 actor 身份。
-                 GROUP_CONCAT(DISTINCT agent) AS agents
+                 GROUP_CONCAT(DISTINCT agent) AS agents,
+                 ${SESSION_FLAG_COLUMNS}
           FROM request
           WHERE conv_key IS NOT NULL
           GROUP BY conv_key
@@ -222,14 +235,20 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
       .all(bound.lastMs, bound.convKey, size + 1)) as SessionDbRow[];
 
   const page = rows.slice(0, size);
-  const items: SessionRow[] = page.map(row => ({
-    conv_key: row.conv_key,
-    title: row.title ?? '',
-    last_ms: row.last_ms,
-    request_count: row.request_count,
-    agents: row.agents === null ? [] : row.agents.split(',').filter(value => value.length > 0),
-    flags: [],
-  }));
+  const items: SessionRow[] = page.map(row => {
+    const flags: string[] = [];
+    if (row.has_failed === 1) flags.push('failed');
+    if (row.has_unknown === 1) flags.push('unknown');
+    if (row.has_missing === 1) flags.push('missing_body');
+    return {
+      conv_key: row.conv_key,
+      title: row.title ?? '',
+      last_ms: row.last_ms,
+      request_count: row.request_count,
+      agents: row.agents === null ? [] : row.agents.split(',').filter(value => value.length > 0),
+      flags,
+    };
+  });
   const last = page[page.length - 1];
   const nextCursor = rows.length > size && last !== undefined
     ? encodeCursor([last.last_ms, last.conv_key])
@@ -367,8 +386,8 @@ function projectRow(row: ProjectableRow): {
     input_preview_kind: current
       ? row.input_preview_kind as RequestRow['input_preview_kind'] : null,
     reply_preview: row.reply_preview,
-    req_kind: row.req_kind ?? 'chat',
-    chain_role: current ? (row.chain_role ?? 'main') : 'unknown',
+    req_kind: row.req_kind ?? 'unknown',
+    chain_role: current ? (row.chain_role ?? 'unknown') : 'unknown',
     model_title: row.model_title,
     purpose_status: row.purpose_status,
     purpose_version: row.purpose_version,

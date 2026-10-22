@@ -389,9 +389,11 @@ if (typeof document !== 'undefined') {
   function relationTextOf(reqId) {
     const detail = reqId === null ? null : details.get(reqId) ?? null;
     if (detail === null) return '';
-    // 非当前行没有可确认的关系：接口已经把 prev_relation 清成 null，
-    // 这里只说清为什么，不拿 historical 里的旧关系冒充当前。
-    if (detail.derived_state !== 'current') return '派生结果还没追上当前输入';
+    // 链结果不是当前结论时，关系与增量都是旧产物：接口已把 prev_relation 清成 null，
+    // 这里只说清原因，不拿 historical 里的旧关系冒充当前。
+    if (detail.derivation === undefined || detail.derivation.chain_state !== 'current') {
+      return '关系待重建或为旧结果，不标记新增';
+    }
     if (detail.purpose_chain === 'exclude' || detail.chain_role === 'aux') {
       return '辅助请求，不在主链上';
     }
@@ -820,7 +822,8 @@ if (typeof document !== 'undefined') {
     const replyRow = hasReply
       ? `<span class="req-row reply"><span class="req-text">${esc(r.reply_preview)}</span></span>`
       : '<span class="req-row reply" aria-hidden="true"></span>';
-    const chainFlag = r.chain_role === 'branch'
+    // 分支标记只对当前链结果有意义：非当前行的 chain_role 已被接口退回中性值。
+    const chainFlag = r.chain_role === 'branch' && r.derived_state === 'current'
       ? '<span class="req-flag mute" title="与主链不相接；主链以时间最早的真实请求为准">⎇ 分支</span>' : '';
     // 派生没追上的行不显示旧关系与旧摘要，只说明它还没算完；标题退到模型时间占位。
     const deriveFlag = r.derived_state === 'dirty'
