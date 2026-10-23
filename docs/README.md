@@ -24,6 +24,7 @@
 | [请求用途](superpowers/plans/2026-10-22-atc-request-purpose.md) | 版本化解释、分类器强指纹、请求待处理、链参与和全部消费者 |
 | [输入与能力阅读](superpowers/plans/2026-10-22-atc-input-capability-reading.md) | 服务端包装解释、消息覆盖、工具技能提取、尝试链与页面纠错 |
 | [容量基线与收敛](superpowers/plans/2026-10-22-atc-capacity-convergence.md) | 隔离合成负载、固定原因观测、预算、路由解码优化与条件切片 |
+| [单一轨迹生产阅读](superpowers/plans/2026-10-23-single-timeline-production-reader.md) | 原型迁入生产的架构评估、发布代读取、最近窗口、条件正文、工具结果、缓存与界面实施步骤 |
 | [首轮 Collector 实施总入口](superpowers/plans/2026-10-20-collector-implementation.md) | 首轮阶段依赖、共同接口、文件职责与验收；实际切换继续遵守 C3 授权要求 |
 | [持久化与真实页面](superpowers/plans/2026-10-20-collector-foundation.md) | A1–A5：SQLite、文件代际与恢复、账本路由和费用、访问控制、真实分页页面 |
 | [正文与关联派生](superpowers/plans/2026-10-20-collector-body.md) | B1–B5：脱敏内容库、协议适配、薄 hook、证据关联、乱序派生与正文阅读 |
