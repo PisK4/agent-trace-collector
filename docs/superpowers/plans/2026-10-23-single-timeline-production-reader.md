@@ -468,7 +468,7 @@ export function createReaderStore(fetcher: (url:string)=>Promise<Response>): {
 
 类型写进JS JSDoc，RequestRow/ReadingDetail/ReadingBody/ToolResultReading引用真实TS定义。RequestRead导出JSDoc typedef供trace-view与app导入。delta.next是已消费的可信delta序号数量，structure.next是连续历史区间上界；不能共用。
 
-- [ ] **Step 1: 写fetch序列与可控迟到响应测试。** 使用BunTest与Response.json，JSON对象均为合成。为first请求返回reading_token=r1-加64个a，BodyPage补齐capabilities/coverage/interpretations。测试URLs精确区分from/to和if_reading；detail请求迟到后切换会话，旧响应不能更新新window或触发新会话渲染。相同(id,token,from,to)并发只发一次，不同区间不能错误共用一个Promise。
+- [x] **Step 1: 写fetch序列与可控迟到响应测试。** 使用BunTest与Response.json，JSON对象均为合成。为first请求返回reading_token=r1-加64个a，BodyPage补齐capabilities/coverage/interpretations。测试URLs精确区分from/to和if_reading；detail请求迟到后切换会话，旧响应不能更新新window或触发新会话渲染。相同(id,token,from,to)并发只发一次，不同区间不能错误共用一个Promise。
 
 ```ts
 const store=createReaderStore(fetcher);
@@ -486,8 +486,8 @@ expect((await store.readRequest(1)).structure.next).toBe(40);
 
 另测结构40+5分页、同页重复ord去重、503游标不动、空页且total未到时报body_page_empty游标不动、409整笔作废、切换后旧inflight不重新塞缓存。清空后重新读取同id必须产生新网络请求。工具结果另测：未发起读取时没有结果缓存，已 `resolved` 不自动等于已读；同一owner两个call ord分别缓存；读取失败保留失败状态，重试成功后才替换；旧token的迟到结果不能写入当前请求。
 
-- [ ] **Step 2: 运行红测。** `bun test tests/reader-store.test.ts`；模块/接口缺失为红，具体行为测试随后逐项绿。
-- [ ] **Step 3: 实现缓存与有限并发。** request缓存以canonical req_id归属、token标识版本。page/inflight键为 `[id,token,from,to]` 的JSON；results键为 `[owner,token,ord]`。共享一个固定4并发的网络队列，失败finally释放；结构与delta有独立loading守卫。换会话递增epoch并释放旧正文Map，晚到响应必须同时匹配epoch与当前请求token才可写入。只缓存已加载窗口和显式选中的一个窗口外请求，窗口外目标结果只存该调用结果，不装载目标整份历史。
+- [x] **Step 2: 运行红测。** `bun test tests/reader-store.test.ts`；模块/接口缺失为红，具体行为测试随后逐项绿。
+- [x] **Step 3: 实现缓存与有限并发。** request缓存以canonical req_id归属、token标识版本。page/inflight键为 `[id,token,from,to]` 的JSON；results键为 `[owner,token,ord]`。共享一个固定4并发的网络队列，失败finally释放；结构与delta有独立loading守卫。换会话递增epoch并释放旧正文Map，晚到响应必须同时匹配epoch与当前请求token才可写入。只缓存已加载窗口和显式选中的一个窗口外请求，窗口外目标结果只存该调用结果，不装载目标整份历史。
 
 ```js
 const key=JSON.stringify([id,token,from,to]);
@@ -500,9 +500,9 @@ const merge=(entries, incoming) => {
 
 结构成功后才推进next到 `Math.min(page.to,page.total ?? page.to)`；不是推进entries.length，也不受其它定点读影响。网络失败保留已有entries/next并记录error。页响应token/id不匹配视为reading_changed，不合并。409不自动无限重试：invalidate、显示请求已变化及重新读取按钮，下一次显式读取重建；继续展示的旧展开文本标为旧读取，旧delta与resolved按钮立刻移除。工具结果的正文加载状态由页面本地保存（未读取/读取中/已读/失败），不与 `ToolResultReading.state` 混写；读取失败可再次触发，直到token失效或用户切换请求。
 
-- [ ] **Step 4: 实现delta片与元信息读取。** readRequest首次detail后读body0/0，后续区间不覆盖meta.reply/request_fields/capabilities。loadDelta只消费deltaOrdinals非null的集合，按升序把跨度小于40的ord合成一片，每轮最多pages=2；过滤额外读到但不在delta中的消息。delta=[]立即done，null显示关系状态且不读消息。readRequest(validate=true)重新GET详情，token变化先清掉旧内容；readRoute只有用户选择路由/展开路由时发起。
-- [ ] **Step 5: 运行绿测并发布静态模块。** `bun test tests/reader-store.test.ts tests/http.test.ts`；`/reader-store.js`返回JavaScript与现行CSP，任意路径仍404。`bun run typecheck`核对JSDoc。
-- [ ] **Step 6: 提交边界。** 建议 `feat(reader): cache request reading pages by version and range`。更新提案的缓存取舍与实际验证。
+- [x] **Step 4: 实现delta片与元信息读取。** readRequest首次detail后读body0/0，后续区间不覆盖meta.reply/request_fields/capabilities。loadDelta只消费deltaOrdinals非null的集合，按升序把跨度小于40的ord合成一片，每轮最多pages=2；过滤额外读到但不在delta中的消息。delta=[]立即done，null显示关系状态且不读消息。readRequest(validate=true)重新GET详情，token变化先清掉旧内容；readRoute只有用户选择路由/展开路由时发起。
+- [x] **Step 5: 运行绿测并发布静态模块。** `bun test tests/reader-store.test.ts tests/http.test.ts`；`/reader-store.js`返回JavaScript与现行CSP，任意路径仍404。`bun run typecheck`核对JSDoc。
+- [x] **Step 6: 提交边界。** 建议 `feat(reader): cache request reading pages by version and range`。更新提案的缓存取舍与实际验证。
 
 ## Task 5: 把可信输入与回复投影为单行步骤
 
