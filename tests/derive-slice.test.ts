@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
-import { fixture } from './fixtures';
+import { fixture, seedRequest, SEED_GROUP } from './fixtures';
+import { persistBody } from '../src/body';
 import {
-  beginGeneration, discardGeneration, publishGeneration, readEffectiveGroup, recoverSlice,
+  DEFAULT_DERIVE_BUDGET, DERIVE_ALGORITHM, beginGeneration, discardGeneration,
+  publishGeneration, readEffectiveGroup, recoverSlice, sliceRequestsStage,
 } from '../src/derive-slice';
 
 function seedGroup(f: ReturnType<typeof fixture>): void {
@@ -144,5 +146,118 @@ test('丢弃已发布代际时不动结果，也不清发布指针', () => {
     const queue = f.store.read.query('SELECT * FROM derive_queue').get() as Record<string, unknown>;
     expect(queue.published_generation).toBe(generation);
     expect(queue.state).toBe('clean');
+  } finally { f.close(); }
+});
+/**
+ * 切片模式下组变脏时要标的是切片算法号，而正文写入造出的队列行带的是同步号。
+ * 这一步是 Task 18 要补的布线，这里先手动切过来。
+ */
+function switchToSliceAlgorithm(f: ReturnType<typeof fixture>): void {
+  f.store.write(db => db.run(
+    'UPDATE derive_queue SET target_algorithm=? WHERE conv_key=? AND actor=?',
+    [DERIVE_ALGORITHM, SEED_GROUP.convKey, SEED_GROUP.actor],
+  ));
+}
+
+function drainStage(
+  f: ReturnType<typeof fixture>,
+  generation: string,
+  budget: typeof DEFAULT_DERIVE_BUDGET,
+) {
+  let step = sliceRequestsStage(f.store, generation, budget, 20);
+  let guard = 0;
+  while (step.status === 'advanced' && guard++ < 50) {
+    step = sliceRequestsStage(f.store, generation, budget, 20);
+  }
+  return step;
+}
+
+test('请求切片分批物化并按A比较器写traversal_ord', () => {
+  const f = fixture();
+  try {
+    const ids = seedRequest(f.store, [
+      { req_id: 1, started_ms: 200, sort_source: 'ledger', sort_key: '1:1:1:1|00000000000000000001' },
+      { req_id: 2, started_ms: 100, sort_source: 'ledger', sort_key: '1:1:1:1|00000000000000000002' },
+      { req_id: 3, started_ms: 100, sort_source: 'ledger', sort_key: '1:1:1:1|00000000000000000001' },
+      { req_id: 4, started_ms: 300, sort_source: null, sort_key: null },
+    ]);
+    expect(ids).toEqual([1, 2, 3, 4]);
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'a' }] }] },
+      reply: { content: [{ type: 'tool_use', id: 'call-1', name: 'read' }] },
+      redact_version: 1,
+    });
+    persistBody(f.store, 2, {
+      protocol: 'anthropic',
+      request: {
+        messages: [{ role: 'user', content: [
+          { type: 'tool_result', tool_use_id: 'call-1', content: 'ok' }] }],
+      },
+      reply: { content: [{ type: 'text', text: 'done' }] },
+      redact_version: 1,
+    });
+    f.store.write(db => db.run("UPDATE request SET body_state='missing' WHERE req_id=4"));
+    switchToSliceAlgorithm(f);
+
+    const generation = beginGeneration(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    const budget = { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 2, maxWritesPerBatch: 8 };
+    const step = drainStage(f, generation, budget);
+    // 驱动到停为止：最后一次调用无事可做，stage 已经过到角色阶段。
+    expect(step.status).toBe('idle');
+    expect(step.stage).toBe('roles');
+
+    const rows = f.store.read.query<{ req_id: number; traversal_ord: number;
+      retention_state: string }, [string]>(`SELECT req_id,traversal_ord,retention_state
+      FROM derive_request_result WHERE generation=? ORDER BY traversal_ord`).all(generation);
+    // 同一毫秒的账本行按同代际偏移定序，不看 req_id；时间不同的按时间。
+    expect(rows.map(row => row.req_id)).toEqual([3, 2, 1, 4]);
+    expect(rows.map(row => row.traversal_ord)).toEqual([0, 1, 2, 3]);
+    // 正文读不出来的两笔按旧值保留，读得出来的两笔标成本次重算。
+    expect(rows.map(row => row.retention_state))
+      .toEqual(['retained', 'recomputed', 'recomputed', 'retained']);
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_call_work WHERE generation=?')
+      .get(generation)).toEqual({ n: 1 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_result_work WHERE generation=?')
+      .get(generation)).toEqual({ n: 1 });
+    // 候选带上遍历序写回：配对阶段要按请求顺序推进。
+    expect(f.store.read.query<{ traversal_ord: number }, [string]>(
+      'SELECT traversal_ord FROM derive_call_work WHERE generation=?').get(generation))
+      .toEqual({ traversal_ord: 2 });
+    expect(f.store.read.query<{ stage: string; request_count: number }, [string]>(
+      'SELECT stage,request_count FROM derive_generation WHERE generation=?').get(generation))
+      .toEqual({ stage: 'roles', request_count: 4 });
+  } finally { f.close(); }
+});
+
+test('请求切片在读取窗口内输入变化时丢弃整代', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, [
+      { req_id: 1, started_ms: 100, sort_source: null, sort_key: null },
+      { req_id: 2, started_ms: 200, sort_source: null, sort_key: null },
+    ]);
+    // 这一组没有正文，不会由摄入路径自动造出队列行，所以直接种一行。
+    f.store.write(db => db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,
+      input_revision,published_revision,target_algorithm,state,dirty_since_ms)
+      VALUES (?,?,'','g1',0,-1,?,'dirty',10)`,
+    [SEED_GROUP.convKey, SEED_GROUP.actor, DERIVE_ALGORITHM]));
+    const generation = beginGeneration(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    const budget = { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 1, maxWritesPerBatch: 1 };
+    // 只走一批，让代停在请求阶段；随后再动组修订，模拟页之间夹进来的输入变化。
+    const first = sliceRequestsStage(f.store, generation, budget, 20);
+    expect(first.status).toBe('advanced');
+    expect(first.stage).toBe('requests');
+    f.store.write(db => db.run('UPDATE derive_queue SET input_revision=input_revision+1'));
+    const second = sliceRequestsStage(f.store, generation, budget, 21);
+    expect(second.status).toBe('discarded');
+    expect(f.store.read.query<{ state: string }, [string]>(
+      'SELECT state FROM derive_generation WHERE generation=?').get(generation))
+      .toEqual({ state: 'discarded' });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_request_result WHERE generation=?')
+      .get(generation)).toEqual({ n: 0 });
+    expect(f.store.read.query<{ compute_generation: string | null; last_error: string | null }, []>(
+      'SELECT compute_generation,last_error FROM derive_queue').get())
+      .toEqual({ compute_generation: null, last_error: 'slice_group_revision_changed' });
   } finally { f.close(); }
 });

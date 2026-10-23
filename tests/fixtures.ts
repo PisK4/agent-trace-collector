@@ -132,3 +132,38 @@ export function seedPurposeRequest(store: Store, input: PurposeSeed = {}): numbe
   }
   return reqId;
 }
+
+/**
+ * 只建请求行的切片种子：正文与用途都留给调用方按用例自己写。
+ *
+ * `conv_key` 与 `conv_source` 的形状跟真实摄入一致（会话身份写成 JSON 数组），
+ * 这样队列行、请求行与代际拿到的是同一个组键，不会因为种子写了个短名字
+ * 而让整组永远匹配不上。
+ */
+export type RequestSeedRow = {
+  req_id: number;
+  started_ms: number;
+  sort_source: string | null;
+  sort_key: string | null;
+};
+
+export const SEED_GROUP = { convKey: JSON.stringify(['session', 'chain']), actor: 'a' };
+
+export function seedRequest(
+  store: Store,
+  rows: readonly RequestSeedRow[],
+  group: { convKey: string; actor: string } = SEED_GROUP,
+): number[] {
+  store.write(db => {
+    for (const row of rows) {
+      db.run(`INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,
+        day,via,body_state,derive_version,have,created_at,updated_at,
+        sort_source,sort_key,input_epoch,input_revision,purpose_revision,
+        purpose_version,purpose_chain,req_kind)
+        VALUES (?,?,'session',?,'known',?,'2026-10-22','hook','pending',0,1,1,1,
+        ?,?,'e1',0,0,1,'participate','chat')`,
+      [row.req_id, group.convKey, group.actor, row.started_ms, row.sort_source, row.sort_key]);
+    }
+  });
+  return rows.map(row => row.req_id);
+}

@@ -8,8 +8,13 @@ import { readBodyTx } from './body';
 import { assistantText } from './protocols';
 import { interpretMessage } from './input-interpretation';
 
-/** 从回复里取工具调用；两种协议结构都认。 */
-function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
+/**
+ * 从回复里取工具调用；两种协议结构都认。
+ *
+ * 导出给切片派生复用：候选抽取只有这一处实现，切片与同步不能各有一套
+ * 「什么算一次工具调用」的判据。
+ */
+export function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
   if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return [];
   const content = (reply as Record<string, unknown>).content;
   if (!Array.isArray(content)) {
@@ -44,8 +49,8 @@ function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: n
   return out;
 }
 
-/** 从请求里取工具结果；Anthropic 的 tool_result 与 chat 的 role=tool。 */
-function anthropicRequestResults(request: unknown): { id: string; ord: number; path: string; value: unknown }[] {
+/** 从请求里取工具结果；Anthropic 的 tool_result 与 chat 的 role=tool。导出理由同上。 */
+export function anthropicRequestResults(request: unknown): { id: string; ord: number; path: string; value: unknown }[] {
   if (request === null || typeof request !== 'object' || Array.isArray(request)) return [];
   const messages = (request as Record<string, unknown>).messages;
   if (!Array.isArray(messages)) return [];
@@ -500,8 +505,13 @@ function writePresentationTx(db: Database, input: PresentationInput,
   ]);
 }
 
-/** 工具结果内容压平；数组形状里只取 text 块。 */
-function flattenToolContent(value: unknown): string {
+/**
+ * 工具结果内容压平；数组形状里只取 text 块。
+ *
+ * 导出给切片派生复用：结果正文怎么压平是一条判据，两套实现会让同一份工具结果
+ * 在同步与切片两条路径上得到不同的摘要。
+ */
+export function flattenToolContent(value: unknown): string {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) {
     const parts: string[] = [];
