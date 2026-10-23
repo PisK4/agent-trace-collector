@@ -280,7 +280,13 @@ export function createHandler(
       if (requestsMatch !== null) {
         const key = decodeURIComponent(requestsMatch[1]!);
         const limit = parseLimit(url, 100);
-        return json(listRequests(store, key, limit, url.searchParams.get('cursor')));
+        const rawDirection = url.searchParams.get('direction');
+        // 缺参数保持 forward；未知方向显式 400，不静默忽略。
+        const direction = rawDirection === null ? 'forward' : rawDirection;
+        if (direction !== 'forward' && direction !== 'older') {
+          return json({ error: 'invalid_direction' }, 400);
+        }
+        return json(listRequests(store, key, limit, url.searchParams.get('cursor'), direction));
       }
 
       const requestMatch = /^\/api\/requests\/(\d+)$/.exec(path);

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { fixture, seedPurposeRequest } from './fixtures';
+import { fixture, SEED_GROUP, seedPurposeRequest } from './fixtures';
 import { loadBoundSaltTx, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
 import { zstdCompressSync } from 'node:zlib';
@@ -841,5 +841,37 @@ test('发布代不 current 或保留时屏蔽为旧结论，不冒充当前', ()
     expect(after.input_preview).toBeNull();
     expect(after.tool_calls[0]?.state).toBe('pending');
     expect(generation).toBe('gen-reader-published-01');
+  } finally { f.close(); }
+});
+
+test('older 方向从最近窗口向前翻，同毫秒不漏不重', () => {
+  const f = fixture();
+  try {
+    insertRequests(f.store, SEED_GROUP.convKey, 7, true);
+    const first = listRequests(f.store, SEED_GROUP.convKey, 3, null, 'older');
+    expect(first.items.map(r => r.req_id)).toEqual([5, 6, 7]);
+    const second = listRequests(f.store, SEED_GROUP.convKey, 3, first.next_cursor, 'older');
+    expect(second.items.map(r => r.req_id)).toEqual([2, 3, 4]);
+    const last = listRequests(f.store, SEED_GROUP.convKey, 3, second.next_cursor, 'older');
+    expect(last.items.map(r => r.req_id)).toEqual([1]);
+    expect(last.next_cursor).toBeNull();
+    // 默认 forward 行为保持：无游标取最早页。
+    expect(listRequests(f.store, SEED_GROUP.convKey, 3).items.map(r => r.req_id))
+      .toEqual([1, 2, 3]);
+  } finally { f.close(); }
+});
+
+test('older 方向查询计划沿用会话时间索引', () => {
+  const f = fixture();
+  try {
+    const details = f.store.read.query<unknown, [string, number, number, number]>(`
+      EXPLAIN QUERY PLAN
+      SELECT r.req_id, r.started_ms
+      FROM request r
+      WHERE r.conv_key = ? AND (r.started_ms, r.req_id) < (?, ?)
+      ORDER BY r.started_ms DESC, r.req_id DESC LIMIT ?`)
+      .all(SEED_GROUP.convKey, 1_700_000_000_000, 5, 30);
+    expect(JSON.stringify(details)).toContain('i_req_session_time');
+    expect(JSON.stringify(details)).not.toContain('SCAN request');
   } finally { f.close(); }
 });

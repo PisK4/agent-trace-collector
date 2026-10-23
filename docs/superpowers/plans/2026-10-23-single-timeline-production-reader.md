@@ -308,7 +308,7 @@ published存在时工具只查derive_tool_result指定generation；同步明确�
 
 **Interfaces:** Consumes Task 1的RequestRow安全投影。Produces §3.1的RequestDirection和listRequests新签名；Page字段保持items/next_cursor。
 
-- [ ] **Step 1: 写同毫秒与分页方向测试。** fixture中seedRequest插入id1..7，started_ms都为1000，conv_key为SEED_GROUP.convKey。正文不必创建，验证列表不读块。
+- [x] **Step 1: 写同毫秒与分页方向测试。** fixture中seedRequest插入id1..7，started_ms都为1000，conv_key为SEED_GROUP.convKey。正文不必创建，验证列表不读块。
 
 ```ts
 const first = listRequests(f.store, SEED_GROUP.convKey, 3, null, 'older');
@@ -324,8 +324,8 @@ expect(listRequests(f.store, SEED_GROUP.convKey, 3).items.map(r => r.req_id))
 
 HTTP直接使用createHandler合成配置，增加未知direction、旧forward游标用于older、其它会话older游标、非法limit、无穷值/非安全整数游标的400断言。保留旧forward分页不漏不重测试。
 
-- [ ] **Step 2: 运行红测。** `bun test tests/queries.test.ts tests/http.test.ts`；新增签名或older方向断言失败。
-- [ ] **Step 3: 实现方向查询与绑定游标。** older使用现有会话索引，参数化WHERE，不把用户输入拼接SQL；只在固定两个分支间选择比较符及排序。
+- [x] **Step 2: 运行红测。** `bun test tests/queries.test.ts tests/http.test.ts`；新增签名或older方向断言失败。
+- [x] **Step 3: 实现方向查询与绑定游标。** older使用现有会话索引，参数化WHERE，不把用户输入拼接SQL；只在固定两个分支间选择比较符及排序。
 
 ```sql
 -- 此可执行形状用于EXPLAIN断言；生产SELECT保留Task 1完整安全投影及来源连接。
@@ -337,8 +337,8 @@ ORDER BY r.started_ms DESC,r.req_id DESC LIMIT ?
 
 无cursor省略二元组条件。先slice(0,size)，用该DESC页末行生成older游标，再reverse返回正序。HTTP只接受forward/older，缺参数为forward。oldercursor的key、direction与安全整数校验全部通过后执行查询。forward现有二元游标的语义保留。
 
-- [ ] **Step 4: 运行绿测和索引核对。** `bun test tests/queries.test.ts tests/http.test.ts`。沿用现有EXPLAIN测试断言会话查询用 `i_req_session_time`，不得新增表、索引或offset分页。
-- [ ] **Step 5: 提交边界。** 建议 `feat(reader): add latest request windows and backward pagination`；接口事实写架构查询节，本提案保留理由和验证。
+- [x] **Step 4: 运行绿测和索引核对。** `bun test tests/queries.test.ts tests/http.test.ts`。沿用现有EXPLAIN测试断言会话查询用 `i_req_session_time`，不得新增表、索引或offset分页。
+- [x] **Step 5: 提交边界。** 建议 `feat(reader): add latest request windows and backward pagination`；接口事实写架构查询节，本提案保留理由和验证。
 
 ## Task 3: 增加条件正文读取与精确工具结果读取
 
