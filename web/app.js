@@ -513,10 +513,10 @@ if (typeof document !== 'undefined') {
     el('load-more-sessions').hidden = store.getSessions().cursor === null;
     el('sess-count').textContent = `${list.length} / 已加载 ${store.getSessions().items.length}`;
     const item = (/** @type {SessionRow} */ s) => {
+      // 左栏只保留具体事实标记；未知派生不再给笼统「待确认」，状态留在选中请求。
       const flag = s.flags.includes('failed') ? { color: 'var(--bad)', text: '含失败' }
-        : s.flags.includes('unknown') ? { color: 'var(--warn)', text: '待确认' }
-          : s.flags.includes('missing_body') ? { color: 'var(--muted)', text: '缺正文' }
-            : { color: 'var(--line-strong)', text: '' };
+        : s.flags.includes('missing_body') ? { color: 'var(--muted)', text: '缺正文' }
+          : { color: 'var(--line-strong)', text: '' };
       return `<button class="sess" data-session="${esc(s.conv_key)}" aria-current="${s.conv_key === state.session}">
         <span class="sess-title">${esc(s.title || '（无标题）')}</span>
         <span class="sess-time num">${esc(clock(s.last_ms))}</span>
@@ -601,7 +601,6 @@ if (typeof document !== 'undefined') {
     const priced = rows.filter(r => r.cost_state === 'priced' || r.cost_state === 'zero');
     const totalCost = priced.reduce((a, r) => a + (r.cost ?? 0), 0);
     const hasUsage = rows.some(r => r.in_tok !== null || r.out_tok !== null);
-    const missing = rows.filter(r => r.body_state === 'pending' || !(r.have & 1)).length;
     const failures = rows.filter(r => r.status !== null && r.status >= 400).length;
     const timing = timingSummary(rows);
     const timingParts = [
@@ -633,7 +632,6 @@ if (typeof document !== 'undefined') {
         <button class="chip-btn" id="jump-latest">回到最新 ↓</button>
       </div>
       ${unknown ? `<div class="session-note warn"><span>↳</span><span>链接里的会话 key 不在已加载的会话里：可能是已淘汰、从未记录，或者还在后面的会话页。下面没有用别的会话顶替。</span></div>` : ''}
-      ${missing > 0 ? `<div class="session-note warn"><span>↳</span><span>已加载请求中有 ${missing} 笔正文未到或没有回调；它们保留身份与读数，不用另一笔的正文替代。</span></div>` : ''}
       ${state.missingReqId !== null ? `<div class="session-note warn"><span>↳</span><span>链接里的 Request ${state.missingReqId} 在当前库里不存在，也没有别名指向它。下面显示的是本会话的请求，不是那一笔。</span></div>` : ''}
       ${state.offPageReqId !== null ? `<div class="session-note"><span>↳</span><span>链接里的 Request ${state.offPageReqId} 存在，但不在当前载入窗口（可能在更早的历史里）；从顶部加载更早记录后可以选到它，右栏已显示它的详情。不自动扫描全部历史。</span></div>` : ''}
       ${window.error !== null ? `<div class="session-note warn"><span>↳</span><span>请求窗口读取失败：${esc(window.error)}。已加载内容保持不变，可重试。</span></div>` : ''}
@@ -1643,6 +1641,115 @@ if (typeof document !== 'undefined') {
     themePref = next;
     applyTheme();
   });
+
+  /* ---------------- 布局控制：折叠与详情栏调宽 ---------------- */
+  const RAIL_MIN = 280, RAIL_MAX = 640, MAIN_MIN = 320;
+  /**
+   * 详情栏宽度夹取：范围 280..640，且给中栏保留至少 320px。
+   * @param {number} wanted @param {number} viewport @param {number} sidebar
+   */
+  const clampWidth = (wanted, viewport, sidebar) =>
+    Math.max(RAIL_MIN, Math.min(wanted, RAIL_MAX, Math.max(RAIL_MIN, viewport - sidebar - 6 - MAIN_MIN)));
+  /** 折叠中的会话栏宽度按 0 计。 */
+  function sidebarWidth() {
+    if (document.body.classList.contains('sidebar-collapsed')) return 0;
+    return document.querySelector('.col-sessions')?.getBoundingClientRect().width ?? 0;
+  }
+  const resizer = el('rail-resize');
+  /** @type {number | null} 按住中的 pointerId；move 只在按住时生效。 */
+  let draggingPointer = null;
+  /** @param {number} wanted */
+  function resizeRail(wanted) {
+    const limit = Math.round(clampWidth(RAIL_MAX, window.innerWidth, sidebarWidth()));
+    const value = Math.round(clampWidth(wanted, window.innerWidth, sidebarWidth()));
+    document.documentElement.style.setProperty('--rail-width', `${value}px`);
+    resizer.setAttribute('aria-valuenow', String(value));
+    resizer.setAttribute('aria-valuemax', String(limit));
+  }
+  resizer.addEventListener('pointerdown', e => {
+    draggingPointer = e.pointerId;
+    try { resizer.setPointerCapture(e.pointerId); } catch { /* 合成指针没有 capture；按住标记已生效 */ }
+  });
+  resizer.addEventListener('pointermove', e => {
+    if (draggingPointer === e.pointerId) resizeRail(window.innerWidth - e.clientX);
+  });
+  /** @param {PointerEvent} e */
+  const releasePointer = e => {
+    if (draggingPointer === e.pointerId) draggingPointer = null;
+    try { if (resizer.hasPointerCapture(e.pointerId)) resizer.releasePointerCapture(e.pointerId); } catch { /* 已释放 */ }
+  };
+  resizer.addEventListener('pointerup', releasePointer);
+  resizer.addEventListener('pointercancel', releasePointer);
+  resizer.addEventListener('dblclick', () => {
+    document.documentElement.style.removeProperty('--rail-width');
+    resizer.setAttribute('aria-valuenow', String(Math.round(document.querySelector('.col-rail')?.getBoundingClientRect().width ?? 380)));
+  });
+  resizer.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const current = document.querySelector('.col-rail')?.getBoundingClientRect().width ?? 380;
+      resizeRail(current + (e.key === 'ArrowLeft' ? 20 : -20));
+    }
+  });
+  window.addEventListener('resize', () => {
+    const set = document.documentElement.style.getPropertyValue('--rail-width');
+    if (window.innerWidth > 1000 && set !== '') resizeRail(parseFloat(set));
+  });
+  /** 折叠按钮的 aria 状态与 body 类同步。 */
+  function syncPanelButtons() {
+    for (const [id, cls, name] of [['sidebar-toggle', 'sidebar-collapsed', '会话栏'], ['rail-toggle', 'rail-collapsed', '详情栏']]) {
+      const button = el(id);
+      const closed = document.body.classList.contains(cls);
+      button.setAttribute('aria-expanded', String(!closed));
+      button.setAttribute('aria-label', `${closed ? '展开' : '收起'}${name}`);
+      button.title = button.getAttribute('aria-label') ?? '';
+    }
+  }
+  el('sidebar-toggle').addEventListener('click', () => { document.body.classList.toggle('sidebar-collapsed'); syncPanelButtons(); });
+  el('rail-toggle').addEventListener('click', () => { document.body.classList.toggle('rail-collapsed'); syncPanelButtons(); });
+
+  /* ---------------- Session ID 复制 ---------------- */
+  /** @param {string} text */
+  function toast(text) {
+    const chip = document.createElement('div');
+    chip.className = 'toast';
+    chip.textContent = text;
+    document.body.append(chip);
+    setTimeout(() => chip.remove(), 2400);
+  }
+  /**
+   * 复制当前会话身份：JSON 数组的 session 复制第二项原始 ID，conv 身份复制完整 conv_key；
+   * 不把 JSON 数组误称 UUID。剪贴板拒绝或不可用时给出可选中文本降级。
+   */
+  async function copySessionId() {
+    const key = state.session;
+    if (key === null) { toast('当前没有选中的会话'); return; }
+    let text = key;
+    let label = '会话键';
+    try {
+      const parsed = JSON.parse(key);
+      if (Array.isArray(parsed) && parsed.length >= 2 && parsed[0] === 'session') {
+        text = String(parsed[1]);
+        label = 'Session ID';
+      }
+    } catch { /* conv 身份：复制完整 conv_key */ }
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(`已复制${label}`);
+    } catch {
+      const field = document.createElement('textarea');
+      field.value = text;
+      field.setAttribute('readonly', '');
+      field.style.position = 'fixed';
+      field.style.top = '-1000px';
+      document.body.append(field);
+      field.focus();
+      field.select();
+      toast(`复制受限：已选中${label}，按 ⌘C / Ctrl+C 复制`);
+      field.addEventListener('blur', () => field.remove(), { once: true });
+    }
+  }
+  el('copy-session').addEventListener('click', () => { void copySessionId(); });
 
   window.addEventListener('popstate', () => {
     const p = new URLSearchParams(location.search);

@@ -47,3 +47,4 @@ Status: implemented
 ## Related
 
 - 固定行高与类型标签的原始决策：[2026-10-21-ledger-fixed-row-and-type-tags.md](../feature/2026-10-21-ledger-fixed-row-and-type-tags.md)。本记录部分取代其中的标志位置与窄屏行为。
+- 读数布局随生产单一轨迹改为右栏读数页：[2026-10-23-single-timeline-production-reader.md](../architecture/2026-10-23-single-timeline-production-reader.md)。本记录「读数子元素不越左边界、不能只看 document.scrollWidth」的防错验收继续有效，并已纳入该轮浏览器验收。

@@ -104,12 +104,23 @@ code,pre,.mono{font-family:var(--mono)}
 }
 .icon-btn:hover{background:var(--hover)}
 
-/* ---------- 三栏工作台：每栏独立滚动 ---------- */
-.app{flex:1;min-height:0;display:grid;grid-template-columns:250px minmax(0,1fr) 348px}
+/* ---------- 三栏工作台：每栏独立滚动；侧栏与详情栏可折叠，详情栏可调宽 ---------- */
+:root{--sidebar-width:250px;--rail-width:380px}
+.app{flex:1;min-height:0;display:grid;grid-template-columns:var(--sidebar-width) minmax(0,1fr) 6px var(--rail-width)}
 .col{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain}
 .col-sessions{background:var(--page);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
 .col-main{background:var(--canvas)}
 .col-rail{background:var(--surface);border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+/* 折叠用 body 类 + visibility：分隔线与可聚焦后代一并退出可访问树，不用 opacity 假装隐藏。 */
+body.sidebar-collapsed .app{grid-template-columns:0 minmax(0,1fr) 6px var(--rail-width)}
+body.sidebar-collapsed .col-sessions{visibility:hidden}
+body.rail-collapsed .app{grid-template-columns:var(--sidebar-width) minmax(0,1fr) 0 0}
+body.sidebar-collapsed.rail-collapsed .app{grid-template-columns:0 minmax(0,1fr) 0 0}
+body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidden}
+.resize-handle{cursor:col-resize;border-left:1px solid var(--line);background:var(--surface);touch-action:none;position:relative;overflow:hidden}
+.resize-handle:hover,.resize-handle:focus-visible{background:var(--accent-soft);outline:0}
+.resize-handle::after{content:"";position:absolute;top:45%;left:1px;width:2px;height:30px;background:var(--line-strong);border-radius:2px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:60;background:var(--text);color:var(--page);font-size:11.5px;padding:7px 12px;border-radius:5px;box-shadow:var(--shadow);max-width:70vw}
 
 /* ---------- 左栏：会话 ---------- */
 .sessions-head{padding:12px 12px 8px;display:flex;flex-direction:column;gap:8px;flex:none}
@@ -500,13 +511,13 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 
 /* 响应式 */
 @media(max-width:1240px){
-  .app{grid-template-columns:220px minmax(0,1fr) 310px}
+  :root{--sidebar-width:220px;--rail-width:310px}
       }
 @media(max-width:1000px){
   html,body{height:auto}
   body{overflow:auto;display:block}
   /* 窄屏回到文档流：会话 → 对话 → 当前请求读数，各自完整展开，不再互相挤压 */
-  .app{display:block;flex:none;min-height:0;height:auto}
+  .app,body.sidebar-collapsed .app,body.rail-collapsed .app{display:block;flex:none;min-height:0;height:auto}
   .col-sessions{max-height:none;border-right:0;border-bottom:1px solid var(--line);overflow:visible;display:block}
   .col-main{border-left:0;overflow:visible}
   .sessions-list{max-height:none;overflow:visible}
@@ -515,6 +526,9 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
   .rail-body{overflow:visible;max-height:none}
   .rail-head{position:static}
   .session-head{position:static}
+  /* 堆叠布局没有分隔线；折叠的栏整体移出文档流。 */
+  .resize-handle{display:none}
+  body.sidebar-collapsed .col-sessions,body.rail-collapsed .col-rail{display:none}
   .ledger{padding-inline:12px}
   .ledger::before{left:19px}
   .req-body{margin-left:18px}
@@ -550,12 +564,15 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
   <div class="grow"></div>
   <div class="toolbar-right">
     <span class="demo-tag" id="source-tag">本地库</span>
+    <button class="icon-btn" id="copy-session" aria-label="复制当前会话 ID" title="复制当前会话 ID">⧉</button>
+    <button class="icon-btn" id="sidebar-toggle" aria-controls="sessions-col" aria-expanded="true" aria-label="收起会话栏" title="收起会话栏">☷</button>
+    <button class="icon-btn" id="rail-toggle" aria-controls="rail-col" aria-expanded="true" aria-label="收起详情栏" title="收起详情栏">◨</button>
     <button class="icon-btn" id="theme-toggle" aria-label="切换主题" title="切换主题">◐</button>
   </div>
 </header>
 
 <div class="app">
-  <aside class="col col-sessions" aria-label="会话列表">
+  <aside class="col col-sessions" id="sessions-col" aria-label="会话列表">
     <div class="sessions-head">
       <div class="sessions-title"><h2>会话</h2><span id="sess-count"></span></div>
       <div class="search">
@@ -570,7 +587,9 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 
   <main class="col col-main" id="main"><p class="sess-empty" style="padding:24px">正在读取请求…</p></main>
 
-  <aside class="col col-rail" aria-label="请求读数与正文">
+  <div class="resize-handle" id="rail-resize" role="separator" tabindex="0" aria-label="调整详情栏宽度" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="640" aria-valuenow="380" title="拖动调整宽度；双击恢复默认；方向键微调"></div>
+
+  <aside class="col col-rail" id="rail-col" aria-label="请求读数与正文">
     <div class="rail-head" id="rail-head"></div>
     <div class="rail-body" id="rail-body"><div class="rail-empty"><b>等待选择</b>数据到达后再显示读数。</div></div>
   </aside>

@@ -10,7 +10,7 @@
 
 **Tech Stack:** TypeScript、Bun 1.4.0、`bun:sqlite`、`node:zlib`、`node:crypto`、原生 JavaScript ES Modules、原生 CSS、Bun Test。
 
-**Spec:** [生产阅读提案](../../../.agents/notes/proposed/architecture/2026-10-23-single-timeline-production-reader.md)、[原型交互与验证范围](../../../prototypes/README.md)、[原型右栏与编号决定](../../../.agents/notes/implemented/feature/2026-10-23-prototype-request-context-rail.md)、[现行查询与状态设计](../../architecture-design.md#查询接口)、[服务端输入解释](../../architecture-design.md#输入解释与能力阅读)。生产切换完成后提案移入 implemented，所有入站链接随迁移更新。
+**Spec:** [生产阅读提案（已实施）](../../../.agents/notes/implemented/architecture/2026-10-23-single-timeline-production-reader.md)、[原型交互与验证范围](../../../prototypes/README.md)、[原型右栏与编号决定](../../../.agents/notes/implemented/feature/2026-10-23-prototype-request-context-rail.md)、[现行查询与状态设计](../../architecture-design.md#查询接口)、[服务端输入解释](../../architecture-design.md#输入解释与能力阅读)。生产切换完成后提案移入 implemented，所有入站链接随迁移更新。
 
 ## Global Constraints
 
@@ -182,29 +182,29 @@ Task 0 不新增生产类型，只把下列五组状态分开，避免用一句�
 
 **Interfaces:** Consumes 静态合成入口、现有 `createLocalReader`、`replyView` 与本机 `page.capabilities` 能力视图。Produces 经 Task 0 硬条件验证后可供 Task 5/7 继承的状态语义；不新增生产类型，不把原型字段、静态样本或本机服务带进生产。验证结果写入[原型说明](../../../prototypes/README.md#验证范围)。
 
-- [ ] **Step 1: 建立唯一的合成阅读场景和状态口径。** 在静态合成数据中构造一个会话，至少包含：一笔 HTTP 失败但保留用户输入与回复的请求；一笔 HTTP 200、Chat `finish_reason=length` 的请求；一笔 Anthropic `stop_reason=max_tokens` 的请求；一笔正常 `stop`/`end_turn` 的请求；一笔未知停止原因的请求；一笔工具调用在后续请求中 `resolved` 且结果正文未读取；一笔关系 `pending` 或 `ambiguous`；一笔结果请求在最近窗口外；一笔辅助请求和一笔分支请求；能力视图分别覆盖 `present`（含未声明某个工具的情形）、`empty`（请求未携带工具）、`missing`/`partial`（不可读）、`unrecognized`（格式未知）以及两个同名工具定义。场景只存在于原型或合成 fixture，不读取本机库、不启动 collector、不复制真实会话正文。按 §3.4 固定状态组，任何位置不得把「未读取」写成「未记录」，也不得把 `resolved` 当成工具成功。
+- [x] **Step 1: 建立唯一的合成阅读场景和状态口径。** 在静态合成数据中构造一个会话，至少包含：一笔 HTTP 失败但保留用户输入与回复的请求；一笔 HTTP 200、Chat `finish_reason=length` 的请求；一笔 Anthropic `stop_reason=max_tokens` 的请求；一笔正常 `stop`/`end_turn` 的请求；一笔未知停止原因的请求；一笔工具调用在后续请求中 `resolved` 且结果正文未读取；一笔关系 `pending` 或 `ambiguous`；一笔结果请求在最近窗口外；一笔辅助请求和一笔分支请求；能力视图分别覆盖 `present`（含未声明某个工具的情形）、`empty`（请求未携带工具）、`missing`/`partial`（不可读）、`unrecognized`（格式未知）以及两个同名工具定义。场景只存在于原型或合成 fixture，不读取本机库、不启动 collector、不复制真实会话正文。按 §3.4 固定状态组，任何位置不得把「未读取」写成「未记录」，也不得把 `resolved` 当成工具成功。
 
   合成检查必须经过实际 `createLocalReader` 和原型事件处理，不能只修改静态 `REQUESTS` 后验证另一条渲染分支。使用只监听回环地址的合成 API 服务，或在检查脚本中替换 `fetch`，返回与 collector GET 相同形状的合成详情、正文、能力和工具关联；不启动依赖真实库与令牌的 `serve-local.ts`。保留可运行的检查入口与命令，覆盖普通工具行进入结果页、失败重试、HTTP 失败且只有用户输入、长度截断及 Schema 五态。进入 Step 2 前，先在未修复实现上记录同一场景的阅读基线和失败断言；无法完成的任务记为未完成，不补填耗时或答案。
 
-- [ ] **Step 2: 分离工具关联与结果正文加载。** 普通工具行、原位展开和右栏工具概览在结果未读取时显示「结果见请求 N · 待读取」（目标在窗口内）或「关系未确认」；打开结果时才调用现有按调用位置读取，显示读取中、正文或固定原因；读取失败保留重试，不把失败改写成未配对。结果查找以发起请求为边界，同一 `call_id` 出现在两个请求时不能串用。
+- [x] **Step 2: 分离工具关联与结果正文加载。** 普通工具行、原位展开和右栏工具概览在结果未读取时显示「结果见请求 N · 待读取」（目标在窗口内）或「关系未确认」；打开结果时才调用现有按调用位置读取，显示读取中、正文或固定原因；读取失败保留重试，不把失败改写成未配对。结果查找以发起请求为边界，同一 `call_id` 出现在两个请求时不能串用。
 
-- [ ] **Step 3: 保留独立请求状态记录。** 重新组织 `renderSteps`：先合并用户、助手、工具与状态记录，再渲染；`localSteps` 不能整体覆盖状态行。HTTP 失败、正文缺失、回复缺失、未知增量、样本截断各自产生一条可见记录，即使该请求已有用户输入或回复。状态文本放在不被省略号裁剪的独立元素，颜色只作辅助。
+- [x] **Step 3: 保留独立请求状态记录。** 重新组织 `renderSteps`：先合并用户、助手、工具与状态记录，再渲染；`localSteps` 不能整体覆盖状态行。HTTP 失败、正文缺失、回复缺失、未知增量、样本截断各自产生一条可见记录，即使该请求已有用户输入或回复。状态文本放在不被省略号裁剪的独立元素，颜色只作辅助。
 
-- [ ] **Step 4: 分开 HTTP 成功与回复完整性。** 核对 `replyView` 对两类协议的现有解析，用合成数据确认 Chat `length`、Anthropic `max_tokens` 显示为「回复因长度上限结束」，请求行仍为 HTTP 成功；`stop`/`end_turn`/`stop_sequence`/`tool_calls`/`tool_use` 按正常停止处理；其它停止原因原样显示并标为未知，不归为失败。缺失回复标为未收到，不标成功完成。
+- [x] **Step 4: 分开 HTTP 成功与回复完整性。** 核对 `replyView` 对两类协议的现有解析，用合成数据确认 Chat `length`、Anthropic `max_tokens` 显示为「回复因长度上限结束」，请求行仍为 HTTP 成功；`stop`/`end_turn`/`stop_sequence`/`tool_calls`/`tool_use` 按正常停止处理；其它停止原因原样显示并标为未知，不归为失败。缺失回复标为未收到，不标成功完成。
 
-- [ ] **Step 5: Schema 改读能力视图。** 本机入口从当前请求的 `localPage.capabilities.tools` 取定义；合成入口使用同形的合成能力视图，状态口径与服务端一致，不直接读 `request.tools`。`present` 且无同名项时说明未声明；`empty` 说明请求未携带工具；`missing`/`partial`/`unrecognized` 显示能力不可读或不完整及原因；同名多项逐项列出并说明无法唯一选择。不得回退到 `owner.request.tools` 或任选第一项。
+- [x] **Step 5: Schema 改读能力视图。** 本机入口从当前请求的 `localPage.capabilities.tools` 取定义；合成入口使用同形的合成能力视图，状态口径与服务端一致，不直接读 `request.tools`。`present` 且无同名项时说明未声明；`empty` 说明请求未携带工具；`missing`/`partial`/`unrecognized` 显示能力不可读或不完整及原因；同名多项逐项列出并说明无法唯一选择。不得回退到 `owner.request.tools` 或任选第一项。
 
-- [ ] **Step 6: 让工具行先给动作和结果状态。** 工具行摘要先写动作对象（命令、路径、查询、工具名），再写结果关系或执行状态；结果正文开头只作补充，不当结论。工具行的失败、未读取、未确认、不可读用独立短状态；请求级的失败、缺正文、回复长度上限落在对应请求记录行，用独立短状态，不随摘要截断。对 `.compact-metrics` 的 215px 固定宽度和空占位做原型测量：在 1507×838 与 400px 下记录正文、异常状态和计时读数的实际占用；可以试验空占位不占宽或按内容分配，但不在本计划预设新的固定宽度，也不取消每请求一次的计量。
+- [x] **Step 6: 让工具行先给动作和结果状态。** 工具行摘要先写动作对象（命令、路径、查询、工具名），再写结果关系或执行状态；结果正文开头只作补充，不当结论。工具行的失败、未读取、未确认、不可读用独立短状态；请求级的失败、缺正文、回复长度上限落在对应请求记录行，用独立短状态，不随摘要截断。对 `.compact-metrics` 的 215px 固定宽度和空占位做原型测量：在 1507×838 与 400px 下记录正文、异常状态和计时读数的实际占用；可以试验空占位不占宽或按内容分配，但不在本计划预设新的固定宽度，也不取消每请求一次的计量。
 
-- [ ] **Step 7: 前移确定结果入口并标明关系范围。** 关系为 `resolved` 且 actor 与调用方一致时，工具行显示「结果见请求 N」，N 是当前窗口展示号，数据属性保存稳定 `req_id`；点击定位承载结果的请求。目标在窗口外时不显示窗口号，只读取该请求详情并提示未在窗口，不扫描全部历史。`pending`/`ambiguous`/`unpaired`/不同 actor/辅助请求/分支分别标识；后续请求成功不自动写成前一次失败的重试成功。
+- [x] **Step 7: 前移确定结果入口并标明关系范围。** 关系为 `resolved` 且 actor 与调用方一致时，工具行显示「结果见请求 N」，N 是当前窗口展示号，数据属性保存稳定 `req_id`；点击定位承载结果的请求。目标在窗口外时不显示窗口号，只读取该请求详情并提示未在窗口，不扫描全部历史。`pending`/`ambiguous`/`unpaired`/不同 actor/辅助请求/分支分别标识；后续请求成功不自动写成前一次失败的重试成功。
 
-- [ ] **Step 8: 让初始选中可见。** 复现 1507×838 下默认选中最新请求但选中组落在 `main` 底边之外的情况；初始渲染后把选中组带入可见区域，同时保留回到列表顶部的路径。URL 明确指定 `trace` 时保留该请求；窗口外时读详情并在右栏说明，不静默改选最新。加载更早记录后，选中组不因重新编号而丢失或跳到别处。
+- [x] **Step 8: 让初始选中可见。** 复现 1507×838 下默认选中最新请求但选中组落在 `main` 底边之外的情况；初始渲染后把选中组带入可见区域，同时保留回到列表顶部的路径。URL 明确指定 `trace` 时保留该请求；窗口外时读详情并在右栏说明，不静默改选最新。加载更早记录后，选中组不因重新编号而丢失或跳到别处。
 
-- [ ] **Step 9: 执行三项阅读任务并判定门槛。** 用同一合成场景执行：a 找到最后一条已记录回复并说明当前进展；b 找到失败请求并说明后续发生了什么，不把后续成功写成已确认重试；c 从一次工具调用定位对应结果和承载它的请求。每项记录完成时间、点击/展开次数和回答正确性，答案以同一场景的预写答案为对照；答案由场景构造者保存在验证记录里，不显示在原型界面。修复前的基线在 Step 1 记录，本步在相同场景上复测并记录差值。记录执行者是人工还是 Agent、是否已知答案以及计时起止条件；Agent 通过页面完成任务只能证明信息可达与语义正确，自动化耗时不作为人的阅读速度证据。同一执行者重复场景有熟悉效应，前后差值只作描述，不声称因果改善。不设未经验证的数值阈值，不把时间或点击数的改善写成用户批准。
+- [x] **Step 9: 执行三项阅读任务并判定门槛。** 用同一合成场景执行：a 找到最后一条已记录回复并说明当前进展；b 找到失败请求并说明后续发生了什么，不把后续成功写成已确认重试；c 从一次工具调用定位对应结果和承载它的请求。每项记录完成时间、点击/展开次数和回答正确性，答案以同一场景的预写答案为对照；答案由场景构造者保存在验证记录里，不显示在原型界面。修复前的基线在 Step 1 记录，本步在相同场景上复测并记录差值。记录执行者是人工还是 Agent、是否已知答案以及计时起止条件；Agent 通过页面完成任务只能证明信息可达与语义正确，自动化耗时不作为人的阅读速度证据。同一执行者重复场景有熟悉效应，前后差值只作描述，不声称因果改善。不设未经验证的数值阈值，不把时间或点击数的改善写成用户批准。
 
   硬条件：Step 2–8 的合成回归通过（Step 6 的宽度试验只记录，工具行动作/状态与异常可见性仍须通过）；三项阅读任务回答正确且没有伪造因果；36px 行高、默认折叠、400px 无横向溢出保持；每请求计量仍只出现一次。任一项失败时不启动 Task 1，在 Task 0 内修复并重跑；修复后仍不能完成阅读任务，则停止迁移，把原型证据和可选方向交回用户，不降低验收、不把缺陷推给生产任务。用户可读性确认未取得时记录为待确认，不写成通过。
 
-- [ ] **Step 10: 记录与提交边界。** 在 `prototypes/README.md` 的验证范围写入实际通过的场景、未覆盖项和测量值；不写真实会话正文。建议提交 `fix(prototype): separate reading states and validate the trace`。Task 0 硬条件通过后才允许开始 Task 1；未经授权不 commit。
+- [x] **Step 10: 记录与提交边界。** 在 `prototypes/README.md` 的验证范围写入实际通过的场景、未覆盖项和测量值；不写真实会话正文。建议提交 `fix(prototype): separate reading states and validate the trace`。Task 0 硬条件通过后才允许开始 Task 1；未经授权不 commit。
 
 ## Task 1: 让生产查询整套选择派生来源
 
@@ -604,7 +604,7 @@ scroller.scrollTop+=sameAnchor.getBoundingClientRect().top-before;
 
 **Interfaces:** ConsumesRequestRead.structure、loadStructure/readToolResult/readRoute、renderCapabilities/renderMessages/renderMessageDetail/renderReply、ToolResultReading。Produces右栏facts/body/tools/route，以及工具overview/params/result/schema；同请求展开状态存在该请求UI状态，不从DOM位置猜数据身份。
 
-- [ ] **Step 1: 写结构和右栏组合回归。** body-view组合渲染可以导出无DOM函数供测试。structure的total=45、ords=[]时有数量但没有消息；首次展开40条，下一片5条，点击消息详情再返回仍45条。明确delta=null与[]：前者不标新增并给说明，后者显示新增0。能力missing/partial不显示零技能，正文evicted不出现可加载历史按钮。
+- [x] **Step 1: 写结构和右栏组合回归。** body-view组合渲染可以导出无DOM函数供测试。structure的total=45、ords=[]时有数量但没有消息；首次展开40条，下一片5条，点击消息详情再返回仍45条。明确delta=null与[]：前者不标新增并给说明，后者显示新增0。能力missing/partial不显示零技能，正文evicted不出现可加载历史按钮。
 
 ```ts
 expect(html.indexOf('请求能力')).toBeLessThan(html.indexOf('请求结构'));
@@ -615,11 +615,11 @@ expect(html).toContain('45 条消息');
 
 工具回归以同消息两个结果为重点：点击owner7/ord1结果显示second result，当前req仍7，旧选中请求的迟到结果不能覆盖当前工具；409清掉已resolved展示并提供重新读取。另测工具关联与正文加载分开：resolved未读取时显示待读取与结果请求入口，读取失败可重试且不改写关联状态，unpaired/pending/ambiguous不显示结果正文。Schema覆盖present/empty/missing/partial/同名多定义，不能把能力不可读写成未声明。
 
-- [ ] **Step 2: 运行红测。** `bun test tests/body-view.test.ts tests/reader-store.test.ts tests/web.test.ts`。
-- [ ] **Step 3: 复用区块组合。** 从ledgerBodySection保留能力/结构/回复的纯组合，结构使用独立ords加载列表，不把delta Map全部作为历史。能力details和结构details默认closed，首次展开才loadStructure，loading禁用重复按钮，错误可重试。复制调用messageCopyText，不复制HTML；返回按钮只清structure.selected。同请求重绘保持能力清单、条目Schema、结构开合及selected，换请求右栏回顶部；状态按稳定key存Map，避免按details下标恢复到另一清单。
-- [ ] **Step 4: 完整回复与工具详情接线。** facts按§1.3排序，保留生产usageSection/timingSection/promptSection/completenessSection，routeSection延迟到路由tab或展开时加载。renderReply显示全文，thinking默认折叠。回复完整性按§3.4单独显示；HTTP成功且`finish`为长度上限时标截断，请求状态仍成功，缺失回复不标完成。工具点击只用owner/callOrd，概览显示配对状态与正文加载状态，参数展示原始inputText，结果用Task 3接口，Schema从当前meta.capabilities.tools.items按工具名找：0项时按capabilities.state区分，present说明本请求未声明该工具，empty说明请求未携带工具，missing/partial/unrecognized说明能力不可读或不完整及原因；多同名项逐项列出并说明无法唯一选择，不任选第一项。结果is_error true为失败、false为上游未标错、null为未报告，不把resolved当成功；未读取结果不写未记录，读取失败保留重试。模型时长明确归属请求，工具执行时长未采集。
-- [ ] **Step 5: 浏览器合成验收与绿测。** 操作能力展开、Schema、40+5结构分页、消息详情返回、复制拒绝fallback、工具参数/结果/Schema、右栏返回请求、路由tab、同请求scrollTop保持与换请求归顶。另操作：HTTP成功但回复长度上限时的截断提示与请求成功状态并存；resolved未读取、读取失败重试、未确认三种工具状态；能力不可读与工具未声明的不同文案。响应式400px时全文/JSON在栏内换行或内部滚动，文档无横向溢出。绿测同Step 2，类型检查只在本项代码改变后运行一次。
-- [ ] **Step 6: 提交边界。** 建议 `feat(web): add request context and precise tool details to the rail`；交付事实更新架构与本提案生命周期，保留能力声明不等于实际调用的理由。
+- [x] **Step 2: 运行红测。** `bun test tests/body-view.test.ts tests/reader-store.test.ts tests/web.test.ts`。
+- [x] **Step 3: 复用区块组合。** 从ledgerBodySection保留能力/结构/回复的纯组合，结构使用独立ords加载列表，不把delta Map全部作为历史。能力details和结构details默认closed，首次展开才loadStructure，loading禁用重复按钮，错误可重试。复制调用messageCopyText，不复制HTML；返回按钮只清structure.selected。同请求重绘保持能力清单、条目Schema、结构开合及selected，换请求右栏回顶部；状态按稳定key存Map，避免按details下标恢复到另一清单。
+- [x] **Step 4: 完整回复与工具详情接线。** facts按§1.3排序，保留生产usageSection/timingSection/promptSection/completenessSection，routeSection延迟到路由tab或展开时加载。renderReply显示全文，thinking默认折叠。回复完整性按§3.4单独显示；HTTP成功且`finish`为长度上限时标截断，请求状态仍成功，缺失回复不标完成。工具点击只用owner/callOrd，概览显示配对状态与正文加载状态，参数展示原始inputText，结果用Task 3接口，Schema从当前meta.capabilities.tools.items按工具名找：0项时按capabilities.state区分，present说明本请求未声明该工具，empty说明请求未携带工具，missing/partial/unrecognized说明能力不可读或不完整及原因；多同名项逐项列出并说明无法唯一选择，不任选第一项。结果is_error true为失败、false为上游未标错、null为未报告，不把resolved当成功；未读取结果不写未记录，读取失败保留重试。模型时长明确归属请求，工具执行时长未采集。
+- [x] **Step 5: 浏览器合成验收与绿测。** 操作能力展开、Schema、40+5结构分页、消息详情返回、复制拒绝fallback、工具参数/结果/Schema、右栏返回请求、路由tab、同请求scrollTop保持与换请求归顶。另操作：HTTP成功但回复长度上限时的截断提示与请求成功状态并存；resolved未读取、读取失败重试、未确认三种工具状态；能力不可读与工具未声明的不同文案。响应式400px时全文/JSON在栏内换行或内部滚动，文档无横向溢出。绿测同Step 2，类型检查只在本项代码改变后运行一次。
+- [x] **Step 6: 提交边界。** 建议 `feat(web): add request context and precise tool details to the rail`；交付事实更新架构与本提案生命周期，保留能力声明不等于实际调用的理由。
 
 ## Task 8: 完成布局控制、文档和综合验收
 
@@ -627,7 +627,7 @@ expect(html).toContain('45 条消息');
 
 **Interfaces:** ConsumesTask 6/7页面与store。Produces可折叠会话栏/右栏、可拖动与键盘调整的详情宽度、Session ID复制及可复现验收记录。
 
-- [ ] **Step 1: 实现布局变量和原生控制。** 复用原型对应CSS与事件，但只迁移有效样式。默认sidebar250px、rail380px，rail范围280..640，main至少320px；1000px及以下用堆叠布局隐藏分隔线。用CSS变量维护grid，body类控制折叠，按钮有aria-controls/aria-expanded，右栏分隔线role=separator、tabindex=0、aria-orientation=vertical、aria-valuemin/max/now。
+- [x] **Step 1: 实现布局变量和原生控制。** 复用原型对应CSS与事件，但只迁移有效样式。默认sidebar250px、rail380px，rail范围280..640，main至少320px；1000px及以下用堆叠布局隐藏分隔线。用CSS变量维护grid，body类控制折叠，按钮有aria-controls/aria-expanded，右栏分隔线role=separator、tabindex=0、aria-orientation=vertical、aria-valuemin/max/now。
 
 ```js
 const clampWidth=(wanted,viewport,sidebar) =>
@@ -635,8 +635,8 @@ const clampWidth=(wanted,viewport,sidebar) =>
 ```
 
 pointerdown capture，move只在capture时更新，up/cancel释放；双击恢复380，方向键左右每次20px，window resize重新限制。折叠栏要同步隐藏其分隔线和可聚焦后代，不能仅用opacity。
-- [ ] **Step 2: Session ID复制和左栏精简。** JSON conv_key解析为session时复制第二项原始ID，conv身份则标复制会话键并复制完整conv_key；不能把JSON数组误称UUID。clipboard成功才显示已复制，拒绝/不可用显示可选中文本和手工复制提示。去掉左栏未知派生的待确认文字与中栏通用缺正文整行；具体异常、失败及历史未读范围仍就地显示。主题localStorage读写继续try/catch，宽度/折叠状态只存在内存。
-- [ ] **Step 3: 完成一次合成浏览器验收。** 使用临时目录fixture数据和非默认测试配置启动单独服务，关闭服务后清理临时目录；不得读取默认本机库/账号/令牌。fixture沿用 Task 0 的失败、截断、工具结果、能力五态和窗口外场景，覆盖下方矩阵与阅读任务，保留实际尺寸/错误码/网络请求计数，不保存真实正文。页面几何检查同时检查内部读数子元素边缘，不能只看document.scrollWidth。
+- [x] **Step 2: Session ID复制和左栏精简。** JSON conv_key解析为session时复制第二项原始ID，conv身份则标复制会话键并复制完整conv_key；不能把JSON数组误称UUID。clipboard成功才显示已复制，拒绝/不可用显示可选中文本和手工复制提示。去掉左栏未知派生的待确认文字与中栏通用缺正文整行；具体异常、失败及历史未读范围仍就地显示。主题localStorage读写继续try/catch，宽度/折叠状态只存在内存。
+- [x] **Step 3: 完成一次合成浏览器验收。** 使用临时目录fixture数据和非默认测试配置启动单独服务，关闭服务后清理临时目录；不得读取默认本机库/账号/令牌。fixture沿用 Task 0 的失败、截断、工具结果、能力五态和窗口外场景，覆盖下方矩阵与阅读任务，保留实际尺寸/错误码/网络请求计数，不保存真实正文。页面几何检查同时检查内部读数子元素边缘，不能只看document.scrollWidth。
 
 | 场景 | 验收标准 |
 | --- | --- |
@@ -669,8 +669,8 @@ pointerdown capture，move只在capture时更新，up/cancel释放；双击恢�
 
 时间与字节记录是本轮测量结果，不预设性能达标。若真实规模需要另一轮性能优化，按观察结果提出有界摘要投影或虚拟化，不在此提前实现。
 
-- [ ] **Step 4: 同步文档与决策生命周期。** 架构查询节写入分页方向/token/409/结果接口和读取一致性边界；输入能力节保留原语义。README更新生产阅读操作和本轮合成验收，旧验收中view/56px等失效事实移出当前说明，必要历史链接旧note。docs/README更新本计划入口描述。原型说明保留 Task 0 的验证结果；生产验收结果另记，不用原型样本代替。生产提案迁入implemented，Proposal改Decision，Acceptance/Risks折入Consequences/Testing，引用实际测试结果；修复本计划Spec和所有入站链接。旧固定账本与读数修复note按supersession规则核对，仍保留内部裁剪的防错证据和有效理由，不因移除一个布局就删除所有相关记录。
-- [ ] **Step 5: 运行最终必要检查。** 尚未在最后一次代码修改后通过的相关测试统一运行：
+- [x] **Step 4: 同步文档与决策生命周期。** 架构查询节写入分页方向/token/409/结果接口和读取一致性边界；输入能力节保留原语义。README更新生产阅读操作和本轮合成验收，旧验收中view/56px等失效事实移出当前说明，必要历史链接旧note。docs/README更新本计划入口描述。原型说明保留 Task 0 的验证结果；生产验收结果另记，不用原型样本代替。生产提案迁入implemented，Proposal改Decision，Acceptance/Risks折入Consequences/Testing，引用实际测试结果；修复本计划Spec和所有入站链接。旧固定账本与读数修复note按supersession规则核对，仍保留内部裁剪的防错证据和有效理由，不因移除一个布局就删除所有相关记录。
+- [x] **Step 5: 运行最终必要检查。** 尚未在最后一次代码修改后通过的相关测试统一运行：
 
 ```sh
 bun test tests/queries.test.ts tests/http.test.ts tests/body-api.test.ts tests/reading.test.ts tests/reader-store.test.ts tests/trace-view.test.ts tests/body-view.test.ts tests/web.test.ts
@@ -680,7 +680,7 @@ git diff --check
 ```
 
 已在最终代码状态通过的项目不重复。未运行生产全套、真实数据或截图时如实写未运行；没有新旧writer同时启动，没有调整容量门槛。真实数据只读操作仍须在具体执行会话确认其范围，不属于合成验收。
-- [ ] **Step 6: 提交边界与交付。** 建议 `feat(web): finish trace layout controls and document production reading`。逐路径审阅diff，真实正文/配置/令牌不进入提交；未经授权不git add/commit。最终说明实际改动、验证、剩余边界及英文commit message。
+- [x] **Step 6: 提交边界与交付。** 建议 `feat(web): finish trace layout controls and document production reading`。逐路径审阅diff，真实正文/配置/令牌不进入提交；未经授权不git add/commit。最终说明实际改动、验证、剩余边界及英文commit message。
 
 ## 4. 自检与执行收口
 
