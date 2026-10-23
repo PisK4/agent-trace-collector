@@ -624,6 +624,14 @@ body{padding-bottom:0}
 .compact-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:11px}
 .compact-preview code{font-size:10px}
 .compact-metrics{display:flex;justify-content:flex-end;gap:10px;flex:none;width:215px;white-space:nowrap;font:9px var(--mono);color:var(--muted)}
+/* 记录与工具行的独立状态：不进摘要省略号，颜色只作辅助。 */
+.step-status{flex:none;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--muted)}
+.step-status.ok{color:var(--good)}
+.step-status.warn{color:var(--warn)}
+.step-status.bad{color:var(--bad)}
+.step-result-link{flex:none;font-size:10px;color:var(--accent);border:1px solid var(--line);border-radius:3px;padding:2px 7px;background:var(--surface);white-space:nowrap}
+.step-result-link:hover{border-color:var(--accent)}
+.step-result-link.bad{color:var(--bad);border-color:var(--bad)}
 .trace-result-preview{color:var(--muted);font-size:10px}
 .step-expand{width:22px;flex:none;height:30px;color:var(--muted);font-size:16px}
 .step-expand:hover{color:var(--accent);background:var(--hover)}
@@ -1154,6 +1162,7 @@ const SESSIONS = [
 
 const localMode = new URLSearchParams(location.search).get('data') === 'local';
 let localReader = null;
+let pendingOutsideTrace = null;
 if (localMode) {
   document.querySelector('.demo-tag').textContent = 'DEMO · 本机真实数据';
   try {
@@ -1163,6 +1172,12 @@ if (localMode) {
     const key = new URLSearchParams(location.search).get('session');
     const initial = localReader.sessions.find(s => s.key === key) || localReader.sessions[0];
     await localReader.load(initial);
+    const wantedTrace = new URLSearchParams(location.search).get('trace');
+    // URL 指定的 trace 不在窗口内时先记下来；state 定义后再消费（不静默改选最新）。
+    if (wantedTrace && !localReader.requests[wantedTrace]) {
+      try { await localReader.readOutside(wantedTrace); pendingOutsideTrace = wantedTrace; }
+      catch { /* 详情读取失败时保持默认选最新 */ }
+    }
     const params = new URLSearchParams(location.search);
     params.set('session',initial.key);
     history.replaceState(null,'',location.pathname+'?'+params);
@@ -1273,6 +1288,50 @@ function locateRequest(id) {
     document.querySelector(`[data-req="${CSS.escape(id)}"]`)?.scrollIntoView({block:'center', behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
   });
 }
+/* 结果入口与状态：窗口号只是当前载入窗口的展示号，身份用稳定 req_id。 */
+function windowNumberOf(targetId) {
+  const idx = currentSession().requests.indexOf(String(targetId));
+  return idx === -1 ? null : idx + 1;
+}
+const relationLabel = pair => pair?.state === 'resolved' ? '已确认' : pair?.state === 'pending' ? '位置待定' : pair?.state === 'ambiguous' ? '多候选' : '未配对';
+const loadLabel = call => call.result
+  ? (call.result.isError === true ? '已读取 · 工具报告失败' : call.result.isError === false ? '已读取 · 工具未标错' : '已读取')
+  : call.loadState === 'loading' ? '读取中'
+    : call.loadState === 'failed' ? '读取失败 · 可重试'
+      : call.loadState === 'unavailable' ? '不可读'
+        : call.loadState === 'invalid_location' ? '位置无效' : '未读取';
+function resultEntry(call) {
+  const pair = call.pair;
+  if (!pair || pair.state !== 'resolved') {
+    return {kind:'status', text:`关系${relationLabel(pair)}`, tone: pair?.state === 'resolved' ? 'ok' : 'warn'};
+  }
+  const target = String(pair.result_req);
+  const number = windowNumberOf(target);
+  const inWindow = number !== null;
+  const suffix = inWindow ? `结果见请求 ${number}` : `结果在请求 ${pair.result_req} · 未在窗口`;
+  if (call.loadState === 'loaded') return inWindow ? {kind:'link', text:suffix, target, tone:'ok'} : {kind:'status', text:suffix, tone:'ok'};
+  if (call.loadState === 'loading') return {kind:'status', text:'结果读取中…', tone:'warn'};
+  if (call.loadState === 'failed') return {kind:'retry', text:'结果读取失败 · 重试', tone:'bad'};
+  if (call.loadState === 'unavailable' || call.loadState === 'invalid_location') return {kind:'status', text:`结果正文${call.loadState === 'unavailable' ? '不可读' : '位置无效'}${call.error ? ' · '+call.error : ''}`, tone:'bad'};
+  return {kind: inWindow ? 'read' : 'read-outside', text:`${suffix} · 待读取`, target, tone:'warn'};
+}
+function entryHtml(entry, ownerId, callId) {
+  if (entry.kind === 'status') return `<span class="step-status ${entry.tone ?? ''}">${esc(entry.text)}</span>`;
+  if (entry.kind === 'retry') return `<button class="step-result-link bad" data-result-retry="${esc(ownerId)}" data-call-id="${esc(callId)}">${esc(entry.text)}</button>`;
+  const attr = entry.kind === 'read-outside' ? 'data-result-outside' : 'data-result-target';
+  return `<button class="step-result-link" ${attr}="${esc(entry.target)}" data-result-owner="${esc(ownerId)}" data-call-id="${esc(callId)}">${esc(entry.text)}</button>`;
+}
+function toolResultBody(ownerId, call) {
+  if (call.result) return `<pre class="raw">${esc(call.result.message.content)}</pre>${call.result.isError === true ? '<p class="note warn">结果标记 is_error：工具执行失败；这与关联已确认是两回事。</p>' : ''}`;
+  if (!call.pair || call.pair.state !== 'resolved') return `<p class="note">关系未确认，不发起结果读取，也不显示为「未记录」。</p>`;
+  if (call.loadState === 'loading') return '<p class="note">结果读取中…</p>';
+  if (call.loadState === 'failed') return `<p class="note warn">读取失败：${esc(call.error || '未知原因')}</p><button class="chip-btn" data-result-retry="${esc(ownerId)}" data-call-id="${esc(call.id)}">重试读取</button>`;
+  if (call.loadState === 'unavailable' || call.loadState === 'invalid_location') return `<p class="note warn">结果正文${call.loadState === 'unavailable' ? '不可读' : '位置无效'}${call.error ? '：'+esc(call.error) : ''}</p>`;
+  return '<p class="note">结果未读取；点击「结果见请求」时才读取。</p>';
+}
+function toolStepDetail(r, call) {
+  return `<div class="inline-tool"><div><div class="detail-label">调用参数 · ${esc(call.name || '未命名工具')}</div><pre class="raw">${esc(call.inputText)}</pre></div><div><div class="detail-label">结果关联 ${esc(relationLabel(call.pair))} · 正文加载 ${esc(loadLabel(call))}</div>${toolResultBody(r.id, call)}</div></div>`;
+}
 function renderSteps() {
   const all = requestsOf(state.session);
   const rows = visibleRequests();
@@ -1281,28 +1340,37 @@ function renderSteps() {
   for (const r of rows) {
     const index = all.indexOf(r);
     const steps = [];
-    for (const [i, user] of (r.newMsgs || []).filter(m => m.role === 'user' && !m.ctx).entries()) {
-      steps.push({key:`${r.id}:user:${i}`, label:'用户', cls:'', preview:esc(user.content), detail:`<div class="detail-value">${esc(user.content)}</div>`, attrs:`data-step-body="${esc(r.id)}" data-step-path="messages[${r.request.messages.indexOf(user)}]"`});
+    if (r.local) {
+      // localSteps 已含内容步骤与记录行；这里只做行装配，不再整体替换状态记录。
+      for (const step of r.localSteps) {
+        if (step.isRecord) {
+          steps.push({key:step.key, label:step.label, cls:step.cls, preview:'', status:step.status, detail:`<div class="trace-prose">${esc(step.raw ?? step.status)}</div>`, attrs:`data-select="${esc(r.id)}"`});
+        } else if (step.call) {
+          steps.push({key:step.key, label:'工具', cls:'tool', preview:`<code>${esc(step.text)}</code>`, entry:resultEntry(step.call), call:step.call, detail:toolStepDetail(r, step.call), attrs:`data-tool-owner="${esc(r.id)}" data-call-id="${esc(step.call.id)}"`});
+        } else {
+          steps.push({key:step.key, label:step.label, cls:step.cls, preview:esc(step.text), detail:`<div class="trace-prose">${step.label === '助手' ? mdToHtml(step.raw ?? step.text) : esc(step.raw ?? step.text)}</div>`, attrs:`data-select="${esc(r.id)}"`});
+        }
+      }
+    } else {
+      for (const [i, user] of (r.newMsgs || []).filter(m => m.role === 'user' && !m.ctx).entries()) {
+        steps.push({key:`${r.id}:user:${i}`, label:'用户', cls:'', preview:esc(user.content), detail:`<div class="detail-value">${esc(user.content)}</div>`, attrs:`data-step-body="${esc(r.id)}" data-step-path="messages[${r.request.messages.indexOf(user)}]"`});
+      }
+      if (replyText(r)) steps.push({key:`${r.id}:reply`, label:'助手', cls:'reply', preview:esc(replyLabel(r)), detail:`<div class="trace-prose">${mdToHtml(replyText(r))}</div>`, attrs:`data-step-body="${esc(r.id)}" data-step-path="$response"`});
+      for (const call of replyCalls(r)) {
+        const result = resultFor(call.id);
+        steps.push({key:`${r.id}:tool:${call.id}`, label:'工具', cls:'tool', preview:`<code>${esc(callSummary(call))}</code>`, status: result ? `结果已记录 · ${result.request.id}` : '结果未记录', detail:`<div class="inline-tool"><div><div class="detail-label">调用参数</div><pre class="raw">${esc(JSON.stringify(callArgs(call), null, 2))}</pre></div><div><div class="detail-label">${result ? `结果 · ${esc(result.request.id)}` : '结果未记录'}</div><pre class="raw">${esc(result?.message.content || '后续请求中尚未记录匹配结果。')}</pre></div></div>`, attrs:`data-tool-owner="${esc(r.id)}" data-call-id="${esc(call.id)}"`});
+      }
+      if (!r.request || r.status === 'failed' || !steps.length) steps.push({key:`${r.id}:status`, label:r.status === 'failed' ? '失败' : '记录', cls:'aux', preview:'', status:!r.request ? '正文未收到 · '+(r.caveat || '保留身份与读数') : r.status === 'failed' ? `请求失败 · HTTP ${r.attempts?.at(-1)?.status || '未知'}` : '没有可读的新增消息', detail:'', attrs:`data-select="${esc(r.id)}"`});
     }
-    if (replyText(r)) steps.push({key:`${r.id}:reply`, label:'助手', cls:'reply', preview:esc(replyLabel(r)), detail:`<div class="trace-prose">${mdToHtml(replyText(r))}</div>`, attrs:`data-step-body="${esc(r.id)}" data-step-path="$response"`});
-    for (const call of replyCalls(r)) {
-      const result = resultFor(call.id);
-      const summary = result ? result.message.content.replace(/\s+/g, ' ').slice(0, 100) : '结果未记录';
-      steps.push({key:`${r.id}:tool:${call.id}`, label:'工具', cls:'tool', preview:`<code>${esc(callSummary(call))}</code><span class="trace-result-preview"> → ${esc(summary)}</span>`, detail:`<div class="inline-tool"><div><div class="detail-label">调用参数</div><pre class="raw">${esc(JSON.stringify(callArgs(call), null, 2))}</pre></div><div><div class="detail-label">${result ? `结果 · ${esc(result.request.id)}` : '结果未记录'}</div><pre class="raw">${esc(result?.message.content || '后续请求中尚未记录匹配结果。')}</pre></div></div>`, attrs:`data-tool-owner="${esc(r.id)}" data-tool-id="${esc(call.id)}"`});
-    }
-    if (!r.request || r.status === 'failed' || !steps.length) steps.push({key:`${r.id}:status`, label:r.status === 'failed' ? '失败' : '记录', cls:'aux', preview:esc(!r.request ? '正文未收到 · '+(r.caveat || '保留身份与读数') : r.status === 'failed' ? `请求失败 · HTTP ${r.attempts?.at(-1)?.status || '未知'}` : '没有可读的新增消息'), detail:'', attrs:`data-select="${esc(r.id)}"`});
-    if (r.local) steps.splice(0, steps.length, ...r.localSteps.map(step => ({
-      ...step, preview:esc(step.text),
-      attrs:step.call ? `data-tool-owner="${esc(r.id)}" data-tool-id="${esc(step.call.id)}"` : `data-select="${esc(r.id)}"`,
-      detail:step.call ? `<div class="detail-label">调用参数 · 结果关联 ${esc(step.call.pair?.state || 'unpaired')}</div><pre class="raw">${esc(step.call.function.arguments)}</pre><div class="detail-label">工具结果</div><pre class="raw">${esc(step.call.result?.message.content || '展开时读取已确认的配对结果；未确认关系不猜配。')}</pre>` : `<div class="trace-prose">${step.label === '助手' ? mdToHtml(step.raw) : esc(step.raw || step.text)}</div>`,
-    })));
     const speed = r.timing?.flow && r.usage?.out ? Math.round(r.usage.out / (r.timing.flow / 1000)) : null;
     const metrics = `<span class="compact-metrics" title="所属模型请求的读数；不表示工具执行耗时"><span>首字 ${secs(r.timing?.ttft)}</span><span>时长 ${secs(r.timing?.ms)}</span>${speed ? `<span>${speed} tok/s</span>` : ''}</span>`;
     html += `<section class="trace-group" data-req="${esc(r.id)}" aria-current="${r.id === state.reqId}" data-status="${r.status}">`;
     steps.forEach((step, i) => {
       const open = state.stepOpen.has(step.key);
       const number = index + 1;
-      html += `<div class="compact-step"><div class="compact-row"><button class="compact-select" ${step.attrs} title="${esc(r.id)} · 查看详情"><span class="compact-meta" title="请求 ${number}"><b>${number}</b></span><span class="row-label ${step.cls}">${step.label}</span><span class="compact-preview">${step.preview}</span></button>${i === steps.length - 1 && !r.sampleCut ? metrics : '<span class="compact-metrics"></span>'}<button class="step-expand" data-step-expand="${esc(step.key)}" aria-expanded="${open}" aria-label="${open ? '收起' : '展开'}请求 ${index+1} ${step.label}详情">${open ? '⌄' : '›'}</button></div>${open ? `<div class="trace-step-detail">${step.detail}<details class="trace-context"><summary>${r.local ? '已读取片段与请求详情' : '完整请求详情 · 上下文、路由与原始对象'}</summary>${requestBody(r, index)}</details></div>` : ''}</div>`;
+      const slot = step.entry ? entryHtml(step.entry, r.id, step.call?.id ?? '') : step.status ? `<span class="step-status">${esc(step.status)}</span>` : '';
+      // 非末行不再渲染同宽空占位，把宽度让给正文摘要；读数仍每请求只出现一次。
+      html += `<div class="compact-step"><div class="compact-row"><button class="compact-select" ${step.attrs} title="${esc(r.id)} · 查看详情"><span class="compact-meta" title="请求 ${number}"><b>${number}</b></span><span class="row-label ${step.cls}">${step.label}</span><span class="compact-preview">${step.preview}</span></button>${slot}${i === steps.length - 1 && !r.sampleCut ? metrics : ''}<button class="step-expand" data-step-expand="${esc(step.key)}" aria-expanded="${open}" aria-label="${open ? '收起' : '展开'}请求 ${index+1} ${step.label}详情">${open ? '⌄' : '›'}</button></div>${open ? `<div class="trace-step-detail">${step.detail}<details class="trace-context"><summary>${r.local ? '已读取片段与请求详情' : '完整请求详情 · 上下文、路由与原始对象'}</summary>${requestBody(r, index)}</details></div>` : ''}</div>`;
     });
     html += '</section>';
   }
@@ -1322,14 +1390,54 @@ function selectTool(owner, id) {
   syncPanelButtons();
   renderAll();
 }
+const schemaPre = item => `<pre class="raw">${esc(JSON.stringify({name:item.name, description:item.description, parameters:item.schema}, null, 2))}</pre>`;
+/* Schema 读能力视图，不读可能为 null 的请求对象；同名多项逐项列出，不任选第一项。 */
+function toolSchemaSection(owner, name) {
+  const caps = owner.localPage?.capabilities;
+  if (caps) {
+    const tools = caps.tools;
+    if (tools.state === 'present') {
+      const matches = tools.items.filter(item => item.name === name);
+      if (matches.length === 0) return `<p class="note">请求能力为 present（声明 ${tools.items.length} 个工具），但没有「${esc(name)}」：本请求未声明该工具。</p>`;
+      if (matches.length > 1) return `<p class="note warn">同名工具定义 ${matches.length} 项，无法唯一选择，逐项列出：</p>${matches.map(schemaPre).join('')}`;
+      return schemaPre(matches[0]);
+    }
+    if (tools.state === 'empty') return '<p class="note">请求未携带工具定义（tools 为空）；说「未声明」需要能力可读，这里不能推断。</p>';
+    if (tools.state === 'missing' || tools.state === 'partial') return `<p class="note warn">能力不可读或不完整（${esc(tools.state)}${tools.reason ? ' · '+esc(tools.reason) : ''}），不能据此判断工具是否声明。</p>`;
+    return `<p class="note warn">工具字段格式未识别（${esc(tools.reason ?? tools.state)}），无法列出定义。</p>`;
+  }
+  // 静态演示分支没有能力视图，保留旧的 request.tools 来源。
+  const schema = owner.request?.tools?.find(t => t.function.name === name);
+  return schema ? schemaPre({name:schema.function.name, description:schema.function.description, schema:schema.function.parameters}) : '<p class="note">本笔请求没有携带该工具的定义。</p>';
+}
+function localToolInspector(owner, call) {
+  const entry = resultEntry(call);
+  if (state.railTab === 'params') return `<section class="rail-section"><h3>调用参数</h3><pre class="raw">${esc(call.inputText)}</pre></section>`;
+  if (state.railTab === 'result') return `<section class="rail-section"><h3>工具结果</h3>
+    <div class="tool-state">关联 ${esc(relationLabel(call.pair))} · 正文 ${esc(loadLabel(call))}${call.result?.isError === true ? ' · 工具报告失败' : call.result?.isError === false ? ' · 工具未标错' : ''}</div>
+    ${toolResultBody(owner.id, call)}
+    ${entry.kind === 'link' ? `<button class="tool-link" data-locate="${esc(entry.target)}">查看承载结果的请求 ${esc(entry.target)} →</button>` : ''}
+    ${entry.kind === 'read-outside' ? `<button class="tool-link" data-result-outside="${esc(entry.target)}" data-result-owner="${esc(owner.id)}" data-call-id="${esc(call.id)}">读取窗口外请求 ${esc(entry.target)} 的详情 →</button>` : ''}
+  </section>`;
+  if (state.railTab === 'schema') return `<section class="rail-section"><h3>工具定义 · 读请求能力</h3>${toolSchemaSection(owner, call.name || '')}</section>`;
+  const target = call.pair?.result_req;
+  const number = target == null ? null : windowNumberOf(target);
+  return `<section class="rail-section"><h3>工具往返</h3><dl class="chain">
+    <div class="chain-row"><dt>结果关联</dt><dd>${esc(relationLabel(call.pair))}<span class="muted">（关联已确认只说明找到了承载请求，不代表工具成功）</span></dd></div>
+    <div class="chain-row"><dt>结果正文</dt><dd>${esc(loadLabel(call))}</dd></div>
+    <div class="chain-row"><dt>发起请求</dt><dd class="mono">${esc(owner.id)}</dd></div>
+    <div class="chain-row"><dt>结果所在请求</dt><dd class="mono">${target == null ? '—' : `${esc(String(target))}${number === null ? ' · 未在窗口' : ` · 当前窗口号 ${number}`}`}</dd></div>
+    <div class="chain-row"><dt>执行耗时</dt><dd>未采集</dd></div>
+  </dl></section><section class="rail-section"><h3>参数</h3><pre class="raw">${esc(call.inputText)}</pre></section><section class="rail-section"><h3>所属请求的模型计时</h3><dl class="chain"><div class="chain-row"><dt>首字</dt><dd>${secs(owner.timing?.ttft)}</dd></div><div class="chain-row"><dt>总时长</dt><dd>${secs(owner.timing?.ms)}</dd></div></dl>${explainer('模型请求计时覆盖模型响应过程，不能用作工具执行耗时。关联已确认与工具执行成功、结果正文已读取是三件不同的事。')}</section>`;
+}
 function toolInspector(tool) {
   const {owner, call, result} = tool;
+  if (owner.local) return localToolInspector(owner, owner.replyMsg.tool_calls.find(c => c.id === call.id) ?? call);
   const args = JSON.stringify(callArgs(call), null, 2);
   if (state.railTab === 'params') return `<section class="rail-section"><h3>调用参数</h3><pre class="raw">${esc(args)}</pre></section>`;
   if (state.railTab === 'result') return `<section class="rail-section"><h3>工具结果</h3><pre class="raw">${esc(result?.message.content || '后续请求中没有找到匹配的工具结果。')}</pre>${result ? `<button class="tool-link" data-locate="${esc(result.request.id)}">查看承载结果的请求 ${esc(result.request.id)} →</button>` : ''}</section>`;
   if (state.railTab === 'schema') {
-    const schema = owner.request?.tools?.find(t => t.function.name === call.function.name);
-    return `<section class="rail-section"><h3>工具定义</h3><pre class="raw">${esc(schema ? JSON.stringify(schema.function, null, 2) : '本笔请求没有携带该工具的定义。')}</pre></section>`;
+    return `<section class="rail-section"><h3>工具定义</h3>${toolSchemaSection(owner, call.function.name)}</section>`;
   }
   return `<section class="rail-section"><h3>工具往返</h3><dl class="chain"><div class="chain-row"><dt>结果</dt><dd>${result ? '✓ 已记录' : '○ 未记录'}</dd></div><div class="chain-row"><dt>发起请求</dt><dd class="mono">${esc(owner.id)}</dd></div><div class="chain-row"><dt>结果所在请求</dt><dd class="mono">${esc(result?.request.id || '未记录')}</dd></div><div class="chain-row"><dt>执行耗时</dt><dd>未采集</dd></div></dl></section><section class="rail-section"><h3>参数</h3><pre class="raw">${esc(args)}</pre></section><section class="rail-section"><h3>结果预览</h3><pre class="raw">${esc(result?.message.content || '未记录')}</pre></section><section class="rail-section"><h3>所属请求的模型计时</h3><dl class="chain"><div class="chain-row"><dt>首字</dt><dd>${secs(owner.timing?.ttft)}</dd></div><div class="chain-row"><dt>总时长</dt><dd>${secs(owner.timing?.ms)}</dd></div></dl>${explainer('模型请求计时覆盖模型响应过程，不能用作工具执行耗时。工具返回只表示结果已记录，是否成功需要依据明确的结果状态。')}</section>`;
 }
@@ -1409,6 +1517,7 @@ const state = {
   query: '',
   agent: 'all',
   replyOpen: false,
+  outsideNotice: null,     // 窗口外结果/请求的右栏说明
 };
 let themePref = 'system';
 try { themePref = localStorage.getItem('tc.theme') || 'system'; } catch {}
@@ -1418,7 +1527,8 @@ function currentSession() { return SESSIONS.find(s => s.key === state.session) |
 function currentReq() { return REQUESTS[state.reqId] || null; }
 function ensureSelection() {
   const rows = requestsOf(state.session);
-  if (!rows.some(r => r.id === state.reqId)) {
+  // 窗口外 trace 保留该请求语义：不静默改选最新，右栏说明未在窗口。
+  if (!rows.some(r => r.id === state.reqId) && !REQUESTS[state.reqId]?.outside) {
     state.reqId = rows.at(-1)?.id || null;
     state.open = new Set();
     state.selected = null;
@@ -1430,8 +1540,9 @@ function ensureSelection() {
 function renderCrumb() {
   const s = currentSession(), r = currentReq();
   const idx = s.requests.indexOf(r?.id) + 1;
+  const label = r?.outside ? `Request ${r.id} · 未在窗口` : idx ? `Request ${String(idx).padStart(2,'0')}` : '未选择请求';
   document.getElementById('crumb').innerHTML =
-    `<span>${esc(s.title)}</span><span class="sep">/</span><b>${idx ? `Request ${String(idx).padStart(2,'0')}` : '未选择请求'}</b>`;
+    `<span>${esc(s.title)}</span><span class="sep">/</span><b>${label}</b>`;
 }
 
 function renderFilters() {
@@ -1711,7 +1822,7 @@ function railHead() {
   const idx = s.requests.indexOf(r.id) + 1;
   const tool = selectedTool();
   if (tool) return `<div class="rail-id"><span class="row-label tool">工具</span><span>Request ${String(idx).padStart(2,'0')}</span><span class="grow"></span><button class="icon-btn" data-close-tool="1" aria-label="返回请求详情">×</button></div><div class="rail-title mono">${esc(tool.call.function.name)}</div><div class="detail-label" style="margin-top:5px">${esc(callSummary(tool.call))}</div><div class="rail-tabs" role="tablist">${[['overview','概览'],['params','参数'],['result','结果'],['schema','Schema']].map(([key,label]) => `<button role="tab" data-rail="${key}" aria-pressed="${state.railTab === key}">${label}</button>`).join('')}</div>`;
-  return `<div class="rail-id"><span>Request ${String(idx).padStart(2,'0')}</span><span class="muted">·</span><span>${esc(r.at)}</span><span class="grow"></span>${statusChip(r)}</div>
+  return `<div class="rail-id"><span>${r.outside ? `Request ${esc(r.id)} · 未在窗口` : `Request ${String(idx).padStart(2,'0')}`}</span><span class="muted">·</span><span>${esc(r.at)}</span><span class="grow"></span>${statusChip(r)}</div>
     <div class="rail-title">${esc(r.title)}</div>
     ${bigNumbers(r)}
     <div class="rail-tabs" role="tablist">
@@ -1844,7 +1955,7 @@ function completenessSection(r) {
 
 function railFacts() {
   const r = currentReq();
-  if (r?.local) return `${localReader.renderContext(r)}<section class="rail-section"><h3>本次回复</h3>${localReader.renderResponse(r)}</section>${usageSection(r)}<section class="rail-section"><h3>请求状态与身份</h3><div class="detail-value">请求 ${esc(r.id)} · ${esc(r.localDetail.model_served || r.localDetail.model_requested)}
+  if (r?.local) return `${r.outside ? `<section class="rail-section"><h3>窗口外请求</h3><p class="note">请求 ${esc(r.id)} · ${esc(r.title)} 未在当前载入窗口，这里只读了它的详情；需要完整轨迹请从顶部加载更早记录，不自动扫描全部历史。</p></section>` : ''}${localReader.renderContext(r)}<section class="rail-section"><h3>本次回复</h3>${localReader.renderResponse(r)}</section>${usageSection(r)}<section class="rail-section"><h3>请求状态与身份</h3><div class="detail-value">请求 ${esc(r.id)} · ${esc(r.localDetail.model_served || r.localDetail.model_requested)}
 正文 ${esc(r.localDetail.body_state)} · 派生 ${esc(r.localDetail.derived_state)}
 前驱关系 ${esc(r.localDetail.prev_relation)}
 首个文本 ${secs(r.timing.firstText)}
@@ -1862,7 +1973,7 @@ function railBody() {
   if (state.railTab === 'route') return `<section class="rail-section"><h3>路由与尝试</h3>${routeBlock(r)}</section>`;
   if (state.railTab === 'tools') {
     const calls = replyCalls(r);
-    return `<section class="rail-section"><h3>本次回复发起的工具调用</h3>${calls.length ? calls.map(c => `<button class="tool-chip call" style="margin-bottom:8px" data-tool-owner="${esc(r.id)}" data-tool-id="${esc(c.id)}"><span>${esc(callSummary(c))}</span></button>`).join('') : '<p class="note">本次回复没有工具调用。</p>'}</section>`;
+    return `<section class="rail-section"><h3>本次回复发起的工具调用</h3>${calls.length ? calls.map(c => `<button class="tool-chip call" style="margin-bottom:8px" data-tool-owner="${esc(r.id)}" data-call-id="${esc(c.id)}"><span>${esc(callSummary(c))}</span></button>`).join('') : '<p class="note">本次回复没有工具调用。</p>'}</section>`;
   }
   if (state.railTab === 'facts') return railFacts();
   if (!r.request && !r.local) {
@@ -1896,7 +2007,9 @@ function renderRail() {
   const keep = same ? rail.scrollTop : 0;
   const openCapabilities = same ? [...rail.querySelectorAll('.cap-section details')].map(node=>node.open) : [];
   document.getElementById('rail-head').innerHTML = railHead();
-  rail.innerHTML = railBody();
+  rail.innerHTML = (state.outsideNotice
+    ? `<section class="rail-section"><h3>窗口外请求</h3><p class="note">请求 ${esc(state.outsideNotice.target)} · ${esc(state.outsideNotice.title)} 未在当前载入窗口，只读取了详情；不扫描全部历史。</p></section>`
+    : '') + railBody();
   rail.querySelectorAll('.cap-section details').forEach((node,i)=>{node.open=!!openCapabilities[i];});
   rail.scrollTop = keep;
   lastRailRequest = state.reqId;
@@ -1939,6 +2052,7 @@ async function selectSession(key) {
   resetTimeline();
   state.toolSelection = null;
   state.selected = null;
+  state.outsideNotice = null;
   state.railTab = 'facts';
   state.searches = {};
   state.deltaOnly = new Set();
@@ -1951,6 +2065,7 @@ function selectRequest(id) {
   const same = state.reqId === id && state.toolSelection === null;
   state.reqId = id;
   state.toolSelection = null;
+  state.outsideNotice = null;
   if (!['facts','body','tools','route'].includes(state.railTab)) state.railTab = 'facts';
   renderCrumb();
   // 同一笔不重建主体，否则会关闭已经展开的工具结果
@@ -2054,16 +2169,45 @@ document.addEventListener('click', async (e) => {
   }
   const locate = t.closest('[data-locate]');
   if (locate) {locateRequest(locate.dataset.locate); return;}
+  // 工具行/详情里的结果入口：先按调用位置读取，再定位或说明窗口外；失败可重试。
+  const localCallOf = (ownerId, callId) => REQUESTS[ownerId]?.replyMsg?.tool_calls?.find(c => c.id === callId) || null;
+  const readTarget = t.closest('[data-result-target]');
+  if (readTarget) {
+    const call = localCallOf(readTarget.dataset.resultOwner, readTarget.dataset.callId);
+    if (call) { try { await localReader.result(call); } catch (error) { toast(error.message); } }
+    locateRequest(readTarget.dataset.resultTarget);
+    renderMain(); renderRail();
+    return;
+  }
+  const outside = t.closest('[data-result-outside]');
+  if (outside) {
+    const call = localCallOf(outside.dataset.resultOwner, outside.dataset.callId);
+    if (call) { try { await localReader.result(call); } catch (error) { toast(error.message); } }
+    try {
+      const row = await localReader.readOutside(outside.dataset.resultOutside);
+      state.outsideNotice = {target:row.id, title:row.title};
+      toast(`请求 ${row.id} 未在当前窗口，详情已在右栏说明`);
+      renderRail();
+    } catch (error) { toast(error.message); }
+    return;
+  }
+  const retry = t.closest('[data-result-retry]');
+  if (retry) {
+    const call = localCallOf(retry.dataset.resultRetry, retry.dataset.callId);
+    if (call) { try { await localReader.result(call); } catch (error) { toast(error.message); } }
+    renderMain(); renderRail();
+    return;
+  }
   const tool = t.closest('[data-tool-owner]');
   if (tool) {
-    if (tool.dataset.localResult) {
-      const owner=REQUESTS[tool.dataset.toolOwner];
-      const call=replyCalls(owner).find(item=>item.id===tool.dataset.toolId);
-      tool.disabled=true;
-      try {await localReader.result(call);} catch(error) {toast(error.message);tool.disabled=false;return;}
-      if (state.reqId !== owner.id) return;
-      selectTool(owner.id,call.id);state.railTab='result';renderRail();
-    } else selectTool(tool.dataset.toolOwner, tool.dataset.toolId);
+    selectTool(tool.dataset.toolOwner, tool.dataset.callId);
+    if (localMode) {
+      const call = localCallOf(tool.dataset.toolOwner, tool.dataset.callId);
+      if (call?.pair?.state === 'resolved' && call.loadState === 'not_loaded') {
+        try { await localReader.result(call); } catch (error) { toast(error.message); }
+        renderRail();
+      }
+    }
     return;
   }
   if (t.closest('[data-close-tool]')) {state.toolSelection = null; state.railTab = 'facts'; renderAll(); return;}
@@ -2198,8 +2342,16 @@ applyTheme();
 syncPanelButtons();
 ensureSelection();
 resetTimeline();
+if (pendingOutsideTrace && REQUESTS[pendingOutsideTrace]?.outside) {
+  state.reqId = pendingOutsideTrace;
+  state.outsideNotice = {target:pendingOutsideTrace, title:REQUESTS[pendingOutsideTrace].title};
+}
 if (state.reqId) revealRequest(state.reqId);
 renderAll();
+// 默认选最新后必须让选中请求进入可见区域；顶部历史入口与「回到最新」仍是回顶路径。
+if (localMode) requestAnimationFrame(() => {
+  document.querySelector('.trace-group[aria-current="true"]')?.scrollIntoView({block:'center', behavior:'instant'});
+});
 </script>
 </body>
 </html>
