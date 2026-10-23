@@ -1,9 +1,41 @@
 import { Database } from 'bun:sqlite';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { SliceRuntime } from './derive-slice';
+import type { SliceRuntime } from './config';
 
 export type WriteStats = { count: number; total_ms: number; max_ms: number };
+
+/**
+ * 正文当前能否读取。`body_state` 与 `have` 分开：`have` 表示收到过哪几路证据，
+ * 回收不能把收到过改写成没收到；这个值表示正文现在还在不在。
+ */
+export type BodyState = 'pending' | 'available' | 'partial' | 'evicted' | 'unsupported';
+
+/**
+ * 请求身份的别名解析：旧 id 沿 `request_alias` 走到没有别名为止，再确认存在。
+ *
+ * 合并请求时旧 id 在这里登记；读侧（HTTP 路由、正文恢复）只认规范 id，
+ * 旧链接经过这一步落到同一行。环与自引用按 null 处理，不抛错也不死循环。
+ */
+export function resolveRequestId(store: Store, id: number): number | null {
+  const seen = new Set<number>();
+  let current = id;
+  for (;;) {
+    if (seen.has(current)) return null;
+    seen.add(current);
+    const alias = store.read.query<{ new_id: number }, [number]>(
+      'SELECT new_id FROM request_alias WHERE old_id=?',
+    ).get(current);
+    if (alias != null) {
+      current = alias.new_id;
+      continue;
+    }
+    const exists = store.read.query<{ req_id: number }, [number]>(
+      'SELECT req_id FROM request WHERE req_id=?',
+    ).get(current);
+    return exists != null ? current : null;
+  }
+}
 
 export type Store = {
   /** 库文件路径。切片路径要按它量 WAL 增长，不再从配置里拼一次。 */

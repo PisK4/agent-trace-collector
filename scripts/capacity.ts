@@ -19,7 +19,7 @@ import { persistBodyTx } from '../src/body';
 import type { Config } from '../src/config';
 import { drainDeriveTx, enqueueDeriveTx, rebuildDerived } from '../src/derive';
 import { drainDeriveEntry } from '../src/derive-slice';
-import type { SliceRuntime } from '../src/derive-slice';
+import type { SliceRuntime } from '../src/config';
 import { PAGE_MAX } from '../src/protocols';
 import type { StorageUsage } from '../src/retention';
 import { openStore } from '../src/store';

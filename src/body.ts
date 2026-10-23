@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
-import { resolveRequestId } from './queries';
+import { resolveRequestId } from './store';
 import { ADAPTER_VERSION, parseProtocol } from './protocols';
 import { fingerprintHash, messageFingerprint } from './fingerprint';
 import { markRequestInputTx } from './derive-state';

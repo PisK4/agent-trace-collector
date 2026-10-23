@@ -6,11 +6,13 @@ import { persistBody } from '../src/body';
 import { drainDeriveTx, enqueueDerive } from '../src/derive';
 import { GROUP_ALGORITHM } from '../src/derive-state';
 import {
-  DEFAULT_DERIVE_BUDGET, DERIVE_ALGORITHM, beginGeneration, discardGeneration,
+  DERIVE_ALGORITHM, beginGeneration, discardGeneration,
   drainDeriveEntry, publishGeneration, readEffectiveGroup, recoverSlice, sliceGroupStep,
   sliceRequestsStage, sliceRolesStage, sliceSummaryStage, sliceToolsStage, sliceReadyStage,
 } from '../src/derive-slice';
-import type { SliceRuntime, SliceStep } from '../src/derive-slice';
+import type { SliceStep } from '../src/derive-slice';
+import { DEFAULT_DERIVE_BUDGET } from '../src/config';
+import type { SliceRuntime } from '../src/config';
 
 function seedGroup(f: ReturnType<typeof fixture>): void {
   f.store.write(db => {

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { Config } from './config';
 import { loadLocalSecret } from './config';
+import { resolveRequestId } from './store';
 import type { Store } from './store';
 import {
   QueryInputError,
@@ -9,7 +10,6 @@ import {
   getStats,
   listRequests,
   listSessions,
-  resolveRequestId,
 } from './queries';
 import { PAGE_MAX, getBodyPage } from './protocols';
 import { acceptHook } from './hook';

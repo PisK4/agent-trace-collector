@@ -653,12 +653,6 @@ export function purgeMetadata(store: Store, beforeDay: string, approvalId: strin
 
 export type PurgedCheck = { skip: boolean };
 
-/** 来源重放前先问一句：这条证据是不是已经被主动淘汰了。 */
-export function isPurgedEvidence(db: Database, sourceKind: string, refKey: string): boolean {
-  return db.query('SELECT 1 AS hit FROM purged_evidence WHERE source_kind=? AND ref_key=?')
-    .get(sourceKind, refKey) !== null;
-}
-
 function parseArgs(argv: string[]): Map<string, string | true> {
   const flags = new Map<string, string | true>();
   for (let index = 0; index < argv.length; index++) {

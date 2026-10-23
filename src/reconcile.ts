@@ -12,12 +12,11 @@ import {
   optionalNumber,
 } from './sources/magpie';
 import type { LedgerFields, RouteFields } from './sources/magpie';
-import { insertPreparedLedgerTx, upsertPreparedRouteTx } from './sources/raw';
+import { insertPreparedLedgerTx, isPurgedEvidence, upsertPreparedRouteTx } from './sources/raw';
 import type { LedgerPhysicalRef } from './sources/raw';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx, projectionSignature, readProjectionTx } from './sources/projection';
 import { markOwnershipChangeTx, markRequestInputTx, requestGroupTx } from './derive-state';
 import type { RequestProjection } from './sources/projection';
-import { isPurgedEvidence } from './maintenance';
 import { closeSourceGapsTx, markStaleGapsTx, recordPausedBatchTx } from './retention';
 
 export type IngestLedgerResult = {
