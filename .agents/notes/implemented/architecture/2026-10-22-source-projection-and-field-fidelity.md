@@ -59,6 +59,15 @@ Status: implemented
 
 账号脱敏归一到同一形态：`account` 与 `providerAccount` 都是敏感键，都得到同一个 `credential` 占位符，所以同一个订阅身份在两个入口下不会看起来像两个人。`placeholder` 对已经是占位符的值原样返回，敏感键、请求头与普通字符串三处分支都调用它，重复脱敏不会把占位符再散列成另一个 digest。历史明文账号的修复与隐私变换版本由[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)交付。
 
+## Decision：读模型也按真实键名读取，读不到的键删掉
+
+来源投影之外的读模型与正文视图同样以上游真实键为准。2026-10-23 用只读 v4 副本复核后，按下述键集读取：
+
+- 路由首字时间读 `firstText`。`raw_route.payload_json` 的 14,679 行里 `firstText` 有 2,382 行，`first_text` 0 行；`route_summary.first_text` 此前因此恒为 NULL。摘要列与 `z.first_text` 都来自同一个 `RouteFields.firstText`，只改映射入口。
+- `safeAffinity` 的键集是 `mode`、`why`、`turn`、`at`、`lastTurn`、`within`、`kept`、`cacheRead`、`cacheWrite`。真实的 affinity 对象（12,644 条）没有 `cache_read` / `cache_write`；`last` 是账号或来源身份，与 `order[].who` / `id` 同属身份，继续排除。没有证据的键不加。
+- `attemptChainOf` 只读真实 tries 键：`model`、`status`、`fail`、`error`、`start`、`ms`、`ttft`、`flow`、`firstText`、`firstReasoning`、`served`、`done`、`effort`、`tierServed`、`reasoningHidden`、`queued`。`provider`、`replan`、`gone`、`earlier` 在 14,803 个尝试项里 0 次出现，删掉；`id` 是身份，`net` 与 `rest` 是嵌套透传对象（`rest.key` 含账号），整体不透出。`done` 与 `reasoningHidden` 按布尔透出，缺失保持 null。
+- 工具结果的 `is_error` 在正文块里：14,817 个去重后的工具结果块中 9,012 个带该布尔，286 个为 true。它不落新列；正文 API 本来就返回原始块，页面展开消息时按需读取，只有 `true` 标“工具结果失败”，缺失不等于成功。
+
 ## Alternatives considered
 
 **继续用 `optionalString` / `optionalNumber`。** 它们把缺失、空串与非法类型合并成 null，正是这轮要修的问题；保留它们只会让下游无法区分"上游没报"与"上游报了读不懂"。
@@ -69,6 +78,14 @@ Status: implemented
 
 **`counted` 省略时写 NULL。** 省略是"未校准"这一合法状态，写 NULL 会让它看起来像"读不出"，也无法与 `invalid` 区分。
 
+**为 `first_text`、`cache_read`、`cache_write` 保留蛇形后备键。** 这些键在真实路由与 affinity 数据里 0 次出现，后备分支只会继续掩盖键名错误；首版前不为错误键名写兼容读法。
+
+**把键名自动做 camelCase / snake_case 或大小写归一。** 归一等于替上游猜键名，会把不同来源的同名字段混成一个量；映射在一处显式列出，读不到就是没有。
+
+**给 `is_error` 加长期列。** 工具结果块本来就在正文里，页面按需读取即可；加列要同时改 schema、派生与迁移，首版前没有证据表明需要长期列。
+
+**整体透出 `net` 与 `rest`。** `rest.key` 是账号或来源身份，`net` 是网络阶段耗时；整体透出越过白名单，只抽布尔或计数也无法回答当前页面要问的问题，所以都不透出。
+
 ## Consequences
 
 - `request.model_requested` 与 `request.own_cost` 从此可能真有值；此前它们恒为 NULL，任何"这两个字段没有数据"的判断都要重新核对。
@@ -76,7 +93,11 @@ Status: implemented
 - 旧账本里的 `own_cost` 不再被读取。若存在只写了旧键的来源，它的自报费用会表现为 `absent`，而不是一个可疑的数值。
 - 非法类型不再被静默吞掉成"没有值"，但也没有日志：状态字段是唯一出口，读它的人必须显式检查。
 - 投影不写库时读不到"这列是哪一版映射算出来的"：同一列里可能并存新事实与历史保留值，读者只能看 `families.*.current` 判断。
+- 新摄入的路由开始写 `route_summary.first_text`；既有摘要行不自动回填，仍为 NULL，读旧行时不能把 NULL 当成"上游没报"。
+- 路由详情的 affinity 会多出 `at`、`lastTurn`、`cacheRead`、`cacheWrite`；`last` 与 `order[].who` / `id` 仍不出现在响应里。
+- 尝试链响应删掉四个恒空字段（`provider`、`replan`、`gone`、`earlier`），新增 `first_text_ms`、`first_reasoning_ms`、`done`、`tier_served`、`reasoning_hidden`；消费方按新形状读取，当前仓库内只有阅读页面消费。
+- `is_error` 只在展开正文消息时可见，工具配对卡不显示失败态：配对表没有这一列，也不打算为首版加列。
 
 ## Testing
 
-`tests/magpie.test.ts` 的「账本来源字段按 req 与 cost 读取并给出类型状态」「账本旧键、空串与非法类型分开记录且都不当新值」「路由 Prompt 只在校准布尔与 tokens 合法时给出 counted」锁定读取与状态；`tests/privacy.test.ts` 的「account 别名共享占位符且已脱敏值不再散列」锁定账号归一与占位符幂等；`tests/projection.test.ts` 的十四条用例锁定完整选择、pending_final、failed、同毫秒可证与跨代际不可证、缺 req、partial 保留、duplicate 保留、后到非法 counted 保留、当前 route 缺 Prompt、同毫秒 route 冲突、kind 冲突、hook 独立与重复投影幂等；`tests/reconcile.test.ts` 的「账本 req 与 served 分别落列」「缺 req 保持 NULL」「同一脱敏对象」「部分 raw 过期」「后到非法账本行」「清空排序键」锁定账本写入路径，「路由列、payload 与长期摘要来自同一脱敏对象」「counted 布尔与合法省略」「非法 counted 不写 prompt 族」「到达顺序不改变请求事实」锁定路由写入路径；`tests/hook.test.ts` 的「hook-only 不合成 HTTP 状态」「账本缺 req 时 hook 报告独立」「success 为 false 同样不产生失败状态」「hook 证据过期」锁定 hook 与账本事实的分离。上游键名以锚定检出 `开源源码@magpie-2374ffe` 的 `internal/usage/usage.go` 与 `internal/gateway/prompt.go` 为准。
+`tests/magpie.test.ts` 的「账本来源字段按 req 与 cost 读取并给出类型状态」「账本旧键、空串与非法类型分开记录且都不当新值」「路由 Prompt 只在校准布尔与 tokens 合法时给出 counted」锁定读取与状态；`tests/privacy.test.ts` 的「account 别名共享占位符且已脱敏值不再散列」锁定账号归一与占位符幂等；`tests/projection.test.ts` 的十四条用例锁定完整选择、pending_final、failed、同毫秒可证与跨代际不可证、缺 req、partial 保留、duplicate 保留、后到非法 counted 保留、当前 route 缺 Prompt、同毫秒 route 冲突、kind 冲突、hook 独立与重复投影幂等；`tests/reconcile.test.ts` 的「账本 req 与 served 分别落列」「缺 req 保持 NULL」「同一脱敏对象」「部分 raw 过期」「后到非法账本行」「清空排序键」锁定账本写入路径，「路由列、payload 与长期摘要来自同一脱敏对象」「counted 布尔与合法省略」「非法 counted 不写 prompt 族」「到达顺序不改变请求事实」锁定路由写入路径；`tests/hook.test.ts` 的「hook-only 不合成 HTTP 状态」「账本缺 req 时 hook 报告独立」「success 为 false 同样不产生失败状态」「hook 证据过期」锁定 hook 与账本事实的分离。`tests/magpie.test.ts` 的「路由首字时间按 firstText 读取，旧键名不兜底」锁定首字键名；`tests/queries.test.ts` 的「affinity 按真实 camelCase 键挑选且不透出身份键」「尝试链按真实键读取并丢掉读不到的键」锁定白名单与嵌套对象边界；`tests/body-view.test.ts` 的「工具结果的 is_error 按需透出为失败标记」锁定失败标记与缺失不等于成功。上游键名以锚定检出 `开源源码@magpie-2374ffe` 的 `internal/usage/usage.go` 与 `internal/gateway/prompt.go` 为准。

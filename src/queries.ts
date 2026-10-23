@@ -609,7 +609,6 @@ export type RouteColumns = {
 export type AttemptItem = {
   index: number;
   model: string | null;
-  provider: string | null;
   effort: string | null;
   status: number | null;
   fail: string | null;
@@ -618,11 +617,13 @@ export type AttemptItem = {
   ms: number | null;
   ttft_ms: number | null;
   flow_ms: number | null;
+  first_text_ms: number | null;
+  first_reasoning_ms: number | null;
   served: string | null;
+  done: boolean | null;
+  tier_served: string | null;
+  reasoning_hidden: boolean | null;
   queued_ms: number | null;
-  replan: number | null;
-  gone: boolean;
-  earlier: boolean;
 };
 
 export type AttemptChain = {
@@ -686,7 +687,9 @@ function safeOrder(value: unknown): Record<string, unknown>[] {
 function safeAffinity(value: unknown): Record<string, unknown> | null {
   if (!isRecord(value)) return null;
   const picked: Record<string, unknown> = {};
-  for (const key of ['mode', 'why', 'turn', 'within', 'kept', 'cache_read', 'cache_write']) {
+  // 上游 affinity 用 camelCase。`last` 是账号/来源身份，永不透出；
+  // 蛇形旧键在真实数据里一次也没有出现，不作为后备读法。
+  for (const key of ['mode', 'why', 'turn', 'at', 'lastTurn', 'within', 'kept', 'cacheRead', 'cacheWrite']) {
     const scalar = simpleValue(value[key]);
     if (scalar !== undefined) picked[key] = scalar;
   }
@@ -731,8 +734,10 @@ function timeMs(value: unknown): number | null {
 /**
  * 尝试链的安全投影。
  *
- * 只保留白名单字段；未知 `fail` 原样保留，`start_ms` 只从合法的开始时间解析。
- * 缺时间时标 partial 并说明不推算间隔——没有任何相邻差值字段。
+ * 只保留真实存在的白名单字段；未知 `fail` 原样保留，`start_ms` 只从合法的
+ * 开始时间解析。缺时间时标 partial 并说明不推算间隔——没有任何相邻差值字段。
+ * `id` 是来源身份、`net` 与 `rest` 是嵌套透传对象（`rest.key` 含账号），
+ * 都不进入返回对象。
  */
 export function attemptChainOf(tries: unknown): AttemptChain {
   if (tries === null || tries === undefined) {
@@ -750,7 +755,6 @@ export function attemptChainOf(tries: unknown): AttemptChain {
     items.push({
       index,
       model: stringOrNull(entry.model),
-      provider: stringOrNull(entry.provider),
       effort: stringOrNull(entry.effort),
       status: finite(entry.status),
       fail: stringOrNull(entry.fail),
@@ -759,11 +763,13 @@ export function attemptChainOf(tries: unknown): AttemptChain {
       ms: finite(entry.ms),
       ttft_ms: finite(entry.ttft),
       flow_ms: finite(entry.flow),
+      first_text_ms: finite(entry.firstText),
+      first_reasoning_ms: finite(entry.firstReasoning),
       served: stringOrNull(entry.served),
+      done: typeof entry.done === 'boolean' ? entry.done : null,
+      tier_served: stringOrNull(entry.tierServed),
+      reasoning_hidden: typeof entry.reasoningHidden === 'boolean' ? entry.reasoningHidden : null,
       queued_ms: finite(entry.queued),
-      replan: finite(entry.replan),
-      gone: entry.gone === true,
-      earlier: entry.earlier === true,
     });
   }
   if (items.length === 0) {

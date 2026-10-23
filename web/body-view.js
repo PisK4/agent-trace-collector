@@ -9,7 +9,7 @@
  * @typedef {import('../src/protocols').BodyPage} BodyPage
  * @typedef {import('../src/queries').RequestDetail} RequestDetail
  * @typedef {'system' | 'user' | 'assistant' | 'tool' | 'unknown'} Role
- * @typedef {{kind: string, text: string, index: number, raw: unknown}} Block
+ * @typedef {{kind: string, text: string, index: number, raw: unknown, failed?: boolean}} Block
  * @typedef {import('../src/input-interpretation').UserInputView} UserInputView
  * @typedef {{ord: number, role: Role, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
  * @typedef {{id: string, name: string, inputText: string, ord: number}} ToolCallView
@@ -170,7 +170,11 @@ function blockView(block, index) {
     return { kind: 'thinking', text: '（推理内容已被上游加密，只保留占位块）', index, raw: block };
   }
   if (type === 'tool_use') return { kind: 'call', text: callLabel(block.name, block.input), index, raw: block };
-  if (type === 'tool_result') return { kind: 'result', text: previewOf(block.content), index, raw: block };
+  if (type === 'tool_result') {
+    // is_error 只在正文里按需读取；缺失保持未报告，不等于成功。
+    const failed = typeof block.is_error === 'boolean' ? block.is_error : undefined;
+    return { kind: 'result', text: previewOf(block.content), index, raw: block, failed };
+  }
   if (type === 'image' || type === 'input_image') return { kind: 'image', text: imageLabel(block), index, raw: block };
   // chat 的函数调用块：{id, type:'function', function:{name, arguments}}
   if (isRecord(block.function)) {
@@ -414,7 +418,9 @@ export function renderMessageDetail(entry) {
         <pre class="raw" tabindex="0">${esc(block.text)}</pre></details>`;
     }
     if (block.kind === 'call' || block.kind === 'result') {
-      return `<pre class="raw" tabindex="0">${esc(block.text)}</pre>`;
+      const failed = block.kind === 'result' && block.failed === true
+        ? '<span class="tool-chip miss"><span>工具结果失败</span></span>' : '';
+      return `${failed}<pre class="raw" tabindex="0">${esc(block.text)}</pre>`;
     }
     return `<pre class="raw" tabindex="0">${esc(JSON.stringify(block.raw, null, 2))}</pre>`;
   }).join('');
@@ -586,15 +592,22 @@ export function renderAttemptChain(chain) {
   }
   const rows = chain.items.map(item => {
     const bits = [item.model ?? '模型未报告'];
-    if (item.provider !== null) bits.push(item.provider);
+    if (item.served !== null && item.served !== item.model) bits.push(`served ${item.served}`);
     if (item.status !== null) bits.push(`HTTP ${item.status}`);
     if (item.fail !== null) bits.push(`fail ${item.fail}`);
     if (item.effort !== null) bits.push(`effort ${item.effort}`);
+    if (item.tier_served !== null) bits.push(`tier ${item.tier_served}`);
+    if (item.reasoning_hidden === true) bits.push('推理隐藏');
+    if (item.done === false) bits.push('未结束');
     if (item.start_ms !== null) {
       const started = new Date(item.start_ms);
       if (!Number.isNaN(started.getTime())) bits.push(started.toISOString());
     }
     if (item.ms !== null) bits.push(`${item.ms} ms`);
+    if (item.ttft_ms !== null) bits.push(`首 token ${item.ttft_ms} ms`);
+    if (item.first_reasoning_ms !== null) bits.push(`首个推理 ${item.first_reasoning_ms} ms`);
+    if (item.first_text_ms !== null) bits.push(`首个文本 ${item.first_text_ms} ms`);
+    if (item.queued_ms !== null) bits.push(`排队 ${item.queued_ms} ms`);
     return `<span class="attempt-name">${item.index + 1}. ${bits.map(esc).join(' · ')}</span>`;
   }).join('<br>');
   const note = chain.timing.state === 'partial'

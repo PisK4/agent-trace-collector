@@ -75,6 +75,13 @@ test('路由Prompt只在校准布尔与tokens合法时给出counted', () => {
     .toEqual([null, 'absent', 'absent']);
 });
 
+test('路由首字时间按 firstText 读取，旧键名不兜底', () => {
+  const real = mapRouteRow({ id: 1, time: '2026-10-20T00:00:00Z', firstText: 2603 })!;
+  expect(real.firstText).toBe(2603);
+  const legacy = mapRouteRow({ id: 2, time: '2026-10-20T00:00:00Z', first_text: 2603 })!;
+  expect(legacy.firstText).toBeNull();
+});
+
 function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatch {
   let offset = startOffset;
   const lines = rows.map(row => {

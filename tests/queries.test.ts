@@ -464,6 +464,28 @@ test('安全挑选去掉 account、host、who 与 id', () => {
   expect(reading.affinity).toEqual({ mode: 'session', why: 'kept' });
 });
 
+test('affinity 按真实 camelCase 键挑选且不透出身份键', () => {
+  const reading = routeSummaryReading({
+    format: 2, route_id: 100, time_ms: 1000, model: 'm', served: 's', provider: 'p',
+    status: 200, ms: 10, ttft: 2, flow: 8, first_text: 3,
+    kind: 'chat', folder: null, effort: null, prompt: null, error: null,
+    order: [], tries: [],
+    affinity: {
+      mode: '', why: 'turn', turn: 2, at: '2026-10-21T00:16:24.666553+08:00',
+      lastTurn: 3, last: 'synthetic-account', kept: true,
+      cacheRead: 9024, within: true, cacheWrite: 175,
+      // 旧蛇形键名从未在真实 affinity 里出现，不能当后备读取。
+      cache_read: 1, cache_write: 2,
+    },
+    saved_at: 1,
+  }, routeColumns);
+  expect(reading.affinity).toEqual({
+    mode: '', why: 'turn', turn: 2, at: '2026-10-21T00:16:24.666553+08:00',
+    lastTurn: 3, kept: true, cacheRead: 9024, within: true, cacheWrite: 175,
+  });
+  expect(JSON.stringify(reading)).not.toContain('synthetic-account');
+});
+
 test('旧 format 1 不补 kind、folder、effort 与 prompt', () => {
   const reading = routeSummaryReading({ route_id: 100, order: [], tries: [] }, routeColumns);
   expect(reading.format).toBe(1);
@@ -535,6 +557,35 @@ test('尝试项只保留白名单字段', () => {
   expect(text).not.toContain('secret-account');
   expect(text).not.toContain('secret-host');
   expect(text).not.toContain('secret-id');
+});
+
+test('尝试链按真实键读取并丢掉读不到的键', () => {
+  const chain = attemptChainOf([{
+    status: 200, start: '2026-10-21T00:16:19.764961+08:00', ms: 3176, model: 'step-5-preview',
+    id: 'synthetic-account', done: true, served: 'step-5-preview', effort: 'high',
+    ttft: 1555, flow: 670, firstReasoning: 1555, tierServed: 'default', fixed: 'high',
+    firstText: 2603, reasoningHidden: true, fail: null, error: null,
+    queued: 188, again: 1000,
+    net: { own: 8.5, reused: true, wait: 1313.6, head: 5702.7 },
+    rest: { why: 'other', key: 'synthetic-account' },
+    provider: 'synthetic-provider', replan: 1, gone: true, earlier: true,
+  }]);
+  expect(chain.items[0]).toMatchObject({
+    status: 200, ms: 3176, model: 'step-5-preview', done: true,
+    served: 'step-5-preview', effort: 'high', ttft_ms: 1555, flow_ms: 670,
+    first_reasoning_ms: 1555, tier_served: 'default', first_text_ms: 2603,
+    reasoning_hidden: true, queued_ms: 188, fail: null, error: null,
+  });
+  expect(chain.items[0]?.start_ms).not.toBeNull();
+  expect(chain.items[0]).not.toHaveProperty('provider');
+  expect(chain.items[0]).not.toHaveProperty('replan');
+  expect(chain.items[0]).not.toHaveProperty('gone');
+  expect(chain.items[0]).not.toHaveProperty('earlier');
+  const text = JSON.stringify(chain);
+  expect(text).not.toContain('synthetic-account');
+  expect(text).not.toContain('synthetic-provider');
+  expect(text).not.toContain('"net"');
+  expect(text).not.toContain('"rest"');
 });
 
 test('source_facts 只挑白名单字段，hook 用有界值与成功分类', () => {

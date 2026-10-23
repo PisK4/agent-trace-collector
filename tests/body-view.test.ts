@@ -46,6 +46,28 @@ test('Anthropic 文本、推理与工具块各自归一化', () => {
   expect(messages[0]?.preview).toBe('读一下配置');
 });
 
+test('工具结果的 is_error 按需透出为失败标记', () => {
+  const entries = messageEntries(page({
+    messages: [{
+      ord: 0,
+      value: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu_1', is_error: true, content: 'boom' },
+          { type: 'tool_result', tool_use_id: 'toolu_2', is_error: false, content: 'ok' },
+          { type: 'tool_result', tool_use_id: 'toolu_3', content: 'unknown' },
+        ],
+      },
+    }],
+  }));
+  const blocks = entries[0]?.blocks ?? [];
+  // 缺失不等于成功：只有明确的 false 才记成 false，缺失保持未报告。
+  expect(blocks.map(block => block.failed)).toEqual([true, false, undefined]);
+  const html = renderMessageDetail(entries[0]!);
+  expect(html.match(/工具结果失败/g)?.length).toBe(1);
+  expect(html).toContain('boom');
+});
+
 test('Chat 的 tool_calls 提升为调用块且保住位置', () => {
   const entries = messageEntries(page({
     messages: [{
@@ -342,16 +364,18 @@ test('尝试链渲染未知 fail 码与已记录时间', () => {
     state: 'present',
     items: [
       {
-        index: 0, model: 'm1', provider: 'p1', effort: 'high', status: 500,
+        index: 0, model: 'm1', effort: 'high', status: 500,
         fail: 'synthetic_new_gate', error: null, start_ms: 1761091200000,
-        ms: 100, ttft_ms: null, flow_ms: null, served: null,
-        queued_ms: null, replan: null, gone: false, earlier: false,
+        ms: 100, ttft_ms: 1555, flow_ms: 670, first_text_ms: 2603,
+        first_reasoning_ms: 1555, served: null, done: true, tier_served: 'default',
+        reasoning_hidden: true, queued_ms: null,
       },
       {
-        index: 1, model: 'm2', provider: 'p2', effort: null, status: 200,
+        index: 1, model: 'm2', effort: null, status: 200,
         fail: null, error: null, start_ms: 1761091201000,
-        ms: 200, ttft_ms: null, flow_ms: null, served: 's',
-        queued_ms: null, replan: null, gone: false, earlier: false,
+        ms: 200, ttft_ms: null, flow_ms: null, first_text_ms: null,
+        first_reasoning_ms: null, served: 's', done: true, tier_served: null,
+        reasoning_hidden: false, queued_ms: null,
       },
     ],
     timing: { state: 'recorded', note: '时间来自各次尝试的开始时间' },
@@ -360,16 +384,21 @@ test('尝试链渲染未知 fail 码与已记录时间', () => {
   expect(html).toContain('synthetic_new_gate');
   expect(html).toContain('m1');
   expect(html).toContain('m2');
+  expect(html).toContain('首个文本 2603 ms');
+  expect(html).toContain('首个推理 1555 ms');
+  expect(html).toContain('首 token 1555 ms');
+  expect(html).toContain('tier default');
+  expect(html).toContain('推理隐藏');
 });
 
 test('缺时间时只显示说明，不补造间隔', () => {
   const html = renderAttemptChain({
     state: 'present',
     items: [{
-      index: 0, model: 'm1', provider: null, effort: null, status: 500,
+      index: 0, model: 'm1', effort: null, status: 500,
       fail: 'rate_limit', error: null, start_ms: null, ms: null,
-      ttft_ms: null, flow_ms: null, served: null, queued_ms: null,
-      replan: null, gone: false, earlier: false,
+      ttft_ms: null, flow_ms: null, first_text_ms: null, first_reasoning_ms: null,
+      served: null, done: null, tier_served: null, reasoning_hidden: null, queued_ms: null,
     }],
     timing: { state: 'partial', note: '部分尝试没有开始时间，不推算间隔' },
   });
