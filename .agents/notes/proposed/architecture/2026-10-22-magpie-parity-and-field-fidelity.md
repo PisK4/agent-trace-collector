@@ -111,7 +111,10 @@ direct 只能经 API 拿，且要以 `native_session` 作为软身份键才不�
 
 ## 与现有记录的关系
 
-- [Agent Profile 与请求类别注册表](2026-10-22-agent-request-kind-registry.md) 持有 agent 语义缝（`req_kind`/`chain_role` 的注册机制、保留未知值）。本文不重写它，只要求批 1 的列集合与它的验收项不冲突。
+**交付现状。** 批 0 的字段读法已交付：映射层按 magpie 的真实键读、`counted` 当布尔三态、折叠行的 part 颜色与列表标志接上真实值，形状见[来源投影与字段保真](../../implemented/architecture/2026-10-22-source-projection-and-field-fidelity.md)与[账本读数溢出](../../implemented/bug-fix/2026-10-21-ledger-readings-overflow.md)。批 1 没有按本文的加列清单落地：`effort`、`native_session`、`host`、`account`、`tier_asked`／`tier_sent`／`tier_served` 与 vendor 错误文本仍只在 `raw_ledger` 行上，route 决策字段也没有折进 `route_summary`——投影改用 `source_facts_json` 承载，见[有界来源事实与来源依据](../../implemented/architecture/2026-10-22-bounded-source-facts-and-provenance.md)。批 2 与批 3 未做。
+
+本文与[Agent Profile 与请求类别注册表](2026-10-22-agent-request-kind-registry.md)的分工不变：它持有 agent 语义缝（`req_kind`/`chain_role` 的注册机制、保留未知值），本文不重写它，只要求批 1 的列集合与它的验收项不冲突。
+
 - [2026-10-20-retention-three-gates.md](../../implemented/architecture/2026-10-20-retention-three-gates.md) 约束元数据增长与回收边界；本文的加列必须落在它的预算里。
 - [2026-10-20-privacy-and-local-access-boundary.md](../../implemented/architecture/2026-10-20-privacy-and-local-access-boundary.md) 约束脱敏顺序与「真实数据不进仓库」；本文的 `err`/`account` 上浮受它约束。
 - 存储形状以 [docs/architecture-design.md](../../../../docs/architecture-design.md) 为准，运维步骤以 [docs/operations.md](../../../../docs/operations.md) 为准；本文只写为什么这样排序、否决了什么。
@@ -121,7 +124,7 @@ direct 只能经 API 拿，且要以 `native_session` 作为软身份键才不�
 1. **请求分页的方向**。代码是 `ASC` 加 `>` 游标（追加更晚的请求），文案写「加载更早」。若首屏应是最近若干笔，应改成 `DESC` 加 `<`；若确实从最早读起，则文案与注释改「更晚」。这是产品意图，本文不代定。
 2. **direct 做不做**。批 3 的价值取决于是否要回答「Agent 直连 vs 经网关」，也取决于 magpie 是否长期保留 `via` 查询。
 3. **加列的升版范围**：一次加完（本文倾向）还是按族分批；`route_summary` 侧是否同步加，取决于第 1 批的字节估算。
-4. **是否另立 `docs/` 研究页**存放本文的对标证据表。本文按提出的要求写成 Agent Note；若认为字段清单属于「现状」而不是「为什么」，证据表应搬到 `docs/`，note 只留决策与代价。
+4. **证据表的归属**（已定）：真实库的形状普查、键名与未采用的读数在[真实库格式研究](../../../../docs/atc-real-format-research.md)，本文留决策与代价。
 
 ## Alternatives considered
 
