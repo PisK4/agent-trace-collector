@@ -91,3 +91,85 @@ test('未知角色中性保留，不猜成 user 或 assistant', () => {
   expect(view.role_state).toBe('unknown');
   expect(view.input).toBeNull();
 });
+
+test('排在用户正文之后的包装块不算输入', () => {
+  const view = interpretMessage({
+    role: 'user',
+    content: [
+      { type: 'text', text: '修复登录' },
+      { type: 'text', text: '<system-reminder>\n上下文提示\n</system-reminder>' },
+    ],
+  }, 'claude', 0);
+  expect(view.input?.state).toBe('text');
+  expect(view.input?.text).toBe('修复登录');
+  expect(view.input?.removed).toEqual(['system-reminder']);
+});
+
+test('粘贴标记只删标记行，粘贴正文仍是用户输入', () => {
+  const view = interpretMessage({
+    role: 'user',
+    content: [
+      { type: 'text', text: '<pasted_content id=7>\n粘贴的日志\n第二行' },
+      { type: 'text', text: '请看这段' },
+    ],
+  }, 'claude', 0);
+  expect(view.input?.state).toBe('text');
+  expect(view.input?.kind).toBe('wrapped');
+  expect(view.input?.text).toBe('粘贴的日志\n第二行\n请看这段');
+});
+
+test('作业规格整段丢弃，规格之后的用户的话保留', () => {
+  const view = interpretMessage({
+    role: 'user',
+    content: [{ type: 'text', text: '<job>\ngoal: 重构\nrepo: demo\n</job>\n按上面做' }],
+  }, 'omp', 0);
+  expect(view.input?.text).toBe('按上面做');
+});
+
+test('附件与对话简报不算用户输入，原文仍可复制', () => {
+  const file = interpretMessage({
+    role: 'user',
+    content: [{ type: 'text', text: '<file path="src/a.ts">const a = 1;</file>' }],
+  }, 'omp', 0);
+  expect(file.input?.state).toBe('injected');
+  expect(file.input?.text).toBe('');
+  expect(file.input?.original).toContain('<file');
+  const chat = interpretMessage({
+    role: 'user',
+    content: [{ type: 'text', text: '<chat>\ngoal:\n修复登录\n</chat>' }],
+  }, 'omp', 1);
+  expect(chat.input?.state).toBe('injected');
+});
+
+test('跨块的 transcript 仍按拼接后的全文配对剥掉', () => {
+  const view = interpretMessage({
+    role: 'user',
+    content: [
+      { type: 'text', text: '<transcript>\n历史' },
+      { type: 'text', text: '更多历史' },
+      { type: 'text', text: '</transcript>' },
+      { type: 'text', text: '继续' },
+    ],
+  }, 'claude', 0);
+  expect(view.input?.state).toBe('text');
+  expect(view.input?.text).toBe('继续');
+  expect(view.input?.removed).toContain('transcript');
+});
+
+test('块内未闭合的已知标签原样保留，不吞掉后面的正文', () => {
+  const view = interpretMessage({
+    role: 'user',
+    content: [
+      { type: 'text', text: '看这个' },
+      { type: 'text', text: '<session>没有闭合' },
+    ],
+  }, null, 0);
+  expect(view.input?.state).toBe('text');
+  expect(view.input?.text).toBe('看这个\n<session>没有闭合');
+});
+
+test('user 壳保留内文', () => {
+  const view = interpretUserText('<user>你好</user>', 'omp');
+  expect(view.text).toBe('你好');
+  expect(view.kind).toBe('wrapped');
+});
