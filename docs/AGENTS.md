@@ -10,7 +10,7 @@
 | [architecture-design.md](architecture-design.md) | 组成、证据身份、存储模型、派生、接口、容量与安全边界的设计权威 | 事故叙事、任务步骤、过期状态 |
 | [project-overview.md](project-overview.md) | 项目定位、记录单位、数据来源与名词 | 实现细节、决策 rationale |
 | [architecture-review.md](architecture-review.md)、[agent-request-kind-review.md](agent-request-kind-review.md) | 落地前评审记录与证据 | 现行行为的权威描述 |
-| [architecture-evolution-v2.md](architecture-evolution-v2.md) | 下一轮架构统筹提案：目标职责、依赖、迁移与验收 | 已交付行为、来源证据表的副本 |
+| [architecture-evolution-v2.md](architecture-evolution-v2.md) | 本轮架构演进的目标约束与阶段划分：目标职责、依赖、阶段与容量验收；交付记录见实施入口 | 已交付行为、来源证据表的副本 |
 | [magpie-integration-research.md](magpie-integration-research.md)、[magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 对 magpie 机制的研究证据，带锚定版本与证据标签 | 本项目已交付行为的描述 |
 | [auto-mode-classifier-research.md](auto-mode-classifier-research.md) | 对 Claude Code auto mode 分类器请求的研究证据，带采集时间与证据等级 | 本项目已交付行为的权威描述、UI 决策 |
 | [atc-real-format-research.md](atc-real-format-research.md) | 对本机真实库归档的形状研究：键名、类型、计数与窗口对照，带证据等级 | 本项目已交付行为的权威描述、实现步骤 |

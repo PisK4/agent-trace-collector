@@ -1,6 +1,6 @@
 # ATC 架构演进方案 v2
 
-本文是下一轮架构改造的统筹提案，尚未实施。它组织字段保真、证据重建、Agent 语义与机器流量容量之间的依赖，作为本轮方案讨论入口；现行设计仍见[收敛型技术架构设计](architecture-design.md)，运行操作仍见[运维手册](operations.md)。采纳某一阶段后，在对应代码变更中更新现行设计与所属 note。
+本文是这一轮架构改造的目标约束与阶段划分，组织字段保真、证据重建、Agent 语义与机器流量容量之间的依赖。交付记录与验收见[架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md)；现行设计见[收敛型技术架构设计](architecture-design.md)，运行操作见[运维手册](operations.md)。
 
 结构升级采用破坏式替换：旧库拒绝打开后由运维删除重建，不提供跨结构迁移。下文涉及迁移阶段的部分仅保留为提案背景，现行规则见[旧库删除重建](../.agents/notes/implemented/architecture/2026-10-23-destructive-schema-replacement.md)。
 
@@ -292,11 +292,11 @@ from_sort 只用于识别受影响起点，不能据此删除更早祖先候选�
 
 ## 文档关系与仍需定下的选择
 
-本方案统筹下一版范围、职责与顺序。[Agent Profile 提案](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)与[字段保真提案](../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)保留为输入材料，其尚未修订的 Interface、验收和次序不能直接作为执行依据；事实修正集中在[联合评审](agent-request-kind-review.md)，统筹理由见[架构演进 note](../.agents/notes/proposed/architecture/2026-10-22-atc-architecture-evolution.md)。原有 implemented 决策继续有效，没有因新提案而交付、反转或归档。
+本方案统筹范围、职责与顺序。[Agent Profile 提案](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)与[字段保真提案](../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)保留为输入材料，其尚未修订的 Interface、验收和次序不能直接作为执行依据；事实修正集中在[联合评审](agent-request-kind-review.md)，统筹理由见[架构演进决策](../.agents/notes/implemented/architecture/2026-10-22-atc-architecture-evolution.md)。本轮交付扩展了原有 implemented 决策，没有反转或归档其中任何一项。
 
-来源 kind 冲突、请求行待处理与分组重建发布已有本轮推荐，分别见[投影输入完整性与来源冲突](#投影输入完整性与来源冲突)、[请求语义触发](#请求语义独立于会话归属)与[派生执行](#派生执行与调度)。这些选择仍是提案，代码实施前要以相应反例验证；不能把静态可行性当作吞吐或迁移成功。
+来源 kind 冲突、请求行待处理与分组重建发布已有本轮推荐，分别见[投影输入完整性与来源冲突](#投影输入完整性与来源冲突)、[请求语义触发](#请求语义独立于会话归属)与[派生执行](#派生执行与调度)。这些选择按各自反例验证后交付，实施记录见[架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md)；静态可行性不作为吞吐或迁移成功的证据。
 
-剩余选择按交付门槛收敛：阶段 2 的 schema 迁移前确定来源最终尝试最小身份、kind 与依据存储、来源映射版本、请求/组修订和工具保留状态；引入切片的 schema 迁移前冻结派生代际表键、字段归属与读取索引。长组缓存、候选比较和写入预算及积压/排空阈值依 0b 测量确定，不能据此延后失效和恢复契约。普通未知用途的兼容建议见[链参与政策](#请求语义独立于会话归属)；收紧未知 Agent 政策另列行为改变与反例。没有消费者的字段、未出现的 Agent 规则和未测出的并行需求不预先建设。
+剩余选择在各自交付时定下：来源最终尝试最小身份、kind 与依据存储、来源映射版本、请求与组修订和工具保留状态随阶段 2 的结构变更确定；派生代际表键、字段归属与读取索引随切片交付冻结。长组缓存、候选比较和写入预算及积压/排空阈值依 0b 测量确定，不据此延后失效和恢复契约。普通未知用途的兼容见[链参与政策](#请求语义独立于会话归属)；收紧未知 Agent 政策另列行为改变与反例。没有消费者的字段、未出现的 Agent 规则和未测出的并行需求不预先建设。
 
 ## 事实来源与来源等级
 
