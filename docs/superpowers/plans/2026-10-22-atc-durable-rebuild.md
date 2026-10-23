@@ -4,6 +4,10 @@
 >
 > 技能以执行会话可用列表为准；缺少时按同样测试与复核执行。本文件不授权真实库迁移、服务启动、切换或 push，代码提交按执行会话授权处理。
 
+> **迁移部分已作废（用户决定，2026-10-23）。** `V5_DELTA`、`initializeV5`、可续跑迁移状态机、守恒摘要与恢复侧的迁移标记校验都不再实施，相应源码按[旧库删除重建](../../../.agents/notes/implemented/architecture/2026-10-23-destructive-schema-replacement.md)删除。现行契约是：普通启动只接受空目录或当前版本（现在 v6），低版本报 `schema_rebuild_required`，由运维删除旧数据目录后重建，见[运维手册的 schema 版本](../../operations.md#schema-版本)。本文件里 Task 1 的 v5 初始化与后文的分阶段迁移步骤因此不再执行。
+>
+> **仍然生效的是长期事实本身**：请求与组的修订、有界来源事实、盐绑定与恢复包、同快照读模型。这些已交付，定义见[长期输入与显式重建](../../../.agents/notes/implemented/architecture/2026-10-22-durable-input-and-explicit-migration.md)、[有界来源事实与结果依据](../../../.agents/notes/implemented/architecture/2026-10-22-bounded-source-facts-and-provenance.md)与 [v6 派生代际结构](../../../.agents/notes/implemented/architecture/2026-10-22-atc-schema-v6-generations.md)。
+
 **Goal:** 用一次显式 v4→v5 迁移保存来源依据、请求与组修订和实际结果版本，使历史修复、恢复与持续摄入使用同一规则。
 
 **Architecture:** 延续 B 的来源投影和 A 的完整同步派生，扩展既有 request、derive_queue、tool_call 与 collector_state。请求修订负责用途失效，持久组记录负责完整产物的发布修订；本批保持同步事务，F 的条件切片另升 v6。
