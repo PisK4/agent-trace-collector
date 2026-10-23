@@ -1086,37 +1086,42 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
       inputKind = row.live_input_preview_kind === 'delta' || row.live_input_preview_kind === 'tail'
         || row.live_input_preview_kind === 'tool_result'
         || row.live_input_preview_kind === 'title' ? row.live_input_preview_kind : null;
-    } else if (delta !== null && delta.length > 0) {
-      // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
-      const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
+    } else {
+      // 排除用途但不是标题请求：不把用户增量变成标题，只用已存的模型标题或时间兜底。
+      // 输入摘要仍按同一套关系取值，不为 aux 另写一份规则。这一段必须在增量分支
+      // **之前**：排除用途的行常常连关系都判不出来（`delta` 为空），兜底不能只在
+      // 有增量时才生效，否则同一个模型标题会随"判不判得出关系"变成两种结果。
       if (isAux) {
-        // 排除用途的非标题行不得从用户增量取标题：保持模型标题或时间兜底。
-        // 输入摘要仍走同一套取值，不为旁路另写一份规则。
         title = modelTitle ?? fallback;
         source = modelTitle !== null ? 'model_title' : 'model_time';
-      } else {
-        const derived = deriveTitle(messages, delta.map((_, index) => index), fallback, row.agent);
-        title = derived.title;
-        source = derived.source;
       }
-      // 增量里常常只有工具结果或系统消息，没有用户文本。
-      // 有用户文本才算"新增"，否则照实说这一轮回传了什么工具结果。
-      const fresh = previewOf(messages, row.agent);
-      if (fresh !== null) {
-        inputPreview = fresh;
-        inputKind = 'delta';
+      if (delta !== null && delta.length > 0) {
+        // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
+        const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
+        if (!isAux) {
+          const derived = deriveTitle(messages, delta.map((_, index) => index), fallback, row.agent);
+          title = derived.title;
+          source = derived.source;
+        }
+        // 增量里常常只有工具结果或系统消息，没有用户文本。
+        // 有用户文本才算"新增"，否则照实说这一轮回传了什么工具结果。
+        const fresh = previewOf(messages, row.agent);
+        if (fresh !== null) {
+          inputPreview = fresh;
+          inputKind = 'delta';
+        } else {
+          inputPreview = toolResultPreview(db, row.req_id, delta, associations);
+          inputKind = inputPreview === null ? null : 'tool_result';
+        }
+      } else if (delta !== null) {
+        // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
+        inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
+        inputKind = 'tool_result';
       } else {
-        inputPreview = toolResultPreview(db, row.req_id, delta, associations);
-        inputKind = inputPreview === null ? null : 'tool_result';
+        // 关系未知、另起一支或排除用途：没有"新增"可言，但折叠行仍要有东西可读。
+        inputPreview = tailUserPreview(db, row.req_id);
+        inputKind = inputPreview === null ? null : 'tail';
       }
-    } else if (delta !== null) {
-      // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
-      inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
-      inputKind = 'tool_result';
-    } else {
-      // 关系未知、另起一支或排除用途：没有"新增"可言，但折叠行仍要有东西可读。
-      inputPreview = tailUserPreview(db, row.req_id);
-      inputKind = inputPreview === null ? null : 'tail';
     }
     db.run(`UPDATE derive_request_result SET title=?,title_source=?,input_preview=?,
       input_preview_kind=?,reply_preview=?,retention_state=? WHERE generation=? AND req_id=?`,
