@@ -749,7 +749,7 @@ harness 的 Title Generator 是旁路请求：Claude Code 与 OMP 的输入/回�
 | 语义指纹 + 仅比紧邻上一笔 | 29 | 13 |
 | 语义指纹 + 任意祖先 | 35 | 7 |
 
-harness 包装也在指纹前剥掉：`<session>` 保留内容、`<transcript>` / `<command-*>` / 技能注入提示整段丢弃。这类壳只影响标题与增量提取，不影响链。
+harness 包装留在指纹里：指纹只归一传输标记与内容形状，不剥文本中的 `<session>` / `<system-reminder>` 这类壳。历史消息在后续请求里字节稳定，包装因此不影响链；包装的剥离只服务标题与增量提取，规则见[输入解释与能力阅读](#输入解释与能力阅读)。
 
 ### 折叠行摘要
 
@@ -820,7 +820,16 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 正文分页在服务端附带消息级展示解释与能力视图。解释只影响显示：原始脱敏消息、块哈希与语义指纹保持原值，页面不再维护第二套包装规则。
 
-输入解释只剥开头的已知包装，并按嵌套深度扫描配对标签。结果状态是 `text`、`empty`、`injected` 或 `unrecognized`；未闭合或无法识别的包装保留原文并标未识别。只有 `text` 与 `unrecognized` 算用户输入（`is_input`），`injected` 与 `empty` 不产生用户气泡。同一请求的多条用户消息逐条解释，不合并成一条。标题与折叠行摘要复用同一解释结果。
+输入解释先逐个文本块清洗，再按换行拼接，最后对整段再剥一遍开头包装。包装按块出现，也常排在用户正文之后，因此块级清洗是主要规则，整段规则只补跨块的配对标签与插话前缀。
+
+| 标签 | 处理 | 说明 |
+| --- | --- | --- |
+| `system-reminder`、`transcript`、`local-command-stdout`、`local-command-caveat`、`command-*`、`system-notice`、`recap` | 整段丢弃 | 注入内容，不是用户说的话 |
+| `job`、`file`、`chat` | 整段丢弃 | omp 的作业规格、附件正文与命令简报 |
+| `session`、`user` | 剥壳留内容 | 套着用户正文 |
+| `<pasted_content id=…>` | 只删开标签行与闭标签 | 粘贴正文是用户输入，保留 |
+
+只在块的**开头**剥包装，块中间的同名标签属于用户内容，原样保留。未闭合的块内标签也不动：跨块的 `<transcript>` 在块内看是未闭合的，交给整段规则按拼接后的全文配对。结果状态是 `text`、`empty`、`injected` 或 `unrecognized`；未闭合或无法识别的开头包装保留原文并标未识别。只有 `text` 与 `unrecognized` 算用户输入（`is_input`），`injected` 与 `empty` 不产生用户气泡。同一请求的多条用户消息逐条解释，不合并成一条。标题与折叠行摘要复用同一解释结果。
 
 能力视图把协议工具定义与 Agent 技能声明分开。工具只读请求的 `tools` / `functions` 字段；技能只读 system 文本里的标签清单与 Claude 标题列表。两种能力各分 `present`、`empty`、`unrecognized`、`missing`、`partial`：正文不完整时技能最多报 partial，正文不可读时报 missing，不把没读到解释成零技能。覆盖状态记录本片的读取区间与整笔消息总数。能力按正文读取即时计算，不长期复制技能描述或工具 schema。
 
