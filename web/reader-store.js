@@ -1,3 +1,4 @@
+// @ts-check
 import { deltaOrdinals, messageEntries } from './body-view.js';
 
 /**
@@ -5,62 +6,89 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * 不进 DOM 闭包。正文与工具结果带阅读版本；409 整笔作废，下一次显式读取重建。
  * 迟到响应必须同时匹配会话代次与当前请求 token 才可写入缓存。
  *
- * 缓存边界：只保留当前会话已加载窗口的请求，外加显式读取过的窗口外请求
- * （工具结果的目标请求不装载整份历史，只保留该次读取）。
+ * 缓存边界：只保留当前会话已加载窗口的请求，外加显式读取过的窗口外请求。
  */
 
-/** 固定 4 并发的网络队列：失败在 finally 释放，不占住后续请求。 */
-function createLanes(limit = 4) {
+/**
+ * @typedef {Object} RequestRead 一次请求的读取快照。
+ * @property {import('../src/queries').RequestDetail | null} detail
+ * @property {import('../src/protocols').BodyPage | null} meta
+ * @property {Map<number, ReturnType<typeof messageEntries>[number]>} messages
+ * @property {ReturnType<typeof messageEntries>} entries
+ * @property {{open: boolean, next: number, total: number | null, ords: number[], selected: number | null, loading: boolean, error: string | null}} structure
+ * @property {{next: number, done: boolean, loading: boolean, error: string | null, unconfirmed: boolean}} delta
+ * @property {string | null} token
+ */
+
+/**
+ * @typedef {Object} ReaderStore
+ * @property {() => {sessionKey: string | null, requests: import('../src/queries').RequestRow[], olderCursor: string | null, loading: boolean, error: string | null}} getWindow
+ * @property {() => {items: import('../src/queries').SessionRow[], cursor: string | null, error: string | null}} getSessions
+ * @property {(cursor?: string) => Promise<void>} loadSessions
+ * @property {(key: string, limit?: number) => Promise<void>} selectSession
+ * @property {() => Promise<void>} loadEarlier
+ * @property {(id: number, validate?: boolean) => Promise<RequestRead>} readRequest
+ * @property {(id: number, from: number, to: number) => Promise<import('../src/protocols').BodyPage>} readRange
+ * @property {(id: number) => Promise<RequestRead>} loadStructure
+ * @property {(id: number, pages?: number) => Promise<RequestRead>} loadDelta
+ * @property {(id: number, ord: number) => Promise<import('../src/reading').ToolResultReading>} readToolResult
+ * @property {(id: number) => Promise<unknown>} readRoute
+ * @property {(id: number) => void} invalidate
+ */
+
+/**
+ * 固定 N 并发的网络队列：失败在 finally 释放，不占住后续请求。
+ * @param {number} limit
+ * @param {(url: string) => Promise<Response>} fetcher
+ */
+function createLanes(limit, fetcher) {
+  /** @type {{task: () => Promise<unknown>, resolve: (value: Response) => void, reject: (reason?: unknown) => void}[]} */
   const queue = [];
   let active = 0;
   const pump = () => {
     while (active < limit && queue.length > 0) {
       const next = queue.shift();
+      if (next === undefined) break;
       active += 1;
-      next.task().then(next.resolve, next.reject).finally(() => { active -= 1; pump(); });
+      next.task().then(value => next.resolve(/** @type {Response} */ (value)), reason => next.reject(reason))
+        .finally(() => { active -= 1; pump(); });
     }
   };
-  return task => new Promise((resolve, reject) => {
-    queue.push({ task, resolve, reject });
+  /** @param {string} url @returns {Promise<Response>} */
+  const run = url => new Promise((resolve, reject) => {
+    queue.push({ task: () => fetcher(url), resolve, reject });
     pump();
   });
+  return run;
 }
 
+/** @param {(url: string) => Promise<Response>} fetcher @returns {ReaderStore} */
 export function createReaderStore(fetcher) {
-  const lane = createLanes(4);
+  const lane = createLanes(4, fetcher);
   let epoch = 0;
 
+  /** @type {{items: import('../src/queries').SessionRow[], cursor: string | null, error: string | null}} */
   const sessions = { items: [], cursor: null, error: null };
+  /** @type {string | null} */
   let sessionKey = null;
+  /** @type {import('../src/queries').RequestRow[]} */
   let windowRows = [];
+  /** @type {string | null} */
   let olderCursor = null;
   let windowLoading = false;
+  /** @type {string | null} */
   let windowError = null;
 
-  /** @type {Map<number, Record<string, unknown>>} 请求读取缓存，按 canonical id 归属。 */
+  /**
+   * 请求读取缓存，按 canonical id 归属。rec 的字段在运行期由各读取路径填充，
+   * 结构与 RequestRead 对齐（messages 以 ord 为键保存解释后的消息）。
+   * @type {Map<number, any>}
+   */
   const reads = new Map();
-  /** @type {Map<number, unknown>} 路由只在用户展开时读取，单独缓存。 */
+  /** @type {Map<number, Promise<unknown>>} 路由只在用户展开时读取，单独缓存。 */
   const routes = new Map();
 
-  const pageKey = (id, token, from, to) => JSON.stringify([id, token, from, to]);
-  const resultKey = (owner, token, ord) => JSON.stringify([owner, token, ord]);
-
-  async function getJson(url) {
-    const response = await lane(() => fetcher(url));
-    if (response.status === 409) {
-      const error = new Error('reading_changed');
-      error.code = 'reading_changed';
-      throw error;
-    }
-    if (!response.ok) {
-      const error = new Error(`http_${response.status}`);
-      error.code = response.status === 503 ? 'unavailable' : `http_${response.status}`;
-      error.body = await response.json().catch(() => null);
-      throw error;
-    }
-    return response.json();
-  }
-
+  /** @param {number} id */
   function recordOf(id) {
     let rec = reads.get(id);
     if (rec === undefined) {
@@ -79,14 +107,17 @@ export function createReaderStore(fetcher) {
     return rec;
   }
 
-  const sortedEntries = rec => [...rec.messages.values()].sort((a, b) => a.ord - b.ord);
+  /** @param {any} rec */
+  const sortedEntries = rec => [...rec.messages.values()].sort((/** @type {{ord: number}} */ a, /** @type {{ord: number}} */ b) => a.ord - b.ord);
 
+  /** @param {any} rec @param {import('../src/protocols').BodyPage} page */
   function mergeMessages(rec, page) {
     for (const entry of messageEntries(page)) {
       if (!rec.messages.has(entry.ord)) rec.messages.set(entry.ord, entry);
     }
   }
 
+  /** @param {string | undefined} cursor */
   async function loadSessions(cursor) {
     try {
       const page = await getJson(`/api/sessions?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
@@ -94,10 +125,27 @@ export function createReaderStore(fetcher) {
       sessions.cursor = page.next_cursor;
       sessions.error = null;
     } catch (error) {
-      sessions.error = error.message;
+      sessions.error = error instanceof Error ? error.message : 'load_failed';
     }
   }
 
+  /** @param {string} url */
+  async function getJson(url) {
+    const response = await lane(url);
+    if (response.status === 409) {
+      const error = /** @type {Error & {code?: string}} */ (new Error('reading_changed'));
+      error.code = 'reading_changed';
+      throw error;
+    }
+    if (!response.ok) {
+      const error = /** @type {Error & {code?: string}} */ (new Error(`http_${response.status}`));
+      error.code = response.status === 503 ? 'unavailable' : `http_${response.status}`;
+      throw error;
+    }
+    return response.json();
+  }
+
+  /** @param {string} key @param {number} limit */
   async function selectSession(key, limit = 30) {
     const myEpoch = ++epoch;
     sessionKey = key;
@@ -114,7 +162,7 @@ export function createReaderStore(fetcher) {
       if (myEpoch !== epoch) return;
       windowRows = [];
       olderCursor = null;
-      windowError = error.message;
+      windowError = error instanceof Error ? error.message : 'window_failed';
     } finally {
       if (myEpoch === epoch) windowLoading = false;
     }
@@ -126,21 +174,22 @@ export function createReaderStore(fetcher) {
     windowLoading = true;
     windowError = null;
     try {
-      const page = await getJson(`/api/sessions/${encodeURIComponent(sessionKey)}/requests?direction=older&limit=${windowRows.length > 0 ? windowRows.length : 30}&cursor=${encodeURIComponent(olderCursor)}`);
+      const page = await getJson(`/api/sessions/${encodeURIComponent(String(sessionKey))}/requests?direction=older&limit=${windowRows.length > 0 ? windowRows.length : 30}&cursor=${encodeURIComponent(olderCursor)}`);
       if (myEpoch !== epoch) return;
       // prepend + 去重 + 排序：失败保留旧 rows/cursor 由 catch 负责。
       const seen = new Set(windowRows.map(row => row.req_id));
-      windowRows = [...page.items.filter(row => !seen.has(row.req_id)), ...windowRows]
+      windowRows = [...page.items.filter((/** @type {{req_id: number}} */ row) => !seen.has(row.req_id)), ...windowRows]
         .sort((a, b) => a.started_ms - b.started_ms || a.req_id - b.req_id);
       olderCursor = page.next_cursor;
     } catch (error) {
       if (myEpoch !== epoch) return;
-      windowError = error.message;
+      windowError = error instanceof Error ? error.message : 'window_failed';
     } finally {
       if (myEpoch === epoch) windowLoading = false;
     }
   }
 
+  /** @param {any} rec @param {boolean} validate */
   async function fetchDetail(rec, validate) {
     if (rec.detail !== null && !validate) return;
     const myEpoch = epoch;
@@ -149,11 +198,11 @@ export function createReaderStore(fetcher) {
       if (myEpoch !== epoch) return;
       // validate 时 token 变化先清掉旧内容，避免新旧混拼。
       if (validate && rec.token !== null && detail.reading_token !== rec.token) {
-        rec.pages.clear();
-        rec.messages.clear();
+        rec.pages = new Map();
+        rec.messages = new Map();
         rec.structure = { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null };
         rec.delta = { next: 0, done: false, loading: false, error: null, unconfirmed: false };
-        rec.tools.clear();
+        rec.tools = new Map();
         routes.delete(rec.id);
       }
       rec.detail = detail;
@@ -161,23 +210,16 @@ export function createReaderStore(fetcher) {
       rec.detailError = null;
     } catch (error) {
       if (myEpoch !== epoch) return;
-      if (error.code === 'reading_changed') { reads.delete(rec.id); throw error; }
-      rec.detailError = error.message;
+      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
+        reads.delete(rec.id);
+        throw error;
+      }
+      rec.detailError = error instanceof Error ? error.message : 'detail_failed';
       throw error;
     }
   }
 
-  async function readRequest(id, validate = false) {
-    const rec = recordOf(id);
-    await fetchDetail(rec, validate);
-    if (rec.meta === null && rec.detail !== null) {
-      // 首次 detail 后读 body 0/0 元信息；后续区间读取不覆盖 meta。
-      const meta = await readRange(id, 0, 0);
-      if (meta !== null) rec.meta = meta;
-    }
-    return assemble(rec);
-  }
-
+  /** @param {any} rec @returns {RequestRead} */
   function assemble(rec) {
     return {
       detail: rec.detail,
@@ -190,11 +232,24 @@ export function createReaderStore(fetcher) {
     };
   }
 
+  /** @param {number} id @param {boolean} validate @returns {Promise<RequestRead>} */
+  async function readRequest(id, validate = false) {
+    const rec = recordOf(id);
+    await fetchDetail(rec, validate);
+    if (rec.meta === null && rec.detail !== null) {
+      // 首次 detail 后读 body 0/0 元信息；后续区间读取不覆盖 meta。
+      const meta = await readRange(id, 0, 0);
+      if (meta !== null) rec.meta = meta;
+    }
+    return assemble(rec);
+  }
+
+  /** @param {number} id @param {number} from @param {number} to @returns {Promise<import('../src/protocols').BodyPage>} */
   async function readRange(id, from, to) {
     const rec = recordOf(id);
     if (rec.detail === null) await fetchDetail(rec, false);
     if (rec.detail === null) throw rec.detailError ?? new Error('detail_unavailable');
-    const key = pageKey(id, rec.token, from, to);
+    const key = JSON.stringify([id, rec.token, from, to]);
     let pending = rec.pages.get(key);
     if (pending === undefined) {
       const myEpoch = epoch;
@@ -202,22 +257,23 @@ export function createReaderStore(fetcher) {
       pending = (async () => {
         const page = await getJson(`/api/requests/${id}/body?from=${from}&to=${to}&if_reading=${myToken}`);
         // 迟到响应：会话已切换，或请求已换版本（409 重建后 token 变了）。
-        if (myEpoch !== epoch || reads.get(id)?.token !== myToken) {
-          const error = new Error('reading_changed');
+        const current = reads.get(id);
+        if (myEpoch !== epoch || current?.token !== myToken) {
+          const error = /** @type {Error & {code?: string}} */ (new Error('reading_changed'));
           error.code = 'reading_changed';
           throw error;
         }
-        mergeMessages(rec, page);
+        mergeMessages(current ?? rec, page);
         if (from === 0 && to === 0 && rec.meta === null) rec.meta = page;
         return page;
       })();
       rec.pages.set(key, pending);
       pending.catch(() => { rec.pages.delete(key); });
     }
-    const page = await pending;
-    return page;
+    return pending;
   }
 
+  /** @param {number} id @returns {Promise<RequestRead>} */
   async function loadStructure(id) {
     const rec = recordOf(id);
     const state = rec.structure;
@@ -240,13 +296,15 @@ export function createReaderStore(fetcher) {
         state.next = Math.min(page.to, page.total ?? page.to);
       }
     } catch (error) {
-      state.error = error.code === 'reading_changed' ? 'reading_changed' : error.message;
+      state.error = /** @type {Error & {code?: string}} */ (error).code === 'reading_changed' ? 'reading_changed'
+        : error instanceof Error ? error.message : 'structure_failed';
     } finally {
       state.loading = false;
     }
     return assemble(rec);
   }
 
+  /** @param {number} id @param {number} [pages] @returns {Promise<RequestRead>} */
   async function loadDelta(id, pages = 2) {
     const rec = recordOf(id);
     const state = rec.delta;
@@ -267,10 +325,10 @@ export function createReaderStore(fetcher) {
       let consumed = 0;
       // 每片跨度小于 40 的连续可信 delta 合成一片，每轮最多 pages 片。
       for (let piece = 0; piece < pages && consumed < ords.length;) {
-        const start = ords[consumed];
+        const start = ords[consumed] ?? 0;
         let end = consumed;
-        while (end < ords.length && ords[end] < start + 40) end += 1;
-        const page = await readRange(id, start, ords[end - 1] + 1);
+        while (end < ords.length && (ords[end] ?? 0) < start + 40) end += 1;
+        await readRange(id, start, (ords[end - 1] ?? start) + 1);
         // 只消费 delta 集合内的消息；额外读到的历史不推进消费。
         consumed = end;
         piece += 1;
@@ -278,26 +336,29 @@ export function createReaderStore(fetcher) {
       state.next += consumed;
       if (state.next >= trusted.size) state.done = true;
     } catch (error) {
-      state.error = error.code === 'reading_changed' ? 'reading_changed' : error.message;
+      state.error = /** @type {Error & {code?: string}} */ (error).code === 'reading_changed' ? 'reading_changed'
+        : error instanceof Error ? error.message : 'delta_failed';
     } finally {
       state.loading = false;
     }
     return assemble(rec);
   }
 
+  /** @param {number} id @param {number} ord @returns {Promise<import('../src/reading').ToolResultReading>} */
   async function readToolResult(id, ord) {
     const rec = recordOf(id);
     if (rec.detail === null) await fetchDetail(rec, false);
     if (rec.detail === null) throw rec.detailError ?? new Error('detail_unavailable');
-    const key = resultKey(id, rec.token, ord);
+    const key = JSON.stringify([id, rec.token, ord]);
     let pending = rec.tools.get(key);
     if (pending === undefined) {
       const myEpoch = epoch;
       const myToken = rec.token;
       pending = (async () => {
-        const reading = await getJson(`/api/requests/${id}/tools/${ord}/result?if_reading=${myToken}`);
-        if (myEpoch !== epoch || reads.get(id)?.token !== myToken) {
-          const error = new Error('reading_changed');
+        const reading = /** @type {import('../src/reading').ToolResultReading} */ (await getJson(`/api/requests/${id}/tools/${ord}/result?if_reading=${myToken}`));
+        const current = reads.get(id);
+        if (myEpoch !== epoch || current?.token !== myToken) {
+          const error = /** @type {Error & {code?: string}} */ (new Error('reading_changed'));
           error.code = 'reading_changed';
           throw error;
         }
@@ -309,6 +370,7 @@ export function createReaderStore(fetcher) {
     return pending;
   }
 
+  /** @param {number} id @returns {Promise<unknown>} */
   async function readRoute(id) {
     let pending = routes.get(id);
     if (pending === undefined) {
@@ -316,7 +378,7 @@ export function createReaderStore(fetcher) {
       pending = (async () => {
         const route = await getJson(`/api/requests/${id}/route`);
         if (myEpoch !== epoch) {
-          const error = new Error('reading_changed');
+          const error = /** @type {Error & {code?: string}} */ (new Error('reading_changed'));
           error.code = 'reading_changed';
           throw error;
         }
@@ -328,6 +390,7 @@ export function createReaderStore(fetcher) {
     return pending;
   }
 
+  /** @param {number} id */
   function invalidate(id) {
     reads.delete(id);
     routes.delete(id);

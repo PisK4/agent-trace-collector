@@ -228,14 +228,47 @@ const REQUESTS: SynthRequest[] = [
     usage:{in:8400,out:160,read:9800,write:600,cost:0.0061}, timing:{ms:1900,ttft:430,flow:1400,firstText:500} },
 ];
 
-const byId = new Map(REQUESTS.map(r => [r.id, r]));
+// Task 6 验收用的窗口会话：42 笔简单请求，默认 30 笔窗口留下两页更早历史。
+const convWindow = 'conv-synthetic-window';
+const WINDOW_REQUESTS: SynthRequest[] = Array.from({length: 42}, (_, i) => ({
+  id: 500 + i, title: `窗口样本 ${i + 1}`, status: 200, protocol: 'anthropic',
+  history: [], inputs: [{message: U(`窗口样本问题 ${i + 1}`), userInput: true}],
+  reply: {model: 'synth-a', stop_reason: 'end_turn', content: [{type: 'text', text: `窗口样本回答 ${i + 1}`}]},
+  tools: [TOOL_READ], bodyState: 'available', bodyReason: null,
+  delta: [2], prevRelation: i === 0 ? 'first' : 'confirmed', chainRole: 'main',
+  purposeChain: 'participate', reqKind: 'chat', modelTitle: null,
+  toolCalls: [],
+  usage: {in: 100 + i, out: 20, read: 0, write: 0, cost: 0.001},
+  timing: {ms: 1000 + i, ttft: 100, flow: 800, firstText: 120},
+}));
+
+const byId = new Map([...REQUESTS, ...WINDOW_REQUESTS].map(r => [r.id, r]));
 
 function fullMessages(r: SynthRequest): SynthMessage[] {
   return [{role:'system', content:SYS}, {role:'user', content:BRIEF}, ...r.history, ...r.inputs.map(i => i.message)];
 }
 
+/** 列表行：与生产 RequestRow 同形，状态语义来自派生结果。 */
+function rowOf(r: SynthRequest) {
+  return {
+    req_id: r.id, conv_key: r.id >= 500 ? convWindow : convKey, actor: 'actor-main', actor_state: 'known',
+    agent: 'synthetic-agent', started_ms: r.id * 1000, title: r.title, title_source: 'user_delta',
+    status: r.status, model_requested: 'synth-group', model_served: r.protocol === 'chat' ? 'synth-c' : 'synth-a',
+    in_tok: r.usage.in, out_tok: r.usage.out, cache_read: r.usage.read, cache_write: r.usage.write,
+    cost: r.usage.cost, cost_state: 'reported', have: 7,
+    ms: r.timing.ms, ttft_ms: r.timing.ttft, flow_ms: r.timing.flow,
+    body_state: r.bodyState, miss_reason: r.bodyReason,
+    input_preview: r.title, input_preview_kind: 'delta', reply_preview: null,
+    req_kind: r.reqKind, chain_role: r.chainRole, model_title: r.modelTitle,
+    purpose_status: 'selected', purpose_version: 1, purpose_rule: null, purpose_chain: r.purposeChain,
+    derived_state: 'current',
+  };
+}
+
 function detailOf(r: SynthRequest) {
   const ms = fullMessages(r);
+  // 阅读版本：合成稳定值（同一请求输入不变则不变）。
+  const readingToken = 'r1-' + Buffer.from(`synth-${r.id}-${r.input_revision ?? 0}-${r.bodyState}`).toString('hex').padEnd(64, '0').slice(0, 64);
   return {
     req_id:r.id, conv_key:convKey, actor:'actor-main', actor_state:'known', agent:'synthetic-agent',
     started_ms:r.id*1000, title:r.title, title_source:'user_delta', status:r.status,
@@ -257,9 +290,9 @@ function detailOf(r: SynthRequest) {
     attempt_cost:null, attempt_cost_state:'absent',
     summary_state:'recomputed', summary_algorithm:1, summary_basis:'{}',
     derive_version:1, archive:null, route_state:'available', model_provider:'relay-synth',
-    source_facts:{}, projection_meta:{}, prompt:{state:'missing', values:[], reason:'legacy_unknown'},
+    source_facts:{}, projection_meta:{}, prompt:{state:'missing', reason:'legacy_unknown', tokens:null, counted:false, window:null, parts:[], ratio:null, note:null},
     derivation:{state:'clean', chain_state:'current', summary_state:'current', reason:null},
-    tool_calls:r.toolCalls, historical:null,
+    tool_calls:r.toolCalls, historical:null, reading_token: readingToken,
     total_messages:ms.length,
   };
 }
@@ -314,9 +347,25 @@ const files: Record<string, [URL, string]> = {
   '/trace-reader-prototype.html': [new URL('./trace-reader-prototype.html', import.meta.url), 'text/html; charset=utf-8'],
   '/local-data.js': [new URL('./local-data.js', import.meta.url), 'text/javascript; charset=utf-8'],
   '/web/body-view.js': [new URL('../web/body-view.js', import.meta.url), 'text/javascript; charset=utf-8'],
+  // 生产页面走 /production 前缀，同一合成 API。
+  '/production': [new URL('../web/index.html', import.meta.url), 'text/html; charset=utf-8'],
+  '/app.js': [new URL('../web/app.js', import.meta.url), 'text/javascript; charset=utf-8'],
+  '/reader-store.js': [new URL('../web/reader-store.js', import.meta.url), 'text/javascript; charset=utf-8'],
+  '/trace-view.js': [new URL('../web/trace-view.js', import.meta.url), 'text/javascript; charset=utf-8'],
+  '/body-view.js': [new URL('../web/body-view.js', import.meta.url), 'text/javascript; charset=utf-8'],
 };
 const headers = { 'cache-control':'no-store', 'x-content-type-options':'nosniff', 'content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" };
 const json = (value:unknown, status = 200) => new Response(JSON.stringify(value), {status, headers:{...headers, 'content-type':'application/json'}});
+
+/** 与生产同口径的不透明游标：base64url(JSON 数组)。 */
+const encodeCursor = (value: unknown[]) => Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+const decodeCursor = (raw: string | null): unknown[] | null => {
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    return Array.isArray(parsed) && parsed.every(Number.isSafeInteger) ? parsed : null;
+  } catch { return null; }
+};
 
 Bun.serve({
   hostname:'127.0.0.1', port,
@@ -330,11 +379,20 @@ Bun.serve({
     if (!url.pathname.startsWith('/api/')) {
       const file = files[url.pathname];
       if (!file) return json({error:'not_found'}, 404);
+      if (url.pathname === '/production') {
+        // 临时错误采集：合成验收用，失败栈写进 window.__pageErrors。
+        const html = await Bun.file(file[0]).text();
+        const instrumented = html.replace('<head>', `<head><script>window.__pageErrors=[];window.addEventListener('error',e=>window.__pageErrors.push(String(e.message)+' @ '+(e.filename||'')+':'+e.lineno));window.addEventListener('unhandledrejection',e=>window.__pageErrors.push('rejection: '+String(e.reason && e.reason.stack || e.reason)));</script>`);
+        return new Response(instrumented, {headers:{...headers, 'content-type':file[1]}});
+      }
       return new Response(Bun.file(file[0]), {headers:{...headers, 'content-type':file[1]}});
     }
     if (origin === null && req.headers.get('sec-fetch-site') !== 'same-origin') return json({error:'same_origin_required'}, 403);
     if (url.pathname === '/api/sessions') {
-      return json({items:[{conv_key:convKey, title:'空状态排查（合成场景）', agents:['synthetic-agent'], request_count:REQUESTS.length, first_ms:101000, last_ms:118000, last_title:'查文档建议（未声明工具）'}], next_cursor:null});
+      return json({items:[
+        {conv_key:convKey, title:'空状态排查（合成场景）', agents:['synthetic-agent'], request_count:REQUESTS.length, flags:[], last_ms:118000},
+        {conv_key:convWindow, title:'窗口分页样本（合成）', agents:['synthetic-agent'], request_count:WINDOW_REQUESTS.length, flags:[], last_ms:(500+41)*1000},
+      ], next_cursor:null});
     }
     if (url.pathname === '/api/local-session') {
       const prefix = url.searchParams.get('prefix') || '';
@@ -343,19 +401,39 @@ Bun.serve({
     }
     if (url.pathname === '/api/local-window') {
       const session = url.searchParams.get('session');
-      if (session !== convKey) return json({error:'session_required'}, 400);
+      const pool = session === convWindow ? WINDOW_REQUESTS : session === convKey ? REQUESTS : null;
+      if (pool === null) return json({error:'session_required'}, 400);
       let before:number[] | null = null;
       try { before = JSON.parse(url.searchParams.get('before') ?? 'null'); } catch { return json({error:'cursor'}, 400); }
       const rows = before === null
-        ? [...REQUESTS].sort((a,b)=>b.id-a.id).slice(0, windowSize+1)
-        : REQUESTS.filter(r=>r.id<before[1]).sort((a,b)=>b.id-a.id).slice(0, windowSize+1);
+        ? [...pool].sort((a,b)=>b.id-a.id).slice(0, windowSize+1)
+        : pool.filter(r=>r.id<before[1]).sort((a,b)=>b.id-a.id).slice(0, windowSize+1);
       const selected = rows.slice(0, windowSize).reverse();
       return json({items:selected.map(r=>({req_id:r.id, started_ms:r.id*1000})), more:rows.length>windowSize});
     }
     const list = /^\/api\/sessions\/([^/]+)\/requests$/.exec(url.pathname);
     if (list) {
-      if (decodeURIComponent(list[1]!) !== convKey) return json({error:'not_found'}, 404);
-      return json({items:REQUESTS.map(r=>({req_id:r.id, started_ms:r.id*1000})), next_cursor:null});
+      const pool = decodeURIComponent(list[1]!) === convWindow ? WINDOW_REQUESTS
+        : decodeURIComponent(list[1]!) === convKey ? REQUESTS : null;
+      if (pool === null) return json({error:'not_found'}, 404);
+      // 生产列表端点：older 无游标取最近窗口，游标向更早翻；forward 保持最早页语义。
+      const direction = url.searchParams.get('direction') ?? 'forward';
+      const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? '100')));
+      if (direction !== 'forward' && direction !== 'older') return json({error:'invalid_direction'}, 400);
+      const cursor = decodeCursor(url.searchParams.get('cursor'));
+      if (url.searchParams.get('cursor') !== null && cursor === null) return json({error:'invalid_cursor'}, 400);
+      if (direction === 'older') {
+        const rows = cursor === null
+          ? [...pool].sort((a,b)=>b.id-a.id).slice(0, limit+1)
+          : pool.filter(r=>r.id<(cursor![1] as number)).sort((a,b)=>b.id-a.id).slice(0, limit+1);
+        const items = rows.slice(0, limit).reverse().map(rowOf);
+        return json({items, next_cursor: rows.length>limit && items.length>0 ? encodeCursor([items[0]!.started_ms, items[0]!.req_id]) : null});
+      }
+      const rows = cursor === null
+        ? pool.slice(0, limit+1)
+        : pool.filter(r=>r.id>(cursor![1] as number)).slice(0, limit+1);
+      const items = rows.slice(0, limit).map(rowOf);
+      return json({items, next_cursor: rows.length>limit && items.length>0 ? encodeCursor([items[items.length-1]!.started_ms, items[items.length-1]!.req_id]) : null});
     }
     const body = /^\/api\/requests\/(\d+)\/body$/.exec(url.pathname);
     if (body) {
@@ -365,6 +443,36 @@ Bun.serve({
       const to = Number(url.searchParams.get('to') ?? String(from));
       if (!Number.isInteger(from) || !Number.isInteger(to) || from<0 || to<from || to-from>40) return json({error:'invalid_body_range'}, 400);
       return json(bodyPageOf(r, from, to));
+    }
+    const toolResult = /^\/api\/requests\/(\d+)\/tools\/(\d+)\/result$/.exec(url.pathname);
+    if (toolResult) {
+      const owner = byId.get(Number(toolResult[1]));
+      const ord = Number(toolResult[2]);
+      const expected = url.searchParams.get('if_reading');
+      if (owner === undefined) return json({error:'not_found'}, 404);
+      if (expected === null || !/^r1-[0-9a-f]{16,}$/.test(expected)) return json({error:'invalid_reading_token'}, 400);
+      const d = detailOf(owner);
+      const pair = (d.tool_calls as SynthCall[]).find(c => c.ord === ord);
+      const base = { owner_req: owner.id, call_ord: ord, reading_token: expected };
+      if (pair === undefined) return json({...base, state:'unpaired', target:null, content:null, is_error:null, reason:'call_not_found'});
+      if (pair.state !== 'resolved' || pair.result_req === null) {
+        return json({...base, state: pair.state === 'pending' ? 'pending' : pair.state === 'ambiguous' ? 'ambiguous' : 'unpaired', target:null, content:null, is_error:null, reason:pair.state});
+      }
+      const target = byId.get(pair.result_req);
+      if (target === undefined) return json({...base, state:'invalid_location', target:null, content:null, is_error:null, reason:'location_mismatch'});
+      const page = bodyPageOf(target, pair.result_ord, pair.result_ord + 1);
+      const message = page.messages.find(m => m.ord === pair.result_ord)?.value as {content?: unknown} | undefined;
+      const match = /^request\.messages\[(\d+)\](?:\.content\[(\d+)\])?$/.exec(pair.result_path ?? '');
+      if (!message || !match) return json({...base, state:'unavailable', target:null, content:null, is_error:null, reason:'body_evicted'});
+      const blocks = message.content;
+      const block = match[2] !== undefined && Array.isArray(blocks)
+        ? (blocks[Number(match[2])] as {content?: unknown, is_error?: unknown})
+        : { content: typeof blocks === 'string' ? blocks : null };
+      return json({...base, state:'available',
+        target:{ req_id: target.id, ord: pair.result_ord, path: pair.result_path },
+        content: block.content ?? null,
+        is_error: (block as {is_error?: unknown}).is_error === true ? true : (block as {is_error?: unknown}).is_error === false ? false : null,
+        reason: null});
     }
     const detail = /^\/api\/requests\/(\d+)$/.exec(url.pathname);
     if (detail) {
