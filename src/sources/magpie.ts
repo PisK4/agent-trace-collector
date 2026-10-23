@@ -353,7 +353,7 @@ export function mapRouteRow(record: Record<string, unknown>): RouteFields | null
     done: typeof record.done === 'boolean' ? (record.done ? 1 : 0) : optionalNumber(record, 'done'),
     ms: optionalNumber(record, 'ms'),
     ttft: optionalNumber(record, 'ttft'),
-    firstText: optionalNumber(record, 'first_text'),
+    firstText: optionalNumber(record, 'firstText'),
     flow: optionalNumber(record, 'flow'),
     tokens: prompt.state === 'reported' ? prompt.tokens : optionalNumber(record, 'tokens'),
     outTok: optionalNumber(record, 'out') ?? optionalNumber(record, 'out_tok'),
