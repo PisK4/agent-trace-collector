@@ -754,3 +754,92 @@ test('会话 flags 按确定状态聚合且顺序固定', () => {
     f.close();
   }
 });
+
+/** Task 1 红测种子：发布代结果与同步旧列刻意不同值，锁住整套选源。 */
+function seedPublishedReading(f: ReturnType<typeof fixture>) {
+  const id = seedPurposeRequest(f.store, {
+    convKey:'conv-reading', actor:'actor-reading', startedMs:100,
+    messages:[{role:'user', content:'synthetic question'}],
+    purposePending:0, cleanGroup:true, summaryState:'recomputed', summaryAlgorithm:1,
+    title:'synchronous bait', titleSource:'user_delta',
+  });
+  const generation = 'gen-reader-published-01';
+  f.store.write(db => {
+    db.run(`UPDATE request SET purpose_revision=input_revision WHERE req_id=?`, [id]);
+    db.run(`INSERT INTO derive_generation(generation,conv_key,actor,group_epoch,
+      input_revision,algorithm,state,stage,created_at,published_at,request_count)
+      SELECT ?,conv_key,actor,group_epoch,input_revision,5,'published','done',1,1,1
+      FROM derive_queue WHERE conv_key='conv-reading' AND actor='actor-reading'`,
+      [generation]);
+    db.run(`INSERT INTO derive_request_result(generation,req_id,input_epoch,
+      input_revision,started_ms,prev_relation,delta_ordinals,chain_role,title,
+      title_source,input_preview,purpose_revision,purpose_version,purpose_chain,
+      algorithm,retention_state,basis_json)
+      SELECT ?,req_id,input_epoch,input_revision,started_ms,'first','[1]','main',
+      'published title','user_delta','published input',purpose_revision,
+      purpose_version,purpose_chain,5,'recomputed','{"why":"synthetic"}' FROM request WHERE req_id=?`,
+      [generation, id]);
+    db.run(`UPDATE derive_queue SET published_generation=?,state='clean',
+      published_revision=input_revision,target_algorithm=5,published_algorithm=5
+      WHERE conv_key='conv-reading' AND actor='actor-reading'`, [generation]);
+    db.run(`INSERT INTO derive_tool_result(generation,req_id,ord,call_id,
+      tool_name,result_req,result_ord,result_path,state,algorithm_version,
+      retention_state) VALUES (?,?,0,'call-reading','read',?,4,
+      'request.messages[4].content[1]','resolved',5,'recomputed')`,
+      [generation, id, id]);
+    db.run(`INSERT INTO tool_call(req_id,ord,call_id,tool_name,result_req,
+      result_ord,result_path,state) VALUES (?,0,'call-reading','read',?,0,
+      'request.messages[0].content[0]','resolved')`, [id, id]);
+  });
+  return {id, generation};
+}
+
+test('发布代存在时整套读取发布结果，标题列表详情工具同源', () => {
+  const f = fixture();
+  try {
+    const {id} = seedPublishedReading(f);
+    const detail = getRequest(f.store, id)!;
+    expect(detail.title).toBe('published title');
+    expect(detail.input_preview).toBe('published input');
+    expect(detail.delta_ordinals).toEqual([1]);
+    expect(detail.summary_state).toBe('recomputed');
+    expect(detail.summary_basis).toBe('{"why":"synthetic"}');
+    expect(detail.tool_calls[0]?.result_path).toBe('request.messages[4].content[1]');
+    expect(listRequests(f.store, 'conv-reading').items[0]?.title).toBe('published title');
+    expect(listSessions(f.store).items.find(s => s.conv_key === 'conv-reading')?.title)
+      .toBe('published title');
+    // 发布代行缺失时不再回退同步诱饵值：NULL 保持 NULL。
+    f.store.write(db => db.run(
+      'UPDATE derive_request_result SET input_preview=NULL WHERE req_id=?', [id],
+    ));
+    expect(getRequest(f.store, id)?.input_preview).toBeNull();
+  } finally { f.close(); }
+});
+
+test('发布代不 current 或保留时屏蔽为旧结论，不冒充当前', () => {
+  const f = fixture();
+  try {
+    const {id, generation} = seedPublishedReading(f);
+    // 组 dirty：即使指针还在，发布代不能当当前结论读。
+    f.store.write(db => db.run(
+      `UPDATE derive_request_result SET title='retained bait',input_preview='retained input',
+       retention_state='retained' WHERE req_id=?`, [id]));
+    let detail = getRequest(f.store, id)!;
+    expect(detail.derived_state).toBe('retained');
+    expect(detail.input_preview).toBeNull();
+    expect(detail.historical?.title).toBe('retained bait');
+    expect(detail.tool_calls[0]?.result_path).toBeNull();
+    f.store.write(db => markGroupDirtyTx(db, 'conv-reading', 'actor-reading', ''));
+    detail = getRequest(f.store, id)!;
+    expect(detail.derived_state).toBe('dirty');
+    expect(detail.title).not.toBe('published title');
+    expect(detail.tool_calls[0]?.state).toBe('pending');
+    // 指针指向没有结果行的代：不回退同步诱饵。
+    f.store.write(db => db.run(
+      `UPDATE derive_queue SET published_generation='gen-missing' WHERE conv_key='conv-reading'`, []));
+    const after = getRequest(f.store, id)!;
+    expect(after.input_preview).toBeNull();
+    expect(after.tool_calls[0]?.state).toBe('pending');
+    expect(generation).toBe('gen-reader-published-01');
+  } finally { f.close(); }
+});
