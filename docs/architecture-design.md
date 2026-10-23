@@ -1010,7 +1010,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | 接口 | 用途 | 分页 |
 | --- | --- | --- |
 | `GET /api/sessions?limit=50&cursor=` | 会话列表，含笔数、最后时间、异常标记 | keyset，(last_ms, conv_key) |
-| `GET /api/sessions/:key/requests?limit=100&cursor=` | 会话内请求列表，只返回列字段 | keyset，(started_ms, req_id) |
+| `GET /api/sessions/:key/requests?limit=100&cursor=&direction=older` | 会话内请求列表，只返回列字段；direction 省略为 forward | keyset，(started_ms, req_id)；older 游标绑定会话与方向 |
 | `GET /api/requests/:id` | 单笔读数、费用状态、正文状态 | 无 |
 | `GET /api/requests/:id/body?from=0&to=40` | 分页取消息 | 消息序号区间 |
 | `GET /api/requests/:id/route` | 路由决策与尝试链，来自 `route_summary` | 无 |
@@ -1024,7 +1024,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 详情另附四个展示视图：`prompt`（上下文阅读）、`source_facts`、`projection_meta` 与 `derivation`。上下文比例只在 prompt 族状态为 `recomputed` 且窗口为正时计算；`retained`、`invalid_input`、`missing` 即使带着旧计数也不给比例，并说明原因。正文分页附带 `interpretations`、`coverage` 与 `capabilities`，解释只覆盖当前页。这些视图都按白名单挑标量，不返回原始 JSON；失效或缺失的值保持 null，不从邻近字段补猜。
 
-分页用 keyset 不用 offset。摄入一直在写，offset 会漂移，游标是本页最后一行的 `(started_ms, req_id)`。
+分页用 keyset 不用 offset。摄入一直在写，offset 会漂移，游标是本页边界行的 `(started_ms, req_id)`。`direction=older` 无游标取最近一页并向更早翻页，返回仍按时间正序；它的游标额外绑定会话与方向，未知方向返回 400，不静默按 forward 处理。
 
 正文按消息序号区间取，一次 40 条，块解码在单次请求内复用缓存。实测取 40 条 0.13 ms，最重的一笔 526 块全取 13.7 ms。正文已回收时返回 `evicted` 与回收原因，不返回空。
 

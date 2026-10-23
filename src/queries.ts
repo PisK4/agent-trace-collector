@@ -432,40 +432,83 @@ const REQUEST_COLUMNS = `r.req_id, r.conv_key, r.actor, r.agent, r.actor_state, 
   ${SUMMARY_STATE_COL('g', 'd', 'r')} AS summary_state,
   ${SUMMARY_ALGO_COL('g', 'd', 'r')} AS summary_algorithm`;
 
-export function listRequests(store: Store, key: string, limit = 100, cursor: string | null = null): Page<RequestRow> {
+export type RequestDirection = 'forward' | 'older';
+
+/**
+ * 会话内请求分页。forward 从最早页向后追加（默认）；older 无游标取最近窗口，
+ * 之后向更早方向翻。返回 items 始终按 (started_ms, req_id) 升序，两个方向
+ * 只是比较符与扫描方向不同；older 游标额外绑定会话与方向，禁止与 forward 混用。
+ */
+export function listRequests(
+  store: Store, key: string, limit = 100,
+  cursor: string | null = null, direction: RequestDirection = 'forward',
+): Page<RequestRow> {
   const size = checkLimit(limit, 200);
+  if (direction !== 'forward' && direction !== 'older') throw new QueryInputError('invalid_direction');
   const bound = cursor === null
     ? null
-    : decodeCursor(cursor, value => {
-      if (!Array.isArray(value) || value.length !== 2) return null;
-      const [startedMs, reqId] = value;
-      if (typeof startedMs !== 'number' || !Number.isFinite(startedMs) || !Number.isInteger(reqId)) return null;
-      return { startedMs, reqId };
-    });
+    : direction === 'older'
+      ? decodeCursor(cursor, value => {
+        if (!Array.isArray(value) || value.length !== 4) return null;
+        const [tag, boundKey, startedMs, reqId] = value;
+        if (tag !== 'older' || boundKey !== key) return null;
+        if (typeof startedMs !== 'number' || !Number.isFinite(startedMs) || !Number.isInteger(startedMs)) return null;
+        if (!Number.isSafeInteger(reqId)) return null;
+        return { startedMs, reqId };
+      })
+      : decodeCursor(cursor, value => {
+        if (!Array.isArray(value) || value.length !== 2) return null;
+        const [startedMs, reqId] = value;
+        if (typeof startedMs !== 'number' || !Number.isFinite(startedMs) || !Number.isInteger(reqId)) return null;
+        return { startedMs, reqId };
+      });
   // 分页与状态判定必须在同一个快照里：分成两次读会把分页时的行与状态时的行混在一起。
-  const rows = store.read.transaction(() => (bound === null
-    ? store.read.query<RequestDbRow, [string, number]>(`
-        SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
-        ${DERIVED_JOIN('g', 'd', 'r')}
-        WHERE r.conv_key = ?
-        ORDER BY r.started_ms ASC, r.req_id ASC
-        LIMIT ?`)
-      .all(key, size + 1)
-    : store.read.query<RequestDbRow, [string, number, number, number]>(`
-        SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
-        ${DERIVED_JOIN('g', 'd', 'r')}
-        WHERE r.conv_key = ? AND (r.started_ms, r.req_id) > (?, ?)
-        ORDER BY r.started_ms ASC, r.req_id ASC
-        LIMIT ?`)
-      .all(key, bound.startedMs, bound.reqId, size + 1)))() as RequestDbRow[];
+  const rows = store.read.transaction(() => {
+    if (direction === 'older') {
+      return (bound === null
+        ? store.read.query<RequestDbRow, [string, number]>(`
+            SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
+            ${DERIVED_JOIN('g', 'd', 'r')}
+            WHERE r.conv_key = ?
+            ORDER BY r.started_ms DESC, r.req_id DESC
+            LIMIT ?`)
+          .all(key, size + 1)
+        : store.read.query<RequestDbRow, [string, number, number, number]>(`
+            SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
+            ${DERIVED_JOIN('g', 'd', 'r')}
+            WHERE r.conv_key = ? AND (r.started_ms, r.req_id) < (?, ?)
+            ORDER BY r.started_ms DESC, r.req_id DESC
+            LIMIT ?`)
+          .all(key, bound.startedMs, bound.reqId, size + 1)) as RequestDbRow[];
+    }
+    return (bound === null
+      ? store.read.query<RequestDbRow, [string, number]>(`
+          SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
+          ${DERIVED_JOIN('g', 'd', 'r')}
+          WHERE r.conv_key = ?
+          ORDER BY r.started_ms ASC, r.req_id ASC
+          LIMIT ?`)
+        .all(key, size + 1)
+      : store.read.query<RequestDbRow, [string, number, number, number]>(`
+          SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
+          ${DERIVED_JOIN('g', 'd', 'r')}
+          WHERE r.conv_key = ? AND (r.started_ms, r.req_id) > (?, ?)
+          ORDER BY r.started_ms ASC, r.req_id ASC
+          LIMIT ?`)
+        .all(key, bound.startedMs, bound.reqId, size + 1)) as RequestDbRow[];
+  })() as RequestDbRow[];
 
+  // older 先按 DESC 取页，再反转成正序返回；游标编码本页最早行，下一页严格小于它。
   const page = rows.slice(0, size);
+  if (direction === 'older') page.reverse();
   const items = page.map(row => ({
     ...projectRow(row).safe, conv_key: row.conv_key ?? key,
   }));
-  const last = page[page.length - 1];
-  const nextCursor = rows.length > size && last !== undefined
-    ? encodeCursor([last.started_ms, last.req_id])
+  const cursorRow = direction === 'older' ? page[0] : page[page.length - 1];
+  const nextCursor = rows.length > size && cursorRow !== undefined
+    ? direction === 'older'
+      ? encodeCursor(['older', key, cursorRow.started_ms, cursorRow.req_id])
+      : encodeCursor([cursorRow.started_ms, cursorRow.req_id])
     : null;
   return { items, next_cursor: nextCursor };
 }

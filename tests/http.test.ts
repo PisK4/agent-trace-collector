@@ -390,3 +390,41 @@ test('认证统计入口返回计数与启动时间，未认证返回 401', asyn
     expect(Object.keys(body).sort()).toContain('event_loop');
   } finally { f.close(); }
 });
+
+test('older 分页方向经 HTTP 校验，未知方向与游标混用返回 400', async () => {
+  const f = fixture();
+  try {
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
+    const key = encodeURIComponent(JSON.stringify(['session', 'older-http']));
+    seedRequests(f.store, JSON.stringify(['session', 'older-http']), 4, true);
+    const make = (query: string) => new Request(
+      `http://127.0.0.1:8320/api/sessions/${key}/requests${query}`,
+      { headers: { host: '127.0.0.1:8320', 'sec-fetch-site': 'same-origin' } });
+    // 最近窗口：无游标 older 取最近一页，返回正序。
+    const first = await handler(make('?direction=older&limit=3'));
+    expect(first.status).toBe(200);
+    const body = await first.json();
+    expect(body.items.map((r: { req_id: number }) => r.req_id)).toEqual([2, 3, 4]);
+    expect(body.next_cursor).toBeTruthy();
+    // 未知方向不静默忽略。
+    const bad = await handler(make('?direction=newest'));
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: 'invalid_direction' });
+    // forward 旧二元游标不能混用于 older。
+    const forwardCursor = Buffer.from(JSON.stringify([1_700_000_000_000, 2]), 'utf8').toString('base64url');
+    const mixed = await handler(make('?direction=older&cursor=' + encodeURIComponent(forwardCursor)));
+    expect(mixed.status).toBe(400);
+    // 其它会话的 older 游标拒绝。
+    const otherSession = await handler(make('?direction=older&limit=2'));
+    const otherCursor = (await otherSession.json()).next_cursor as string;
+    const otherKey = encodeURIComponent(JSON.stringify(['session', 'another']));
+    const stolen = await handler(new Request(
+      `http://127.0.0.1:8320/api/sessions/${otherKey}/requests?direction=older&cursor=${encodeURIComponent(otherCursor)}`,
+      { headers: { host: '127.0.0.1:8320', 'sec-fetch-site': 'same-origin' } }));
+    expect(stolen.status).toBe(400);
+    // 非法 limit 与非安全整数游标。
+    expect((await handler(make('?direction=older&limit=0'))).status).toBe(400);
+    const badCursor = Buffer.from(JSON.stringify(['older', JSON.stringify(['session', 'older-http']), 1.5, 1]), 'utf8').toString('base64url');
+    expect((await handler(make('?direction=older&cursor=' + encodeURIComponent(badCursor)))).status).toBe(400);
+  } finally { f.close(); }
+});
