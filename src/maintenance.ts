@@ -9,7 +9,8 @@ import {
 import { dirname, join } from 'node:path';
 import { openStore } from './store';
 import type { Store } from './store';
-import { drainDerive, rebuildDerived } from './derive';
+import { rebuildDerived } from './derive';
+import { drainDeriveEntry } from './derive-slice';
 import { upgradePurposeTargetTx } from './request-purpose';
 import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
 import { readLocalSecret, saltId } from './config';
@@ -778,14 +779,14 @@ export async function runMaintenance(argv: string[], io: {
         // 排进用途阶段，再按当前规则重算；普通 tick 不碰已结算的 clean 行。
         const purposeUpgraded = store.write(db => upgradePurposeTargetTx(db, session));
         const report = rebuildDerived(store, session);
-        let drained: ReturnType<typeof drainDerive>;
+        let drained: ReturnType<typeof drainDeriveEntry>;
         let recomputedRequests = 0;
         let retainedRequests = 0;
         let purposeProcessed = 0;
         // 只排空目标会话：其它会话的积压留给它自己的维护窗口。
         // 两个阶段都要排空：组没算完是积压，请求用途没判完也是——组的输入依赖用途。
         do {
-          drained = drainDerive(store, 100, { convKey: session });
+          drained = drainDeriveEntry(store, 100, { convKey: session });
           recomputedRequests += drained.recomputed;
           retainedRequests += drained.retained;
           purposeProcessed += drained.purpose_processed;

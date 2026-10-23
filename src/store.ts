@@ -1,15 +1,25 @@
 import { Database } from 'bun:sqlite';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { SliceRuntime } from './derive-slice';
 
 export type WriteStats = { count: number; total_ms: number; max_ms: number };
 
 export type Store = {
+  /** 库文件路径。切片路径要按它量 WAL 增长，不再从配置里拼一次。 */
+  path: string;
   db: Database;
   read: Database;
   write<T>(fn: (db: Database) => T): T;
   /** 进程内所有写事务的累计计时；失败与回滚同样计数。 */
   writeStats: WriteStats;
+  /**
+   * 派生按哪条路径跑：设了就是切片，没设就是同步。
+   *
+   * 模式的落点只有这一个字段，预算也在里面：分成"模式标志 + 预算 + 路径"三个
+   * 字段存，运行期迟早会出现三者互相不一致的组合。
+   */
+  deriveRuntime?: SliceRuntime;
   close(): void;
 };
 
@@ -113,6 +123,7 @@ export function openStore(path: string): Store {
   };
 
   return {
+    path,
     db,
     read,
     write,

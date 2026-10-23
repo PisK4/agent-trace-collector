@@ -1,14 +1,16 @@
 import { expect, test } from 'bun:test';
+import { join } from 'node:path';
 import { fixture, seedChain, seedRequest, SEED_GROUP } from './fixtures';
 import type { ChainSeed } from './fixtures';
 import { persistBody } from '../src/body';
-import { drainDeriveTx } from '../src/derive';
+import { drainDeriveTx, enqueueDerive } from '../src/derive';
+import { GROUP_ALGORITHM } from '../src/derive-state';
 import {
   DEFAULT_DERIVE_BUDGET, DERIVE_ALGORITHM, beginGeneration, discardGeneration,
-  publishGeneration, readEffectiveGroup, recoverSlice, sliceRequestsStage, sliceRolesStage,
-  sliceToolsStage,
+  drainDeriveEntry, publishGeneration, readEffectiveGroup, recoverSlice, sliceGroupStep,
+  sliceRequestsStage, sliceRolesStage, sliceSummaryStage, sliceToolsStage, sliceReadyStage,
 } from '../src/derive-slice';
-import type { SliceStep } from '../src/derive-slice';
+import type { SliceRuntime, SliceStep } from '../src/derive-slice';
 
 function seedGroup(f: ReturnType<typeof fixture>): void {
   f.store.write(db => {
@@ -153,8 +155,8 @@ test('丢弃已发布代际时不动结果，也不清发布指针', () => {
   } finally { f.close(); }
 });
 /**
- * 切片模式下组变脏时要标的是切片算法号，而正文写入造出的队列行带的是同步号。
- * 这一步是 Task 18 要补的布线，这里先手动切过来。
+ * 阶段级测试直接调阶段函数，绕开了调度入口的算法号归一；这里把队列行补成
+ * 切片算法号，让 `beginGeneration` 的认领校验能过。
  */
 function switchToSliceAlgorithm(f: ReturnType<typeof fixture>): void {
   f.store.write(db => db.run(
@@ -567,5 +569,324 @@ test('确定增量的工具结果被配成resolved', () => {
     expect(f.store.read.query<{ confirmed: number }, [string]>(`SELECT confirmed
       FROM derive_result_work WHERE generation=? AND req_id=2`).get(generation))
       .toEqual({ confirmed: 1 });
+  } finally { f.close(); }
+});
+
+// ---------------------------------------------------------------------------
+// 完成、发布、磁盘预算与失效回收（Task 18）。
+// ---------------------------------------------------------------------------
+
+const PRESENTATION_COLUMNS =
+  'title,title_source,input_preview,input_preview_kind,reply_preview';
+
+type PresentationRow = {
+  req_id: number; title: string | null; title_source: string | null;
+  input_preview: string | null; input_preview_kind: string | null;
+  reply_preview: string | null;
+};
+
+function sliceRuntime(f: ReturnType<typeof fixture>,
+  budget: typeof DEFAULT_DERIVE_BUDGET = DEFAULT_DERIVE_BUDGET): SliceRuntime {
+  return { budget, dataDir: f.dir, dbPath: join(f.dir, 'trace.db') };
+}
+
+/** 一笔真实正文的工具往返，用途冻结：第 1 笔发起调用，第 2 笔的输入里回传结果。 */
+function seedToolRoundTrip(f: ReturnType<typeof fixture>): void {
+  seedRequest(f.store, [
+    { req_id: 1, started_ms: 100, sort_source: 'ledger', sort_key: 'ledger|0000' },
+    { req_id: 2, started_ms: 200, sort_source: 'ledger', sort_key: 'ledger|0001' },
+  ]);
+  persistBody(f.store, 1, {
+    protocol: 'anthropic',
+    request: { messages: [{ role: 'user', content: [{ type: 'text', text: '读一下' }] }] },
+    reply: { content: [{ type: 'tool_use', id: 'call-1', name: 'read' }] },
+    redact_version: 1,
+  });
+  persistBody(f.store, 2, {
+    protocol: 'anthropic',
+    request: { messages: [
+      { role: 'user', content: [{ type: 'text', text: '读一下' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'call-1', name: 'read' }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'file body' }] },
+    ] },
+    reply: { content: [{ type: 'text', text: 'done' }] },
+    redact_version: 1,
+  });
+  // 正文写入会把请求重新标成待判定；这两笔的用途就是种下的这些。
+  f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE conv_key=? AND actor=?',
+    [SEED_GROUP.convKey, SEED_GROUP.actor]));
+  enqueueDerive(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, '');
+}
+
+test('摘要阶段与同步路径给出同一套标题与摘录，随后发布', () => {
+  const slice = fixture();
+  const sync = fixture();
+  try {
+    seedToolRoundTrip(slice);
+    seedToolRoundTrip(sync);
+    // 对照就是同步入口在同一组输入上的结果，不手写期望值。
+    sync.store.write(db => drainDeriveTx(db, { limit: 10 }));
+    const oracle = sync.store.read.query<PresentationRow, [string, string]>(`
+      SELECT req_id,${PRESENTATION_COLUMNS} FROM request
+      WHERE conv_key=? AND actor=? ORDER BY req_id`).all(SEED_GROUP.convKey, SEED_GROUP.actor);
+
+    switchToSliceAlgorithm(slice);
+    const generation = beginGeneration(slice.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    runStage(slice, generation, sliceRequestsStage);
+    runStage(slice, generation, sliceRolesStage);
+    expect(runStage(slice, generation, sliceToolsStage).stage).toBe('summary');
+    expect(runStage(slice, generation, sliceSummaryStage).stage).toBe('ready');
+    const staged = slice.store.read.query<PresentationRow, [string]>(`
+      SELECT req_id,${PRESENTATION_COLUMNS} FROM derive_request_result
+      WHERE generation=? ORDER BY req_id`).all(generation);
+    expect(staged).toEqual(oracle);
+    // 工具往返那一笔的输入里没有用户文本：摘录照实说这一轮回传了什么工具结果，
+    // 名字取自本代已确认的关联（按 ord 与 path 精确定位），不是内容兜底。
+    expect(staged[1]).toMatchObject({ input_preview_kind: 'tool_result' });
+    expect(staged[1]!.input_preview).toBe('工具结果 · read');
+
+    expect(sliceReadyStage(slice.store, generation, DEFAULT_DERIVE_BUDGET, 20,
+      join(slice.dir, 'trace.db')).status).toBe('published');
+    expect(slice.store.read.query('SELECT * FROM derive_queue').get())
+      .toMatchObject({ state: 'clean', published_generation: generation });
+    // 构建期的祖先台账与扫描状态发布后不再留着。
+    expect(slice.store.read.query('SELECT COUNT(*) AS n FROM derive_chain_work WHERE generation=?')
+      .get(generation)).toEqual({ n: 0 });
+    expect(slice.store.read.query('SELECT COUNT(*) AS n FROM derive_role_work WHERE generation=?')
+      .get(generation)).toEqual({ n: 0 });
+  } finally { slice.close(); sync.close(); }
+});
+
+test('排除用途的行不从用户增量取标题', () => {
+  const run = (modelTitle: string | null) => {
+    const f = fixture();
+    try {
+      f.store.write(db => {
+        db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+          body_state,derive_version,have,created_at,updated_at,title,title_source,
+          input_epoch,input_revision,purpose_revision,purpose_version,purpose_chain,req_kind,
+          model_title,model_served)
+          VALUES (1,'c','a','known',100,'2026-10-22','hook','available',0,1,1,1,
+            '旁路旧标题','user_delta','e1',1,11,1,'exclude','chat',?,'模型X')`, [modelTitle]);
+        db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,input_revision,
+          published_revision,target_algorithm,state,dirty_since_ms)
+          VALUES ('c','a','','g1',1,0,5,'dirty',1)`);
+      });
+      persistBody(f.store, 1, {
+        protocol: 'anthropic',
+        request: { messages: [{ role: 'user', content: [{ type: 'text', text: '用户增量标题' }] }] },
+        reply: { id: 'msg_1', content: [{ type: 'text', text: 'ok' }] },
+        redact_version: 1,
+      });
+      const generation = beginGeneration(f.store, 'c', 'a', 10)!;
+      f.store.write(db => {
+        // 正常流程里 aux 行由匹配阶段给出 delta=null，走不到 delta 分支；
+        // 这里直接写非空 delta，专门触发 delta 分支里的 aux 判据。
+        db.run(`INSERT INTO derive_request_result(generation,req_id,input_epoch,input_revision,
+          started_ms,traversal_ord,purpose_revision,purpose_version,chain_role,delta_ordinals,
+          algorithm,retention_state,basis_json)
+          VALUES (?,1,'e1',1,100,0,11,1,'aux','[0]',5,'recomputed','{}')`, [generation]);
+        db.run(`UPDATE derive_generation SET stage='summary',summary_cursor_ord=-1,
+          request_count=1 WHERE generation=?`, [generation]);
+      });
+      const step = runStage(f, generation, sliceSummaryStage);
+      expect(step.stage).toBe('ready');
+      return f.store.read.query<PresentationRow & { title_source: string }, [string]>(`
+        SELECT title,title_source,input_preview,input_preview_kind
+        FROM derive_request_result WHERE generation=? AND req_id=1`).get(generation);
+    } finally { f.close(); }
+  };
+  // model_title 为空：标题保持时间兜底，不写由用户增量推导的标题，也不沿用库里旧标题。
+  const plain = run(null)!;
+  expect(plain.title_source).toBe('model_time');
+  expect(plain.title).not.toContain('用户增量标题');
+  expect(plain.title).not.toBe('旁路旧标题');
+  // 输入摘录仍走同一 delta 分支，不显示成标题请求。
+  expect(plain.input_preview_kind).toBe('delta');
+  expect(plain.input_preview).toContain('用户增量标题');
+  // model_title 存在：保持模型标题来源，同样不取用户增量。
+  const titled = run('模型标题')!;
+  expect(titled).toMatchObject({ title: '模型标题', title_source: 'model_title' });
+  expect(titled.title).not.toContain('用户增量标题');
+});
+
+test('组修订在阶段间变化时丢弃代际', () => {
+  const f = fixture();
+  try {
+    seedGroup(f);
+    const generation = beginGeneration(f.store, 'c', 'a', 10)!;
+    // 代际停在角色阶段：这一步要看的是阶段开头的修订校验。
+    f.store.write(db => db.run(`UPDATE derive_generation SET stage='roles' WHERE generation=?`,
+      [generation]));
+    f.store.write(db => db.run(`UPDATE derive_queue SET input_revision=8
+      WHERE conv_key='c' AND actor='a'`));
+    const step = sliceRolesStage(f.store, generation, DEFAULT_DERIVE_BUDGET, 20);
+    expect(step.status).toBe('discarded');
+    expect((f.store.read.query('SELECT * FROM derive_queue').get() as any).published_generation)
+      .toBeNull();
+    expect(f.store.read.query('SELECT state FROM derive_generation WHERE generation=?')
+      .get(generation)).toEqual({ state: 'discarded' });
+  } finally { f.close(); }
+});
+
+test('暂存超预算丢弃整代', () => {
+  const f = fixture();
+  try {
+    seedGroup(f);
+    const generation = beginGeneration(f.store, 'c', 'a', 10)!;
+    seedResult(f, generation, 'budget title');
+    f.store.write(db => db.run(`UPDATE derive_generation SET stage='ready',request_count=1,
+      staged_bytes=? WHERE generation=?`,
+    [DEFAULT_DERIVE_BUDGET.maxStagedBytes + 1, generation]));
+    const step = sliceReadyStage(f.store, generation,
+      { ...DEFAULT_DERIVE_BUDGET, maxStagedBytes: 1 }, 20, join(f.dir, 'trace.db'));
+    expect(step.status).toBe('discarded');
+    expect(f.store.read.query('SELECT state FROM derive_generation WHERE generation=?')
+      .get(generation)).toEqual({ state: 'discarded' });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_request_result WHERE generation=?')
+      .get(generation)).toEqual({ n: 0 });
+  } finally { f.close(); }
+});
+
+test('覆盖不全的代际不发布', () => {
+  const f = fixture();
+  try {
+    seedGroup(f);
+    const generation = beginGeneration(f.store, 'c', 'a', 10)!;
+    seedResult(f, generation, 'covered title');
+    // 组里又多了一笔已知请求，而这一代里没有它：整代作废，指针不动。
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+        body_state,derive_version,have,created_at,updated_at,input_epoch,input_revision,
+        purpose_revision,purpose_version,req_kind)
+        VALUES (2,'c','a','known',200,'2026-10-22','hook','available',0,1,1,1,'e1',7,11,3,'chat')`);
+      db.run(`UPDATE derive_generation SET stage='ready',request_count=1 WHERE generation=?`,
+        [generation]);
+    });
+    const step = sliceReadyStage(f.store, generation, DEFAULT_DERIVE_BUDGET, 20,
+      join(f.dir, 'trace.db'));
+    expect(step.status).toBe('discarded');
+    expect((f.store.read.query('SELECT * FROM derive_queue').get() as any).published_generation)
+      .toBeNull();
+  } finally { f.close(); }
+});
+
+test('发布回收超过上限的退役代，最近两代结果留着', () => {
+  const f = fixture();
+  try {
+    seedGroup(f);
+    const published: string[] = [];
+    for (let round = 0; round < 4; round++) {
+      if (round > 0) {
+        f.store.write(db => db.run(`UPDATE derive_queue SET state='dirty',input_revision=?,
+          dirty_since_ms=? WHERE conv_key='c' AND actor='a'`, [7 + round, 100 + round]));
+      }
+      const generation = beginGeneration(f.store, 'c', 'a', 1000 + round)!;
+      seedResult(f, generation, `title ${round}`);
+      f.store.write(db => db.run(`UPDATE derive_generation SET stage='ready',request_count=1
+        WHERE generation=?`, [generation]));
+      expect(sliceReadyStage(f.store, generation, DEFAULT_DERIVE_BUDGET, 1000 + round,
+        join(f.dir, 'trace.db')).status).toBe('published');
+      published.push(generation);
+    }
+    // 上限是 2：最旧那一代连同结果行一起回收，指针仍指向最新一代。
+    const kept = f.store.read.query<{ generation: string; state: string }, []>(
+      'SELECT generation,state FROM derive_generation ORDER BY published_at').all();
+    expect(kept.map(row => row.generation)).toEqual(published.slice(1));
+    expect(kept.map(row => row.state)).toEqual(['retired', 'retired', 'published']);
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_request_result WHERE generation=?')
+      .get(published[0])).toEqual({ n: 0 });
+    expect((f.store.read.query('SELECT * FROM derive_queue').get() as any).published_generation)
+      .toBe(published[3]);
+  } finally { f.close(); }
+});
+
+test('多个dirty组按last_claimed轮转', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => {
+      for (const [actor, key] of [['a', 'c1'], ['b', 'c2']] as const) {
+        db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+          body_state,derive_version,have,created_at,updated_at,input_epoch,input_revision,
+          purpose_revision,purpose_version,purpose_pending,req_kind)
+          VALUES (?,?,?,'known',1,'2026-10-22','hook','pending',0,1,1,1,'e1',1,0,1,0,'chat')`,
+        [actor === 'a' ? 1 : 2, key, actor]);
+        db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,input_revision,
+          published_revision,target_algorithm,state,dirty_since_ms)
+          VALUES (?,?,'','g1',1,0,5,'dirty',1)`, [key, actor]);
+      }
+    });
+    const runtime = sliceRuntime(f);
+    expect(sliceGroupStep(f.store, runtime, 1000).status).not.toBe('idle');
+    expect(sliceGroupStep(f.store, runtime, 1001).status).not.toBe('idle');
+    expect(f.store.read.query(`SELECT DISTINCT actor FROM derive_queue
+      WHERE last_claimed_ms IS NOT NULL ORDER BY actor`).all())
+      .toEqual([{ actor: 'a' }, { actor: 'b' }]);
+  } finally { f.close(); }
+});
+
+test('组里还有待判定用途时不认领，认领时把算法号归一到切片', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, [
+      { req_id: 1, started_ms: 100, sort_source: 'ledger', sort_key: 'ledger|0000' },
+    ], { convKey: 'c', actor: 'a' });
+    // 入队路径写下的目标算法号是同步的；用途还没结算。
+    enqueueDerive(f.store, 'c', 'a', '');
+    const runtime = sliceRuntime(f);
+    expect(f.store.read.query<{ target_algorithm: number }, []>(
+      'SELECT target_algorithm FROM derive_queue').get())
+      .toEqual({ target_algorithm: GROUP_ALGORITHM });
+    expect(sliceGroupStep(f.store, runtime, 1000).status).toBe('idle');
+    expect(f.store.read.query<{ compute_generation: string | null }, []>(
+      'SELECT compute_generation FROM derive_queue').get()).toEqual({ compute_generation: null });
+
+    // 用途结算之后同一组就能认领，队列行的算法号在认领时归一到切片号。
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0'));
+    expect(sliceGroupStep(f.store, runtime, 1001).status).toBe('advanced');
+    expect(f.store.read.query<{ target_algorithm: number; compute_generation: string | null }, []>(
+      'SELECT target_algorithm,compute_generation FROM derive_queue').get())
+      .toMatchObject({ target_algorithm: DERIVE_ALGORITHM });
+  } finally { f.close(); }
+});
+
+test('切片入口分批推进到发布，没有运行时的库走同步路径', () => {
+  const f = fixture();
+  try {
+    seedToolRoundTrip(f);
+    f.store.deriveRuntime = sliceRuntime(f, { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 1,
+      maxWritesPerBatch: 1, maxStageBatchMs: 1 });
+    // 队列行由正文写入与入队路径造出，带的是同步算法号。
+    expect(f.store.read.query<{ target_algorithm: number }, []>(
+      'SELECT target_algorithm FROM derive_queue').get())
+      .toEqual({ target_algorithm: GROUP_ALGORITHM });
+    for (let index = 0; index < 200; index++) {
+      const result = drainDeriveEntry(f.store, 1);
+      expect(result).toMatchObject({ processed: 1, discarded: 0 });
+      if (result.remaining === 0) break;
+    }
+    const queue = f.store.read.query('SELECT * FROM derive_queue').get() as Record<string, unknown>;
+    expect(queue).toMatchObject({ state: 'clean', target_algorithm: DERIVE_ALGORITHM,
+      published_algorithm: DERIVE_ALGORITHM });
+    expect(queue.published_revision).toBe(queue.input_revision);
+    const rows = f.store.read.query<{ req_id: number; prev_relation: string; chain_role: string;
+      input_preview: string | null; input_preview_kind: string | null }, [string]>(`
+      SELECT req_id,prev_relation,chain_role,input_preview,input_preview_kind
+      FROM derive_request_result WHERE generation=? ORDER BY req_id`)
+      .all(String(queue.published_generation));
+    expect(rows[0]).toMatchObject({ req_id: 1, prev_relation: 'first', chain_role: 'main' });
+    expect(rows[1]).toMatchObject({ req_id: 2, prev_relation: 'confirmed', chain_role: 'main',
+      input_preview_kind: 'tool_result' });
+
+    // 没有切片运行时的库：同一入口落到同步分支，结果照旧写回 request 行。
+    f.store.deriveRuntime = undefined;
+    enqueueDerive(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, '');
+    // 同步入口的 `processed` 是请求数，切片入口是阶段步数；两边都恒为 0 的是丢弃数。
+    expect(drainDeriveEntry(f.store, 10)).toMatchObject({
+      processed: 2, remaining: 0, discarded: 0, purpose_remaining: 0, recomputed: 2,
+    });
+    expect(f.store.read.query<{ prev_relation: string }, [number]>(
+      'SELECT prev_relation FROM request WHERE req_id=2').get(2))
+      .toEqual({ prev_relation: 'confirmed' });
   } finally { f.close(); }
 });

@@ -4,6 +4,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Store } from './store';
+import type { DeriveBudget } from './derive-slice';
 
 export type Config = {
   dataDir: string;
@@ -17,6 +18,11 @@ export type Config = {
   gatewayTimeoutMs: number;
   /** 容量实验用的作业间隔；生产配置不设置，缺省沿用各作业常量。 */
   intervals?: Partial<Record<IntervalKey, number>>;
+  /**
+   * 派生预算。设了就说明这个进程按切片路径派生；生产 `loadConfig` 不设置它，
+   * 只有容量实验与显式启用切片的入口注入。
+   */
+  deriveBudget?: DeriveBudget;
 };
 
 const INTERVAL_KEYS = ['ledger', 'route', 'cost', 'probe', 'pending', 'derive', 'retention', 'rawPrune', 'gap'] as const;
