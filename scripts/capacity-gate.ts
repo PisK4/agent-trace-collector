@@ -71,8 +71,14 @@ export type ScenarioReport = {
     failed: number;
     /** 页面读取轮询的非 2xx 或网络失败次数；非零时报告不能算通过。 */
     query_failed: number;
-    /** 突发场景的并发峰值；其余场景省略。 */
-    concurrency_peak?: number;
+    /** 按计划发出的请求数（含 burst 的重放）。 */
+    launched: number;
+    /** 到点的刻度数：计划速率乘实际时长。 */
+    ticks_scheduled: number;
+    /** 到点却因在途上限已满而没发出的刻度数；非零说明计划速率没被真正施加上去。 */
+    ticks_dropped: number;
+    /** 在途请求峰值；贴住 `config.concurrency` 说明负载端自己成了瓶颈。 */
+    in_flight_peak: number;
     hook_latency: DurationSummary;
     query_latency: DurationSummary;
   };

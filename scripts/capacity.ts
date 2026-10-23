@@ -58,7 +58,7 @@ export function scenarioPlan(name: ScenarioName, options: PlanOptions): Scenario
     case 'baseline-1rps':
       return { durationMs: options.durationMs ?? long, rps: 1, bodyMix: [350 * 1024, 2 * 1024 * 1024], concurrency: 1, requestBytes: 0, replyBytes: [1024, 64 * 1024], sessions: 20, readerIntervalMs: 500 };
     case 'baseline-5rps':
-      return { durationMs: options.durationMs ?? long, rps: 5, bodyMix: [350 * 1024, 2 * 1024 * 1024], concurrency: 1, requestBytes: 0, replyBytes: [1024, 64 * 1024], sessions: 20, readerIntervalMs: 500 };
+      return { durationMs: options.durationMs ?? long, rps: 5, bodyMix: [350 * 1024, 2 * 1024 * 1024], concurrency: 4, requestBytes: 0, replyBytes: [1024, 64 * 1024], sessions: 20, readerIntervalMs: 500 };
     case 'burst':
       return { durationMs: options.durationMs ?? 30_000, rps: 0, bodyMix: [4 * 1024 * 1024], concurrency: 10, requestBytes: 4 * 1024 * 1024, replyBytes: [1024, 64 * 1024, 512 * 1024, 2 * 1024 * 1024], sessions: 4, readerIntervalMs: 500 };
     case 'long': {
@@ -76,6 +76,24 @@ export function scenarioPlan(name: ScenarioName, options: PlanOptions): Scenario
     default:
       throw new Error('capacity_scenario_requires_subcommand');
   }
+}
+
+/**
+ * 计划在 `durationMs` 里到点的刻度数。负载端按这个数发请求，
+ * 少发的部分必须出现在报告里，不能被"等响应再睡"悄悄吞掉。
+ */
+export function scheduledTicks(durationMs: number, rps: number): number {
+  if (!(durationMs > 0) || !(rps > 0)) return 0;
+  return Math.ceil((durationMs * rps) / 1_000);
+}
+
+/** 计划速率没被真正发出去时的缺口标记：守恒为真只说明发出去的那部分收敛了。 */
+export function offeredShortfall(client: {
+  launched: number; ticks_scheduled: number; ticks_dropped: number;
+}): string[] {
+  return client.ticks_dropped > 0
+    ? [`offered:${client.launched}<${client.ticks_scheduled}`]
+    : [];
 }
 
 export type Args = {
@@ -258,9 +276,24 @@ export function createPeakTracker(): PeakTracker {
 type ClientCounters = {
   attempts: number; accepted: number; duplicates: number; retried: number;
   failed: number; query_failed: number;
+  /** 按计划发出的请求数（含 burst 的重放）。 */
+  launched: number;
+  /** 到点的刻度数：计划速率乘实际时长。 */
+  ticks_scheduled: number;
+  /** 到点却因在途上限已满而没发出的刻度数。 */
+  ticks_dropped: number;
+  /** 在途请求峰值；贴住上限说明负载端自己成了瓶颈。 */
+  in_flight_peak: number;
 };
 
-type RequestBody = string | (() => ReadableStream<Uint8Array>);
+function newClientCounters(): ClientCounters {
+  return {
+    attempts: 0, accepted: 0, duplicates: 0, retried: 0, failed: 0, query_failed: 0,
+    launched: 0, ticks_scheduled: 0, ticks_dropped: 0, in_flight_peak: 0,
+  };
+}
+
+type RequestBody = string | (() => string | ReadableStream<Uint8Array>);
 
 /**
  * 发一个 hook。429/503 最多重试 8 次，退避 10/20/40/80/160/320/640/1280 ms；
@@ -414,6 +447,7 @@ function buildReport(input: {
     environment: { bun: Bun.version, platform: process.platform, arch: process.arch },
     config: {
       rps: input.plan.rps, sessions: input.plan.sessions, requests: input.plan.requests ?? 0,
+      concurrency: input.plan.concurrency,
       body_budget: input.args.bodyBudget, disk_limit: input.args.diskLimit,
       dataDir: input.root,
     },
@@ -658,6 +692,11 @@ const PEAK_INTERVAL_MS = 1_000;
 /**
  * 按固定速率发合成 hook；账本与路由行先落盘，hook 后到。
  * 页面读取与峰值采样各用一个定时器，失败只计数，不打断负载。
+ *
+ * 刻度按绝对时间推进：落后不补也不顺延，所以"计划发多少"与"实际发多少"
+ * 可以分开记账。等响应再睡（一次只在途一笔）会把速率悄悄降到采集器能承受的水平，
+ * 于是任何档位都"通过"。在途上限取 `plan.concurrency`：宽到负载端自己不是瓶颈，
+ * 又有限到不会把几千个 1 MiB 正文压在内存里；贴住上限会体现在 `ticks_dropped` 上。
  */
 async function runPeriodicLoad(
   handle: CollectorHandle, plan: ScenarioPlan, seed: number,
@@ -665,14 +704,12 @@ async function runPeriodicLoad(
   const hookLatency = new DurationRecorder();
   const queryLatency = new DurationRecorder();
   const peaks = createPeakTracker();
-  const client: ClientCounters = {
-    attempts: 0, accepted: 0, duplicates: 0, retried: 0, failed: 0, query_failed: 0,
-  };
+  const client = newClientCounters();
   const metricsUrl = `${handle.baseUrl}/api/ingest-metrics`;
-  let routeId = 1;
-  let sent = 0;
   const startedAt = Date.now();
-  const stopAt = startedAt + plan.durationMs;
+  const tickMs = plan.rps > 0 ? 1_000 / plan.rps : 0;
+  const limit = Math.max(1, plan.concurrency);
+  const inFlight = new Set<Promise<void>>();
   const readerTimer = plan.readerIntervalMs > 0
     ? setInterval(() => {
       void readOnce(handle.port, handle.readHeaders)
@@ -685,31 +722,41 @@ async function runPeriodicLoad(
       .then(snapshot => peaks.observe(snapshot))
       .catch(() => {});
   }, PEAK_INTERVAL_MS);
+  const launch = (tick: number): void => {
+    const bodyBytes = plan.bodyMix[tick % plan.bodyMix.length] ?? plan.requestBytes;
+    const session = `session-${tick % plan.sessions}`;
+    const routeId = tick + 1;
+    // 由种子与序号生成，重放同一场景时 hook_id 与账本关联可复现。
+    const hookId = `cap-${seed}-${routeId}`;
+    const startedMs = Date.now();
+    const envelope = makeHookEnvelope({
+      hookId, session, routeId, requestBytes: bodyBytes,
+      replyBytes: plan.replyBytes[tick % plan.replyBytes.length]!,
+      bodyOmitted: false, omitReason: null, model: 'synthetic-model', startedMs,
+    });
+    appendFileSync(join(handle.root, 'sources', 'usage.jsonl'), makeLedgerLine({
+      routeId, session, responseId: hookId, startedMs,
+    }));
+    appendRouteLine(handle.root, routeId, session, startedMs);
+    client.launched += 1;
+    client.in_flight_peak = Math.max(client.in_flight_peak, inFlight.size + 1);
+    const done = postWithRetry(
+      `${handle.baseUrl}/hook/ingest`, handle.hookHeaders,
+      () => JSON.stringify(envelope), client, hookLatency,
+    ).then(() => {}).finally(() => { inFlight.delete(done); });
+    inFlight.add(done);
+  };
   try {
-    while (Date.now() < stopAt) {
-      const bodyBytes = plan.bodyMix[sent % plan.bodyMix.length] ?? plan.requestBytes;
-      const session = `session-${sent % plan.sessions}`;
-      // 由种子与序号生成，重放同一场景时 hook_id 与账本关联可复现。
-      const hookId = `cap-${seed}-${routeId}`;
-      const startedMs = Date.now();
-      const envelope = makeHookEnvelope({
-        hookId, session, routeId, requestBytes: bodyBytes,
-        replyBytes: plan.replyBytes[sent % plan.replyBytes.length]!,
-        bodyOmitted: false, omitReason: null, model: 'synthetic-model', startedMs,
-      });
-      appendFileSync(join(handle.root, 'sources', 'usage.jsonl'), makeLedgerLine({
-        routeId, session, responseId: hookId, startedMs,
-      }));
-      appendRouteLine(handle.root, routeId, session, startedMs);
-      const result = await postWithRetry(
-        `${handle.baseUrl}/hook/ingest`, handle.hookHeaders, JSON.stringify(envelope),
-        client, hookLatency,
-      );
-      if (result !== null) sent += 1;
-      routeId += 1;
-      const wait = plan.rps > 0 ? 1000 / plan.rps - (Date.now() - startedMs) : 0;
-      if (wait > 0) await Bun.sleep(wait);
+    for (let tick = 0; tick < scheduledTicks(plan.durationMs, plan.rps); tick += 1) {
+      const tickAt = startedAt + tick * tickMs;
+      const now = Date.now();
+      if (now < tickAt) await Bun.sleep(tickAt - now);
+      client.ticks_scheduled += 1;
+      if (inFlight.size >= limit) client.ticks_dropped += 1;
+      else launch(tick);
     }
+    // 停止投递后等在途响应落定，接受数与时延分布才算完整。
+    await Promise.all([...inFlight]);
   } finally {
     if (readerTimer !== null) clearInterval(readerTimer);
     clearInterval(peakTimer);
@@ -760,6 +807,7 @@ async function runHttpScenario(
     if (final.open_gaps !== 0) {
       conservation.missing.push(`open_gaps:${final.open_gaps}!=0`);
     }
+    conservation.missing.push(...offeredShortfall(load.client));
     const report = buildReport({
       plan: { ...plan, scenario: name, mode: 'baseline', seed: args.seed },
       args, root: handle.root,
@@ -772,6 +820,13 @@ async function runHttpScenario(
       startedAt: load.startedAt, stopAt: load.stopAt,
       notes: [`rss 与存储峰值按 ${PEAK_INTERVAL_MS} ms 采样，共 ${load.peaks.samples} 次（含最终快照）。`],
     });
+    if (load.client.ticks_dropped > 0) {
+      report.notes.push(
+        `计划 ${plan.rps}/s 共 ${load.client.ticks_scheduled} 个刻度，`
+        + `${load.client.ticks_dropped} 个因在途请求已满未发出（在途峰值 ${load.client.in_flight_peak}）；`
+        + '这份报告测的是实际投递速率下的行为，不是计划速率。',
+      );
+    }
     if (options.inspect !== undefined) report.notes.push(...options.inspect(handle.dbPath));
     return report;
   } finally {
@@ -837,9 +892,7 @@ async function runBurst(args: Args): Promise<ScenarioReport> {
   const hookLatency = new DurationRecorder();
   const queryLatency = new DurationRecorder();
   const peaks = createPeakTracker();
-  const client: ClientCounters = {
-    attempts: 0, accepted: 0, duplicates: 0, retried: 0, failed: 0, query_failed: 0,
-  };
+  const client = newClientCounters();
   const startedAt = Date.now();
   let active = 0;
   let concurrencyPeak = 0;
@@ -872,6 +925,8 @@ async function runBurst(args: Args): Promise<ScenarioReport> {
     await Promise.all(bodies.map(async body => {
       active += 1;
       concurrencyPeak = Math.max(concurrencyPeak, active);
+      client.launched += 1;
+      client.in_flight_peak = Math.max(client.in_flight_peak, active);
       try {
         return await postWithRetry(url, handle.hookHeaders, body, client, hookLatency);
       } finally {
@@ -879,6 +934,7 @@ async function runBurst(args: Args): Promise<ScenarioReport> {
       }
     }));
     // 重放第一个 hook_id：服务端应返回 duplicate，唯一计数不增加。
+    client.launched += 1;
     await postWithRetry(url, handle.hookHeaders, JSON.stringify(envelopes[0]!), client, hookLatency);
     const stopAt = Date.now();
     const metricsUrl = `${handle.baseUrl}/api/ingest-metrics`;
@@ -902,6 +958,7 @@ async function runBurst(args: Args): Promise<ScenarioReport> {
     if (final.open_gaps !== 0) {
       conservation.missing.push(`open_gaps:${final.open_gaps}!=0`);
     }
+    conservation.missing.push(...offeredShortfall(client));
     const report = buildReport({
       plan: { ...plan, scenario: 'burst', mode: 'baseline', seed: args.seed },
       args, root: handle.root,
@@ -913,7 +970,6 @@ async function runBurst(args: Args): Promise<ScenarioReport> {
       startedAt, stopAt,
       notes: ['rss 与存储峰值取自并发结束与排空后的两次快照。'],
     });
-    report.client.concurrency_peak = concurrencyPeak;
     if (concurrencyPeak < plan.concurrency) {
       report.notes.push(`burst 并发峰值 ${concurrencyPeak} 低于 ${plan.concurrency}，不能声称已观测满并发。`);
     }
@@ -1038,9 +1094,7 @@ async function runLong(args: Args): Promise<ScenarioReport> {
     const report = buildReport({
       plan: { ...plan, scenario, mode: 'baseline', seed: args.seed },
       args, root,
-      client: {
-        attempts: 0, accepted: 0, duplicates: 0, retried: 0, failed: 0, query_failed: 0,
-      },
+      client: newClientCounters(),
       hookLatency: new DurationRecorder(),
       queryLatency: new DurationRecorder(),
       snapshot,
