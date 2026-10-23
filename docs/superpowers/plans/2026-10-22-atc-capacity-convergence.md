@@ -1696,7 +1696,7 @@ async function runBaseline(name: 'baseline-1rps' | 'baseline-5rps', args: Args):
 
 `postWithRetry` 在 429 和 503 时最多重试 8 次，退避 10、20、40、80、160、320、640、1,280 ms；十笔 4 MiB 并发在单线程采集器上串行排空，短窗口会让最后一笔耗尽重试。只记录状态码与响应中的固定 `error` 字段，不把请求体写进失败记录。不可重试状态码立即计入 `client.failed`，不等最后一次尝试；网络错误与重试耗尽也计入 `client.failed`。
 
-- [ ] **Step 5：实现读取与排空轮询。** `readOnce` 依次请求会话列表、首个会话的请求列表和首条请求的正文页，任一非 2xx 都算读取失败并计入 `client.query_failed`，不能把 401/404 的 JSON 当样本。`pollDrain` 每 100 ms 读统计，直到 `derive_queue.pending_groups === 0` 或超时（`plan.durationMs + 120_000`，调用方显式传入）；超时把 `pending_groups_end` 保留为非零，报告 `ok:false`。
+- [ ] **Step 5：实现读取与排空轮询。** `readOnce` 依次请求会话列表、首个会话的请求列表和首条请求的正文页，任一非 2xx 都算读取失败并计入 `client.query_failed`，不能把 401/404 的 JSON 当样本。`pollDrain` 每 100 ms 读 `/api/ingest-metrics` 与 `/api/stats`，直到 `derive_queue.pending_groups === 0`、`pending_hooks === 0` 且 `open_gaps === 0`，或超时（`plan.durationMs + 120_000`，调用方显式传入）；只等派生队列会让末尾几个还没对账的 hook 多出请求行。超时把 `pending_groups_end` 保留为队列值，`pending_hooks` 与 `open_gaps` 写进 `conservation` 与 `missing`，报告 `ok:false`。
 
 ```ts
 async function readOnce(port: number, headers: Record<string, string>): Promise<number> {
@@ -1900,9 +1900,9 @@ function buildReport(input: {
 }
 ```
 
-- [ ] **Step 6：实现突发、长组、路由与回收场景。** 突发场景使用 `Promise.all` 发 10 个并发，其中第 1 个请求体用分块流延迟 50 ms，保证 `ingesting` 互斥被观测到；重复发送第一个 `hook_id` 一次。长组场景直接 `openStore` 建合成库，调用 `persistBody`、`enqueueDerive`，再 `store.write(db => drainDeriveTx(db,{limit}))`，记录比较次数与解码次数；每写一笔就入队，积压年龄覆盖整个写入阶段。路由场景在同一个采集器上按时序追加、替换 gzip、增加跨午夜文件；回收场景注入 5 秒 retention/raw_prune 与 10 秒 cost 间隔，并预置 8 天前的 raw 行；停止后只读核对预置 raw 行已清空，残量非零时报告 `ok:false`。
+- [ ] **Step 6：实现突发、长组、路由与回收场景。** 突发场景先为十笔请求落账本与路由行，再用 `Promise.all` 发 10 个并发，其中第 1 个请求体用分块流延迟 50 ms，保证 `ingesting` 互斥被观测到；重复发送第一个 `hook_id` 一次。长组场景直接 `openStore` 建合成库，调用 `persistBody`、`enqueueDerive`，再 `store.write(db => drainDeriveTx(db,{limit}))`，记录比较次数与解码次数；每写一笔就入队，积压年龄覆盖整个写入阶段。路由场景在同一个采集器上按时序追加、替换 gzip、增加跨午夜文件；回收场景注入 5 秒 retention/raw_prune 与 10 秒 cost 间隔，并预置 8 天前的 raw 行；停止后只读核对预置 raw 行已清空，残量非零时报告 `ok:false`。
 
-**实现偏差（已按代码校正）。** 报告在最终快照之外按 1 秒采样 rss 与存储峰值（burst 在并发结束与排空后各一次，long 在写入、增量排空、全量重排后各一次），字段为 `rss_peak_bytes`、`storage_peak`、`storage_end`、`peak_samples`，采样次数写进 `notes`；`buildReport` 的 `config` 增加临时 `dataDir`，磁盘总量取 `StorageUsage.total_bytes` 而不是只加 db/wal/temp。`client` 增加 `query_failed`，非零时 `ok:false`。`hook_id` 由 `seed` 与序号生成，不再用随机 UUID，重放同一场景时关联可复现。`scenarioPlan` 对 10,000 笔长组同样要求 `acknowledgeLongRun`，`all`、`--full` 与 600,000 ms 由 `requiresLongRunAck` 统一判定。长组重建后的排空循环补 `processed===0` 的卡死守卫。回收场景在正文峰值低于预算 90% 时写明未触发回收，不把未执行写成通过；用户未显式给 `--body-budget` 时，回收场景把预算压到 4 KiB（且小于盘上限的一半），`all` 中其余场景不受影响。
+**实现偏差（已按代码校正）。** 报告在最终快照之外按 1 秒采样 rss 与存储峰值（burst 在并发结束与排空后各一次，long 在写入、增量排空、全量重排后各一次），字段为 `rss_peak_bytes`、`storage_peak`、`storage_end`、`peak_samples`，采样次数写进 `notes`；`buildReport` 的 `config` 增加临时 `dataDir`，磁盘总量取 `StorageUsage.total_bytes` 而不是只加 db/wal/temp。`client` 增加 `query_failed`，非零时 `ok:false`。`hook_id` 由 `seed` 与序号生成，不再用随机 UUID，重放同一场景时关联可复现。`scenarioPlan` 对 10,000 笔长组同样要求 `acknowledgeLongRun`，`all`、`--full` 与 600,000 ms 由 `requiresLongRunAck` 统一判定。长组重建后的排空循环补 `processed===0` 的卡死守卫。`conservation` 增加 `pending_hooks` 与 `open_gaps`：收敛等待同时读 `/api/stats`，两者非零进 `missing` 并使报告失败；burst 先落账本与路由行，避免留下永不收敛的 `pending_hook`；`long` 直接建库，两者恒为 0。回收场景在正文峰值低于预算 90% 时写明未触发回收，不把未执行写成通过；用户未显式给 `--body-budget` 时，回收场景把预算压到 4 KiB（且小于盘上限的一半），`all` 中其余场景不受影响。
 
 - [ ] **Step 7：运行冒烟。** Run:
 
@@ -1951,7 +1951,7 @@ bun scripts/capacity.ts --scenario baseline-5rps --full --acknowledge-long-run \
   --report /private/tmp/atc-capacity-reports/baseline-5rps.json
 ```
 
-Expected: 每个报告 `duration_ms=600000`；`client.accepted` 分别为 600 与 3000（允许少量请求因重试落在结束边界，报告记录实际值）；`derive.pending_groups_end=0`。正常持续负载不出现 `writer_failed`，`insufficient_storage` 为 0；`busy` 可以有值，负载端重试后应全部接受。若出现 `ok:false`，先修采集器或负载器，不调整预算掩盖。
+Expected: 每个报告 `duration_ms=600000`；`client.accepted` 分别为 600 与 3000（允许少量请求因重试落在结束边界，报告记录实际值）；`derive.pending_groups_end=0`、`conservation.pending_hooks=0`、`conservation.open_gaps=0`，请求行数等于唯一接受数。正常持续负载不出现 `writer_failed`，`insufficient_storage` 为 0；`busy` 可以有值，负载端重试后应全部接受。若出现 `ok:false`，先修采集器或负载器，不调整预算掩盖。
 
 - [ ] **Step 3：运行突发场景。** 10 个并发、4 MiB 请求、不同回复大小、同一 `hook_id` 重复一次。
 

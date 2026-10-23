@@ -333,7 +333,9 @@ function countRows(db: Database, sql: string, params: readonly (string | number)
  * 采集器停止后的守恒核对。evidence 按请求去重：账本与 hook 各留一行证据，
  * 同一个请求上出现两行是正常关联结果，不代表多收了一笔。
  */
-function countConservation(dbPath: string, hookAccepted: number): ScenarioReport['conservation'] {
+function countConservation(
+  dbPath: string, hookAccepted: number,
+): Omit<ScenarioReport['conservation'], 'pending_hooks' | 'open_gaps'> {
   const db = new Database(dbPath, { readonly: true });
   try {
     const rawHook = countRows(db, 'SELECT COUNT(*) AS n FROM raw_hook');
@@ -376,6 +378,10 @@ type DrainPoll = {
   polls: number;
   max_age_ms: number | null;
   pending: number;
+  /** 未收敛的 hook：等账本/路由证据到达后由 pending 对账合并。 */
+  pending_hooks: number;
+  /** 未关闭的来源缺口；非零表示有账本区间还没读进来。 */
+  open_gaps: number;
 };
 
 function buildReport(input: {
@@ -493,22 +499,41 @@ async function readOnce(port: number, headers: Record<string, string>): Promise<
  * 积压年龄优先用 dirty_since_ms；最老请求年龄只作回退观测。
  */
 async function pollDrain(
-  url: string, headers: Record<string, string>, stopAtMs: number, timeoutMs = 120_000,
+  url: string, statsUrl: string, headers: Record<string, string>,
+  stopAtMs: number, timeoutMs = 120_000,
 ): Promise<DrainPoll> {
   const deadline = Date.now() + timeoutMs;
   let polls = 0;
   let maxAge: number | null = null;
+  let pendingHooks = 0;
+  let openGaps = 0;
   for (;;) {
     polls += 1;
     const snapshot = await fetch(url, { headers }).then(response => response.json()) as Snapshot;
+    try {
+      const stats = await fetch(statsUrl, { headers }).then(response => response.json()) as {
+        pending_hooks: number; open_gaps: number;
+      };
+      pendingHooks = stats.pending_hooks;
+      openGaps = stats.open_gaps;
+    } catch {
+      // 统计入口短暂失败不当作收敛；下一次轮询再读。
+    }
     const queue = snapshot.derive_queue;
     const age = queue.oldest_dirty_age_ms ?? queue.oldest_request_age_ms;
     if (age !== null) maxAge = Math.max(maxAge ?? 0, age);
-    if (queue.pending_groups === 0) {
-      return { drain_ms: Date.now() - stopAtMs, polls, max_age_ms: maxAge, pending: 0 };
+    // 队列排空还不够：hook 要等账本/路由证据对账，账本区间要读完，否则请求行数会对不上。
+    if (queue.pending_groups === 0 && pendingHooks === 0 && openGaps === 0) {
+      return {
+        drain_ms: Date.now() - stopAtMs, polls, max_age_ms: maxAge,
+        pending: 0, pending_hooks: 0, open_gaps: 0,
+      };
     }
     if (Date.now() > deadline) {
-      return { drain_ms: null, polls, max_age_ms: maxAge, pending: queue.pending_groups };
+      return {
+        drain_ms: null, polls, max_age_ms: maxAge,
+        pending: queue.pending_groups, pending_hooks: pendingHooks, open_gaps: openGaps,
+      };
     }
     await Bun.sleep(100);
   }
@@ -717,13 +742,24 @@ async function runHttpScenario(
     routeTimer = null;
     const metricsUrl = `${handle.baseUrl}/api/ingest-metrics`;
     const final = await pollDrain(
-      metricsUrl, handle.readHeaders, load.stopAt, plan.durationMs + 120_000,
+      metricsUrl, `${handle.baseUrl}/api/stats`, handle.readHeaders,
+      load.stopAt, plan.durationMs + 120_000,
     );
     const snapshot = await fetchSnapshot(metricsUrl, handle.readHeaders);
     load.peaks.observe(snapshot);
     await handle.stop();
     const uniqueAccepted = load.client.accepted - load.client.duplicates;
-    const conservation = countConservation(handle.dbPath, uniqueAccepted);
+    const conservation = {
+      ...countConservation(handle.dbPath, uniqueAccepted),
+      pending_hooks: final.pending_hooks,
+      open_gaps: final.open_gaps,
+    };
+    if (final.pending_hooks !== 0) {
+      conservation.missing.push(`pending_hooks:${final.pending_hooks}!=0`);
+    }
+    if (final.open_gaps !== 0) {
+      conservation.missing.push(`open_gaps:${final.open_gaps}!=0`);
+    }
     const report = buildReport({
       plan: { ...plan, scenario: name, mode: 'baseline', seed: args.seed },
       args, root: handle.root,
@@ -820,6 +856,15 @@ async function runBurst(args: Args): Promise<ScenarioReport> {
         bodyOmitted: false, omitReason: null, model: 'synthetic-model', startedMs,
       });
     });
+    // 账本与路由行先落盘，和周期场景一样让 hook 有可对账的对象；
+    // 否则每个 hook 都会留下一条永不收敛的 pending_hook。
+    for (const [index, envelope] of envelopes.entries()) {
+      const session = envelope.session ?? `burst-session-${index}`;
+      appendFileSync(join(handle.root, 'sources', 'usage.jsonl'), makeLedgerLine({
+        routeId: index + 1, session, responseId: envelope.hook_id, startedMs: envelope.observed_start_ms,
+      }));
+      appendRouteLine(handle.root, index + 1, session, envelope.observed_start_ms);
+    }
     const bodies: RequestBody[] = envelopes.map((envelope, index) => {
       const json = JSON.stringify(envelope);
       return index === 0 ? delayedBody(json, 50) : json;
@@ -839,13 +884,24 @@ async function runBurst(args: Args): Promise<ScenarioReport> {
     const metricsUrl = `${handle.baseUrl}/api/ingest-metrics`;
     peaks.observe(await fetchSnapshot(metricsUrl, handle.readHeaders));
     const final = await pollDrain(
-      metricsUrl, handle.readHeaders, stopAt, plan.durationMs + 120_000,
+      metricsUrl, `${handle.baseUrl}/api/stats`, handle.readHeaders,
+      stopAt, plan.durationMs + 120_000,
     );
     const snapshot = await fetchSnapshot(metricsUrl, handle.readHeaders);
     peaks.observe(snapshot);
     await handle.stop();
     const uniqueAccepted = client.accepted - client.duplicates;
-    const conservation = countConservation(handle.dbPath, uniqueAccepted);
+    const conservation = {
+      ...countConservation(handle.dbPath, uniqueAccepted),
+      pending_hooks: final.pending_hooks,
+      open_gaps: final.open_gaps,
+    };
+    if (final.pending_hooks !== 0) {
+      conservation.missing.push(`pending_hooks:${final.pending_hooks}!=0`);
+    }
+    if (final.open_gaps !== 0) {
+      conservation.missing.push(`open_gaps:${final.open_gaps}!=0`);
+    }
     const report = buildReport({
       plan: { ...plan, scenario: 'burst', mode: 'baseline', seed: args.seed },
       args, root: handle.root,
@@ -992,10 +1048,11 @@ async function runLong(args: Args): Promise<ScenarioReport> {
       final: {
         drain_ms: drainMs, polls: drainPolls,
         max_age_ms: backlogMaxAge, pending: queue.pending_groups,
+        pending_hooks: 0, open_gaps: 0,
       },
       conservation: {
         hook_accepted: 0, raw_hook_rows: 0, request_rows: requestRows,
-        evidence_rows: 0, route_rows: 0, missing,
+        evidence_rows: 0, route_rows: 0, pending_hooks: 0, open_gaps: 0, missing,
       },
       derive: {
         // 单组前缀比较的迭代次数：0+1+…+(n-1)，是本场景要压的派生成本。

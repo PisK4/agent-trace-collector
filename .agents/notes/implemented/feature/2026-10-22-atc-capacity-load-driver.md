@@ -10,9 +10,9 @@ Status: implemented
 
 `scripts/capacity.ts` 把场景参数集中在 `scenarioPlan`：默认 10 秒，只有 `--full` 才启用 600 秒，且必须同时给 `--acknowledge-long-run`；`requiresLongRunAck` 把 10 分钟、10,000 笔长组与 `all` 收在同一个闸门里；测试只查矩阵，不启动负载。CLI 还接受 `--duration-ms`、`--rps`、`--requests`、`--seed`、`--report`、`--body-budget` 与 `--disk-limit`，所有数值都有上界。
 
-每个 HTTP 场景都建 `mkdtempSync(join(tmpdir(), 'atc-capacity-'))` 新根，起假上游，写 `collector.json`，再用 `scripts/capacity-collector.ts` 在子进程里启动采集器。负载端只在回环端口发请求：先追加账本与路由行，再按种子与序号生成 `hook_id` 并发送；读线程按间隔访问会话、请求与正文页，非 2xx 计入 `client.query_failed` 并使报告失败；另一个 1 秒定时器取 `/api/ingest-metrics` 记录 rss 与存储峰值。停止输入后每 100 ms 读一次队列快照，直到未发布组为 0 或超时（场景时长加 120 秒）；随后取最终快照、停子进程、用只读连接做守恒核对并写报告。`rss_peak_bytes`、`storage_peak`、`peak_samples` 来自这些实际快照，`storage_end` 保留停止后的终值。
+每个 HTTP 场景都建 `mkdtempSync(join(tmpdir(), 'atc-capacity-'))` 新根，起假上游，写 `collector.json`，再用 `scripts/capacity-collector.ts` 在子进程里启动采集器。负载端只在回环端口发请求：先追加账本与路由行，再按种子与序号生成 `hook_id` 并发送；读线程按间隔访问会话、请求与正文页，非 2xx 计入 `client.query_failed` 并使报告失败；另一个 1 秒定时器取 `/api/ingest-metrics` 记录 rss 与存储峰值。停止输入后每 100 ms 读一次队列快照与 `/api/stats`，直到未发布组、`pending_hooks` 与 `open_gaps` 都为 0 或超时（场景时长加 120 秒）；只等派生队列会让末尾几个还没与账本对账的 hook 多出请求行，守恒随即失败。随后取最终快照、停子进程、用只读连接做守恒核对并写报告；`pending_hooks` 与 `open_gaps` 进 `conservation`，非零同时写入 `missing` 并使报告失败。`rss_peak_bytes`、`storage_peak`、`peak_samples` 来自这些实际快照，`storage_end` 保留停止后的终值。
 
-`burst` 同时发 10 个 4 MiB 请求，第一个请求体用分块流延迟 50 ms 以覆盖 `ingesting` 互斥，完成后重放第一个 `hook_id`；429/503 的重试窗口约 2.55 秒，足够单线程采集器把十笔大请求排空，短窗口会让最后一笔耗尽重试。`long` 直接 `openStore` 建临时库，用 `persistBody` 写一笔组内全部请求并逐笔入队，再 `drainDeriveTx`；增量结果与 `rebuildDerived` 后的全量结果各算一次指纹，写进 `full_incremental_equal`。`route` 在同一个采集器上追加路由、把当日文件替换成 gzip、写坏 gzip 后修复，并增加跨午夜文件。`retention` 注入 5 秒 retention/raw_prune 与 10 秒 cost 间隔，预置 8 天前的 raw 行；用户未显式给预算时把正文预算压到 4 KiB 以触发驱逐，停止后只读核对预置 raw 行已清空。
+`burst` 先为十笔请求落好账本与路由行，再同时发 10 个 4 MiB 请求，第一个请求体用分块流延迟 50 ms 以覆盖 `ingesting` 互斥，完成后重放第一个 `hook_id`；没有账本行时 hook 只能留下永不收敛的 `pending_hook`。429/503 的重试窗口约 2.55 秒，足够单线程采集器把十笔大请求排空，短窗口会让最后一笔耗尽重试。`long` 直接 `openStore` 建临时库，用 `persistBody` 写一笔组内全部请求并逐笔入队，再 `drainDeriveTx`；增量结果与 `rebuildDerived` 后的全量结果各算一次指纹，写进 `full_incremental_equal`。`route` 在同一个采集器上追加路由、把当日文件替换成 gzip、写坏 gzip 后修复，并增加跨午夜文件。`retention` 注入 5 秒 retention/raw_prune 与 10 秒 cost 间隔，预置 8 天前的 raw 行；用户未显式给预算时把正文预算压到 4 KiB 以触发驱逐，停止后只读核对预置 raw 行已清空。
 
 报告的字段形状与预算形状只在 `scripts/capacity-gate.ts` 里定义类型，负载端与后续门槛端共用同一份；门槛加载与判定尚未实现。`budget` 与 `calibrate` 子命令只做分发，当前以退出码 2 明确表示未实现。
 
@@ -43,6 +43,8 @@ Status: implemented
 - 正文页按服务端的 `PAGE_MAX` 取一页；计划示例里的 65536 超过上限，只会得到 `invalid_body_range`，量不到正文序列化。
 - 不可重试的 HTTP 失败立即计入 `client.failed`，不等最后一次尝试；重试只留给 429、503 与网络错误，窗口约 2.55 秒。
 - 回收场景默认 4 KiB 正文预算只在用户未显式给 `--body-budget` 时生效；正文峰值低于预算 90% 时报告注明回收未触发，报告仍可能 `ok:true`。
+- `conservation.pending_hooks` 与 `open_gaps` 只在 HTTP 场景可测；`long` 直接建库，两者恒为 0。非零会让报告 `ok:false`，不会静默通过。
+- 停输入后的收敛等待包含账本读取与 hook 对账，通常要多等一个 5 秒读取周期；这段时间计入 `drain_ms`，短场景的 `drain_ms` 因此明显大于派生耗时。
 - `budget` 与 `calibrate` 在 Task 7 前退出 2，不会伪造预算或校准结果。
 - 计划示例测试与 `scenarioPlan` 有三处不一致：`full: true` 的示例没有写 `acknowledgeLongRun`，正文混合写的是 0.35 MiB 而不是代码里的 350 KiB，10,000 笔长组也没有确认；测试按代码取显式确认、350 KiB 与长组闸门。
 
@@ -50,4 +52,4 @@ Status: implemented
 
 `bun test tests/capacity.test.ts`：场景矩阵固定 600 秒/1 rps/350 KiB 与 2 MiB 混合、5 rps、突发 10 并发 4 MiB、长组 2,000 与 10,000 笔，以及未确认长跑被拒；另覆盖 `requiresLongRunAck` 的全场景/10 分钟/长组分支与峰值追踪。`bun run typecheck` 覆盖 CLI、报告与预算类型。
 
-本任务实跑的短场景全部使用临时根与合成正文：smoke 5 秒（10 次接受、`query_failed=0`、峰值采样 6 次）、burst（观察到 `busy>0`，重试后 10 个唯一请求全部 200、重复一次不增加唯一计数）、long 50 笔（`full_incremental_equal=true`、`pending_groups_end=0`）、route 21 秒（`decoded>0`、坏 gzip 产生 `errors`、`unchanged=0`）、retention 12 秒（`raw_prune.count>=1`、预置 raw 行剩余 0、正文峰值高于终值，回收已触发）。10 分钟基线、2,000/10,000 笔长组与 `all` 未在本任务运行。
+本任务实跑的短场景全部使用临时根与合成正文：smoke 5 秒（10 次接受、`query_failed=0`、峰值采样 6 次）、burst（观察到 `busy>0`，重试后 10 个唯一请求全部 200、重复一次不增加唯一计数、`pending_hooks=0`）、baseline-1rps 30 秒（30 次接受、请求行 30、`pending_hooks=0`、`open_gaps=0`）、long 50 笔（`full_incremental_equal=true`、`pending_groups_end=0`）、route 21 秒（`decoded>0`、坏 gzip 产生 `errors`、`unchanged=0`）、retention 12 秒（`raw_prune.count>=1`、预置 raw 行剩余 0、正文峰值高于终值，回收已触发）。10 分钟基线、2,000/10,000 笔长组与 `all` 未在本任务运行。
