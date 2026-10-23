@@ -10,6 +10,7 @@ import {
   admission,
   createAdmissionGate,
   closeSourceGapsTx,
+  enforceBodyBudget,
   evictOldestBodyBatch,
   measureStorage,
   pruneRaw,
@@ -504,6 +505,34 @@ test('回收中途失败整体回滚，不留删了引用没标状态的中间�
     // 回滚后重试应当正常完成，说明事务没留下坏状态。
     expect(evictOldestBodyBatch(f.store, 6000, 10).requests).toBe(2);
     expect(f.store.read.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  } finally {
+    f.close();
+  }
+});
+
+test('预算触顶按批回收并失效准入缓存', () => {
+  const f = fixture();
+  try {
+    let invalidated = 0;
+    // 未触顶：不回收、不动闸门。
+    expect(enforceBodyBudget(f.store, f.dir,
+      { bodyBudget: 10 * MiB, diskLimit: 100 * MiB },
+      { invalidate: () => { invalidated += 1; } })).toBe(0);
+    expect(invalidated).toBe(0);
+    f.store.db.run(
+      "INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,in_tok) VALUES (1,1,'2026-10-19','through','pending',1,7,1,1,10)",
+    );
+    persistBody(f.store, 1, {
+      protocol: 'chat',
+      request: { messages: [{ role: 'user', content: 'over budget payload' }] },
+      reply: { id: 'chatcmpl_demo', choices: [] },
+      redact_version: 1,
+    });
+    expect(enforceBodyBudget(f.store, f.dir, { bodyBudget: 10, diskLimit: 100 * MiB },
+      { invalidate: () => { invalidated += 1; } })).toBe(1);
+    expect(invalidated).toBe(1);
+    expect(f.store.read.query<{ body_state: string }, []>(
+      'SELECT body_state FROM request WHERE req_id=1').get()?.body_state).toBe('evicted');
   } finally {
     f.close();
   }
