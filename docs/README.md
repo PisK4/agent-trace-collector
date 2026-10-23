@@ -10,6 +10,7 @@
 | [magpie-integration-research.md](magpie-integration-research.md) | magpie 0.1.1294 的 Agent 识别、session 与 conv 两套会话标识、四条可接入面及原采集结果；新增研究补充了部分机制边界，见文首说明 |
 | [magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 模型、路由与上下文容量的真实控制流，现成 prompt 分解、classifier、缓存亲和性、尝试与账本、会话续写判定与语义指纹、插件形态及直接集成或借鉴的取舍 |
 | [auto-mode-classifier-research.md](auto-mode-classifier-research.md) | Claude Code auto mode 分类器请求：两条拼接消息、`<block>` 判定、出现频率、页面折叠与派生错位；附未决的识别与呈现选项 |
+| [atc-real-format-research.md](atc-real-format-research.md) | 真实库 v4 归档副本的形状普查：账本、路由、正文与语义层的键名、类型与计数，当前代码对上的键与未采用的读数，归档窗口外的 `conv` 对照与复核 SQL |
 | [agent-request-kind-review.md](agent-request-kind-review.md) | Agent 语义与字段保真联合评审；附请求触发、派生排序与摘要依赖、版本消费者、来源完整性及合成反例 |
 | [architecture-evolution-v2.md](architecture-evolution-v2.md) | 下一轮架构统筹提案：来源完整性、请求级触发、统一派生依赖、破坏式结构替换、阶段依赖与容量验收；具体证据见联合评审 |
 | [architecture-design.md](architecture-design.md) | 收敛型架构设计：账本物理记录身份与增量读取协议、三路证据收敛、SQLite 表结构与正文状态、内容去重与语义指纹、乱序重算、查询接口、正文预算与总磁盘硬上限、版本与形状探针、访问控制、AVA 下线顺序与分步落地判据；文末附两轮评审的逐条对照 |

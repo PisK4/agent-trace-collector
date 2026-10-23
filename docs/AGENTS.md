@@ -13,6 +13,7 @@
 | [architecture-evolution-v2.md](architecture-evolution-v2.md) | 下一轮架构统筹提案：目标职责、依赖、迁移与验收 | 已交付行为、来源证据表的副本 |
 | [magpie-integration-research.md](magpie-integration-research.md)、[magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 对 magpie 机制的研究证据，带锚定版本与证据标签 | 本项目已交付行为的描述 |
 | [auto-mode-classifier-research.md](auto-mode-classifier-research.md) | 对 Claude Code auto mode 分类器请求的研究证据，带采集时间与证据等级 | 本项目已交付行为的权威描述、UI 决策 |
+| [atc-real-format-research.md](atc-real-format-research.md) | 对本机真实库归档的形状研究：键名、类型、计数与窗口对照，带证据等级 | 本项目已交付行为的权威描述、实现步骤 |
 | [operations.md](operations.md) | 运维命令、错误码、备份恢复与 AVA 切换步骤 | 设计 rationale，链接到所属 note |
 | [superpowers/plans/](superpowers/plans/) | 执行计划：步骤、复选框、验收清单 | 常备规则、已交付事实的权威 |
 | [.agents/notes/](../.agents/notes/README.md) | 活跃决策记录：why、放弃了什么、必需的验证 | 迁移计划、验收清单、spec 腔 |
