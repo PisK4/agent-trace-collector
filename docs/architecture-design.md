@@ -901,7 +901,9 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | `published_derive_request` | 已发布代的请求结果行，按组键连接队列指针 |
 | `effective_request` | `request` 行 + 队列状态 + 该组已发布代的结果行，左连接 |
 
-`effective_request` 让一次查询拿到同一代的快照：结果行全部来自 `published_generation` 指向的那一代，不会一半来自旧代、一半来自新代。切片模式下 `request` 上的旧派生列不再被写，它们留在库里的是同步模式算过的那一份，读切片结果不走它们。
+`effective_request` 让一次查询拿到同一代的快照：结果行全部来自 `published_generation` 指向的那一代，不会一半来自旧代、一半来自新代。
+
+读模型还没有迁到这组视图上：`queries.ts` 仍只读 `request` 派生列，`effective_request` 与 `readEffectiveGroup` 只有测试与容量实验在读。切片模式下 `request` 旧派生列不再被写，库里的旧值若恰好满足当前判据，会被读侧当成现行结论。所以在读模型改经 `published_generation` 取结果之前，生产启用路径拒绝切片模式：`startCollector` 见到 `deriveBudget` 即以 `slice_read_unmigrated` 拒绝启动，只有声明实验身份（`capacityExperiment`）的容量采集器能起切片进程。
 
 发布是指针的原子切换，条件在切换前全部校验完：组修订与逐请求修订一致、每笔候选都有结果行、这一代覆盖了全部已知请求、暂存行与 WAL 增长都在预算内。任何一条不成立就丢弃整代（`derive_generation.state='discarded'`，队列行写 `last_error`），指针不动，旧代继续可读。丢弃不是"抛错回滚后的补救"，而是校验结论本身，与校验在同一个事务里提交。
 
