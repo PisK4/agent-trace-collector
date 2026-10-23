@@ -26,13 +26,20 @@ export type FileBatch = {
   issues: FileIssue[];
 };
 
+/** 路由文件的三态：解压成功、指纹已提交所以未变、读取或解压失败。 */
+export type RouteState = 'decoded' | 'unchanged' | 'error';
+
 export type RouteFile = {
   name: string;
   fingerprint: string;
-  lines: string[];
   kind: 'jsonl' | 'gz';
+  state: RouteState;
+  lines: string[];
   error: string | null;
 };
+
+/** 指纹是否已被提交过。命中就跳过解压，调用方不因此推进 cursor。 */
+export type RouteKnown = (name: string, fingerprint: string) => boolean;
 
 const MAX_LINES = 128;
 const BATCH_BYTES = 8 * 1024 * 1024;
@@ -169,42 +176,49 @@ export async function readBatch(path: string, cursor: FileCursor | null): Promis
   }
 }
 
-export async function readRouteFiles(dir: string): Promise<RouteFile[]> {
+export async function readRouteFiles(dir: string, known: RouteKnown = () => false): Promise<RouteFile[]> {
   const names = readdirSync(dir)
     .filter(name => /^\d{4}-\d{2}-\d{2}\.jsonl(?:\.gz)?$/.test(name))
     .sort();
   const files: RouteFile[] = [];
   for (const name of names) {
     const path = join(dir, name);
+    const kind = name.endsWith('.gz') ? 'gz' as const : 'jsonl' as const;
+    let bytes: Buffer;
     try {
       if (!statSync(path).isFile()) continue;
-      const compressed = name.endsWith('.gz');
-      const bytes = readFileSync(path);
-      const fingerprint = createHash('sha256').update(bytes).digest('hex');
-      let text: string;
-      if (compressed) {
-        text = gunzipSync(bytes, { maxOutputLength: 512 * 1024 * 1024 }).toString('utf8');
-      } else {
-        text = bytes.toString('utf8');
-      }
-      const lines = text.split('\n');
-      if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-      files.push({ name, fingerprint, lines, kind: compressed ? 'gz' : 'jsonl', error: null });
+      bytes = readFileSync(path);
     } catch {
-      let fingerprint = '';
-      try {
-        fingerprint = createHash('sha256').update(readFileSync(path)).digest('hex');
-      } catch {
-        // The file may have vanished between readdir and read.
-      }
+      files.push({ name, fingerprint: '', kind, state: 'error', lines: [], error: 'route_file_unreadable' });
+      continue;
+    }
+    // 指纹先于解压：同一份字节只解一次，替换检测也以这次读取的快照为准。
+    const fingerprint = createHash('sha256').update(bytes).digest('hex');
+    if (known(name, fingerprint)) {
+      files.push({ name, fingerprint, kind, state: 'unchanged', lines: [], error: null });
+      continue;
+    }
+    let text: string;
+    try {
+      text = kind === 'gz'
+        ? gunzipSync(bytes, { maxOutputLength: 512 * 1024 * 1024 }).toString('utf8')
+        : bytes.toString('utf8');
+    } catch (error) {
+      // 读取成功但解压失败：指纹照留，调用方据此不推进 cursor，下一轮同指纹重试。
+      const code = (error as NodeJS.ErrnoException).code;
       files.push({
         name,
         fingerprint,
+        kind,
+        state: 'error',
         lines: [],
-        kind: name.endsWith('.gz') ? 'gz' : 'jsonl',
-        error: 'route_file_unreadable',
+        error: code === 'ERR_BUFFER_TOO_LARGE' ? 'route_gzip_limit' : 'route_gzip_invalid',
       });
+      continue;
     }
+    const lines = text.split('\n');
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    files.push({ name, fingerprint, kind, state: 'decoded', lines, error: null });
   }
   return files;
 }
