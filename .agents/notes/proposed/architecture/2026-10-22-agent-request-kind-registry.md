@@ -178,6 +178,8 @@ Title Generator 在 Claude Code 与 OMP 上都能识别，放共享集合；auto
 
 ## 与现有记录的关系
 
+**交付现状。** 用途判定已交付，形状与本文不同：`req_kind` 当稳定 ID、旁路请求写 `chain_role='aux'`、未知值原样保留、正文不可读时保留已存 `req_kind`、标题请求单独写 `model_title`——这些都落地了；判据与依据记在 `purpose_*` 列上（`purpose_version`、`purpose_rule`、`purpose_signals`、`purpose_chain`、`purpose_pending`），不是本文的 `req_feature` 文档加 `req_kind_evidence` 列，见[请求用途与链](../../implemented/architecture/2026-10-22-request-purpose-and-chain.md)与[组发布前处理请求](../../implemented/architecture/2026-10-22-request-work-before-group-publish.md)。页面按 `purpose_chain` 与 `chain_role` 读：本文点名的 `isAuxTitleRequest` 与 `reply_preview.startsWith('标题 · ')` 已经不在，`web/app.js` 里 `prev_relation === 'branch'` 的文案仍在。未建的是注册表机制本身：没有 `src/features/<id>.ts` 的纯匹配器，也没有 Agent Profile 注册入口——新增一个类别仍要改派生代码，本文的「新增一个 RequestKind 的流程」尚未成立。
+
 这篇提案不取代 [Title Generator 与主链分离](../../implemented/feature/2026-10-21-title-generator-and-main-chain.md)。标题请求的识别与主链规则继续以那篇为准；这篇只把它的 `req_kind='title'`、`chain_role='aux'` 扩展成可注册的通用机制。
 
 语义指纹与任意祖先共同前缀、正文不可读请求保持中性这两条规则不变，分别见[语义指纹与任意祖先共同前缀](../../implemented/architecture/2026-10-20-semantic-fingerprint-and-ancestor-predecessor.md)和[正文不可读的请求保持中性](../../implemented/bug-fix/2026-10-21-unreadable-requests-stay-neutral.md)。
