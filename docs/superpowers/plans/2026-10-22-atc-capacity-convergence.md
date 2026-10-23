@@ -4081,6 +4081,13 @@ git commit -m "feat(derive): add generation lifecycle and atomic publish pointer
   -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+**Step 8（执行时的偏差记录）**
+
+1. **`discardGeneration` 拆成两半。** `publishGeneration` 在事务里校验失败时也要丢弃这一代，若直接调用带 `BEGIN IMMEDIATE` 的 `discardGeneration` 就是嵌套事务，`bun:sqlite` 会抛 `cannot start a transaction within a transaction`。因此实现拆成 `discardGenerationTx(db, generation, reason, now)`（调用方已处于事务中）与包一层事务的 `discardGeneration`。两者共用同一段删除逻辑，测试两条路径都覆盖。
+2. **`src/derive.ts` 的 helper 导出、`src/queries.ts` 的接线、`Store.deriveBudget?` 在本任务里没有做。** 这三项都要等到有调用点才有意义：helper 与 `queries.ts` 是 Task 15—17 各阶段要用的，`Store.deriveBudget` 是 Task 18 的 `drainDeriveEntry` 才读的。Task 14 里凭空加出未被引用的导出只会让本模块的接口面先于用途增长。相应地，本任务的测试文件只导入已经存在的符号（`beginGeneration`、`discardGeneration`、`publishGeneration`、`readEffectiveGroup`、`recoverSlice`），不含 `sliceGroupStep`/`slice*Stage`/`drainDeriveTx`；阶段函数在 Task 15—17 落地时，测试再在同一文件里扩展。
+3. **`target_algorithm` 的布线缺口（Task 18/19 必须处理）。** `markGroupDirtyTx` 目前写 `GROUP_ALGORITHM = 1`，而 `beginGeneration` 要求 `target_algorithm === DERIVE_ALGORITHM`（5），否则抛 `derive_algorithm_mismatch`。也就是说切片模式一开，认领就会硬失败。切换算法号的钩子必须在切片模式启用之前接上（组变脏时按运行模式写 `target_algorithm`），否则 `--slice` 的容量场景跑不起来。Task 15 起的所有阶段测试若要端到端跑，也都需要先解决这一点；本任务的测试直接种入 `target_algorithm=5` 的队列行，绕开布线。
+4. **`DEFAULT_DERIVE_BUDGET` 与 `SliceStep` 在 Task 14 里未被使用。** 两者是 Task 15—19 的接口形状，先按计划定义出来（`DeriveBudget` 的字段名就是后面读预算的地方要对齐的），但 `sliceGroupStep` 尚未实现，因此 `SliceStep` 暂无生产者。这是有意的：接口先定死，实现分批填。
+
 ### Task 15：请求、候选与逻辑顺序切片
 
 **Files:**
