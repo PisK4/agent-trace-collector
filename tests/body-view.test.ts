@@ -180,8 +180,24 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
   }));
   expect(tools.map(tool => tool.state)).toEqual(['resolved', 'pending']);
   const html = renderTools(tools);
-  expect(html).toContain('data-tool-result="9"');
-  expect(html).toContain('data-tool-ord="2"');
+  expect(html).toContain(`data-tool-owner="${detail.req_id}"`);
+  expect(html).toContain('data-call-ord="0"');
+  // 两个调用指向同一目标消息的不同内容块：按钮身份仍是各自的调用序号。
+  const twin = toolEntries({ req_id: 42, tool_calls: [
+    { call_id: 'a', ord: 0, tool_name: 'read', result_req: 9, result_ord: 2, result_path: 'request.messages[2].content[0]', state: 'resolved' },
+    { call_id: 'b', ord: 1, tool_name: 'read', result_req: 9, result_ord: 2, result_path: 'request.messages[2].content[1]', state: 'resolved' },
+  ] }, page({
+    reply: { id: 'm', content: [
+      { type: 'tool_use', id: 'a', name: 'read', input: { path: 'a' } },
+      { type: 'tool_use', id: 'b', name: 'read', input: { path: 'b' } },
+    ] },
+  }));
+  const twinHtml = renderTools(twin);
+  expect(twin.filter(t => t.result_path !== null).map(t => t.result_path)).toEqual([
+    'request.messages[2].content[0]', 'request.messages[2].content[1]',
+  ]);
+  expect((twinHtml.match(/data-call-ord="0"/g) ?? []).length).toBe(1);
+  expect((twinHtml.match(/data-call-ord="1"/g) ?? []).length).toBe(1);
   expect(html).toContain('结果位置未确认');
   // 没有配对信息的调用不能冒充已配对。
   const orphan = toolEntries(null, page({ reply: { id: 'm', content: [{ type: 'tool_use', id: 'x', name: 'n', input: {} }] } }));

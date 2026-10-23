@@ -529,7 +529,7 @@ export function renderTraceRows(
 
 ToolEntry保留调用者req_id和result_path；renderTools按钮改为data-tool-owner/data-call-ord，不再按result_req/result_ord反向寻找调用。read=null时是加载/状态记录，不能把请求级input_preview拆成确定用户步骤。`status` 只表达请求级与回复完整性的可见状态，`result` 只表达工具关联；结果正文是否已读由reader-store的缓存和页面状态决定，不写进投影。
 
-- [ ] **Step 1: 写顺序与增量红测。** 测试中定义current detail、meta和消息解释，至少包含旧ord0、真正新增ord2/3，以及text→tool→text回复。两个新增消息分别为text和unrecognized，确保原型遗漏不进入生产。
+- [x] **Step 1: 写顺序与增量红测。** 测试中定义current detail、meta和消息解释，至少包含旧ord0、真正新增ord2/3，以及text→tool→text回复。两个新增消息分别为text和unrecognized，确保原型遗漏不进入生产。
 
 ```ts
 const steps=projectSteps(row,read);
@@ -547,8 +547,8 @@ expect(html).not.toContain('<time');
 
 再测注入/empty/tool_result不是用户、dirty/branch/unknown无确定用户步骤、aux只一个辅助记录、两个不同请求相同call_id键不冲突、纯工具回复、thinking-only、空回复、unsupported、XSS、large参数摘要。状态与关系另测：`row.status=500` 且已有用户与回复步骤时仍有 `status:'failed'` 记录；正文缺失与回复缺失分别产生 `missing_body`/`missing_reply`；Chat `finish_reason='length'` 与 Anthropic `stop_reason='max_tokens'` 产生 `truncated`，请求行仍成功；正常停止不产生 `truncated`；未知停止原因产生 `unknown` 并保留原值；工具步骤带关联状态与结果请求 ID，未读取正文不改变关联状态；`toolSummary` 只返回动作对象，不含结果正文。renderTraceRows只含折叠行与详情容器，正文详情由app按key填充。
 
-- [ ] **Step 2: 运行红测。** `bun test tests/trace-view.test.ts tests/body-view.test.ts`。
-- [ ] **Step 3: 实现投影与工具摘要。** 从可信delta中挑isInput=true且input.state为text/unrecognized的每个消息；用户原始值保留在消息块，不把多个用户消息拼成一条。aux先返回一条；其它请求保留reply内容块顺序，thinking不生成常驻步骤，未知块产生可展开记录。Chat单choice使用messageBlocks，文本与call用不同key命名空间解决index重复；多choices产生限制记录，不启用冲突工具身份。
+- [x] **Step 2: 运行红测。** `bun test tests/trace-view.test.ts tests/body-view.test.ts`。
+- [x] **Step 3: 实现投影与工具摘要。** 从可信delta中挑isInput=true且input.state为text/unrecognized的每个消息；用户原始值保留在消息块，不把多个用户消息拼成一条。aux先返回一条；其它请求保留reply内容块顺序，thinking不生成常驻步骤，未知块产生可展开记录。Chat单choice使用messageBlocks，文本与call用不同key命名空间解决index重复；多choices产生限制记录，不启用冲突工具身份。
 
 ```js
 export function toolSummary(name,inputText) {
@@ -563,9 +563,9 @@ export function toolSummary(name,inputText) {
 
 摘要只用于显示，不用于工具配对；最终HTML必须esc。读取不完整时增加继续读取记录，complete=false使metrics不显示；全部读完将读数放最后一个步骤。request.status失败、正文状态、回复截断或未知增量在所属记录上可见，不能只依赖颜色或title提示，也不能因为已有用户或回复步骤就省略状态记录。工具行摘要只写动作对象和结果关系，不渲染结果正文开头；关系状态放在不被省略号裁剪的独立元素。回复完整性按§3.4映射，`truncated` 不把请求行改成失败。
 
-- [ ] **Step 4: 修正工具按钮并验证。** toolEntries保留result_path，renderTools用owner+call ord绑定按钮，pending/ambiguous不发读取。关系为resolved且actor一致时，工具行给出「结果见请求 N」入口；N用当前窗口展示号，数据属性保存稳定req_id，窗口外不给窗口号。测试两工具都指向目标同message不同content块时按钮仍各有不同call ord，不做html.replace。未读取结果时显示待读取，读取失败保留重试，不写成未记录或未配对。更新原有data-tool-result断言为新的调用者身份断言。
-- [ ] **Step 5: 运行绿测。** `bun test tests/trace-view.test.ts tests/body-view.test.ts tests/http.test.ts`，`bun run typecheck`；新静态 `/trace-view.js` 可访问。
-- [ ] **Step 6: 提交边界。** 建议 `feat(reader): project confirmed inputs and reply blocks into trace steps`。本文引用的稳定键和计量归属在note记录理由，代码/架构拥有实际接口。
+- [x] **Step 4: 修正工具按钮并验证。** toolEntries保留result_path，renderTools用owner+call ord绑定按钮，pending/ambiguous不发读取。关系为resolved且actor一致时，工具行给出「结果见请求 N」入口；N用当前窗口展示号，数据属性保存稳定req_id，窗口外不给窗口号。测试两工具都指向目标同message不同content块时按钮仍各有不同call ord，不做html.replace。未读取结果时显示待读取，读取失败保留重试，不写成未记录或未配对。更新原有data-tool-result断言为新的调用者身份断言。
+- [x] **Step 5: 运行绿测。** `bun test tests/trace-view.test.ts tests/body-view.test.ts tests/http.test.ts`，`bun run typecheck`；新静态 `/trace-view.js` 可访问。
+- [x] **Step 6: 提交边界。** 建议 `feat(reader): project confirmed inputs and reply blocks into trace steps`。本文引用的稳定键和计量归属在note记录理由，代码/架构拥有实际接口。
 
 ## Task 6: 切换生产中栏与窗口导航
 
