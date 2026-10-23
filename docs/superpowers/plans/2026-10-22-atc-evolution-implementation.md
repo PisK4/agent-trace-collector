@@ -10,7 +10,7 @@
 
 **Tech Stack:** TypeScript、Bun 1.4.0、`bun:sqlite`、`node:zlib`、原生 JavaScript；不增加第三方运行依赖。
 
-**Spec:** [架构演进方案 v2](../../architecture-evolution-v2.md)定义目标，[联合评审](../../agent-request-kind-review.md#执行与恢复补充评审)保存证据，[现行架构](../../architecture-design.md)约束当前实现。决策理由见[所属提案](../../../.agents/notes/proposed/architecture/2026-10-22-atc-architecture-evolution.md)。
+**Spec:** [架构演进方案 v2](../../architecture-evolution-v2.md)定义目标，[联合评审](../../agent-request-kind-review.md#执行与恢复补充评审)保存证据，[现行架构](../../architecture-design.md)约束当前实现。决策理由见[架构演进决策](../../../.agents/notes/implemented/architecture/2026-10-22-atc-architecture-evolution.md)。
 
 ## Global Constraints
 
@@ -47,7 +47,7 @@
 | [v2](../../architecture-evolution-v2.md) | 目标职责、结构替换与容量验收的唯一提案定义 | 否 |
 | [联合评审](../../agent-request-kind-review.md) | 已有反例与验证范围，不复制到独立证据文件 | 否 |
 | [现行架构](../../architecture-design.md)、[运维](../../operations.md) | 对应代码交付时同步现状和命令 | 本次不修改 |
-| [proposed note](../../../.agents/notes/proposed/architecture/2026-10-22-atc-architecture-evolution.md) | 统筹与分批推进的理由，不复制任务步骤 | 否 |
+| [架构演进决策](../../../.agents/notes/implemented/architecture/2026-10-22-atc-architecture-evolution.md) | 统筹与分批推进的理由，不复制任务步骤 | 否 |
 
 ## 交付依赖
 
@@ -117,10 +117,10 @@ E 明确消息 ord 与分页覆盖：包装中真实文本、插话、畸形标�
 ## 执行与验收记录
 
 - [x] A：代码与合成验收完成（`64271cf`、`370e346`、`41568d4`、`6b36a07`、`ed70fe5`）；真实库历史对齐未执行，见 A 计划的「上线与历史结果对齐」。破坏式立场下旧库删除重建，不再需要历史对齐。
-- [x] B：代码与合成验收完成（`658776a`、`1e4446d`、`3b7e92b`、`712d45b`、`a3a9f11`、`bdfe137`）；长期 kind/hook 报告落列、旧 hook 伪值与明文账号修复由 C 交付。
+- [x] B：代码与合成验收完成（`658776a`、`1e4446d`、`3b7e92b`、`712d45b`、`a3a9f11`、`bdfe137`）与收口期的真实键名读取修正（`e7c73d6`）；长期 kind/hook 报告落列、旧 hook 伪值与明文账号修复由 C 交付。
 - [x] C：代码与合成验收完成：长期输入修订与组完成、有界来源事实与结果依据、盐绑定与恢复包（`7fb620c`、`cd3faca`），以及 v6 结构（`e13ce40`）。v4→v5 显式迁移与恢复侧的迁移标记校验按用户决定取消，处理方式是旧库删除重建，见 [durable-rebuild 计划](2026-10-22-atc-durable-rebuild.md) 顶部的作废说明。
 - [x] D：代码与合成验收完成：版本化用途解释、组发布前的请求阶段与全部用途消费者（`7fb620c`、`cd3faca`、`531bb38`、`f762a42`）。
-- [x] E：代码与合成验收完成：服务端输入解释、能力提取与页面消费（`2632c97`、`1c8c599`、`223a63e`、`6baa0da`、`da4f0a9`、`61d1b45`、`9518e14`、`30c4b94`、`33049c5`、`12c95c7`）。account/host 展示、全文搜索、direct 与专有指纹仍不在范围内。
+- [x] E：代码与合成验收完成：服务端输入解释、能力提取与页面消费（`2632c97`、`1c8c599`、`223a63e`、`6baa0da`、`da4f0a9`、`61d1b45`、`9518e14`、`30c4b94`、`33049c5`、`12c95c7`）与收口期的按内容块清洗包装（`41fb12e`）。account/host 展示、全文搜索、direct 与专有指纹仍不在范围内。
 - [x] F：基线与观测、路由解码优化、预算与门槛、决策、v6 代际与切片流水线均已交付（`a5beea1` … `9bd38ff`）。Task 19 的交接门槛已补齐：`long-10000-slice` 的报告与据此校准的 `slice` 节都在库里。**门槛判负在 `drain_ms`**：10,000 笔单链的切片排空 878.7 s（同步同输入 1.96 s），超过 120 s 的提案上限，门槛判 `slice_not_converged`；同轮的结构不变量（发布 1 代、丢弃 0 代、增量与全量逐字一致）都成立。切片模式仍未启用，采集器继续走同步派生，5 rps 目标保持未达成——见 F 计划的 Task 19 偏差记录第 10—12 条与[运维手册的切片一节](../../operations.md#派生切片与代际)。
 
 每个代码任务先观察对应断言失败，再实现并跑最窄相关测试。只在新改动或失败需要时扩大检查；不为计划文档重跑运行时测试。任务提交包含其拥有的 note；有提交授权后才 stage/commit，禁止把父仓库或其它任务的改动带入。真实数据、服务切换与 push 均不由本计划授权。
