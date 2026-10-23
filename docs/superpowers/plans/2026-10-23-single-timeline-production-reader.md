@@ -31,7 +31,7 @@
 
 ## 1. 架构评估与实施决定
 
-评估基准为 `2f25e47`（合并提交 `94623ff` 内容相同）；原型文件在其后未变，执行时以符号定位，不把行号当契约。已运行的 `tests/web.test.ts`、`tests/body-view.test.ts` 与合成浏览器检查只覆盖生产页面渲染、几何和部分交互；实际数字、未覆盖项和截图限制由[原型说明](../../../prototypes/README.md#验证范围)记录。这些结果不覆盖 1.1 列出的原型缺陷、默认选中可见性和三项阅读任务。
+评估基准为 `2f25e47`（合并提交 `94623ff` 内容相同）。其后 `84be41b`、`5583ce7`、`b5ec184`、`6485993`、`940653e`、`da95ab1`、`73a7533` 已落地：原型代码文件未变（仅 `prototypes/README.md` 更新过），`src/` 的组口径判据唯一落在 `derive-state` 的 `groupIsCurrent`，行号与符号归属有漂移。执行时以符号定位，不把行号当契约；同步可用性判据以 `groupIsCurrent` 的字段清单为准，不在查询里另立第二套口径。已运行的 `tests/web.test.ts`、`tests/body-view.test.ts` 与合成浏览器检查只覆盖生产页面渲染、几何和部分交互；实际数字、未覆盖项和截图限制由[原型说明](../../../prototypes/README.md#验证范围)记录。这些结果不覆盖 1.1 列出的原型缺陷、默认选中可见性和三项阅读任务。
 
 | 需求 | 现有依据 | 差距与决定 |
 | --- | --- | --- |
@@ -285,12 +285,16 @@ LEFT JOIN derive_request_result d
 
 ```ts
 // 同一个source条件应用于整组派生列，NULL保持NULL。
+// synchronous可用性与derive-state的groupIsCurrent保持同一字段清单：
+// state='clean'、input_revision=published_revision、target_algorithm=published_algorithm；
+// 额外要求target_algorithm=GROUP_ALGORITHM，因为同步列只由同步算法写入。
+// 屏蔽闸门仍是projectRow，source只决定列从哪张表读。
+const synchronousUsable = `g.state='clean' AND g.input_revision=g.published_revision
+  AND g.target_algorithm=g.published_algorithm AND g.target_algorithm=${GROUP_ALGORITHM}`;
 const source = `CASE WHEN g.published_generation IS NOT NULL THEN 'generation'
-  WHEN g.target_algorithm=${GROUP_ALGORITHM}
-    OR g.legacy_snapshot=1 THEN 'synchronous' ELSE 'unavailable' END`;
+  WHEN ${synchronousUsable} OR g.legacy_snapshot=1 THEN 'synchronous' ELSE 'unavailable' END`;
 const selectedTitle = `CASE WHEN g.published_generation IS NOT NULL THEN d.title
-  WHEN g.target_algorithm=${GROUP_ALGORITHM}
-    OR g.legacy_snapshot=1 THEN r.title ELSE NULL END AS title`;
+  WHEN ${synchronousUsable} OR g.legacy_snapshot=1 THEN r.title ELSE NULL END AS title`;
 ```
 
 published存在时工具只查derive_tool_result指定generation；同步明确可用时查tool_call；无可用来源时不伪造工具配对。将代际retention_state/algorithm/basis_json映射进已有summary状态与依据字段。current额外要求代际请求epoch/revision及用途消费身份匹配当前请求，缺行时dirty；retained保留旧依据但不给确定delta。会话标题候选必须复用同一整套来源及状态条件，不能只改getRequest。将getRequest的alias解析移到其事务内，避免alias与row跨快照。正常同步模式在无published指针、target_algorithm=GROUP_ALGORITHM时继续整体读取同步列，不要求生产切换legacy标记。
