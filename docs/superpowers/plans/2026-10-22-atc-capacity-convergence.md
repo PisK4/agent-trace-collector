@@ -2193,6 +2193,10 @@ export function flattenReport(report: ScenarioReport): Record<string, number | n
 
 - [ ] **Step 4：实现预算生成。** 规则写死在代码里并可复现；每个 `max` 的 `basis` 同时写入。`hook`、`query`、`write_tx`、`event_loop` 使用已有目标或代码常量；`backlog` 与 `drain` 标记 `proposed`；其余采用基线 1.25 倍。
 
+**负载完整性阈值取自计划，不取自实测。** 速率场景的 `min.accepted` 与 `min.request_rows` 用 `client.ticks_scheduled`（即 `durationMs × rps`，由 `scheduledTicks` 算出，与实测无关）乘 0.99 取整，标 `product-target`；`max.ticks_dropped` 为 0，同样 `product-target`；`long` 用 `config.requests` 精确取 `min.request_rows`。这样「采集器跟不上就把目标悄悄降到自己的水平」在预算层被堵住：`baseline-5rps` 实测只发出 2,016 笔时，冻结出来的下限仍是 2,970。
+
+冻结时同时写入 `unmet`：用 `evaluateGate` 跑一遍源报告，把失败项按场景记进预算文件，让「这份预算里哪些门槛当前构型没达到」成为预算自身的事实，而不是靠读 code review 记得。门槛在该场景保持退出 1，直到重新测量并重写预算。
+
 ```ts
 const MIB = 1024 * 1024;
 
@@ -2288,7 +2292,7 @@ export function evaluateGate(report: ScenarioReport, budget: CapacityBudget): Ga
 }
 ```
 
-- [ ] **Step 6：实现 CLI 与汇总预算。** `budget` 子命令读取 `--report`，只接受包含 `scenarios` 的汇总报告；没有汇总时拒绝生成，避免用单场景预算冒充全部。汇总报告中的每个场景单独生成预算，`source_report_sha256` 对整个文件计算。
+- [ ] **Step 6：实现 CLI 与汇总预算。** `budget` 子命令读取 `--report`，只接受包含 `scenarios` 的汇总报告；没有汇总时拒绝生成，避免用单场景预算冒充全部。汇总报告中的每个场景单独生成预算，`source_report_sha256` 对整个文件计算。`gate` 子命令两种输入都收：单场景报告只判它自己，汇总报告逐场景判，预算里缺的场景与汇总里多出来的场景都记失败项，不静默跳过。
 
 ```ts
 if (import.meta.main) {
@@ -2367,6 +2371,8 @@ Expected: 每个命令输出 `{ok,...}` 与失败项；退出码 0 或 1。若�
 - [ ] **Step 3：写基线记录。** 创建 `docs/superpowers/capacity/2026-10-22-atc-capacity-baseline.md`，写明基准提交、Bun 版本、机器、每个场景命令、报告路径与 sha256、预算哈希、门槛失败项及 `basis`。记录不写真实请求内容；报告路径可以写临时路径，提交前确认报告没有进入仓库。process note `.agents/notes/implemented/process/2026-10-22-atc-capacity-baseline.md` 只写测量方法（合成负载、隔离与固定原因计数口径）、机器与固定种子、实测数字与置信口径，不写运行时结构决策；`keep-sync` 的决策与理由已在 `implemented/architecture/2026-10-22-capacity-baseline-keeps-sync.md`，本 note 不另立第二份。
 
 - [ ] **Step 4：判断是否进入优化。** 若全部门槛通过，Task 11 选择 `keep-sync`，仍执行 Task 9 的路由测量，因为路由解码是独立的已验证优化点；若失败，保留失败项，进入 Task 9 与 Task 11。此时不创建 v6 文件。
+
+已定：`baseline-5rps` 的失败**不改产品目标**。实测 20 会话、350 KiB–2 MiB 混合下只投递 3.36 rps（3,000 个刻度丢弃 984 个），derive 占 600 s 的 48%、单轮 max 5.46 s；把目标降到 3 rps 等于让实现反向改需求。该场景在预算里保持红门，主因指向派生成本，Task 11 按此判定进入 Part V；改造完成后重新测量并重写预算，才解除该项。
 
 - [ ] **Step 5：提交基线记录。** 获授权后：
 
@@ -2708,6 +2714,10 @@ export function decideCapacity(input: {
 ```
 
 `stop-non-long` 不是完成路径。它保留同步入口，报告实际失败项与主因，不创建 v6 文件，不把未解决项写成已通过。
+
+**实测与判定条件的冲突（需在 Task 11 执行前改条件，不能机械照抄）。** 上面的规则把进入切片的前提写成"主因是 `long-10000`，且其它场景没有 `product-target` 失败"。`baseline-5rps` 的实测推翻了这个前提：它失败在 `min.accepted`/`max.ticks_dropped`/`event_loop_p99_ms` 上（都是 `product-target`），而它的主因与长组是同一处机制 —— `drainDeriveTx` 每个脏组整组重算，5 rps 下 20 个会话每轮全脏，derive 占 600 s 的 48%、单轮 max 5.46 s，writer 占 56%。也就是说"同步写入成本只在长组咬人"这一假设不成立，按现规则会判成 `stop-non-long` 并把已经知道原因的失败留在一个不被执行的路径上。
+
+改法（二选一，执行前定）：把"主因场景是 `long-10000`"放宽为"主因场景属于同步派生成本场景（`long-10000` 或速率基线）且该场景至少一项失败属于 `max_write_tx_ms`、`event_loop_p99_ms`、`drain_ms`、`backlog_max_age_ms`、`min.accepted`"；或者保留 `decideCapacity` 作为"当前同步设计能否按现状发布"的自动闸门，把 Part V 的执行条件改成"决策为 `slice` **或** 产品目标明确未达成"。后者更干净：脚本判的是能不能留用，Part V 是"5 rps 必须达成"这个产品决定，不靠脚本代签。
 
 - [ ] **Step 4：写决策文件。** 决策 JSON 包含报告 sha256、预算 sha256、失败项、主因、严重度、`decided_at` 与执行命令。没有预算时先由 Task 7 退出 2，不生成决策。
 
