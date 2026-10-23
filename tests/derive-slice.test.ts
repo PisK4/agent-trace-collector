@@ -6,6 +6,7 @@ import { drainDeriveTx } from '../src/derive';
 import {
   DEFAULT_DERIVE_BUDGET, DERIVE_ALGORITHM, beginGeneration, discardGeneration,
   publishGeneration, readEffectiveGroup, recoverSlice, sliceRequestsStage, sliceRolesStage,
+  sliceToolsStage,
 } from '../src/derive-slice';
 import type { SliceStep } from '../src/derive-slice';
 
@@ -423,5 +424,148 @@ test('用途在物化之后被重判时丢弃整代', () => {
       .get(generation)).toEqual({ n: 0 });
     expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_chain_work WHERE generation=?')
       .get(generation)).toEqual({ n: 0 });
+  } finally { f.close(); }
+});
+
+/**
+ * 直接种工作行来隔离工具阶段：请求事实、关系与候选都已就绪，只差配对。
+ *
+ * `traversal_ord` 与 `request_index` 都取请求序号，`confirmed` 由用例给，
+ * 与角色阶段结算后写回 work 行的形态一致。
+ */
+function seedToolWork(f: ReturnType<typeof fixture>, generation: string): void {
+  f.store.write(db => {
+    for (let id = 1; id <= 6; id += 1) {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+        body_state,derive_version,have,created_at,updated_at,input_epoch,input_revision,
+        purpose_revision,purpose_version,req_kind)
+        VALUES (?,'c','a','known',?,'2026-10-22','hook','available',0,1,1,1,'e1',1,11,1,'chat')`,
+      [id, 100 + id]);
+      db.run(`INSERT INTO derive_request_result(generation,req_id,input_epoch,
+        input_revision,started_ms,traversal_ord,purpose_revision,purpose_version,
+        chain_role,algorithm,retention_state,basis_json)
+        VALUES (?,?,'e1',1,?,?,11,1,'main',5,'recomputed','{}')`,
+      [generation, id, 100 + id, id - 1]);
+    }
+    const calls: [number, number, string][] = [
+      [1, 0, 'call-resolved'], [3, 0, 'call-dup'], [4, 0, 'call-dup'], [6, 0, 'call-early'],
+    ];
+    for (const [reqId, ord, callId] of calls) {
+      db.run(`INSERT INTO derive_call_work(generation,req_id,ord,call_id,tool_name,
+        request_index,traversal_ord) VALUES (?,?,?,?,'read',?,?)`,
+      [generation, reqId, ord, callId, reqId - 1, reqId - 1]);
+    }
+    const results: [number, number, string, number][] = [
+      [2, 0, 'call-resolved', 1], [5, 0, 'call-dup', 1], [5, 1, 'call-early', 1],
+    ];
+    for (const [reqId, ord, callId, confirmed] of results) {
+      db.run(`INSERT INTO derive_result_work(generation,req_id,ord,path,call_id,preview,
+        request_index,traversal_ord,confirmed) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [generation, reqId, ord, String(ord), callId, `${callId} result`,
+        reqId - 1, reqId - 1, confirmed]);
+    }
+    // 上游阶段留下的计数与游标：请求数已定，工具数与游标从头开始。
+    db.run(`UPDATE derive_generation SET stage='tools',request_count=6,tool_count=0,
+      tool_cursor_ord=-1 WHERE generation=?`, [generation]);
+  });
+}
+
+test('工具切片与同步配对规则一致且逐页提交', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,
+      group_epoch,input_revision,published_revision,target_algorithm,state,dirty_since_ms)
+      VALUES ('c','a','','g1',1,0,?, 'dirty',1)`, [DERIVE_ALGORITHM]));
+    const generation = beginGeneration(f.store, 'c', 'a', 10)!;
+    seedToolWork(f, generation);
+    const budget = { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 1, maxWritesPerBatch: 2 };
+    const step = runStage(f, generation, sliceToolsStage, budget);
+    expect(step.stage).toBe('summary');
+    const rows = f.store.read.query<{ call_id: string; state: string;
+      result_req: number | null; result_ord: number | null }, [string]>(
+    `SELECT call_id,state,result_req,result_ord FROM derive_tool_result
+      WHERE generation=? ORDER BY req_id,ord`).all(generation);
+    expect(rows).toEqual([
+      { call_id: 'call-resolved', state: 'resolved', result_req: 2, result_ord: 0 },
+      { call_id: 'call-dup', state: 'ambiguous', result_req: 5, result_ord: 0 },
+      { call_id: 'call-dup', state: 'ambiguous', result_req: 5, result_ord: 0 },
+      // 结果在调用之前：不看字典序，保持 pending 且不记位置。
+      { call_id: 'call-early', state: 'pending', result_req: null, result_ord: null },
+    ]);
+    expect(f.store.read.query<{ tool_count: number }, [string]>(
+      'SELECT tool_count FROM derive_generation WHERE generation=?').get(generation))
+      .toEqual({ tool_count: 4 });
+    // 切片结果只写这一代：旧表保持空白，读口径的切换由发布指针完成。
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM tool_call').get()).toEqual({ n: 0 });
+  } finally { f.close(); }
+});
+
+test('重复回传的结果不把已确认的配对降级', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,
+      group_epoch,input_revision,published_revision,target_algorithm,state,dirty_since_ms)
+      VALUES ('c','a','','g1',1,0,?, 'dirty',1)`, [DERIVE_ALGORITHM]));
+    const generation = beginGeneration(f.store, 'c', 'a', 10)!;
+    seedToolWork(f, generation);
+    // 同一调用在更晚的请求里被重发，且那一笔的增量关系未知（confirmed=0）。
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+        body_state,derive_version,have,created_at,updated_at,input_epoch,input_revision,
+        purpose_revision,purpose_version,req_kind)
+        VALUES (7,'c','a','known',107,'2026-10-22','hook','available',0,1,1,1,'e1',1,11,1,'chat')`);
+      db.run(`INSERT INTO derive_request_result(generation,req_id,input_epoch,input_revision,
+        started_ms,traversal_ord,prev_relation,purpose_revision,purpose_version,chain_role,
+        algorithm,retention_state,basis_json)
+        VALUES (?,7,'e1',1,107,6,'unknown',11,1,'main',5,'recomputed','{}')`, [generation]);
+      db.run(`INSERT INTO derive_result_work(generation,req_id,ord,path,call_id,preview,
+        request_index,traversal_ord,confirmed)
+        VALUES (?,7,0,'0','call-resolved','resent',6,6,0)`, [generation]);
+    });
+    runStage(f, generation, sliceToolsStage, DEFAULT_DERIVE_BUDGET);
+    expect(f.store.read.query<{ state: string; result_req: number }, [string]>(
+    `SELECT state,result_req FROM derive_tool_result
+      WHERE generation=? AND call_id='call-resolved'`).get(generation))
+      .toEqual({ state: 'resolved', result_req: 2 });
+  } finally { f.close(); }
+});
+
+test('确定增量的工具结果被配成resolved', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, [
+      { req_id: 1, started_ms: 100, sort_source: 'ledger', sort_key: 'ledger|0000' },
+      { req_id: 2, started_ms: 200, sort_source: 'ledger', sort_key: 'ledger|0001' },
+    ]);
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'read it' }] }] },
+      reply: { content: [{ type: 'tool_use', id: 'call-1', name: 'read' }] },
+      redact_version: 1,
+    });
+    persistBody(f.store, 2, {
+      protocol: 'anthropic',
+      request: { messages: [
+        { role: 'user', content: [{ type: 'text', text: 'read it' }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'call-1', name: 'read' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'file body' }] },
+      ] },
+      reply: { content: [{ type: 'text', text: 'done' }] },
+      redact_version: 1,
+    });
+    switchToSliceAlgorithm(f);
+    const generation = beginGeneration(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    runStage(f, generation, sliceRequestsStage);
+    runStage(f, generation, sliceRolesStage);
+    const step = runStage(f, generation, sliceToolsStage);
+    expect(step.stage).toBe('summary');
+    // 结果落在确定增量的 ord（第 3 条消息）上，调用在前一笔：唯一配对，标 resolved。
+    expect(f.store.read.query<{ call_id: string; state: string; result_req: number;
+      result_ord: number }, [string]>(`SELECT call_id,state,result_req,result_ord
+      FROM derive_tool_result WHERE generation=?`).get(generation))
+      .toEqual({ call_id: 'call-1', state: 'resolved', result_req: 2, result_ord: 2 });
+    expect(f.store.read.query<{ confirmed: number }, [string]>(`SELECT confirmed
+      FROM derive_result_work WHERE generation=? AND req_id=2`).get(generation))
+      .toEqual({ confirmed: 1 });
   } finally { f.close(); }
 });
