@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -469,6 +470,39 @@ test('维护命令能产出并恢复bundle', async () => {
   } finally {
     f.close();
   }
+});
+
+test('v6库备份写实际版本，白名单外的版本两侧都拒', () => {
+  const f = fixture();
+  try {
+    loadBoundSalt(f.store, f.dir);
+    f.store.close();
+    const bundle = join(f.dir, 'bundle-v6');
+    backupBundle(f.dir, bundle);
+    const manifestPath = join(bundle, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    expect(manifest.schema).toBe(6);
+    const restored = join(f.dir, 'restored-v6');
+    restoreBundle(bundle, restored);
+    const store = openStore(join(restored, 'trace.db'));
+    try {
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 6 });
+    } finally { store.close(); }
+
+    // 白名单只有当前版本：低版本没有升级路径，搬回来也打不开。
+    const db = new Database(join(f.dir, 'trace.db'));
+    db.run('PRAGMA user_version=5');
+    db.close();
+    expect(() => backupBundle(f.dir, join(f.dir, 'bundle-v5')))
+      .toThrow('backup_schema_unsupported');
+
+    const db6 = new Database(join(f.dir, 'trace.db'));
+    db6.run('PRAGMA user_version=6');
+    db6.close();
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, schema: 5 }));
+    expect(() => restoreBundle(bundle, join(f.dir, 'bad-version')))
+      .toThrow('restore_bundle_invalid');
+  } finally { f.close(); }
 });
 
 test('维护锁阻止第二个维护进程取得同一数据目录', () => {

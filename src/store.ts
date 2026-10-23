@@ -14,7 +14,8 @@ export type Store = {
 };
 
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 5;
+const SCHEMA_V6 = readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8');
+const SCHEMA_VERSION = 6;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -35,21 +36,16 @@ function migrate(db: Database): void {
     db.exec('PRAGMA journal_mode=WAL');
     db.transaction(() => {
       db.exec(SCHEMA);
+      db.exec(SCHEMA_V6);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
     return;
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
-  // 低版本没有升级路径：普通启动不做 ALTER。旧库由运维显式删除后重建，
+  // 低版本没有升级路径：普通启动不做 ALTER，也不搬旧数据。旧库由运维显式删除后重建，
   // 这条拒绝是唯一的处理方式，不提供半迁移状态。
   if (version < SCHEMA_VERSION) throw new Error('schema_rebuild_required');
-  const requestSql = db.query(
-    "SELECT sql FROM sqlite_master WHERE type='table' AND name='request'",
-  ).get() as { sql: string } | null;
-  if (requestSql === null || !/AUTOINCREMENT/i.test(requestSql.sql)) {
-    throw new Error('legacy_request_primary_key');
-  }
   if (pragmaNumber(db, 'auto_vacuum') !== 2) throw new Error('auto_vacuum_requires_migration');
 }
 

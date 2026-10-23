@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
@@ -19,17 +19,19 @@ test('事务失败不留下证据或游标', () => {
   }
 });
 
-test('建库包含19个业务表且使用AUTOINCREMENT', () => {
+test('建库包含26个业务表且使用AUTOINCREMENT', () => {
   const f = fixture();
   try {
     const names = (f.store.read.query(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
     ).all() as { name: string }[]).map(row => row.name);
     expect(names).toEqual([
-      'block', 'collector_state', 'cost_observation', 'derive_queue', 'ingest_issue',
-      'pending_hook', 'purged_evidence', 'raw_hook', 'raw_ledger', 'raw_route', 'request',
-      'request_alias', 'request_block', 'request_evidence', 'retention_event', 'route_summary',
-      'source_cursor', 'source_gap', 'tool_call',
+      'block', 'collector_state', 'cost_observation',
+      'derive_call_work', 'derive_chain_work', 'derive_generation', 'derive_queue',
+      'derive_request_result', 'derive_result_work', 'derive_role_work', 'derive_tool_result',
+      'ingest_issue', 'pending_hook', 'purged_evidence', 'raw_hook', 'raw_ledger', 'raw_route',
+      'request', 'request_alias', 'request_block', 'request_evidence', 'retention_event',
+      'route_summary', 'source_cursor', 'source_gap', 'tool_call',
     ]);
     const requestSql = f.store.read.query(
       "SELECT sql FROM sqlite_master WHERE type='table' AND name='request'",
@@ -245,11 +247,23 @@ test('低版本库拒绝打开，空库建到当前版本', () => {
     expect(() => openStore(legacy)).toThrow('schema_rebuild_required');
     const store = openStore(join(dir, 'fresh', 'trace.db'));
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 5 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 6 });
     } finally { store.close(); }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('v5库拒绝普通启动且没有迁移入口', () => {
+  const f = fixture();
+  try {
+    f.store.close();
+    const raw = new Database(join(f.dir, 'trace.db'));
+    raw.exec('PRAGMA user_version=5');
+    raw.close();
+    // 破坏式更新：低版本没有升级路径，也没有半迁移状态可续跑。
+    expect(() => openStore(join(f.dir, 'trace.db'))).toThrow('schema_rebuild_required');
+  } finally { f.close(); }
 });
 
 test('写事务统计覆盖成功与回滚', () => {
