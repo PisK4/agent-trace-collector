@@ -458,6 +458,33 @@ pre.raw{
 .rail-empty b{display:block;color:var(--text-2);font-weight:550;margin-bottom:3px}
 .rail-note{margin-top:9px;padding:7px 9px;border-radius:4px;background:var(--inset);border:1px solid var(--line);font-size:10px;line-height:1.6;color:var(--muted)}
 
+/* 右栏折叠区：能力/结构/路由统一开合，开合状态按稳定键在重绘后恢复。 */
+.rail-fold{border:1px solid var(--line);border-radius:6px;background:var(--inset);margin:12px 0 0;overflow:hidden}
+.rail-fold>summary{display:flex;align-items:center;gap:7px;padding:8px 10px;font-size:11px;font-weight:550;color:var(--text-2);cursor:pointer;list-style:none}
+.rail-fold>summary::-webkit-details-marker{display:none}
+.rail-fold>summary::before{content:"▸";color:var(--muted);font-size:9px;flex:none;transition:transform .12s}
+.rail-fold[open]>summary::before{transform:rotate(90deg)}
+.rail-fold>summary:hover{background:var(--hover)}
+.rail-fold .fold-count{margin-left:auto;font:10.5px var(--mono);color:var(--muted);font-weight:400}
+.rail-fold .fold-body{padding:2px 10px 10px;border-top:1px solid var(--line)}
+.rail-fold .fold-body>.note:first-child{margin-top:8px}
+.rail-fold .msg-list{max-height:300px;overflow:auto}
+.rail-fold .body-panel{border:0;padding:6px 0 0}
+/* 能力区块进入右栏后的密度：跟随 rail-section 的分隔节奏。 */
+.rail-body .cap-section{padding:12px 0;border-bottom:1px solid var(--line)}
+.rail-body .cap-section .section-head{margin-bottom:6px}
+
+/* 工具四页：概览/参数/结果/Schema 与返回按钮。 */
+.tool-page-head{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
+.tool-page-head .mono{font-size:11px;color:var(--text-2);overflow-wrap:anywhere}
+.tool-page-tabs{display:flex;gap:4px;margin:8px 0}
+.tool-page-tabs button{font-size:10.5px;padding:3px 9px;border-radius:4px;border:1px solid var(--line);color:var(--muted);background:var(--surface)}
+.tool-page-tabs button[aria-pressed="true"]{color:var(--accent);border-color:var(--accent);font-weight:550}
+.tool-page-tabs button:hover{color:var(--text)}
+button.tool-link{background:none;border:0;cursor:pointer}
+button.tool-link:hover{background:var(--hover);border-radius:4px}
+.schema-item{margin:8px 0}
+
 /* 正文面板 */
 .body-panel{padding-top:12px}
 .body-panel .bp-head{display:flex;align-items:flex-start;gap:8px;margin-bottom:8px}

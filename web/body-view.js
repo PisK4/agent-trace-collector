@@ -571,7 +571,7 @@ function renderToolItem(tool) {
     ? ''
     : `<pre class="raw" tabindex="0">${esc(JSON.stringify(tool.schema, null, 2))}</pre>`;
   return `<li class="cap-item">
-    <details>
+    <details data-fold="cap:tool:${esc(tool.name)}">
       <summary><code class="cap-name">${esc(tool.name)}</code><span class="cap-desc">${esc(clip(tool.description, 120))}</span></summary>
       ${schema}
     </details>
@@ -640,10 +640,10 @@ export function renderCapabilities(page) {
   /** @param {{state: string}} result @param {Record<string, string>} text */
   const note = (result, text) => result.state === 'present'
     ? '' : `<p class="note">${esc(text[result.state] ?? result.state)}</p>`;
-  const toolBlock = tools.items.length === 0 ? '' : `<details class="cap-block">
+  const toolBlock = tools.items.length === 0 ? '' : `<details class="cap-block" data-fold="cap:tools">
     <summary>工具清单 · ${tools.items.length}</summary>
     <ol class="cap-list">${tools.items.map(renderToolItem).join('')}</ol></details>`;
-  const skillBlock = skills.items.length === 0 ? '' : `<details class="cap-block">
+  const skillBlock = skills.items.length === 0 ? '' : `<details class="cap-block" data-fold="cap:skills">
     <summary>技能清单 · ${skills.items.length}</summary>
     <ul class="cap-list">${skills.items.map(renderSkillItem).join('')}</ul></details>`;
   return `<section class="section cap-section">${head}${note(tools, TOOL_STATE_TEXT)}${note(skills, SKILL_STATE_TEXT)}${toolBlock}${skillBlock}</section>`;

@@ -227,6 +227,68 @@ test('工具结果按 owner 与调用序号分别缓存，失败保留到重试�
   expect(h.count('/tools/1/result')).toBe(2);
 });
 
+test('工具结果 409 后整笔作废，重建读取换新 token 重取', async () => {
+  let toolStatus = 200;
+  let token = TOKEN;
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    if (url.includes('/tools/0/result')) {
+      return toolStatus === 409
+        ? respond({ error: 'reading_changed' }, 409)
+        : respond({ owner_req: 1, call_ord: 0, state: 'available', target: { req_id: 2, ord: 1, path: 'p' }, content: 'ok', is_error: null, reason: null, reading_token: token });
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  toolStatus = 409;
+  await expect(store.readToolResult(1, 0)).rejects.toThrow('reading_changed');
+  // 409 后缓存已作废：重建阅读版本（token 变化）再读，走网络且带新 token。
+  toolStatus = 200;
+  token = TOKEN2;
+  await store.readRequest(1, true);
+  const again = await store.readToolResult(1, 0);
+  expect(again.content).toBe('ok');
+  expect(h.count('/tools/0/result')).toBe(2);
+  const secondUrl = h.urls.filter(u => u.includes('/tools/0/result'))[1];
+  expect(secondUrl).toContain('if_reading=' + TOKEN2);
+});
+
+test('迟到的工具结果不写入已换版本的请求', async () => {
+  let toolCalls = 0;
+  let release: ((value: Response) => void) | null = null;
+  const gated = new Promise<Response>(resolve => { release = resolve; });
+  let token = TOKEN;
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    if (url.includes('/tools/0/result')) {
+      toolCalls += 1;
+      return toolCalls === 1 ? gated : respond({ owner_req: 1, call_ord: 0, state: 'available', target: null, content: 'fresh', is_error: null, reason: null, reading_token: token });
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  const stale = store.readToolResult(1, 0);
+  await delay(5);
+  // 请求换版本后再次读取：新 cache 键，立即发第二个请求。
+  token = TOKEN2;
+  await store.readRequest(1, true);
+  const fresh = store.readToolResult(1, 0);
+  await delay(5);
+  release!(respond({ owner_req: 1, call_ord: 0, state: 'available', target: null, content: 'stale', is_error: null, reason: null, reading_token: TOKEN }));
+  await expect(stale).rejects.toThrow('reading_changed');
+  const ok = await fresh;
+  expect(ok.content).toBe('fresh');
+  expect(toolCalls).toBe(2);
+});
+
 test('delta 分片消费与未确认关系不读消息', async () => {
   const h = harness(url => {
     if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
