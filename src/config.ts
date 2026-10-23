@@ -3,8 +3,36 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { Store } from './store';
-import type { DeriveBudget } from './derive-slice';
+
+/**
+ * 切片派生的预算。
+ *
+ * 每一项都是切片路径的一个闸门：批的事务边界、暂存字节与 WAL 增长的上界、
+ * 退役代际的保留数。预算文件（capacity-gate）与 `Config.deriveBudget` 共用
+ * 这一形状，键名映射由类型推导，两侧不会各自漂移。
+ */
+export type DeriveBudget = {
+  maxRequestMs: number;
+  maxStageBatchMs: number;
+  maxCandidatesPerBatch: number;
+  maxWritesPerBatch: number;
+  maxStagedBytes: number;
+  maxWalGrowthBytes: number;
+  maxRetiredGenerations: number;
+};
+
+export const DEFAULT_DERIVE_BUDGET: DeriveBudget = {
+  maxRequestMs: 10,
+  maxStageBatchMs: 250,
+  maxCandidatesPerBatch: 100,
+  maxWritesPerBatch: 500,
+  maxStagedBytes: 64 * 1024 * 1024,
+  maxWalGrowthBytes: 32 * 1024 * 1024,
+  maxRetiredGenerations: 2,
+};
+
+/** 切片入口的运行期配置：预算、数据目录与库路径。 */
+export type SliceRuntime = { budget: DeriveBudget; dataDir: string; dbPath: string };
 
 export type Config = {
   dataDir: string;
@@ -173,8 +201,4 @@ export function loadBoundSaltTx(db: Database, dataDir: string): Uint8Array {
   db.run("INSERT INTO collector_state(key,value_json) VALUES('privacy:salt',?)",
     [JSON.stringify(binding)]);
   return salt;
-}
-
-export function loadBoundSalt(store: Store, dataDir: string): Uint8Array {
-  return store.write(db => loadBoundSaltTx(db, dataDir));
 }

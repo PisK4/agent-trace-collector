@@ -1,11 +1,11 @@
 import { zstdDecompressSync } from 'node:zlib';
-import type { Store } from './store';
+import type { BodyState } from './store';
+import { resolveRequestId, type Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
 import { groupCurrentSql, groupIsCurrent } from './derive-state';
 
 export type Page<T> = { items: T[]; next_cursor: string | null };
 export type CostState = 'priced' | 'zero' | 'unpriced' | 'absent';
-export type BodyState = 'pending' | 'available' | 'partial' | 'evicted' | 'unsupported';
 
 /**
  * 这一行现在能不能当"当前结论"读。
@@ -472,26 +472,6 @@ function parseJsonOrNull(text: string | null): unknown {
     return JSON.parse(text);
   } catch {
     return null;
-  }
-}
-
-export function resolveRequestId(store: Store, id: number): number | null {
-  const seen = new Set<number>();
-  let current = id;
-  for (;;) {
-    if (seen.has(current)) return null;
-    seen.add(current);
-    const alias = store.read.query<{ new_id: number }, [number]>(
-      'SELECT new_id FROM request_alias WHERE old_id=?',
-    ).get(current);
-    if (alias != null) {
-      current = alias.new_id;
-      continue;
-    }
-    const exists = store.read.query<{ req_id: number }, [number]>(
-      'SELECT req_id FROM request WHERE req_id=?',
-    ).get(current);
-    return exists != null ? current : null;
   }
 }
 

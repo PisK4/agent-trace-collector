@@ -12,8 +12,10 @@ import { fixture, seedChain } from './fixtures';
 import type { Store } from '../src/store';
 import { persistBody } from '../src/body';
 import { drainDeriveTx, enqueueDerive } from '../src/derive';
-import { DEFAULT_DERIVE_BUDGET, drainDeriveEntry } from '../src/derive-slice';
-import type { SliceRuntime } from '../src/derive-slice';
+import { drainDeriveEntry } from '../src/derive-slice';
+import { DEFAULT_DERIVE_BUDGET } from '../src/config';
+import type { SliceRuntime } from '../src/config';
+
 
 type GroupKey = { convKey: string; actor: string };
 

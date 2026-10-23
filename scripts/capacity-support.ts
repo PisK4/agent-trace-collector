@@ -5,7 +5,7 @@
 import { join } from 'node:path';
 import type { HookEnvelope } from '../src/hook';
 import type { Config } from '../src/config';
-import type { DeriveBudget } from '../src/derive-slice';
+import type { DeriveBudget } from '../src/config';
 
 export function mulberry32(seed: number): () => number {
   let state = seed >>> 0;

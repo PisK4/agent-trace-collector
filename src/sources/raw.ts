@@ -95,3 +95,15 @@ export function writePreparedRouteTx(
     [...values, routeId],
   ).changes > 0;
 }
+
+/**
+ * 这条证据是不是已经被主动淘汰了。
+ *
+ * `purged_evidence` 是 raw 层的墓碑表：元数据淘汰按证据键记录，来源重放命中
+ * 墓碑时计 `purged_skip`，不复活。在线摄入的热路径每行都要问一次，
+ * 所以它住在 raw 层而不是离线维护 module。
+ */
+export function isPurgedEvidence(db: Database, sourceKind: string, refKey: string): boolean {
+  return db.query('SELECT 1 AS hit FROM purged_evidence WHERE source_kind=? AND ref_key=?')
+    .get(sourceKind, refKey) !== null;
+}

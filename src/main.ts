@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import type { Config } from './config';
-import { loadBoundSalt, loadLocalSecret } from './config';
+import { loadBoundSaltTx, loadLocalSecret } from './config';
 import { openStore } from './store';
 import { createCapacityMetrics } from './capacity';
 import { intervalOf } from './config';
@@ -52,7 +52,7 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   // 失败要在这里关掉库，否则调用方重试会撞上一个已打开的写连接。
   let salt: Uint8Array;
   try {
-    salt = loadBoundSalt(store, config.dataDir);
+    salt = store.write(db => loadBoundSaltTx(db, config.dataDir));
   } catch (error) {
     store.close();
     throw error;

@@ -17,7 +17,7 @@ import {
   runMaintenance,
   verifyDatabase,
 } from '../src/maintenance';
-import { loadBoundSalt, loadConfig } from '../src/config';
+import { loadBoundSaltTx, loadConfig } from '../src/config';
 import { redact } from '../src/privacy';
 import { startCollector } from '../src/main';
 import { persistBody } from '../src/body';
@@ -331,7 +331,7 @@ test('恢复bundle保存原盐且拒绝覆盖目标', () => {
   const bundle = join(f.dir, 'bundle');
   const restored = join(f.dir, 'restored');
   try {
-    const salt = loadBoundSalt(f.store, f.dir);
+    const salt = f.store.write(db => loadBoundSaltTx(db, f.dir));
     f.store.close();
     backupBundle(f.dir, bundle);
     // 包里只放数据库、盐与清单三样，别的文件一律不认。
@@ -342,10 +342,10 @@ test('恢复bundle保存原盐且拒绝覆盖目标', () => {
     expect(() => restoreBundle(bundle, restored)).toThrow('destination_exists');
     const store = openStore(join(restored, 'trace.db'));
     try {
-      expect(loadBoundSalt(store, restored)).toEqual(salt);
+      expect(store.write(db => loadBoundSaltTx(db, restored))).toEqual(salt);
       // 同一份盐继续脱敏：同一敏感值得到与备份前相同的占位符。
       const secret = { account: 'synthetic-account-1' };
-      expect(redact(secret, loadBoundSalt(store, restored))).toEqual(redact(secret, salt));
+      expect(redact(secret, store.write(db => loadBoundSaltTx(db, restored)))).toEqual(redact(secret, salt));
     } finally {
       store.close();
     }
@@ -358,7 +358,7 @@ test('bundle备份要求采集器已停且失败不留目标', () => {
   const f = fixture();
   const bundle = join(f.dir, 'bundle');
   try {
-    loadBoundSalt(f.store, f.dir);
+    f.store.write(db => loadBoundSaltTx(db, f.dir));
     // 采集器还开着：拒绝，且目标与 staging 都不留下。
     expect(() => backupBundle(f.dir, bundle)).toThrow('source_must_be_stopped');
     expect(existsSync(bundle)).toBe(false);
@@ -392,7 +392,7 @@ test('恢复拒绝错盐、缺盐与损坏的数据库且不留目标', () => {
   const bundle = join(f.dir, 'bundle');
   const restored = join(f.dir, 'restored');
   try {
-    loadBoundSalt(f.store, f.dir);
+    f.store.write(db => loadBoundSaltTx(db, f.dir));
     f.store.close();
     backupBundle(f.dir, bundle);
     // 复制一份包做破坏实验，原包保持可恢复。
@@ -430,7 +430,7 @@ test('恢复在发布前校验失败时不留下半套目录', () => {
   const bundle = join(f.dir, 'bundle');
   const restored = join(f.dir, 'restored');
   try {
-    loadBoundSalt(f.store, f.dir);
+    f.store.write(db => loadBoundSaltTx(db, f.dir));
     f.store.close();
     backupBundle(f.dir, bundle);
     // 清单自洽但数据库不是库：哈希能对上，只有完整性校验会拒绝。
@@ -455,7 +455,7 @@ test('维护命令能产出并恢复bundle', async () => {
   const bundle = join(f.dir, 'cli-bundle');
   const restored = join(f.dir, 'cli-restored');
   try {
-    const salt = loadBoundSalt(f.store, f.dir);
+    const salt = f.store.write(db => loadBoundSaltTx(db, f.dir));
     f.store.close();
     const lines: string[] = [];
     const io = { out: (line: string) => lines.push(line), err: (line: string) => lines.push(line) };
@@ -475,7 +475,7 @@ test('维护命令能产出并恢复bundle', async () => {
 test('v6库备份写实际版本，白名单外的版本两侧都拒', () => {
   const f = fixture();
   try {
-    loadBoundSalt(f.store, f.dir);
+    f.store.write(db => loadBoundSaltTx(db, f.dir));
     f.store.close();
     const bundle = join(f.dir, 'bundle-v6');
     backupBundle(f.dir, bundle);

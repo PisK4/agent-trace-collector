@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { fixture, seedPurposeRequest } from './fixtures';
-import { loadBoundSalt, loadConfig } from '../src/config';
+import { loadBoundSaltTx, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
 import { zstdCompressSync } from 'node:zlib';
 import { attemptChainOf, derivationOf, getRequest, getRoute, getStats, listRequests, listSessions,
@@ -286,7 +286,7 @@ test('启动时逐项运行各任务，回收不受其它任务占锁影响', as
   const f = fixture();
   try {
     // 盐与库的绑定要在空库时建立：有数据之后再生成盐会被拒绝（无法证明历史占位符用的是它）。
-    loadBoundSalt(f.store, f.dir);
+    f.store.write(db => loadBoundSaltTx(db, f.dir));
     const config = {
       ...loadConfig({}),
       port: 0,

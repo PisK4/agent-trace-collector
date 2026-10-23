@@ -31,7 +31,7 @@
 
 ## 1. 架构评估与实施决定
 
-评估基准为 `2f25e47`（合并提交 `94623ff` 内容相同）；原型文件在其后未变，执行时以符号定位，不把行号当契约。已运行 `bun test tests/web.test.ts tests/body-view.test.ts`：38 pass、0 fail、140 assertions，只覆盖 `web/body-view.js` 与生产渲染，不覆盖 `prototypes/local-data.js` 或内联原型脚本。合成浏览器操作确认主会话 19 行、每行 36px、400px 无横向溢出、工具原位展开与右栏选择可操作；截图在 `Page.captureScreenshot` 超时，没有 DeepSeek 原图对照。以上结果不覆盖 1.1 列出的原型缺陷、默认选中可见性和三项阅读任务。详细边界见[原型说明](../../../prototypes/README.md#验证范围)。
+评估基准为 `2f25e47`（合并提交 `94623ff` 内容相同）；原型文件在其后未变，执行时以符号定位，不把行号当契约。已运行的 `web/body-view` 测试与合成浏览器检查只覆盖几何和生产渲染；实际数字、未覆盖项和截图限制由[原型说明](../../../prototypes/README.md#验证范围)记录。这些结果不覆盖 1.1 列出的原型缺陷、默认选中可见性和三项阅读任务。
 
 | 需求 | 现有依据 | 差距与决定 |
 | --- | --- | --- |
@@ -55,7 +55,7 @@
 
 | 原型位置 | 现状 | 生产继承约束 |
 | --- | --- | --- |
-| `trace-reader-prototype.html:1290`、`:1311`、`:1325`、`:2057` | 普通工具行只查已缓存结果；已 `resolved` 但正文未加载时显示「结果未记录」「未记录」，关联状态与正文加载状态混用。 | 关联状态（resolved/pending/ambiguous/unpaired/unavailable）与正文加载状态（未读取/读取中/已读/失败）分开；打开结果才按需读取；失败保留原因并可重试；未读取不写成未记录。 |
+| `trace-reader-prototype.html:1290`、`:1311`、`:1325`、`:2057` | 普通工具行只查已缓存结果；已 `resolved` 但正文未加载时显示「结果未记录」「未记录」，关联状态与正文加载状态混用。 | 关联状态（resolved/pending/ambiguous/unpaired）与结果正文状态（未读取/读取中/已读/不可读/位置无效/失败）分开；打开结果才按需读取；失败保留原因并可重试；未读取不写成未记录。 |
 | `trace-reader-prototype.html:1293`、`:1294` | 先构造请求状态行，随后用 `localSteps` 整体替换；HTTP 失败且已有用户输入时没有失败记录。 | 步骤投影独立保留请求状态记录；失败、缺正文、未知关系在已有步骤时仍可见，不依赖 `!steps.length`、颜色或摘要截断。 |
 | `prototypes/local-data.js:59` | 仅按 HTTP 状态生成 `success/failed`；HTTP 200 且 Chat `finish_reason=length` 仍显示完成。 | HTTP 成功与回复完整性分开；复用 `replyView.finish`（Anthropic `stop_reason`、Chat `finish_reason`），只把已确认的长度上限映射为截断；未知停止原因保留原值，不判失败。 |
 | `trace-reader-prototype.html:1331` | Schema 只读 `owner.request.tools`；本机请求的 `request` 恒为 null，Schema 始终显示未携带。 | 复用 `page.capabilities.tools`；区分「工具未声明」「能力不可读/不完整」「同名多定义」；同名不任选第一项。 |
@@ -81,7 +81,7 @@
 - 工具行先显示动作对象（命令、路径、查询或工具名）和明确结果状态，结果正文开头只作补充，不当结论。失败、缺正文、未确认、长度上限等异常用独立可见的短状态表达，不放进省略号摘要，也不只靠颜色或 title。
 - 数字只代表载入请求的正序位置，允许两个1、两个2。raw messages的#0/#1仍是协议消息下标，二者在文案中分别称请求序号和消息位置。显示编号只对当前载入窗口有效；内部身份、跳转和缓存键用 req_id。
 - 失败、缺正文、解析失败、回复截断与关系未知落在对应请求的独立记录行，不再有中栏整行通用缺正文提示。已有用户输入或回复时仍保留这些记录，不以 `!steps.length` 作为唯一条件。左栏去掉笼统待确认文字，具体状态留在选中请求；失败标记保留。
-- 已确认的工具结果在工具行给「结果见请求 N」入口；N 是当前窗口展示号，数据属性保存 req_id。未确认、窗口外、不同 actor、辅助请求和分支分别标识，不按时间邻近猜因果，不把后续成功写成已确认重试。
+- 已确认的工具结果在工具行给「结果见请求 N」入口；N 是当前窗口展示号，数据属性保存 req_id。结果在窗口外时不给窗口号，显示稳定 req_id 并标未在窗口。未确认、不同 actor、辅助请求和分支分别标识，不按时间邻近猜因果，不把后续成功写成已确认重试。
 - 右栏读数页先显示请求能力、请求结构、本次回复，再显示用量、计时、上下文组成、身份完整性。结构与能力默认折叠，回复完整显示，通用说明可折叠。正文、工具、路由入口继续可访问；工具选择有概览/参数/结果/Schema和返回所属请求。Schema 读能力视图，不读可能为 null 的请求对象。
 
 ## 2. 文件职责与依赖
@@ -171,8 +171,8 @@ Task 0 不新增生产类型，只把下列五组状态分开，避免用一句�
 | HTTP 状态 | 成功 / 失败 / 未知 | `RequestRow.status` |
 | 回复完整性 | complete / truncated / unknown / absent | `replyView.finish`；Chat `finish_reason`、Anthropic `stop_reason` |
 | 正文状态 | available / partial / pending / evicted / unsupported | `BodyPage.state` |
-| 工具关联 | resolved / pending / ambiguous / unpaired / invalid_location | 详情工具关系与 `ToolResultReading.state` |
-| 结果正文加载 | not_loaded / loading / loaded / failed | 页面本地状态，不写入服务端 |
+| 工具关联 | resolved / pending / ambiguous / unpaired | 详情工具关系 |
+| 结果正文加载 | not_loaded / loading / loaded / unavailable / invalid_location / failed | 页面本地状态与 `ToolResultReading` |
 
 `resolved` 只说明关联已确认；结果正文未读取、读取失败、工具执行报错与工具成功是四件事。回复截断属于成功响应内的完整性状态，不把请求行改成失败。
 
@@ -182,7 +182,7 @@ Task 0 不新增生产类型，只把下列五组状态分开，避免用一句�
 
 **Interfaces:** Consumes 静态合成入口、现有 `createLocalReader`、`replyView` 与 `capabilityView`。Produces 可供 Task 5/7 继承的已验证状态语义；不新增生产类型，不把原型字段、静态样本或本机服务带进生产。验证结果写入[原型说明](../../../prototypes/README.md#验证范围)。
 
-- [ ] **Step 1: 建立唯一的合成阅读场景和状态口径。** 在静态合成数据中构造一个会话，至少包含：一笔 HTTP 失败但保留用户输入与回复的请求；一笔 HTTP 200、Chat `finish_reason=length` 的请求；一笔 Anthropic `stop_reason=max_tokens` 的请求；一笔正常 `stop`/`end_turn` 的请求；一笔未知停止原因的请求；一笔工具调用在后续请求中 `resolved` 且结果正文未读取；一笔关系 `pending` 或 `ambiguous`；一笔结果请求在最近窗口外；一笔辅助请求和一笔分支请求；能力视图分别覆盖 `present`、`empty`（未声明该工具）、`missing`/`partial`（不可读）以及两个同名工具定义。场景只存在于原型或合成 fixture，不读取本机库、不启动 collector、不复制真实会话正文。按 §3.4 固定状态组，任何位置不得把「未读取」写成「未记录」，也不得把 `resolved` 当成工具成功。
+- [ ] **Step 1: 建立唯一的合成阅读场景和状态口径。** 在静态合成数据中构造一个会话，至少包含：一笔 HTTP 失败但保留用户输入与回复的请求；一笔 HTTP 200、Chat `finish_reason=length` 的请求；一笔 Anthropic `stop_reason=max_tokens` 的请求；一笔正常 `stop`/`end_turn` 的请求；一笔未知停止原因的请求；一笔工具调用在后续请求中 `resolved` 且结果正文未读取；一笔关系 `pending` 或 `ambiguous`；一笔结果请求在最近窗口外；一笔辅助请求和一笔分支请求；能力视图分别覆盖 `present`（含未声明某个工具的情形）、`empty`（请求未携带工具）、`missing`/`partial`（不可读）以及两个同名工具定义。场景只存在于原型或合成 fixture，不读取本机库、不启动 collector、不复制真实会话正文。按 §3.4 固定状态组，任何位置不得把「未读取」写成「未记录」，也不得把 `resolved` 当成工具成功。
 
 - [ ] **Step 2: 分离工具关联与结果正文加载。** 普通工具行、原位展开和右栏工具概览在结果未读取时显示「结果见请求 N · 待读取」或「关系未确认」；打开结果时才调用现有按调用位置读取，显示读取中、正文或固定原因；读取失败保留重试，不把失败改写成未配对。结果查找以发起请求为边界，同一 `call_id` 出现在两个请求时不能串用。
 
@@ -194,13 +194,13 @@ Task 0 不新增生产类型，只把下列五组状态分开，避免用一句�
 
 - [ ] **Step 6: 让工具行先给动作和结果状态。** 工具行摘要先写动作对象（命令、路径、查询、工具名），再写结果关系或执行状态；结果正文开头只作补充，不当结论。失败、缺正文、未确认、长度上限用独立短状态，不随摘要截断。对 `.compact-metrics` 的 215px 固定宽度和空占位做原型测量：在 1507×838 与 400px 下记录正文、异常状态和计时读数的实际占用；可以试验空占位不占宽或按内容分配，但不在本计划预设新的固定宽度，也不取消每请求一次的计量。
 
-- [ ] **Step 7: 前移确定结果入口并标明关系范围。** 关系为 `resolved` 时，工具行显示「结果见请求 N」，N 是当前窗口展示号，数据属性保存稳定 `req_id`；点击定位承载结果的请求。目标在窗口外时只读取该请求详情并提示未在窗口，不扫描全部历史。`pending`/`ambiguous`/`unpaired`/不同 actor/辅助请求/分支分别标识；后续请求成功不自动写成前一次失败的重试成功。
+- [ ] **Step 7: 前移确定结果入口并标明关系范围。** 关系为 `resolved` 且 actor 与调用方一致时，工具行显示「结果见请求 N」，N 是当前窗口展示号，数据属性保存稳定 `req_id`；点击定位承载结果的请求。目标在窗口外时不显示窗口号，只读取该请求详情并提示未在窗口，不扫描全部历史。`pending`/`ambiguous`/`unpaired`/不同 actor/辅助请求/分支分别标识；后续请求成功不自动写成前一次失败的重试成功。
 
 - [ ] **Step 8: 让初始选中可见。** 复现 1507×838 下默认选中最新请求但选中组落在 `main` 底边之外的情况；初始渲染后把选中组带入可见区域，同时保留回到列表顶部的路径。URL 明确指定 `trace` 时保留该请求；窗口外时读详情并在右栏说明，不静默改选最新。加载更早记录后，选中组不因重新编号而丢失或跳到别处。
 
 - [ ] **Step 9: 执行三项阅读任务并判定门槛。** 用同一合成场景执行：a 找到最后一条已记录回复并说明当前进展；b 找到失败请求并说明后续发生了什么，不把后续成功写成已确认重试；c 从一次工具调用定位对应结果和承载它的请求。每项记录完成时间、点击/展开次数和回答正确性，答案以同一场景的预写答案为对照；修复前后各跑一次，记录差值，不设未经验证的数值阈值，不把时间或点击数的改善写成用户批准。
 
-  硬条件：Step 2–5、7–8 的合成回归通过；三项阅读任务回答正确且没有伪造因果；36px 行高、默认折叠、400px 无横向溢出保持；每请求计量仍只出现一次。宽度试验只记录，不作为硬条件。任一项失败时不启动 Task 1，在 Task 0 内修复并重跑；修复后仍不能完成阅读任务，则停止迁移，把原型证据和可选方向交回用户，不降低验收、不把缺陷推给生产任务。用户可读性确认未取得时记录为待确认，不写成通过。
+  硬条件：Step 2–8 的合成回归通过（Step 6 的宽度试验只记录，工具行动作/状态与异常可见性仍须通过）；三项阅读任务回答正确且没有伪造因果；36px 行高、默认折叠、400px 无横向溢出保持；每请求计量仍只出现一次。任一项失败时不启动 Task 1，在 Task 0 内修复并重跑；修复后仍不能完成阅读任务，则停止迁移，把原型证据和可选方向交回用户，不降低验收、不把缺陷推给生产任务。用户可读性确认未取得时记录为待确认，不写成通过。
 
 - [ ] **Step 10: 记录与提交边界。** 在 `prototypes/README.md` 的验证范围写入实际通过的场景、未覆盖项和测量值；不写真实会话正文。建议提交 `fix(prototype): separate reading states and validate the trace`。Task 0 硬条件通过后才允许开始 Task 1；未经授权不 commit。
 
@@ -510,8 +510,8 @@ type TraceStep = {
   text:string; messageOrd:number|null; callOrd:number|null;
   raw:unknown; unrecognized:boolean;
   status:'failed'|'missing_body'|'unknown'|'truncated'|null;
-  result:{state:'resolved'|'pending'|'ambiguous'|'unpaired'
-    |'unavailable'|'invalid_location'; reqId:number|null} | null;
+  result:{state:'resolved'|'pending'|'ambiguous'|'unpaired';
+    reqId:number|null} | null;
 };
 export function projectSteps(row:RequestRow, read:RequestRead|null):TraceStep[];
 export function toolSummary(name:string,inputText:string):string;
@@ -557,7 +557,7 @@ export function toolSummary(name,inputText) {
 
 摘要只用于显示，不用于工具配对；最终HTML必须esc。读取不完整时增加继续读取记录，complete=false使metrics不显示；全部读完将读数放最后一个步骤。request.status失败、正文状态、回复截断或未知增量在所属记录上可见，不能只依赖颜色或title提示，也不能因为已有用户或回复步骤就省略状态记录。工具行摘要只写动作对象和结果关系，不渲染结果正文开头；关系状态放在不被省略号裁剪的独立元素。回复完整性按§3.4映射，`truncated` 不把请求行改成失败。
 
-- [ ] **Step 4: 修正工具按钮并验证。** toolEntries保留result_path，renderTools用owner+call ord绑定按钮，pending/ambiguous不发读取。关系为resolved时，工具行给出「结果见请求 N」入口；N用当前窗口展示号，数据属性保存稳定req_id。测试两工具都指向目标同message不同content块时按钮仍各有不同call ord，不做html.replace。未读取结果时显示待读取，读取失败保留重试，不写成未记录或未配对。更新原有data-tool-result断言为新的调用者身份断言。
+- [ ] **Step 4: 修正工具按钮并验证。** toolEntries保留result_path，renderTools用owner+call ord绑定按钮，pending/ambiguous不发读取。关系为resolved且actor一致时，工具行给出「结果见请求 N」入口；N用当前窗口展示号，数据属性保存稳定req_id，窗口外不给窗口号。测试两工具都指向目标同message不同content块时按钮仍各有不同call ord，不做html.replace。未读取结果时显示待读取，读取失败保留重试，不写成未记录或未配对。更新原有data-tool-result断言为新的调用者身份断言。
 - [ ] **Step 5: 运行绿测。** `bun test tests/trace-view.test.ts tests/body-view.test.ts tests/http.test.ts`，`bun run typecheck`；新静态 `/trace-view.js` 可访问。
 - [ ] **Step 6: 提交边界。** 建议 `feat(reader): project confirmed inputs and reply blocks into trace steps`。本文引用的稳定键和计量归属在note记录理由，代码/架构拥有实际接口。
 
@@ -611,7 +611,7 @@ expect(html).toContain('45 条消息');
 
 - [ ] **Step 2: 运行红测。** `bun test tests/body-view.test.ts tests/reader-store.test.ts tests/web.test.ts`。
 - [ ] **Step 3: 复用区块组合。** 从ledgerBodySection保留能力/结构/回复的纯组合，结构使用独立ords加载列表，不把delta Map全部作为历史。能力details和结构details默认closed，首次展开才loadStructure，loading禁用重复按钮，错误可重试。复制调用messageCopyText，不复制HTML；返回按钮只清structure.selected。同请求重绘保持能力清单、条目Schema、结构开合及selected，换请求右栏回顶部；状态按稳定key存Map，避免按details下标恢复到另一清单。
-- [ ] **Step 4: 完整回复与工具详情接线。** facts按§1.3排序，保留生产usageSection/timingSection/promptSection/completenessSection，routeSection延迟到路由tab或展开时加载。renderReply显示全文，thinking默认折叠。回复完整性按§3.4单独显示；HTTP成功且`finish`为长度上限时标截断，请求状态仍成功，缺失回复不标完成。工具点击只用owner/callOrd，概览显示配对状态与正文加载状态，参数展示原始inputText，结果用Task 3接口，Schema从当前meta.capabilities.tools.items按工具名找：0项在capabilities为present/empty时说明未声明，missing/partial/unrecognized说明能力不可读或不完整及原因，多同名项逐项列出并说明无法唯一选择，不任选第一项。结果is_error true为失败、false为上游未标错、null为未报告，不把resolved当成功；未读取结果不写未记录，读取失败保留重试。模型时长明确归属请求，工具执行时长未采集。
+- [ ] **Step 4: 完整回复与工具详情接线。** facts按§1.3排序，保留生产usageSection/timingSection/promptSection/completenessSection，routeSection延迟到路由tab或展开时加载。renderReply显示全文，thinking默认折叠。回复完整性按§3.4单独显示；HTTP成功且`finish`为长度上限时标截断，请求状态仍成功，缺失回复不标完成。工具点击只用owner/callOrd，概览显示配对状态与正文加载状态，参数展示原始inputText，结果用Task 3接口，Schema从当前meta.capabilities.tools.items按工具名找：0项时按capabilities.state区分，present说明本请求未声明该工具，empty说明请求未携带工具，missing/partial/unrecognized说明能力不可读或不完整及原因；多同名项逐项列出并说明无法唯一选择，不任选第一项。结果is_error true为失败、false为上游未标错、null为未报告，不把resolved当成功；未读取结果不写未记录，读取失败保留重试。模型时长明确归属请求，工具执行时长未采集。
 - [ ] **Step 5: 浏览器合成验收与绿测。** 操作能力展开、Schema、40+5结构分页、消息详情返回、复制拒绝fallback、工具参数/结果/Schema、右栏返回请求、路由tab、同请求scrollTop保持与换请求归顶。另操作：HTTP成功但回复长度上限时的截断提示与请求成功状态并存；resolved未读取、读取失败重试、未确认三种工具状态；能力不可读与工具未声明的不同文案。响应式400px时全文/JSON在栏内换行或内部滚动，文档无横向溢出。绿测同Step 2，类型检查只在本项代码改变后运行一次。
 - [ ] **Step 6: 提交边界。** 建议 `feat(web): add request context and precise tool details to the rail`；交付事实更新架构与本提案生命周期，保留能力声明不等于实际调用的理由。
 

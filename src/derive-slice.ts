@@ -10,6 +10,7 @@ import {
   flattenToolContent, initialPairState, pairOutcome, presentationDecision, settleRelation,
 } from './derive-decision';
 import type { ResolvedTool } from './derive-decision';
+import type { DeriveBudget, SliceRuntime } from './config';
 import {
   compareLogicalOrder, compareTraversalOrder, drainDeriveTx, fingerprintsOf, presentationPortsOf,
   replyInfoOf, uncertainOrderIds,
@@ -18,26 +19,6 @@ import type { DeriveScope, DrainResult, LogicalRow } from './derive';
 
 /** 切片派生的算法号。与同步组的 `GROUP_ALGORITHM` 分开：两者算出的结果不能互相复用。 */
 export const DERIVE_ALGORITHM = 5;
-
-export type DeriveBudget = {
-  maxRequestMs: number;
-  maxStageBatchMs: number;
-  maxCandidatesPerBatch: number;
-  maxWritesPerBatch: number;
-  maxStagedBytes: number;
-  maxWalGrowthBytes: number;
-  maxRetiredGenerations: number;
-};
-
-export const DEFAULT_DERIVE_BUDGET: DeriveBudget = {
-  maxRequestMs: 10,
-  maxStageBatchMs: 250,
-  maxCandidatesPerBatch: 100,
-  maxWritesPerBatch: 500,
-  maxStagedBytes: 64 * 1024 * 1024,
-  maxWalGrowthBytes: 32 * 1024 * 1024,
-  maxRetiredGenerations: 2,
-};
 
 export type SliceStep = {
   status: 'idle' | 'advanced' | 'published' | 'discarded' | 'rotated';
@@ -1128,9 +1109,6 @@ export function sliceSummaryStage(store: Store, generation: string,
 // ---------------------------------------------------------------------------
 // 完成阶段：磁盘与覆盖校验、发布、构建期表回收、退役代际上限。
 // ---------------------------------------------------------------------------
-
-/** 切片入口的运行期配置：预算、数据目录与库路径。 */
-export type SliceRuntime = { budget: DeriveBudget; dataDir: string; dbPath: string };
 
 /** WAL 文件当前字节数。文件还没建（没有写入）时是 0，不是错误。 */
 function walBytes(dbPath: string): number {

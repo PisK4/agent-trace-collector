@@ -51,7 +51,7 @@ bun prototypes/serve-local.ts
 
 浏览器检查确认主会话载入 19 行，每行高度均为 36px，详情默认展开数为 0，列表没有模型名。展开助手详情可看到全文，收起后恢复单行。400px 窄屏检查中，文档宽度为 400px，行高仍为 36px，没有页面横向溢出。
 
-现有几何与交互验证不覆盖本轮评审发现的四类原型缺陷：工具关联与结果正文加载混用、请求状态行被步骤替换、HTTP 200 与回复长度上限未分开、Schema 只读请求对象不读能力视图；也不覆盖默认选中可见性和三项阅读任务。专项代理运行的 `tests/web.test.ts`、`tests/body-view.test.ts` 为 38 pass、0 fail、140 assertions，只覆盖 `web/body-view.js` 与生产渲染，不覆盖 `prototypes/local-data.js` 或内联原型脚本。截图在 `Page.captureScreenshot` 超时，仍无 DeepSeek 原图对照。修复与复验由[生产迁移计划 Task 0](../docs/superpowers/plans/2026-10-23-single-timeline-production-reader.md)负责，未完成前不把这些缺陷写成已修或已验收。
+现有几何与交互验证不覆盖本轮评审发现的四类原型缺陷，也不覆盖默认选中可见性和三项阅读任务；详细现象、行号与修复步骤见[生产迁移计划 Task 0](../docs/superpowers/plans/2026-10-23-single-timeline-production-reader.md)。专项代理运行的 `tests/web.test.ts`、`tests/body-view.test.ts` 为 38 pass、0 fail、140 assertions，只覆盖 `web/body-view.js` 与生产渲染，不覆盖 `prototypes/local-data.js` 或内联原型脚本。截图在 `Page.captureScreenshot` 超时，仍无 DeepSeek 原图对照。未完成 Task 0 前不把这些缺陷写成已修或已验收。
 
 顶部追加与位置保持沿用同轮验证过的实现，桌面位置偏移为 0，窄屏 DOM 触发核验偏移为 0.5px。扩大初始窗口后，当前合成会话不再触发历史分页，尚未用更长合成会话重新操作验收。工具参数标签、返回请求详情、原位完整上下文、回到最新、面板折叠、分隔线键盘调宽及 Session ID 复制已在同轮改版中操作验证。截图调用在 `Page.captureScreenshot` 超时，未完成截图视觉验收。内联脚本语法、差异空白及 Agent Note 格式检查通过。
 

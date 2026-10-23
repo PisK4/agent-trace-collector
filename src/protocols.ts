@@ -1,6 +1,6 @@
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
-import type { BodyState } from './queries';
+import type { BodyState } from './store';
 import { interpretMessage, messageText, type MessageView, type UserInputView } from './input-interpretation';
 import { capabilityView, type CapabilityCoverage, type CapabilityView } from './capabilities';
 
