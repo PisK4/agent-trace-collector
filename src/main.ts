@@ -11,8 +11,7 @@ import { ingestLedger, ingestRoute } from './reconcile';
 import { probeMagpie, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
 import { reconcilePending } from './hook';
-import { drainDerive } from './derive';
-import { recoverSlice } from './derive-slice';
+import { drainDeriveEntry, recoverSlice } from './derive-slice';
 import {
   DISK_METADATA_RATIO,
   EVICT_TARGET_RATIO,
@@ -62,6 +61,15 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   if (heldLock !== null) throw new Error(`maintenance_lock_present:${heldLock}`);
   const dbPath = join(config.dataDir, 'trace.db');
   const store = openStore(dbPath);
+  // 派生路径按配置定下来，定时器之前就设好：一旦有派生任务进来，模式和预算都
+  // 必须是已确定的，不能"先按同步跑一会儿再切"。
+  if (config.deriveBudget !== undefined) {
+    store.deriveRuntime = {
+      budget: config.deriveBudget,
+      dataDir: config.dataDir,
+      dbPath: store.path,
+    };
+  }
   // 盐与库必须配对：有数据却没有绑定、或盐文件与绑定不符时，采集器不能起来。
   // 失败要在这里关掉库，否则调用方重试会撞上一个已打开的写连接。
   let salt: Uint8Array;
@@ -237,7 +245,7 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   });
 
   const deriveTick = guard('derive', () => {
-    drainDerive(store);
+    drainDeriveEntry(store);
   });
 
   const server = Bun.serve({

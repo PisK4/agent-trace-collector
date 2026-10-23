@@ -5469,6 +5469,23 @@ git commit -m "feat(derive): slice ready stage with disk budgets and invalidatio
   -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+**Step 7（执行时的偏差记录）**
+
+1. **`Store` 只留一个切片字段 `deriveRuntime`，不再同时存 `deriveBudget`。** 模式标志、预算与库路径分成三个字段存，运行期迟早出现"一个字段说切片、另一个说同步"的组合。本任务把预算放进 `SliceRuntime.budget`，`Config.deriveBudget` 仍是配置入口。Task 19 的用例改成就地设 `slice.store.deriveRuntime` 一处。
+2. **认领时归一目标算法号（计划把它列为 Task 14 遗留的布线缺口）。** 做法不是"组变脏时按运行模式写 `target_algorithm`"（那要改 8 个调用点），而是在 `sliceGroupStep` 认领前把该行归一到切片号：只改 `state<>'clean'` 的行——clean 行有已发布产物，改号等于伪造它由另一套算法发布。`markGroupDirtyTx` 的插入路径写死同步号这件事因此不再需要动。
+3. **组选择加了用途门控。** 计划的选择 SQL 只筛 `state<>'clean'`，那样组里还有待判定用途的请求也会被认领，物化阶段只能拿到默认的 `purpose_chain`——等于替它们猜了一个用途。同步入口在同一处 `continue`，切片改为在选择时不认领（每轮一条 `NOT EXISTS`）。计划的轮转用例种下的请求带默认 `purpose_pending=1`，本次显式冻结用途。
+4. **摘要阶段按预算连续推进多页**，而不是计划的一次调用只写一页。与角色、工具阶段同构：长组的摘要阶段不会退化成每两秒一页。逐请求的 `maxRequestMs` 超限按 `slice_summary_budget` 丢弃整代，该原因进丢弃枚举。
+5. **ready 阶段的丢弃用 `discardGenerationTx`，不是 `discardGeneration`。** 那些丢弃是校验结论本身，与结果行的删除同事务提交才自洽；而且 `bun:sqlite` 的嵌套 `transaction()` 是平的（Task 15 起的实测结论），在写事务里再开一个事务会直接失败。`publishGeneration` 返回 false 时它已经自己丢弃并记下原因，这里不再二次丢弃。
+6. **关联按 `result_req` 取，不按 `req_id`。** 计划写的是 `req_id IN (本页)`（调用侧）。摘录要回答"这一笔输入里回传了哪些结果"，页边界切在调用与回传之间时调用侧筛会漏关联，同一份结果随批大小给出不同摘录。代价是本代工具行的一次扫描（`result_req` 无索引）；加索引会让上线中的库与新库 schema 分叉，首版前不做。
+7. **`drainDeriveEntry` 的 `processed`/`groups` 语义按实测改。** 同步入口的 `processed` 逐**请求**累加（`drainDeriveTx` 里在请求循环内自增），不是组数；切片入口取"本次推进的阶段步数"。计划写的 `processed = 发布组数`、`groups = 那批发布组` 会让 maintenance 的 `derive_no_progress` 守卫在"只推进了一页、还没发布"的调用上误报。`groups` 取本次涉及的组（去重）。
+8. **`staged_bytes` 由物化阶段按行数估算维护**（结果行 512 字节、候选行 256 字节）。计划没说谁写它；不写的话 ready 的磁盘闸门永远为 0，成为一条永不触发的配置。硬闸门仍是量真实字节的 WAL 检查。
+9. **`Store.path` 新增。** 计划在 ready 阶段用 `store.path` 拼 WAL 路径，而 store 之前没有这个字段；加它比在调用链里再传一次库路径少一处可能不一致的来源。
+10. **维护进程没有模式配置。** `maintenance.ts` 与 `scripts/backfill-fingerprint.ts` 的调用点按计划换成了 `drainDeriveEntry`，但两者都没有设置 `deriveRuntime`，因此落回同步分支；维护的命令行也没有模式开关可拿。切片模式目前只由容量实验入口启用，运维入口的模式事实留到切片真正上线时补，本任务不替它猜。
+11. **计划用例的期望值有四处需要修正。** 摘要用例的请求只写了 `body_state='available'` 而没有正文，`fingerprintsOf` 判不可读，走的是"保留旧值"分支而不是工具摘录分支（本次改成种真实正文，并把对照值改成同步入口在同一组输入上的结果）；工具摘录取的是关联里的工具名（`工具结果 · read`），不是内容兜底；"组修订在阶段间变化"用例缺一步把代际推进到 `roles`（新代出生在 `requests`，阶段函数会返回 idle）；轮转用例的请求需要显式冻结用途（见第 3 条）。
+12. **`tests/maintenance.test.ts` 未改动。** 维护调用点换了入口但没有模式配置，可观察行为与之前逐字相同，没有能对该变更失败的回归可写。
+13. **完成阶段的候选覆盖按 `purpose_chain` 筛，不按计划里的 `COALESCE(chain_role,'main')<>'aux'`。** 与工具阶段的收尾校验、配对函数的筛选同一条判据：`chain_role` 是角色传播的推论，用途才是事实。两者在封闭域下等价，改动只在"同一份文件里同一个断言用两种写法"这处。
+14. **Step 2（验证失败）没有作为红灯步骤执行。** 与前三项同样的情况：实现与测试同一轮写出。
+
 ### Task 19：等价性、切片容量门槛与交接
 
 **Files:**

@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import { statSync } from 'node:fs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type { Store } from './store';
 import { readBodyTx } from './body';
+import { modelTimeTitle } from './sources/magpie';
+import { drainRequestPurposesTx } from './request-purpose';
 import {
   anthropicReplyCalls, anthropicRequestResults, commonPrefix, compareLogicalOrder,
-  compareTraversalOrder, fingerprintsOf, flattenToolContent, uncertainOrderIds,
+  compareTraversalOrder, deriveTitle, drainDeriveTx, fingerprintsOf, firstUserPreview,
+  flattenToolContent, messageAt, previewOf, replyInfoOf, tailUserPreview, toolResultPreview,
+  uncertainOrderIds,
 } from './derive';
-import type { LogicalRow } from './derive';
+import type { DeriveScope, DrainResult, LogicalRow, ResolvedTool } from './derive';
 
 /** 切片派生的算法号。与同步组的 `GROUP_ALGORITHM` 分开：两者算出的结果不能互相复用。 */
 export const DERIVE_ALGORITHM = 5;
@@ -223,13 +228,22 @@ const CANDIDATE_PREVIEW_LIMIT = 200;
 /**
  * 只有这些失败把这一代丢掉。其余异常照旧冒泡：把真实故障吞成"切片决策"
  * 会让坏掉的代码看起来像在正常工作。
+ *
+ * 完成阶段那几条（磁盘、basis、逐请求修订、覆盖）不在抛错路径上：它在自己那个
+ * 写事务里判完即丢，与结果行的删除同事务提交。名字列在这里，因为它们是同一件事
+ * 的另一种说法——"这一代不能发布"。
  */
 const SLICE_DISCARD_REASONS = new Set([
   'slice_group_revision_changed',
   'slice_purpose_revision_changed',
   'slice_request_budget',
+  'slice_summary_budget',
   'slice_candidate_budget',
   'slice_tool_coverage',
+  'slice_disk_budget',
+  'slice_basis_budget',
+  'slice_stamp_invalidated',
+  'slice_coverage_budget',
 ]);
 
 /**
@@ -310,6 +324,10 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
   }
 
   let writes = 0;
+  // 暂存行占用按行数估算：每笔结果行 512 字节、每笔候选行 256 字节。
+  // 这是给发布前磁盘上界用的粗估（预览文本有长度上界，512 覆盖得住），
+  // 真正的硬闸门是 ready 阶段的 WAL 检查——它量的是真实字节。
+  let staged = 0;
   for (const row of page) {
     const rowStarted = performance.now();
     const body = readBodyTx(db, row.req_id);
@@ -338,6 +356,7 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
       DERIVE_ALGORITHM, readable ? 'recomputed' : 'retained',
     ]);
     writes += 1;
+    staged += 512 + (calls.length + results.length) * 256;
     for (const call of calls) {
       db.run(`INSERT INTO derive_call_work(generation,req_id,ord,call_id,tool_name,
         request_index,traversal_ord) VALUES (?,?,?,?,?,-1,-1)`,
@@ -356,7 +375,8 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
   }
   const last = page[page.length - 1]!.req_id;
   db.run(`UPDATE derive_generation SET cursor_req_id=?,
-    request_count=request_count+? WHERE generation=?`, [last, page.length, generation]);
+    request_count=request_count+?,staged_bytes=staged_bytes+? WHERE generation=?`,
+  [last, page.length, staged, generation]);
   return { kind: 'page', rows: page.length, writes };
 }
 
@@ -936,4 +956,487 @@ export function sliceToolsStage(store: Store, generation: string,
       return { status: 'advanced', generation, stage: 'tools', rows, batch_ms: elapsed() };
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// 摘要阶段：标题、输入摘要与回复摘要。
+//
+// 展示分支是同步路径 `writePresentationTx` 的逐条转录，只换读值与写值：
+// 读的是**当前** `request` 行（用途、标题、旧预览都是事实，不是这一代物化那一刻的快照），
+// 写的是本代的结果行。判据一份实现、两处调用，两套写法会让同一份正文在两条路径上
+// 得到不同的标题。
+// ---------------------------------------------------------------------------
+
+/** 一页写多少笔摘要。页是事务边界，也是一次调用里最小的可续跑单位。 */
+const SUMMARY_PAGE_MAX = 50;
+
+type SummaryGen = {
+  state: string; stage: string; conv_key: string; actor: string; group_epoch: string;
+  input_revision: number; summary_cursor_ord: number;
+};
+
+const SUMMARY_GEN_COLUMNS =
+  'state,stage,conv_key,actor,group_epoch,input_revision,summary_cursor_ord';
+
+/** 摘要阶段一行要的事实：暂存行给增量与消费过的用途修订，当前请求行给展示输入。 */
+type SummaryRow = {
+  req_id: number; traversal_ord: number; started_ms: number; delta_ordinals: string | null;
+  staged_purpose_revision: number; live_purpose_revision: number;
+  purpose_chain: string; req_kind: string | null; model_served: string | null;
+  model_title: string | null; agent: string | null;
+  live_title: string | null; live_title_source: string | null;
+  live_input_preview: string | null; live_input_preview_kind: string | null;
+  live_reply_preview: string | null;
+};
+
+function summaryGen(db: Database, generation: string): SummaryGen | null {
+  return one<SummaryGen>(db,
+    `SELECT ${SUMMARY_GEN_COLUMNS} FROM derive_generation WHERE generation=?`, [generation]);
+}
+
+/**
+ * 本页要用的工具往返，按**结果所属请求**取。
+ *
+ * 关联行的 `req_id` 是发起调用的那一笔，与回传结果的那一笔可能隔着页边界：
+ * 按调用侧筛会让同一份结果在不同页大小下得到不同的摘要，而摘要正是文档里
+ * 说"只从本次确定下来的关联取"的那个东西。
+ */
+function pageAssociations(db: Database, generation: string,
+  ids: readonly number[]): ResolvedTool[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  return db.query<ResolvedTool, SQLQueryBindings[]>(`
+    SELECT req_id AS callReq,ord AS callOrd,call_id AS callId,tool_name AS name,
+      result_req AS resultReq,result_ord AS resultOrd,result_path AS resultPath
+    FROM derive_tool_result WHERE generation=? AND state='resolved'
+      AND result_req IN (${placeholders})`).all(generation, ...ids);
+}
+
+/**
+ * 一页请求的展示结果。
+ *
+ * 分支顺序与同步路径一致：标题请求 → 正文不可读 → 增量非空 → 增量存在但为空 →
+ * 关系未知。降级顺序有意义：标题请求先判，不可读的标题请求也要走标题分支。
+ */
+function summaryStep(db: Database, generation: string, budget: DeriveBudget): StageOutcome {
+  const gen = summaryGen(db, generation);
+  if (gen === null || gen.state !== 'building') {
+    return { kind: 'stalled', stage: gen?.stage ?? null, rows: 0, writes: 0 };
+  }
+  if (gen.stage !== 'summary') {
+    return { kind: 'stalled', stage: gen.stage, rows: 0, writes: 0 };
+  }
+  if (!assertQueueRevision(db, gen)) throw new Error('slice_group_revision_changed');
+  const page = db.query<SummaryRow, [string, number, number]>(`
+    SELECT d.req_id,d.traversal_ord,d.started_ms,d.delta_ordinals,
+      d.purpose_revision AS staged_purpose_revision,r.purpose_revision AS live_purpose_revision,
+      r.purpose_chain,r.req_kind,r.model_served,r.model_title,r.agent,
+      r.title AS live_title,r.title_source AS live_title_source,
+      r.input_preview AS live_input_preview,r.input_preview_kind AS live_input_preview_kind,
+      r.reply_preview AS live_reply_preview
+    FROM derive_request_result d JOIN request r ON r.req_id=d.req_id
+    WHERE d.generation=? AND r.actor_state='known' AND d.traversal_ord>?
+    ORDER BY d.traversal_ord LIMIT ?`)
+    .all(generation, gen.summary_cursor_ord,
+      Math.min(SUMMARY_PAGE_MAX, budget.maxCandidatesPerBatch));
+  if (page.length === 0) {
+    db.run(`UPDATE derive_generation SET stage='ready',ready_cursor_ord=-1 WHERE generation=?`,
+      [generation]);
+    return { kind: 'advanced', stage: 'ready', rows: 0, writes: 1 };
+  }
+  const associations = pageAssociations(db, generation, page.map(row => row.req_id));
+  let writes = 0;
+  for (const row of page) {
+    const rowStarted = performance.now();
+    // 用途分类器改判时在同一次写入里更新 purpose_chain/req_kind 并 bump 修订：
+    // 修订不一致说明这一代消费的用途结论已经不是当前结论，整代作废，
+    // 不拿新的用途去配旧的链结果。
+    if (row.live_purpose_revision !== row.staged_purpose_revision) {
+      throw new Error('slice_purpose_revision_changed');
+    }
+    // 可读性只看正文读不读得出来，不看 `body_state`：骨架损坏时正文同样读不出来，
+    // 那时旧标题必须原样保留，不能标成本次重算。
+    const current = fingerprintsOf(db, row.req_id);
+    const replyInfo = current === null
+      ? { preview: row.live_reply_preview }
+      : replyInfoOf(db, row.req_id);
+    const isTitle = row.req_kind === 'title';
+    const isAux = row.purpose_chain === 'exclude';
+    const modelTitle = row.model_title;
+    const delta = row.delta_ordinals === null
+      ? null : JSON.parse(row.delta_ordinals) as number[];
+    const fallback = modelTimeTitle(row.model_served, row.started_ms);
+    let title = fallback;
+    let source: 'user_delta' | 'model_time' | 'model_title' = 'model_time';
+    let inputPreview: string | null = null;
+    let inputKind: 'delta' | 'tail' | 'tool_result' | 'title' | null = null;
+    if (isTitle) {
+      // 标题请求不产生用户标题：它的正式标题只来自用途阶段写下的 model_title。
+      title = modelTitle ?? (current === null ? row.live_title ?? fallback : fallback);
+      source = modelTitle !== null ? 'model_title'
+        : current === null && row.live_title_source === 'model_title' ? 'model_title' : 'model_time';
+      inputPreview = firstUserPreview(db, row.req_id) ?? '生成会话标题';
+      inputKind = 'title';
+    } else if (current === null) {
+      // 正文已回收：旧标题与旧摘要都是当时按正文算出来的，原样保留。
+      title = row.live_title ?? fallback;
+      source = row.live_title_source === 'user_delta' || row.live_title_source === 'model_time'
+        || row.live_title_source === 'model_title' ? row.live_title_source : 'model_time';
+      inputPreview = row.live_input_preview;
+      inputKind = row.live_input_preview_kind === 'delta' || row.live_input_preview_kind === 'tail'
+        || row.live_input_preview_kind === 'tool_result'
+        || row.live_input_preview_kind === 'title' ? row.live_input_preview_kind : null;
+    } else if (delta !== null && delta.length > 0) {
+      // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
+      const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
+      if (isAux) {
+        // 排除用途的非标题行不得从用户增量取标题：保持模型标题或时间兜底。
+        // 输入摘要仍走同一套取值，不为旁路另写一份规则。
+        title = modelTitle ?? fallback;
+        source = modelTitle !== null ? 'model_title' : 'model_time';
+      } else {
+        const derived = deriveTitle(messages, delta.map((_, index) => index), fallback, row.agent);
+        title = derived.title;
+        source = derived.source;
+      }
+      // 增量里常常只有工具结果或系统消息，没有用户文本。
+      // 有用户文本才算"新增"，否则照实说这一轮回传了什么工具结果。
+      const fresh = previewOf(messages, row.agent);
+      if (fresh !== null) {
+        inputPreview = fresh;
+        inputKind = 'delta';
+      } else {
+        inputPreview = toolResultPreview(db, row.req_id, delta, associations);
+        inputKind = inputPreview === null ? null : 'tool_result';
+      }
+    } else if (delta !== null) {
+      // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
+      inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
+      inputKind = 'tool_result';
+    } else {
+      // 关系未知、另起一支或排除用途：没有"新增"可言，但折叠行仍要有东西可读。
+      inputPreview = tailUserPreview(db, row.req_id);
+      inputKind = inputPreview === null ? null : 'tail';
+    }
+    db.run(`UPDATE derive_request_result SET title=?,title_source=?,input_preview=?,
+      input_preview_kind=?,reply_preview=?,retention_state=? WHERE generation=? AND req_id=?`,
+    [title, source, inputPreview, inputKind,
+      current === null ? row.live_reply_preview : replyInfo.preview,
+      current === null ? 'retained' : 'recomputed', generation, row.req_id]);
+    if (performance.now() - rowStarted > budget.maxRequestMs) {
+      throw new Error('slice_summary_budget');
+    }
+    writes += 1;
+  }
+  db.run('UPDATE derive_generation SET summary_cursor_ord=? WHERE generation=?',
+    [page[page.length - 1]!.traversal_ord, generation]);
+  return { kind: 'work', stage: 'summary', rows: page.length, writes: writes + 1 };
+}
+
+/**
+ * 摘要阶段。与角色、工具阶段同构：一步一页、一页一个写事务，超预算停在
+ * `summary_cursor_ord`，下一次从那里接着写。
+ */
+export function sliceSummaryStage(store: Store, generation: string,
+  budget: DeriveBudget, now: number): SliceStep {
+  const started = performance.now();
+  const elapsed = (): number => performance.now() - started;
+  const head = summaryGen(store.read, generation);
+  if (head === null || head.state !== 'building') {
+    return { status: 'idle', generation, stage: head?.stage ?? null, rows: 0, batch_ms: elapsed() };
+  }
+  if (head.stage !== 'summary') {
+    return { status: 'idle', generation, stage: head.stage, rows: 0, batch_ms: elapsed() };
+  }
+
+  let rows = 0;
+  let writes = 0;
+  for (;;) {
+    let outcome: StageOutcome;
+    try {
+      outcome = store.write(db => summaryStep(db, generation, budget));
+    } catch (error) {
+      sliceDiscardReason(store, generation, error, now);
+      return { status: 'discarded', generation, stage: null, rows, batch_ms: elapsed() };
+    }
+    rows += outcome.rows;
+    writes += outcome.writes;
+    if (outcome.kind !== 'work') {
+      return { status: outcome.kind === 'advanced' ? 'advanced' : 'idle', generation,
+        stage: outcome.stage, rows, batch_ms: elapsed() };
+    }
+    if (writes >= budget.maxWritesPerBatch || elapsed() >= budget.maxStageBatchMs) {
+      return { status: 'advanced', generation, stage: 'summary', rows, batch_ms: elapsed() };
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 完成阶段：磁盘与覆盖校验、发布、构建期表回收、退役代际上限。
+// ---------------------------------------------------------------------------
+
+/** 切片入口的运行期配置：预算、数据目录与库路径。 */
+export type SliceRuntime = { budget: DeriveBudget; dataDir: string; dbPath: string };
+
+/** WAL 文件当前字节数。文件还没建（没有写入）时是 0，不是错误。 */
+function walBytes(dbPath: string): number {
+  try {
+    return statSync(`${dbPath}-wal`).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 完成并发布一代。
+ *
+ * 校验顺序固定：组修订 → 磁盘预算 → basis 大小 → 逐请求修订 → 覆盖，全过才发布。
+ * 任何一条不过就丢弃这一代，宁可重算也不发布一份说不清来源的结果。
+ *
+ * WAL 检查在写事务之外做（checkpoint 与 writer 事务互相等，同一个事务里做只会把
+ * 等待叠成死等）。WAL 是整库的量、不是这一代的量：拿它当丢弃理由意味着别处灌了
+ * WAL 时这一组也会被反复重建。这是有意的选择——磁盘安全先于进度，而"因为磁盘"
+ * 而停在 dirty 是可在 `last_error` 与丢弃计数里看见的状态，不是静默的错误结果。
+ */
+export function sliceReadyStage(store: Store, generation: string,
+  budget: DeriveBudget, now: number, dbPath: string): SliceStep {
+  const started = performance.now();
+  if (walBytes(dbPath) > budget.maxWalGrowthBytes) store.db.exec('PRAGMA wal_checkpoint(PASSIVE)');
+  return store.write(db => {
+    const gen = one<{ state: string; stage: string; conv_key: string; actor: string;
+      group_epoch: string; input_revision: number; request_count: number; tool_count: number;
+      staged_bytes: number }>(db, `SELECT state,stage,conv_key,actor,group_epoch,input_revision,
+      request_count,tool_count,staged_bytes FROM derive_generation WHERE generation=?`,
+    [generation]);
+    if (gen === null || gen.state !== 'building') {
+      return { status: 'idle', generation, stage: gen?.stage ?? null, rows: 0,
+        batch_ms: performance.now() - started };
+    }
+    if (gen.stage !== 'ready') {
+      return { status: 'idle', generation, stage: gen.stage, rows: 0,
+        batch_ms: performance.now() - started };
+    }
+    const discard = (reason: string): SliceStep => {
+      // 这里的丢弃与这一代的校验同在一个事务里：它不是"抛错回滚之后的补救"，
+      // 而是校验结论本身，与结果行的删除一起提交才自洽。
+      discardGenerationTx(db, generation, reason, now);
+      return { status: 'discarded', generation, stage: null, rows: 0,
+        batch_ms: performance.now() - started };
+    };
+    if (!assertQueueRevision(db, gen)) return discard('slice_group_revision_changed');
+    if (gen.staged_bytes > budget.maxStagedBytes
+      || walBytes(dbPath) > budget.maxWalGrowthBytes) return discard('slice_disk_budget');
+    // 结果行的 basis 是发布出去的事实来源，超过预算就说明这一代存了不该存的东西。
+    // 当前 basis 恒为代际身份与调用号，远在预算之下：这条是阶段边界上的不变量断言。
+    const oversizedBasis = count(db, `SELECT COUNT(*) FROM derive_request_result
+      WHERE generation=? AND length(CAST(basis_json AS BLOB))>4096`, [generation])
+      + count(db, `SELECT COUNT(*) FROM derive_tool_result
+      WHERE generation=? AND length(CAST(basis_json AS BLOB))>4096`, [generation]);
+    if (oversizedBasis !== 0) return discard('slice_basis_budget');
+    // 逐请求修订：组级校验只看组修订，用途重判到同一结论但换了修订时它拦不住，
+    // 而结果行里记的修订是要发布出去的。
+    const stale = count(db, `SELECT COUNT(*) FROM derive_request_result d
+      JOIN request r ON r.req_id=d.req_id
+      WHERE d.generation=? AND r.actor_state='known'
+        AND (r.input_revision<>d.input_revision OR r.purpose_revision<>d.purpose_revision)`,
+    [generation]);
+    if (stale !== 0) return discard('slice_stamp_invalidated');
+    // 覆盖：参与请求的每一笔候选都要有结果行，组里每一笔已知请求都要进这一代。
+    // 筛选按 `purpose_chain`，与工具阶段同一条判据（`chain_role` 是它的推论）。
+    const missingCalls = count(db, `SELECT COUNT(*) FROM derive_call_work c
+      JOIN derive_request_result d ON d.generation=c.generation AND d.req_id=c.req_id
+      WHERE c.generation=? AND d.purpose_chain='participate'
+        AND NOT EXISTS (SELECT 1 FROM derive_tool_result t
+        WHERE t.generation=c.generation AND t.req_id=c.req_id AND t.ord=c.ord)`, [generation]);
+    const missingRequests = count(db, `SELECT COUNT(*) FROM request r
+      WHERE r.conv_key=? AND r.actor=? AND r.actor_state='known'
+        AND NOT EXISTS (SELECT 1 FROM derive_request_result d
+        WHERE d.generation=? AND d.req_id=r.req_id)`, [gen.conv_key, gen.actor, generation]);
+    const requests = count(db, `SELECT COUNT(*) FROM request
+      WHERE conv_key=? AND actor=? AND actor_state='known'`, [gen.conv_key, gen.actor]);
+    if (missingCalls !== 0 || missingRequests !== 0 || requests !== gen.request_count) {
+      return discard('slice_coverage_budget');
+    }
+    db.run(`UPDATE derive_generation SET state='ready',stage='done' WHERE generation=?`,
+      [generation]);
+    // 发布失败已经被 `publishGeneration` 自己丢弃并记下原因，这里只回报状态。
+    if (!publishGeneration(db, generation, now)) {
+      return { status: 'discarded', generation, stage: null, rows: 0,
+        batch_ms: performance.now() - started };
+    }
+    // 祖先台账与扫描状态只在构建期有读者：发布之后留着只占空间。
+    db.run('DELETE FROM derive_chain_work WHERE generation=?', [generation]);
+    db.run('DELETE FROM derive_role_work WHERE generation=?', [generation]);
+    gcRetired(db, gen.conv_key, gen.actor, budget.maxRetiredGenerations);
+    return { status: 'published', generation, stage: 'done', rows: 0,
+      batch_ms: performance.now() - started };
+  });
+}
+
+/**
+ * 回收超过保留上限的退役代。
+ *
+ * 发布是把上一代转成 retired，不是删除：当前代与最近几代的原算法结果要留给
+ * 历史详情与对照。删的是最旧的那几代，顺序按发布时间。
+ */
+function gcRetired(db: Database, convKey: string, actor: string, keep: number): void {
+  const old = db.query<{ generation: string }, [string, string, number]>(`
+    SELECT generation FROM derive_generation
+    WHERE conv_key=? AND actor=? AND state='retired'
+    ORDER BY published_at DESC LIMIT -1 OFFSET ?`).all(convKey, actor, keep);
+  for (const row of old) {
+    db.run('DELETE FROM derive_result_work WHERE generation=?', [row.generation]);
+    db.run('DELETE FROM derive_call_work WHERE generation=?', [row.generation]);
+    db.run('DELETE FROM derive_chain_work WHERE generation=?', [row.generation]);
+    db.run('DELETE FROM derive_role_work WHERE generation=?', [row.generation]);
+    db.run('DELETE FROM derive_tool_result WHERE generation=?', [row.generation]);
+    db.run('DELETE FROM derive_request_result WHERE generation=?', [row.generation]);
+    db.run('DELETE FROM derive_generation WHERE generation=?', [row.generation]);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 调度：一次调用推进一个组的一个阶段批次。
+// ---------------------------------------------------------------------------
+
+/** 一次调用结算多少笔待判定用途。与同步入口的批大小一致。 */
+const PURPOSE_BATCH = 100;
+
+/**
+ * 推进一个组的一个阶段批次。
+ *
+ * 一次只推进一个组：批的边界就是这一代的一个阶段批次，单个长组不会连续占满
+ * 事件循环。选择顺序是"先续跑已有代，再取最久没被认领的组"，`dirty_since_ms`
+ * 打破平局——积压最久的组先走，热点组不会把冷组饿死。
+ */
+export function sliceGroupStep(store: Store, runtime: SliceRuntime,
+  now: number, scope?: DeriveScope): SliceStep {
+  const idle = (): SliceStep =>
+    ({ status: 'idle', generation: null, stage: null, rows: 0, batch_ms: 0 });
+  // 组里还有未判定用途的请求时不开代：切片的组阶段消费的是已经定下来的用途，
+  // 拿默认值把组算干净等于替那些请求猜了一个用途。同步入口在同一处跳过。
+  const candidate = store.read.query<{ conv_key: string; actor: string;
+    compute_generation: string | null }, [string | null, string | null]>(`
+    SELECT q.conv_key,q.actor,q.compute_generation FROM derive_queue q
+    WHERE q.state<>'clean' AND (? IS NULL OR q.conv_key=?)
+      AND NOT EXISTS (SELECT 1 FROM request r WHERE r.conv_key=q.conv_key AND r.actor=q.actor
+        AND r.actor_state='known' AND r.purpose_pending=1)
+    ORDER BY q.last_claimed_ms IS NOT NULL,q.last_claimed_ms,q.dirty_since_ms,q.conv_key,q.actor
+    LIMIT 1`).get(scope?.convKey ?? null, scope?.convKey ?? null);
+  if (candidate === null) return idle();
+  // 认领前把队列行的目标算法归一到本模式的算法号：组变脏时写下的算法号是同步的，
+  // 直接认领会硬失败。只改未完成的行——clean 行有已发布产物，改号等于伪造它是
+  // 另一套算法算出来的。
+  store.write(db => {
+    db.run(`UPDATE derive_queue SET target_algorithm=? WHERE conv_key=? AND actor=?
+      AND state<>'clean' AND target_algorithm<>?`,
+    [DERIVE_ALGORITHM, candidate.conv_key, candidate.actor, DERIVE_ALGORITHM]);
+    db.run('UPDATE derive_queue SET last_claimed_ms=? WHERE conv_key=? AND actor=?',
+      [now, candidate.conv_key, candidate.actor]);
+  });
+  const generation = candidate.compute_generation
+    ?? beginGeneration(store, candidate.conv_key, candidate.actor, now);
+  // 认领不到（另一个进程刚认领、或这一行已经不是待派生）时不继续烧批次：
+  // 调度下一轮再来，比在这里空转整批更省。
+  if (generation === null) {
+    return { status: 'rotated', generation: null, stage: null, rows: 0, batch_ms: 0 };
+  }
+  const head = one<{ stage: string }>(store.read,
+    'SELECT stage FROM derive_generation WHERE generation=?', [generation]);
+  if (head === null) return idle();
+  const stage = head.stage === 'requests' ? sliceRequestsStage
+    : ROLE_STAGES.has(head.stage) ? sliceRolesStage
+      : head.stage === 'tools' ? sliceToolsStage
+        : head.stage === 'summary' ? sliceSummaryStage : null;
+  try {
+    // `ready` 之外的未知阶段落到完成阶段，由它按状态判定——阶段只前不后，
+    // 已经发布或已丢弃的代在这里得到一个 idle，不会被重复推进。
+    return stage === null
+      ? sliceReadyStage(store, generation, runtime.budget, now, runtime.dbPath)
+      : stage(store, generation, runtime.budget, now);
+  } catch (error) {
+    // 阶段内部的丢弃已经把枚举过的失败处理掉了；这里兜住的是阶段包装外冒出来的
+    // 同类失败，一到即丢。别的异常照旧冒泡：把真实故障吞成"切片决策"会让坏掉的
+    // 代码看起来像在正常工作。
+    sliceDiscardReason(store, generation, error, now);
+    return { status: 'discarded', generation, stage: null, rows: 0, batch_ms: 0 };
+  }
+}
+
+/** 发布的一代里两类请求各有多少：结果行自己记着这次是重算还是保留。 */
+function retentionCounts(store: Store, generation: string): { recomputed: number; retained: number } {
+  const rows = store.read.query<{ retention_state: string; n: number }, [string]>(`
+    SELECT retention_state,COUNT(*) AS n FROM derive_request_result
+    WHERE generation=? GROUP BY retention_state`).all(generation);
+  let recomputed = 0;
+  let retained = 0;
+  for (const row of rows) {
+    if (row.retention_state === 'recomputed') recomputed += row.n;
+    else retained += row.n;
+  }
+  return { recomputed, retained };
+}
+
+/**
+ * 派生的统一入口：按运行模式把一次排空交给同步或切片路径。
+ *
+ * 模式不是这里的判断，而是 `store.deriveRuntime` 的存在与否：没有它就是同步库。
+ * 同步路径保持"一批一组事务"的语义；切片路径一次调用推进若干步，每步各有自己的
+ * 事务与预算，所以 `limit` 在两边都是"本次最多做多少个单位"，只是单位不同
+ * （同步是组，切片是阶段步骤）。两个字段语义的差别在积累的处置方式上：同步要么
+ * 整批提交要么整批回滚，切片在每一步里提交，失败的那一代另开事务丢弃。
+ */
+export function drainDeriveEntry(store: Store, limit = 100, scope?: DeriveScope): DrainResult {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid_derive_limit');
+  if (scope !== undefined && (typeof scope.convKey !== 'string' || scope.convKey.length === 0)) {
+    throw new Error('invalid_derive_scope');
+  }
+  const runtime = store.deriveRuntime;
+  if (runtime === undefined) return store.write(db => drainDeriveTx(db, { limit, scope }));
+  const started = performance.now();
+  // 用途阶段仍走统一入口：切片只把组阶段拆成多批，不改变用途门控。
+  // 一批一个事务：用途结算与组阶段是两种不同粒度的写，混在一个事务里没有收益。
+  let purposeProcessed = 0;
+  let purposeRemaining = 0;
+  for (;;) {
+    const batch = store.write(db => drainRequestPurposesTx(db, PURPOSE_BATCH, scope));
+    purposeProcessed += batch.processed;
+    purposeRemaining = batch.remaining;
+    if (batch.remaining === 0 || batch.processed === 0) break;
+  }
+  let processed = 0;
+  let discarded = 0;
+  let recomputed = 0;
+  let retained = 0;
+  const groups: { conv_key: string; actor: string }[] = [];
+  for (let index = 0; index < limit; index++) {
+    const step = sliceGroupStep(store, runtime, Date.now(), scope);
+    if (step.status === 'idle' || step.status === 'rotated') break;
+    if (step.status === 'discarded') {
+      discarded += 1;
+      continue;
+    }
+    // `advanced` 也算推进：这一步提交了一个阶段批次，积压就往下走了一步。
+    processed += 1;
+    if (step.generation === null) continue;
+    const group = store.read.query<{ conv_key: string; actor: string }, [string]>(
+      'SELECT conv_key,actor FROM derive_generation WHERE generation=?').get(step.generation);
+    if (group === null) continue;
+    if (step.status === 'published') {
+      const counts = retentionCounts(store, step.generation);
+      recomputed += counts.recomputed;
+      retained += counts.retained;
+    }
+    if (!groups.some(row => row.conv_key === group.conv_key && row.actor === group.actor)) {
+      groups.push(group);
+    }
+  }
+  const remaining = store.read.query<{ n: number }, [string | null, string | null]>(`
+    SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'
+      AND (? IS NULL OR conv_key=?)`).get(scope?.convKey ?? null, scope?.convKey ?? null)!.n;
+  return {
+    processed, remaining, groups, recomputed, retained, discarded,
+    purpose_processed: purposeProcessed, purpose_remaining: purposeRemaining,
+    batch_ms: performance.now() - started,
+  };
 }

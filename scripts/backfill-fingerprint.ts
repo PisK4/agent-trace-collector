@@ -9,7 +9,8 @@
 import { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import { fingerprintHash, messageFingerprint } from '../src/fingerprint';
-import { drainDerive, enqueueDerive } from '../src/derive';
+import { enqueueDerive } from '../src/derive';
+import { drainDeriveEntry } from '../src/derive-slice';
 import type { Store } from '../src/store';
 
 const path = process.env.ATC_BACKFILL_DB ?? `${process.env.HOME}/Library/Application Support/agent-trace-collector/trace.db`;
@@ -24,6 +25,7 @@ const db = new Database(path);
 db.exec('PRAGMA journal_mode=WAL');
 db.exec('PRAGMA auto_vacuum=INCREMENTAL');
 const store: Store = {
+  path,
   db,
   read: db,
   write<T>(fn: (connection: Database) => T): T {
@@ -90,7 +92,7 @@ for (const group of groups) enqueueDerive(store, group.conv_key, group.actor, ''
 
 let processed = 0;
 for (;;) {
-  const result = drainDerive(store, 50);
+  const result = drainDeriveEntry(store, 50);
   processed += result.processed;
   if (result.remaining === 0) break;
 }

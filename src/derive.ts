@@ -345,8 +345,13 @@ function clip(text: string): string {
   return chars.length <= PREVIEW_UNICODE_LIMIT ? flat : `${chars.slice(0, PREVIEW_UNICODE_LIMIT).join('')}…`;
 }
 
-/** 折叠行摘要：本轮新增的用户输入，剥掉 harness 包装后取首段。 */
-function previewOf(messages: readonly (unknown | null)[], agent: string | null): string | null {
+/**
+ * 折叠行摘要：本轮新增的用户输入，剥掉 harness 包装后取首段。
+ *
+ * 导出给切片派生复用：剥包装与取首段是一条判据，两套实现会让同一份正文
+ * 在同步与切片两条路径上得到不同的摘要。
+ */
+export function previewOf(messages: readonly (unknown | null)[], agent: string | null): string | null {
   for (const [ordinal, message] of messages.entries()) {
     const input = interpretMessage(message, agent, ordinal).input;
     if (input === null || input.state !== 'text') continue;
@@ -362,7 +367,7 @@ function previewOf(messages: readonly (unknown | null)[], agent: string | null):
  * 这不是"新增"——界面不能把它标成新增，否则会把旧上下文读成本轮输入。
  * 但折叠行空着同样有害：读者无从判断这笔请求在做什么。
  */
-function tailUserPreview(db: Database, reqId: number): string | null {
+export function tailUserPreview(db: Database, reqId: number): string | null {
   const agent = db.query<{ agent: string | null }, [number]>(
     'SELECT agent FROM request WHERE req_id=?',
   ).get(reqId)?.agent ?? null;
@@ -385,7 +390,7 @@ function tailUserPreview(db: Database, reqId: number): string | null {
 }
 
 /** 标题生成请求的输入里只有被 harness 包起来的用户文本；取第一段可读的。 */
-function firstUserPreview(db: Database, reqId: number): string | null {
+export function firstUserPreview(db: Database, reqId: number): string | null {
   const agent = db.query<{ agent: string | null }, [number]>(
     'SELECT agent FROM request WHERE req_id=?',
   ).get(reqId)?.agent ?? null;
@@ -539,8 +544,11 @@ export function flattenToolContent(value: unknown): string {
  *
  * 名字只从本次配对确定下来的关联取，按调用位置与结果 path 精确定位；
  * 不查上一轮表、其它组或不可重算的保留行。顺序按消息出现顺序，同名合并计数。
+ *
+ * 导出给切片派生复用：名称选取、内容兜底、合并计数与截断都只有这一份实现，
+ * 关联数组由调用方按 `ResolvedTool` 形状交出本代已确认的往返。
  */
-function toolResultPreview(db: Database, reqId: number, delta: readonly number[],
+export function toolResultPreview(db: Database, reqId: number, delta: readonly number[],
   associations: readonly ResolvedTool[]): string | null {
   const names: string[] = [];
   let content: string | null = null;
@@ -578,17 +586,23 @@ function replyToolSummary(reply: unknown): string | null {
   return `工具调用 · ${names.join(', ')}`;
 }
 
-/** 折叠行摘要：回复文本首段；没有文本时退到工具调用名。 */
-type ReplyInfo = { preview: string | null };
+/**
+ * 折叠行摘要：回复文本首段；没有文本时退到工具调用名。
+ *
+ * 导出给切片派生复用：正文不可读时回复摘要必须原样保留旧值，能读时重算，
+ * 这个分档与文本兜底同上，只有一份实现。
+ */
+export type ReplyInfo = { preview: string | null };
 
-function replyInfoOf(db: Database, reqId: number): ReplyInfo {
+export function replyInfoOf(db: Database, reqId: number): ReplyInfo {
   const body = readBodyTx(db, reqId);
   if (body === null) return { preview: null };
   const text = assistantText(body.reply) ?? replyToolSummary(body.reply);
   return { preview: text === null ? null : clip(text) };
 }
 
-function messageAt(db: Database, reqId: number, ordinal: number): unknown | null {
+/** 按消息位置取一行正文消息；缺失或解压失败返回 null。导出给切片摘要阶段复用。 */
+export function messageAt(db: Database, reqId: number, ordinal: number): unknown | null {
   const row = db.query<{ z: Uint8Array }, [number, number]>(`
     SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.ord=?`).get(reqId, ordinal);
@@ -665,6 +679,10 @@ export type DrainResult = {
   purpose_processed: number;
   /** 当前 scope 内仍待判定用途的请求数；未完成时组不能被宣布为最新。 */
   purpose_remaining: number;
+  /** 本批被丢弃的未发布代际数：只有切片入口会丢，同步入口恒为 0。 */
+  discarded: number;
+  /** 本批耗时（毫秒），供调度与容量观测使用。 */
+  batch_ms: number;
 };
 
 export type DrainOptions = { limit: number; scope?: DeriveScope; purposeLimit?: number };
@@ -680,6 +698,7 @@ export type DrainOptions = { limit: number; scope?: DeriveScope; purposeLimit?: 
  * 因为任何一段单独提交都会留下"部分更新"的组。
  */
 export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult {
+  const started = performance.now();
   const { limit, scope } = options;
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid_derive_limit');
   if (scope !== undefined && (typeof scope.convKey !== 'string' || scope.convKey.length === 0)) {
@@ -811,6 +830,8 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
   return {
     processed, remaining, groups: touched, recomputed, retained,
     purpose_processed: purposeProcessed, purpose_remaining: purposeRemaining,
+    // 同步批在一个事务里完成：要么整批提交、要么整批回滚，没有丢弃这一档。
+    discarded: 0, batch_ms: performance.now() - started,
   };
 }
 
