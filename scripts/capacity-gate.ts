@@ -130,6 +130,10 @@ export type ScenarioReport = {
     request_rows: number;
     evidence_rows: number;
     route_rows: number;
+    /** 停止输入后仍未对账合并的 hook 行数；非零表示请求数还会变。 */
+    pending_hooks: number;
+    /** 停止后仍未关闭的来源缺口数；非零表示账本还没读完。 */
+    open_gaps: number;
     missing: string[];
   };
   notes: string[];
