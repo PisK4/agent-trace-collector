@@ -112,3 +112,5 @@ hook 的九个上下文字段、请求体、合并回复与 success 是正文通
 - **session**：客户端自己声明的会话 id，magpie 原样记录。
 - **conv**：magpie 根据首条用户消息生成的会话指纹，只在没有 session 时使用。哈希输入的字节处理仍有源码与旧实测解释待复核，见 [机制与复用边界](magpie-mechanisms-research.md)；本项目直接采用输出值。
 - **trace**：本项目的展示单位，等价于一笔请求。
+
+运行模型的完整词汇（证据坐标、递增计数、认识论、销毁动词、kind 三族）见 [CONTEXT.md](../CONTEXT.md)。
