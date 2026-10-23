@@ -4333,6 +4333,19 @@ git commit -m "feat(derive): slice request materialization and traversal orderin
   -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+**Step 8（执行时的偏差记录）**
+
+1. **计划点名的 `sortKeyOf` 与 `bodyInTx` 都不存在。** 排序键本来就是 `request.sort_source`/`sort_key` 两列，直接读；正文读取用 `src/body.ts` 已有的 `readBodyTx(db, reqId)`。本任务只从 `derive.ts` 导出切片真正要复用的三处：`anthropicReplyCalls`、`anthropicRequestResults`、`flattenToolContent`——候选怎么算、结果正文怎么压平各只有一处实现，切片与同步各写一份会让同一份输入得到两种摘要。`fingerprintsOf`/`replyInfoOf` 推迟到 Task 16（它们的第一批消费者）才导出，理由同 Task 14 偏差 2。
+2. **逐请求的 `row.input_revision !== gen.input_revision` 检查被删掉。** 这不是"更严格"，是量纲错了：请求行的 `input_revision` 是它自己的变更计数，组的 `input_revision` 是"组内发生过多少次输入变化"的计数（`markGroupDirtyTx` 每次冲突就 +1）。组内没变过的成员修订天然低于组修订，所以这个等式几乎对每一组都不成立——照计划实现会把每一代都判成过期。真正表达"这一代消费的输入已经变了"的条件是 `assertQueueRevision`（组身份 + 组修订），现在每页开头都验一次，页与页之间夹进来的变更能被抓住。`slice_request_revision_changed` 因此成了没有生产者的错误码。
+3. **可读性按"读得出正文"判，不按 `body_state`。** 计划写的是 `body_state === 'available' || 'partial'`。骨架或块引用损坏时 `body_state` 仍是 `available`，但正文读不出来——同步路径的 `fingerprintsOf` 判成不可比较，`request` 旧列原样保留。照计划实现会给这一行写 `title=NULL`、标 `recomputed`，把旧标题丢掉。现在用 `readBodyTx(db, req_id) !== null` 判定，与同步路径的判据在效果上对齐。
+4. **可读行的 `reply_preview` 也留空。** 计划只对 `title`/`title_source`/`input_preview`/`input_preview_kind` 加了 `readable ? null : ...`，`reply_preview` 却无条件写旧值。标成 `recomputed` 的行不能带任何从旧列抄来的值，否则"发布的一代全部来自本次重算"这句话就不成立；回复摘要有正文就一定重算得出来，由摘要阶段填。
+5. **一页一个事务，而不是整个阶段一个事务。** 计划把整个循环包在 `store.write` 里、每页再开一个嵌套 `db.transaction`。实测 `bun:sqlite` 的嵌套 `transaction()` **不是 savepoint**：内层抛错会把外层一起回滚（探针：外层插 1、内层插 2 后抛错，提交后表里是 0 行）。这带来两个后果——内层的"每页一个事务"是假的；更严重的是，若在同一个 `store.write` 里 catch 住预算错误再调 `discardGeneration`，这次丢弃会被同一个回滚一起带走，那一代就以"半套请求事实、state 仍是 building"的形态留在库里，而它正是最不该被续跑的东西。现在每次 `store.write` 就是一次页事务，超预算的错误在事务**外**接住，再用一次新的写事务丢弃整代。
+6. **"阶段已经过到角色阶段"的早退返回 `status: 'idle'`，不是 `'advanced'`。** 计划片段在 `stage === 'roles'` 时返回 `advanced`，而驱动写法是 `while (step.status === 'advanced')` —— 那会死循环。语义上这次调用确实什么都没做，返回 idle 让调度方推进到下一个阶段函数。相应地，"本批做完、阶段已推进"的返回仍是 `advanced` + `stage: 'roles'`。
+7. **`finishRequestOrder` 不再嵌套事务，也不写 `role_scan_ord`。** 它已经在页事务里（空页那次调用），再包一层没有意义。`role_scan_ord` 默认就是 -1，且它是 Task 16 角色扫描的游标，初始化属于那一阶段的事，请求阶段只推进 `stage`。
+8. **候选工作行的未排序哨兵统一成 -1。** 计划里 `request_index` 写 0、`traversal_ord` 写 -1，两个"还没排序"的值形状不同；现在两张 work 表都写 -1，`request_index` 与 `traversal_ord` 在 `finishRequestOrder` 里一起回填。
+9. **测试的组键要对齐。** 计划给的 `seedRequest` 把 `conv_key` 写成 `JSON.stringify(['session','chain'])`（与真实摄入一致），但同一个测试又把队列行插成 `('c','a')`——两个组键永远匹配不上。现在 `conv_key`/`actor` 由 `tests/fixtures.ts` 的 `SEED_GROUP` 一处定义，队列行、请求行、代际共用它。另外这一组没有正文，`seedRequest` 不会经摄入路径造出队列行，需要由测试自己种。
+10. **Step 2（验证失败）没有作为红灯步骤执行。** 实现与测试是同一轮写出来的，没有先跑出一个 `sliceRequestsStage` 不存在的失败。这一条如实记录，不当作已通过。
+
 ### Task 16：链匹配与角色阶段
 
 **Files:**
