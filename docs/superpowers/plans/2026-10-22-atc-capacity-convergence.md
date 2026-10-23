@@ -1639,23 +1639,23 @@ async function runBaseline(name: 'baseline-1rps' | 'baseline-5rps', args: Args):
     };
     const hookLatency = new DurationRecorder();
     const queryLatency = new DurationRecorder();
-    const client = { attempts: 0, accepted: 0, duplicates: 0, retried: 0, failed: 0 };
-    let routeId = 1;
-    let sent = 0;
-    let stoppedInput = false;
+    const client = newClientCounters();
+    const inFlight = new Set<Promise<void>>();
+    const limit = plan.concurrency;
     const startedAt = Date.now();
-    const stopAt = startedAt + plan.durationMs;
+    const tickMs = 1000 / plan.rps;
     const readerTimer = setInterval(() => {
       void readOnce(port, headers).then(ms => queryLatency.record(ms)).catch(() => {});
     }, plan.readerIntervalMs);
-    while (Date.now() < stopAt) {
-      const bodyBytes = plan.bodyMix[sent % plan.bodyMix.length]!;
-      const session = `session-${sent % plan.sessions}`;
-      const hookId = randomUUID();
+    const launch = (tick: number): void => {
+      const bodyBytes = plan.bodyMix[tick % plan.bodyMix.length]!;
+      const session = `session-${tick % plan.sessions}`;
+      const routeId = tick + 1;
+      const hookId = `cap-${seed}-${routeId}`;
       const startedMs = Date.now();
       const envelope = makeHookEnvelope({
         hookId, session, routeId, requestBytes: bodyBytes,
-        replyBytes: plan.replyBytes[sent % plan.replyBytes.length]!,
+        replyBytes: plan.replyBytes[tick % plan.replyBytes.length]!,
         bodyOmitted: false, omitReason: null, model: 'synthetic-model', startedMs,
       });
       // 账本与路由先落盘，hook 后到，覆盖乱序与后补两条路径。
@@ -1663,19 +1663,29 @@ async function runBaseline(name: 'baseline-1rps' | 'baseline-5rps', args: Args):
         routeId, session, responseId: hookId, startedMs,
       }));
       appendRouteLine(root, routeId, session, startedMs);
-      const result = await postWithRetry(`http://127.0.0.1:${port}/hook/ingest`, hookHeaders, envelope, client, hookLatency);
-      if (result !== null) sent += 1;
-      routeId += 1;
-      const wait = 1000 / plan.rps - (Date.now() - startedMs);
-      if (wait > 0) await Bun.sleep(wait);
+      client.launched += 1;
+      client.in_flight_peak = Math.max(client.in_flight_peak, inFlight.size + 1);
+      const done = postWithRetry(`http://127.0.0.1:${port}/hook/ingest`, hookHeaders,
+        () => JSON.stringify(envelope), client, hookLatency).finally(() => inFlight.delete(done));
+      inFlight.add(done);
+    };
+    for (let tick = 0; tick < scheduledTicks(plan.durationMs, plan.rps); tick += 1) {
+      const tickAt = startedAt + tick * tickMs;
+      if (Date.now() < tickAt) await Bun.sleep(tickAt - Date.now());
+      client.ticks_scheduled += 1;
+      if (inFlight.size >= limit) client.ticks_dropped += 1;
+      else launch(tick);
     }
+    await Promise.all([...inFlight]);
     clearInterval(readerTimer);
     const stopAtMs = Date.now();
-    stoppedInput = true;
-    const final = await pollDrain(metricsUrl, headers, stopAtMs);
+    const final = await pollDrain(metricsUrl, statsUrl, headers, stopAtMs);
     const snapshot = await fetchSnapshot(metricsUrl, headers);
     const childExit = await stopChild(child);
-    const conservation = countConservation(join(root, 'data', 'trace.db'), client.accepted);
+    const conservation = {
+      ...countConservation(join(root, 'data', 'trace.db'), client.accepted),
+      ...offeredShortfall(client),
+    };
     return buildReport({
       plan: { ...plan, scenario: name, mode: 'baseline', seed: args.seed ?? 1 },
       args, client, hookLatency, queryLatency, snapshot, final, conservation,
@@ -1693,6 +1703,8 @@ async function runBaseline(name: 'baseline-1rps' | 'baseline-5rps', args: Args):
   }
 }
 ```
+
+刻度按绝对时间推进，落后不补也不顺延。等响应再睡、一次只在途一笔的写法把速率交给采集器自己决定：采集器慢就少发，于是任何档位都"通过"。负载端因此在途上限取 `plan.concurrency`（5 rps 为 4，1 rps 为 1），到点却因在途已满没发出的刻度记进 `client.ticks_dropped`，并由 `offeredShortfall` 写进 `conservation.missing`，报告 `ok:false`；此时守恒为真只说明发出去的那部分收敛了。`hook_latency` 与 `query_latency` 记录每次尝试的耗时，读数间隔由 `plan.readerIntervalMs` 决定。
 
 `postWithRetry` 在 429 和 503 时最多重试 8 次，退避 10、20、40、80、160、320、640、1,280 ms；十笔 4 MiB 并发在单线程采集器上串行排空，短窗口会让最后一笔耗尽重试。只记录状态码与响应中的固定 `error` 字段，不把请求体写进失败记录。不可重试状态码立即计入 `client.failed`，不等最后一次尝试；网络错误与重试耗尽也计入 `client.failed`。
 
@@ -1951,7 +1963,7 @@ bun scripts/capacity.ts --scenario baseline-5rps --full --acknowledge-long-run \
   --report /private/tmp/atc-capacity-reports/baseline-5rps.json
 ```
 
-Expected: 每个报告 `duration_ms=600000`；`client.accepted` 分别为 600 与 3000（允许少量请求因重试落在结束边界，报告记录实际值）；`derive.pending_groups_end=0`、`conservation.pending_hooks=0`、`conservation.open_gaps=0`，请求行数等于唯一接受数。正常持续负载不出现 `writer_failed`，`insufficient_storage` 为 0；`busy` 可以有值，负载端重试后应全部接受。若出现 `ok:false`，先修采集器或负载器，不调整预算掩盖。
+Expected: 每个报告 `duration_ms=600000`；`client.ticks_scheduled` 为 600 与 3,000，`client.ticks_dropped=0`，`client.accepted` 等于 `client.launched` 且等于刻度数（1 rps 为 600，5 rps 为 3,000；边界上少发会以 `offered:` 缺口出现，报告记录实际值）；`derive.pending_groups_end=0`、`conservation.pending_hooks=0`、`conservation.open_gaps=0`，请求行数等于唯一接受数。正常持续负载不出现 `writer_failed`，`insufficient_storage` 为 0；`busy` 可以有值，负载端重试后应全部接受。若出现 `ok:false`，先修采集器或负载器，不调整预算掩盖。5 rps 若通过 `ticks_dropped` 落空，说明采集器在这一档跟不上，这正是要如实记下的容量结论。
 
 - [ ] **Step 3：运行突发场景。** 10 个并发、4 MiB 请求、不同回复大小、同一 `hook_id` 重复一次。
 
@@ -1960,7 +1972,7 @@ bun scripts/capacity.ts --scenario burst \
   --report /private/tmp/atc-capacity-reports/burst.json
 ```
 
-Expected: `client.concurrency_peak=10`；`collector.ingest.rejected_by_reason.busy > 0`；所有唯一请求最终 200；重复 `hook_id` 的响应 `duplicate:true`；`raw_hook` 与 `request` 唯一计数不因重复增加；至少一个请求的 `body_state=available`，不能用 200 代替正文存在；`rss_peak_bytes` 有界且记录。若并发没有重叠，报告 `busy=0` 并在 `notes` 写明，不能声称已观测背压。
+Expected: `client.in_flight_peak=10`；`collector.ingest.rejected_by_reason.busy > 0`；所有唯一请求最终 200；重复 `hook_id` 的响应 `duplicate:true`；`raw_hook` 与 `request` 唯一计数不因重复增加；至少一个请求的 `body_state=available`，不能用 200 代替正文存在；`rss_peak_bytes` 有界且记录。若并发没有重叠，报告 `busy=0` 并在 `notes` 写明，不能声称已观测背压。
 
 - [ ] **Step 4：运行 2,000 与 10,000 笔长会话。** 先 2,000 确认脚本，再 10,000 作为压力点；两者都直接使用临时库，不经过默认数据目录。
 

@@ -7,7 +7,7 @@ import {
   metadataSnapshot, summarizeDurations,
 } from '../src/capacity';
 import { intervalOf, loadConfig, type Config } from '../src/config';
-import { createPeakTracker, requiresLongRunAck, scenarioPlan } from '../scripts/capacity';
+import { createPeakTracker, offeredShortfall, requiresLongRunAck, scenarioPlan, scheduledTicks } from '../scripts/capacity';
 import type { Args } from '../scripts/capacity';
 import { buildCapacityConfig, makeHookEnvelope, makeLedgerLine, mulberry32 } from '../scripts/capacity-support';
 import { fixture } from './fixtures';
@@ -154,7 +154,7 @@ test('场景矩阵固定请求速率、时长与正文混合', () => {
     durationMs: 600_000, rps: 1, bodyMix: [350 * 1024, 2 * 1024 * 1024], concurrency: 1,
   });
   expect(scenarioPlan('baseline-5rps', { full: true, acknowledgeLongRun: true })).toMatchObject({
-    durationMs: 600_000, rps: 5, concurrency: 1,
+    durationMs: 600_000, rps: 5, concurrency: 4,
   });
   expect(scenarioPlan('burst', { full: false })).toMatchObject({ concurrency: 10, requestBytes: 4 * 1024 * 1024 });
   expect(scenarioPlan('long', { full: false, requests: 2_000 })).toMatchObject({ requests: 2_000 });
@@ -178,6 +178,17 @@ test('长跑确认覆盖全场景、10 分钟与 10,000 笔长组', () => {
   expect(requiresLongRunAck({ ...base, scenario: 'long', requests: 10_000 })).toBe(true);
   expect(requiresLongRunAck({ ...base, scenario: 'long', requests: 2_000 })).toBe(false);
   expect(requiresLongRunAck({ ...base, full: true })).toBe(true);
+});
+
+test('计划速率按绝对刻度记账，少发的刻度进报告缺口', () => {
+  // 10 分钟 5 rps 是 3000 个刻度；等响应再睡的写法到不了这个数，只会记下实际发出去的。
+  expect(scheduledTicks(600_000, 5)).toBe(3_000);
+  expect(scheduledTicks(600_000, 1)).toBe(600);
+  expect(scheduledTicks(0, 5)).toBe(0);
+  expect(scheduledTicks(600_000, 0)).toBe(0);
+  expect(offeredShortfall({ launched: 3_000, ticks_scheduled: 3_000, ticks_dropped: 0 })).toEqual([]);
+  expect(offeredShortfall({ launched: 1_703, ticks_scheduled: 3_000, ticks_dropped: 1_297 }))
+    .toEqual(['offered:1703<3000']);
 });
 
 test('峰值追踪只取实际观测到的快照', () => {
