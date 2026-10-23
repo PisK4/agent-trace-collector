@@ -12,6 +12,7 @@ import { probeMagpie, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
 import { reconcilePending } from './hook';
 import { drainDerive } from './derive';
+import { recoverSlice } from './derive-slice';
 import {
   DISK_METADATA_RATIO,
   EVICT_TARGET_RATIO,
@@ -72,6 +73,9 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   }
   const readToken = loadReadToken(config.dataDir);
   const hookToken = Buffer.from(loadLocalSecret(config.dataDir, 'hook.token')).toString('base64url');
+  // 上一轮没发布完的派生代没有读者：在起定时器和 handler 之前丢弃它们，
+  // 否则下一次认领会把半套结果当成可续跑的目标。
+  recoverSlice(store.db, Date.now());
   // 观测只依赖进程：拒绝计数、写事务与事件循环样本都从启动时刻重新开始。
   const metrics = createCapacityMetrics(store, config.dataDir, Date.now());
   metrics.eventLoop.start();
