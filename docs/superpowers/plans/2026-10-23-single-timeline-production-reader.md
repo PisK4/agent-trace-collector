@@ -346,7 +346,7 @@ ORDER BY r.started_ms DESC,r.req_id DESC LIMIT ?
 
 **Interfaces:** Consumes Task 1的getRequest、resolveRequestId，现有getBodyPage及Store。Produces §3.2/3.3全部类型与函数；`src/reading.ts`依赖queries/protocols，queries不反向import reading，避免循环。
 
-- [ ] **Step 1: 写请求更新使旧token失效的测试。** 测试辅助函数在文件顶部完整定义，使用临时fixture，示例为可执行的最小token回归：
+- [x] **Step 1: 写请求更新使旧token失效的测试。** 测试辅助函数在文件顶部完整定义，使用临时fixture，示例为可执行的最小token回归：
 
 ```ts
 import {expect, test} from 'bun:test';
@@ -373,7 +373,7 @@ test('请求输入修订变化拒绝旧阅读版本', () => {
 
 再分别固定：只改费用token不变；组dirty而本请求revision不变token变；同请求的新published generation使token变；回收和alias合并拒绝旧token；from0/to0有reply和capabilities但messages=[]；from44/to45拿到真实ord44。HTTP验证409/400/404区分与现有Host/Origin保护。
 
-- [ ] **Step 2: 写同消息第二个工具结果测试并运行红测。** seedPurposeRequest创建同conv/actor两个请求，后一个user.content含两个tool_result，id分别call_a/call_b。组设为同步clean、purposePending=0、summaryAlgorithm=1，在tool_call中插入owner ord1/call_b，result_ord=0，path=request.messages[0].content[1]，state=resolved。断言如下：
+- [x] **Step 2: 写同消息第二个工具结果测试并运行红测。** seedPurposeRequest创建同conv/actor两个请求，后一个user.content含两个tool_result，id分别call_a/call_b。组设为同步clean、purposePending=0、summaryAlgorithm=1，在tool_call中插入owner ord1/call_b，result_ord=0，path=request.messages[0].content[1]，state=resolved。断言如下：
 
 ```ts
 function seedTwoToolResults(f: ReturnType<typeof fixture>) {
@@ -413,7 +413,7 @@ expect(result.target?.path).toBe('request.messages[0].content[1]');
 
 另测Chat、pending、ambiguous、缺path、错误call_id、跨actor、目标evicted、错误N、目标alias。`bun test tests/reading.test.ts`预期缺模块或函数失败，fixture SQL约束应先正确。
 
-- [ ] **Step 3: 实现版本身份与事务包装。** reading局部SQL只挑§3.2的元数据，token构造用固定顺序数组和SHA-256；不读正文生成token，不用updated_at替代修订，不哈希整个回复。结果身份选择与Task 1相同，不另发明第三套来源。实现核心：
+- [x] **Step 3: 实现版本身份与事务包装。** reading局部SQL只挑§3.2的元数据，token构造用固定顺序数组和SHA-256；不读正文生成token，不用updated_at替代修订，不哈希整个回复。结果身份选择与Task 1相同，不另发明第三套来源。实现核心：
 
 ```ts
 import {createHash} from 'node:crypto';
@@ -428,9 +428,9 @@ const requireReading=(actual: string, expected: string|null) => {
 
 每个公共读取用 `store.read.transaction(() => { ... })()`，alias、身份、比较及数据读都在其中。getRequest使用Bun嵌套transaction保存点，仍处于同一外层只读快照；不得调用显式BEGIN/COMMIT的readEffectiveGroup。token校验成功后才getBodyPage，409响应无正文。
 
-- [ ] **Step 4: 实现工具结果和HTTP接线。** getToolResultReading在同一事务中读取owner detail+identity，校验token后按ord找工具；调用方非current直接pending，resolved按§3.3验证path、角色、ID、归属，再只读一条目标消息。reason使用固定原因，如body_evicted/location_mismatch/multiple_choices，不回传SQL错误或原始路径执行信息。`content`保留协议值，前端再渲染转义。body可选if_reading，tool必需if_reading，HTTP捕获ReadingConflictError→409，其余QueryInputError→400。现有范围限制先校验，避免无效输入触发解压。
-- [ ] **Step 5: 运行绿测。** `bun test tests/reading.test.ts tests/body-api.test.ts tests/http.test.ts`及`bun run typecheck`。新增接口经createHandler测试，无需监听端口或读取本机token。
-- [ ] **Step 6: 提交边界。** 建议 `feat(reader): guard body reads and resolve tool results by call position`；架构拥有token/HTTP错误与工具位置约定，本提案记录快照取舍。
+- [x] **Step 4: 实现工具结果和HTTP接线。** getToolResultReading在同一事务中读取owner detail+identity，校验token后按ord找工具；调用方非current直接pending，resolved按§3.3验证path、角色、ID、归属，再只读一条目标消息。reason使用固定原因，如body_evicted/location_mismatch/multiple_choices，不回传SQL错误或原始路径执行信息。`content`保留协议值，前端再渲染转义。body可选if_reading，tool必需if_reading，HTTP捕获ReadingConflictError→409，其余QueryInputError→400。现有范围限制先校验，避免无效输入触发解压。
+- [x] **Step 5: 运行绿测。** `bun test tests/reading.test.ts tests/body-api.test.ts tests/http.test.ts`及`bun run typecheck`。新增接口经createHandler测试，无需监听端口或读取本机token。
+- [x] **Step 6: 提交边界。** 建议 `feat(reader): guard body reads and resolve tool results by call position`；架构拥有token/HTTP错误与工具位置约定，本提案记录快照取舍。
 
 ## Task 4: 建立可独立测试的生产阅读缓存
 
