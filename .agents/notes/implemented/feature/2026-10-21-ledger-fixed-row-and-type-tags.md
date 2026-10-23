@@ -32,3 +32,4 @@ Status: implemented
 ## Related
 
 - 读数列的两行排布与异常标志位置由 [2026-10-21-ledger-readings-overflow.md](../bug-fix/2026-10-21-ledger-readings-overflow.md) 部分取代。
+- 账本行版式已被生产单一轨迹取代：[2026-10-23-single-timeline-production-reader.md](../architecture/2026-10-23-single-timeline-production-reader.md)。本记录的类型标签语义与固定行高理由继续有效；账本视图本身随生产切换退役。
