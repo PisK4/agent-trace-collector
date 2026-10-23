@@ -1012,7 +1012,8 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | `GET /api/sessions?limit=50&cursor=` | 会话列表，含笔数、最后时间、异常标记 | keyset，(last_ms, conv_key) |
 | `GET /api/sessions/:key/requests?limit=100&cursor=&direction=older` | 会话内请求列表，只返回列字段；direction 省略为 forward | keyset，(started_ms, req_id)；older 游标绑定会话与方向 |
 | `GET /api/requests/:id` | 单笔读数、费用状态、正文状态 | 无 |
-| `GET /api/requests/:id/body?from=0&to=40` | 分页取消息 | 消息序号区间 |
+| `GET /api/requests/:id/body?from=0&to=40&if_reading=` | 分页取消息；`if_reading` 可选，携带时校验阅读版本 | 消息序号区间 |
+| `GET /api/requests/:owner/tools/:ord/result?if_reading=` | 按调用位置读取一个工具结果内容块；token 必填 | 无 |
 | `GET /api/requests/:id/route` | 路由决策与尝试链，来自 `route_summary` | 无 |
 | `GET /api/stats` | 体积、覆盖位统计、健康状态、探针结果 | 无 |
 
@@ -1025,6 +1026,8 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 详情另附四个展示视图：`prompt`（上下文阅读）、`source_facts`、`projection_meta` 与 `derivation`。上下文比例只在 prompt 族状态为 `recomputed` 且窗口为正时计算；`retained`、`invalid_input`、`missing` 即使带着旧计数也不给比例，并说明原因。正文分页附带 `interpretations`、`coverage` 与 `capabilities`，解释只覆盖当前页。这些视图都按白名单挑标量，不返回原始 JSON；失效或缺失的值保持 null，不从邻近字段补猜。
 
 分页用 keyset 不用 offset。摄入一直在写，offset 会漂移，游标是本页边界行的 `(started_ms, req_id)`。`direction=older` 无游标取最近一页并向更早翻页，返回仍按时间正序；它的游标额外绑定会话与方向，未知方向返回 400，不静默按 forward 处理。
+
+阅读版本（reading token）绑定一笔请求的轨迹输入与派生位置：输入修订、组代际、发布指针、正文状态与用途身份变化都会换发，只改费用不换。token 形如 `r1-` 加 64 位十六进制，只是读取身份，不是认证凭证。详情响应附带 `reading_token`；正文接口的 `if_reading` 可选，携带后与当前身份不符返回 409 `reading_changed`，畸形值 400。工具结果接口必须携带 token：它按 owner 的调用序号定位一次调用，再按记录的 `result_req + result_ord + result_path` 精确取一个内容块，路径只认 `request.messages[N](.content[M])?` 且 N 必须等于 `result_ord`，目标 canonical 与 actor 要和调用方一致；Anthropic 块须是配对 `tool_use_id` 的 `tool_result`，Chat 须是 `role=tool` 且 `tool_call_id` 匹配。关联未确认或组不 current 返回 `pending` / `ambiguous` / `unpaired`，目标不可读返回 `unavailable`，位置或身份不符返回 `invalid_location`；原因用固定词（`body_evicted`、`location_mismatch`、`call_id_mismatch` 等），不回传 SQL 错误。`resolved` 只代表关联已确认，`is_error` 三态表达工具是否报告失败。alias 解析、身份与读取在同一个只读事务内完成。
 
 正文按消息序号区间取，一次 40 条，块解码在单次请求内复用缓存。实测取 40 条 0.13 ms，最重的一笔 526 块全取 13.7 ms。正文已回收时返回 `evicted` 与回收原因，不返回空。
 

@@ -12,6 +12,10 @@ import {
   listSessions,
 } from './queries';
 import { PAGE_MAX, getBodyPage } from './protocols';
+import {
+  getReadingBody, getReadingDetail, getToolResultReading,
+  isValidReadingToken, ReadingConflictError,
+} from './reading';
 import { acceptHook } from './hook';
 import type { HookAdmission, HookEnvelope } from './hook';
 import { createIngestMetrics, type CapacityMetrics, type IngestMetrics } from './capacity';
@@ -291,9 +295,21 @@ export function createHandler(
 
       const requestMatch = /^\/api\/requests\/(\d+)$/.exec(path);
       if (requestMatch !== null) {
-        const detail = getRequest(store, Number(requestMatch[1]));
+        const detail = getReadingDetail(store, Number(requestMatch[1]));
         if (detail === null) return json({ error: 'not_found' }, 404);
         return json(detail);
+      }
+
+      const toolResultMatch = /^\/api\/requests\/(\d+)\/tools\/(\d+)\/result$/.exec(path);
+      if (toolResultMatch !== null) {
+        // 工具结果必须带阅读版本：没有版本就没有「同一批派生输入」的保证。
+        const expected = url.searchParams.get('if_reading');
+        if (expected === null || !isValidReadingToken(expected)) {
+          return json({ error: 'invalid_reading_token' }, 400);
+        }
+        const reading = getToolResultReading(store, Number(toolResultMatch[1]), Number(toolResultMatch[2]), expected);
+        if (reading === null) return json({ error: 'not_found' }, 404);
+        return json(reading);
       }
 
       const routeMatch = /^\/api\/requests\/(\d+)\/route$/.exec(path);
@@ -310,7 +326,11 @@ export function createHandler(
         const from = parseIndex(url, 'from', 0);
         const to = parseIndex(url, 'to', from + PAGE_MAX);
         if (to < from || to - from > PAGE_MAX) return json({ error: 'invalid_body_range' }, 400);
-        const page = getBodyPage(store, canonical, from, to);
+        const expected = url.searchParams.get('if_reading');
+        if (expected !== null && !isValidReadingToken(expected)) {
+          return json({ error: 'invalid_reading_token' }, 400);
+        }
+        const page = getReadingBody(store, canonical, from, to, expected);
         if (page === null) return json({ error: 'not_found' }, 404);
         return json(page);
       }
@@ -318,6 +338,7 @@ export function createHandler(
       return json({ error: 'not_found' }, 404);
     } catch (error) {
       if (error instanceof QueryInputError) return json({ error: error.message }, 400);
+      if (error instanceof ReadingConflictError) return json({ error: 'reading_changed' }, 409);
       return json({ error: 'internal_error' }, 500);
     }
   };
