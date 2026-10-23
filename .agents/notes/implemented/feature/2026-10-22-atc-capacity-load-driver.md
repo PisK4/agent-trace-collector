@@ -10,7 +10,7 @@ Status: implemented
 
 `scripts/capacity.ts` 把场景参数集中在 `scenarioPlan`：默认 10 秒，只有 `--full` 才启用 600 秒，且必须同时给 `--acknowledge-long-run`；`requiresLongRunAck` 把 10 分钟、10,000 笔长组与 `all` 收在同一个闸门里；测试只查矩阵，不启动负载。CLI 还接受 `--duration-ms`、`--rps`、`--requests`、`--seed`、`--report`、`--body-budget` 与 `--disk-limit`，所有数值都有上界。
 
-每个 HTTP 场景都建 `mkdtempSync(join(tmpdir(), 'atc-capacity-'))` 新根，起假上游，写 `collector.json`，再用 `scripts/capacity-collector.ts` 在子进程里启动采集器。负载端只在回环端口发请求：先追加账本与路由行，再按种子与序号生成 `hook_id` 并发送；读线程按间隔访问会话、请求与正文页，非 2xx 计入 `client.query_failed` 并使报告失败；另一个 1 秒定时器取 `/api/ingest-metrics` 记录 rss 与存储峰值。刻度按绝对时间推进，`scheduledTicks(durationMs, rps)` 决定总数，落后不补也不顺延，所以在途上限 `plan.concurrency`（5 rps 为 4，1 rps 与其余场景为 1）满了就记 `client.ticks_dropped`，不会自动降速；`launched`、`ticks_scheduled`、`ticks_dropped`、`in_flight_peak` 四个计数一起进报告，`offeredShortfall` 把少发的刻度写成 `offered:<launched><<ticks_scheduled>` 进 `conservation.missing` 使报告失败。停止输入后每 100 ms 读一次队列快照与 `/api/stats`，直到未发布组、`pending_hooks` 与 `open_gaps` 都为 0 或超时（场景时长加 120 秒）；只等派生队列会让末尾几个还没与账本对账的 hook 多出请求行，守恒随即失败。随后取最终快照、停子进程、用只读连接做守恒核对并写报告；`pending_hooks` 与 `open_gaps` 进 `conservation`，非零同时写入 `missing` 并使报告失败。`rss_peak_bytes`、`storage_peak`、`peak_samples` 来自这些实际快照，`storage_end` 保留停止后的终值。
+每个 HTTP 场景都建 `mkdtempSync(join(tmpdir(), 'atc-capacity-'))` 新根，起假上游，写 `collector.json`，再用 `scripts/capacity-collector.ts` 在子进程里启动采集器。负载端只在回环端口发请求：先追加账本与路由行，再按种子与序号生成 `hook_id` 并发送；读线程按间隔访问会话、请求与正文页，非 2xx 计入 `client.query_failed` 并使报告失败；另一个 1 秒定时器取 `/api/ingest-metrics` 记录 rss 与存储峰值。刻度按绝对时间推进，`scheduledTicks(durationMs, rps)` 决定总数，落后不补也不顺延，所以在途上限 `plan.concurrency`（5 rps 为 4，1 rps 与其余场景为 1）满了就记 `client.ticks_dropped`，不会自动降速；`launched`、`ticks_scheduled`、`ticks_dropped`、`in_flight_peak` 四个计数一起进报告，`offeredShortfall` 把少发的刻度写成 `offered:<launched><<ticks_scheduled>` 进 `conservation.missing` 使报告失败。停止输入后每 100 ms 读一次队列快照与 `/api/stats`，三个计数（未发布组、`pending_hooks`、`open_gaps`）要连续静默 `SETTLE_STABLE_MS`（5 秒，长于采集器最慢的来源间隔）才算收敛，或超时（场景时长加 120 秒）；只等派生队列会让末尾几个还没与账本对账的 hook 多出请求行，守恒随即失败；只看"这一刻为 0"则会撞上账本读取与 hook 对账的下一个间隔——收敛读数为 0、紧接着的终值快照又出现脏组。终值快照里的脏组由 `finalQueueMissing` 写成 `pending_groups_final:` 缺口，报告失败。随后取最终快照、停子进程、用只读连接做守恒核对并写报告；`pending_hooks` 与 `open_gaps` 进 `conservation`，非零同时写入 `missing` 并使报告失败。`rss_peak_bytes`、`storage_peak`、`peak_samples` 来自这些实际快照，`storage_end` 保留停止后的终值。
 
 `burst` 先为十笔请求落好账本与路由行，再同时发 10 个 4 MiB 请求，第一个请求体用分块流延迟 50 ms 以覆盖 `ingesting` 互斥，完成后重放第一个 `hook_id`；没有账本行时 hook 只能留下永不收敛的 `pending_hook`。429/503 的重试窗口约 2.55 秒，足够单线程采集器把十笔大请求排空，短窗口会让最后一笔耗尽重试。`long` 直接 `openStore` 建临时库，用 `persistBody` 写一笔组内全部请求并逐笔入队，再 `drainDeriveTx`；增量结果与 `rebuildDerived` 后的全量结果各算一次指纹，写进 `full_incremental_equal`。`route` 在同一个采集器上追加路由、把当日文件替换成 gzip、写坏 gzip 后修复，并增加跨午夜文件。`retention` 注入 5 秒 retention/raw_prune 与 10 秒 cost 间隔，预置 8 天前的 raw 行；用户未显式给预算时把正文预算压到 4 KiB 以触发驱逐，停止后只读核对预置 raw 行已清空。
 
@@ -34,6 +34,8 @@ Status: implemented
 
 **少发刻度只记在 `notes` 里。** 只写在说明里，读者仍会看到 `ok:true` 的 5 rps 报告；缺口进 `conservation.missing` 才能让门槛与人都停在同一处事实上。
 
+**三个计数第一次同时为 0 就收工。** 停输入不等于来源读完：账本要按自己的间隔补读，hook 要按对账间隔合并，两次都会再插进请求并把组标脏，于是收敛读数是 0、终值快照却有脏组。要求连续静默一个窗口，并把终值快照里的脏组也计入缺口。
+
 **按证据行数核对守恒。** 账本与 hook 对同一请求各有一行证据，按全部行数会把正常关联算成缺口；按请求去重才对齐负载端账目。
 
 **用目标正文大小写报告。** 序列化后的 envelope 会多出协议字段，目标值不是测量值；报告只认实际 `request_bytes`。
@@ -41,7 +43,7 @@ Status: implemented
 ## Consequences
 
 - 报告全部来自合成数据与临时根，可以直接保存；子进程退出后临时根删除，只剩调用方指定的报告文件。
-- `drain_ms` 包含采集器默认的 2 秒派发间隔；短场景只能作为冒烟，不用于冻结预算。
+- `drain_ms` 包含采集器默认的 2 秒派发间隔与 5 秒静默窗口；短场景的 `drain_ms` 因此主要是这两个等待，不能当作派生耗时读。
 - 有界在途让时延分位包含排队：`hook_latency` 不再只是采集器的处理耗时，而是计划速率下客户端看到的总时延。这层含义由 `config.concurrency` 与 `in_flight_peak` 一起限定，读数不得当作单笔服务时间。
 - 刻度总数由时长与速率算出（10 分钟 5 rps 为 3,000），因此报告能自证是否真把这一档施加上去；采集器跟不上时是 `ticks_dropped` 与 `offered:` 缺口，而不是一份看起来更慢但通过的基线。
 - `long` 的 `comparisons` 按单组前缀比较数 `n(n-1)/2` 计算，`decodes` 按可解码正文行数统计，二者都在 `notes` 里注明口径，不是进程内计数器。
