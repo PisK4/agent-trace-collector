@@ -477,3 +477,21 @@ test('复制文本保留原文，不做 HTML 转义', () => {
   expect(html).toContain('data-copy-msg="0"');
   expect(html).not.toContain('<script>');
 });
+
+test('右栏回复详情的推理块默认折叠', () => {
+  const view = replyView(page({
+    reply: { id: 'm', content: [{ type: 'thinking', thinking: '先查一下' }, { type: 'text', text: '答案' }] },
+  }));
+  const html = renderReplyDetail(view);
+  expect(html).toContain('<details class="msg-thinking">');
+  expect(html).not.toContain('<details class="msg-thinking" open>');
+  // 展开后的详情（消息级）可以带 open，这里只锁定回复卡片默认收起。
+});
+
+test('能力折叠区带稳定键，重绘后按名字恢复开合', () => {
+  const html = renderCapabilities(page({ capabilities: presentView }));
+  expect(html).toContain('data-fold="cap:tools"');
+  expect(html).toContain('data-fold="cap:skills"');
+  expect(html).toContain('data-fold="cap:tool:Bash"');
+  expect(html).not.toContain('<details open');
+});

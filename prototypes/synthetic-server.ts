@@ -226,6 +226,19 @@ const REQUESTS: SynthRequest[] = [
     delta:[4,5], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
     toolCalls:[{call_id:'call_ws_1', ord:0, tool_name:'WebSearch', result_req:null, result_ord:null, result_path:null, state:'unpaired'}],
     usage:{in:8400,out:160,read:9800,write:600,cost:0.0061}, timing:{ms:1900,ttft:430,flow:1400,firstText:500} },
+
+  // Task 7 验收：45 条消息的深样本，覆盖结构 40+5 分页、消息详情与返回。
+  { id:119, title:'长上下文样本（45 条消息）', status:200, protocol:'anthropic',
+    history:Array.from({length:42}, (_, i) => i % 2 === 0
+      ? U(`历史问题 ${Math.floor(i / 2) + 1}：长上下文分页怎么读？`)
+      : A(`历史回答 ${Math.floor(i / 2) + 1}：按 40 条一片连续读取，缺口不静默跳过。`)),
+    inputs:[{message:U('把上面的约定整理成三条。'),userInput:true}],
+    reply:{model:'synth-a', stop_reason:'end_turn', content:[
+      {type:'text', text:'一、结构按 40+5 分页；二、缺口提示不冒充已读；三、返回列表保留计数。'}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[44], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[],
+    usage:{in:9000,out:120,read:10000,write:700,cost:0.0081}, timing:{ms:2100,ttft:420,flow:1680,firstText:480} },
 ];
 
 // Task 6 验收用的窗口会话：42 笔简单请求，默认 30 笔窗口留下两页更早历史。
@@ -473,6 +486,19 @@ Bun.serve({
         content: block.content ?? null,
         is_error: (block as {is_error?: unknown}).is_error === true ? true : (block as {is_error?: unknown}).is_error === false ? false : null,
         reason: null});
+    }
+    const route = /^\/api\/requests\/(\d+)\/route$/.exec(url.pathname);
+    if (route) {
+      const r = byId.get(Number(route[1]));
+      if (!r) return json({error:'not_found'}, 404);
+      const served = r.protocol === 'chat' ? 'synth-c' : 'synth-a';
+      return json({ state:'available', summary: {
+        format:1, route_id:r.id, time_ms:r.id*1000, model:'synth-group', served, provider:'relay-synth',
+        status:r.status, ms:r.timing.ms, ttft:r.timing.ttft, flow:r.timing.flow, first_text:r.timing.firstText,
+        order:[{model:'synth-group'}, {model:served}],
+        affinity:null, kind:null, folder:null, effort:null, prompt:null, error:null,
+        attempts:{state:'empty', items:[], timing:{state:'recorded', note:'合成场景没有尝试链'}},
+      }});
     }
     const detail = /^\/api\/requests\/(\d+)$/.exec(url.pathname);
     if (detail) {
