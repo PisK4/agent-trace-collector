@@ -212,7 +212,7 @@ Task 0 不新增生产类型，只把下列五组状态分开，避免用一句�
 
 **Interfaces:** Consumes现有request、derive_queue、derive_request_result、derive_tool_result以及GROUP_ALGORITHM。Produces保持RequestRow/RequestDetail响应字段不变的listSessions/listRequests/getRequest，调用方不接触SQL来源。不得从查询调用readEffectiveGroup读整个组。
 
-- [ ] **Step 1: 写发布结果与同步旧值刻意不同的查询回归。** 在queries测试使用fixture和seedPurposeRequest；给组插入合法published generation及结果行，queue指向它，把request.title/input_preview与tool_call的结果改成不同值。测试必须直接调用getRequest/listRequests/listSessions，不能只测视图。
+- [x] **Step 1: 写发布结果与同步旧值刻意不同的查询回归。** 在queries测试使用fixture和seedPurposeRequest；给组插入合法published generation及结果行，queue指向它，把request.title/input_preview与tool_call的结果改成不同值。测试必须直接调用getRequest/listRequests/listSessions，不能只测视图。
 
 ```ts
 const detail = getRequest(f.store, id)!;
@@ -273,9 +273,9 @@ function seedPublishedReading(f: ReturnType<typeof fixture>) {
 
 该seed只验证查询选源，工具目标内容有效性由Task 3独立构造和验证。
 
-- [ ] **Step 2: 运行红测。** `bun test tests/queries.test.ts`；预期发布标题/路径断言失败，因为现有HTTP查询读同步旧列。fixture若先因SQL约束失败先修fixture，不能当作有效红测。
+- [x] **Step 2: 运行红测。** `bun test tests/queries.test.ts`；预期发布标题/路径断言失败，因为现有HTTP查询读同步旧列。fixture若先因SQL约束失败先修fixture，不能当作有效红测。
 
-- [ ] **Step 3: 统一SQL来源选择。** 保留有界request查询和现有projectRow；在同一个SELECT中LEFT JOIN当前队列和指针结果，派生列全部使用相同的整行来源条件。最小SQL形状如下，列清单必须覆盖DERIVED_COLUMNS、reply_preview、summary状态与依据：
+- [x] **Step 3: 统一SQL来源选择。** 保留有界request查询和现有projectRow；在同一个SELECT中LEFT JOIN当前队列和指针结果，派生列全部使用相同的整行来源条件。最小SQL形状如下，列清单必须覆盖DERIVED_COLUMNS、reply_preview、summary状态与依据：
 
 ```sql
 LEFT JOIN derive_queue g ON g.conv_key=r.conv_key AND g.actor=r.actor
@@ -299,8 +299,8 @@ const selectedTitle = `CASE WHEN g.published_generation IS NOT NULL THEN d.title
 
 published存在时工具只查derive_tool_result指定generation；同步明确可用时查tool_call；无可用来源时不伪造工具配对。将代际retention_state/algorithm/basis_json映射进已有summary状态与依据字段。current额外要求代际请求epoch/revision及用途消费身份匹配当前请求，缺行时dirty；retained保留旧依据但不给确定delta。会话标题候选必须复用同一整套来源及状态条件，不能只改getRequest。将getRequest的alias解析移到其事务内，避免alias与row跨快照。正常同步模式在无published指针、target_algorithm=GROUP_ALGORITHM时继续整体读取同步列，不要求生产切换legacy标记。
 
-- [ ] **Step 4: 运行回归与类型检查。** `bun test tests/queries.test.ts tests/http.test.ts`；预期同步与发布路径均通过，缺行/dirty不升级为current。`bun run typecheck`用于确认SQL类型投影没有遗漏字段。
-- [ ] **Step 5: 提交边界。** 建议 `fix(reader): select published derivation results consistently`；同变更更新本提案的验证事实与架构读取节，附约定署名。未经授权保留工作区，不执行commit。
+- [x] **Step 4: 运行回归与类型检查。** `bun test tests/queries.test.ts tests/http.test.ts`；预期同步与发布路径均通过，缺行/dirty不升级为current。`bun run typecheck`用于确认SQL类型投影没有遗漏字段。
+- [x] **Step 5: 提交边界。** 建议 `fix(reader): select published derivation results consistently`；同变更更新本提案的验证事实与架构读取节，附约定署名。未经授权保留工作区，不执行commit。
 
 ## Task 2: 增加最近窗口与向前分页
 

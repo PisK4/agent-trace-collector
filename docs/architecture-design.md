@@ -1020,6 +1020,8 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 列表与详情都带 `derived_state`，并只在该值为 `current` 时把关系、增量与折叠行摘要放在顶层。详情另带 `historical`（旧派生结论连同状态）与摘要的算法三列；列表不携带这几项。判定的具体规则见[读模型里的派生状态](#读模型里的派生状态)。
 
+派生列的取值来源整套一致：队列带 `published_generation` 指针时，标题、摘要、关系、增量、链角色、回复摘要与工具配对整组读 `derive_request_result` / `derive_tool_result`，摘要状态映射代际的 `retention_state` / `algorithm` / `basis_json`；没有指针时整组读 `request` / `tool_call` 同步旧列，它们同时是「上一次完成值」的家，dirty 组的 `historical` 从这里取。同一条件应用于整组列，不出现标题取发布代、摘要取同步列的混拼；当前与否的屏蔽闸门仍是 `projectRow` 与 `derived_state`。同步可用性判据唯一落在 `derive-state` 的 `groupCurrentSql` / `groupIsCurrent`，查询不另立第二套口径。alias 解析与行读取在同一只读事务内，避免跨快照。
+
 详情另附四个展示视图：`prompt`（上下文阅读）、`source_facts`、`projection_meta` 与 `derivation`。上下文比例只在 prompt 族状态为 `recomputed` 且窗口为正时计算；`retained`、`invalid_input`、`missing` 即使带着旧计数也不给比例，并说明原因。正文分页附带 `interpretations`、`coverage` 与 `capabilities`，解释只覆盖当前页。这些视图都按白名单挑标量，不返回原始 JSON；失效或缺失的值保持 null，不从邻近字段补猜。
 
 分页用 keyset 不用 offset。摄入一直在写，offset 会漂移，游标是本页最后一行的 `(started_ms, req_id)`。
