@@ -258,11 +258,11 @@ export type ScenarioReport = {
 | `docs/superpowers/capacity/2026-10-22-atc-capacity-budget.json` | 冻结预算，Task 7 生成 | 执行时创建 |
 | `docs/superpowers/capacity/2026-10-22-atc-capacity-decision.json` | 分支判定与失败项，Task 11 生成 | 执行时创建 |
 | `src/schema-v6.sql` | v6 代际、暂存结果、工作表、视图与队列重建 DDL | 仅分支 B 创建 |
-| `scripts/migrate-v6.ts` | v5 到 v6 的显式、可续跑迁移 | 仅分支 B 创建 |
+| `scripts/migrate-v6.ts` | ~~v5 到 v6 的显式、可续跑迁移~~ | 不创建：迁移已按用户决定取消，旧库删除重建 |
 | `src/maintenance.ts` | 只把 C 导出的 `RESTORABLE_SCHEMA_VERSIONS` 扩为 `[5,6]`（Task 13b） | 仅分支 B 修改 |
 | `tests/maintenance.test.ts` | 在 C 的 bundle 用例旁补 v6 白名单与 incomplete 恢复用例 | 仅分支 B 修改 |
 | `src/derive-slice.ts` | 代际调度、切片写入、发布、丢弃、清理与祖先索引 | 仅分支 B 创建 |
-| `tests/derive-slice.test.ts`、`tests/migrate-v6.test.ts` | 切片等价性、失效、重开与迁移 | 仅分支 B 创建 |
+| `tests/derive-slice.test.ts` | 切片等价性、失效与重开 | 仅分支 B 创建（`tests/migrate-v6.test.ts` 不创建） |
 
 公共 Interface：
 
@@ -2847,27 +2847,24 @@ git commit -m "docs(capacity): record measured baseline and keep synchronous der
 
 **执行条件：** Task 11 的决策为 `slice`，**或**产品目标明确未达成（本计划已如此决定：`baseline-5rps` 的 5 rps 目标保持未达成，实测只投递 3.36 rps，主因是派生整组重算）。此时决策文件里的 `decision` 应为 `stop-non-long`，它表示"当前同步设计不能按现状发布"，不是"不得开工"；触发理由单独记在决策文件之外。决策为 `keep-sync` 时，本部分全部任务保持未勾选，不创建任何 v6 文件，不运行迁移。
 
-### Task 13：v6 代际 schema 与显式迁移
+### Task 13：v6 代际 schema（迁移部分已按用户决定取消）
 
-**Files:**
+**执行前提变更（用户决定，2026-10-23）。** 原计划在这里按两阶段标记与 keyset 分批写 v5→v6 的可续跑迁移（`scripts/migrate-v6.ts`、`tests/fixtures/schema-v5.sql`、`migration:v5/v6` 标记）。用户明确「不需要数据库迁移」，与既定的破坏式立场一致（[旧库删除重建](../../../../.agents/notes/implemented/architecture/2026-10-23-destructive-schema-replacement.md)）。实际落地为：只建 v6 结构，`openStore` 的空库路径在同一事务里写 v5 基础结构 + v6 结构与 `user_version=6`；低版本一律 `schema_rebuild_required`，没有完成标记、没有续跑入口、也没有半迁移状态。
+
+因此下方 Step 1、2、5、6（v5 fixture、迁移测试、迁移实现、迁移 CLI）整段不执行；Step 4 的 DDL 与 Step 7 的版本门按破坏式简化执行（无 `assertV6Complete`、无标记写入）；Step 3 的"验证失败"由"用例不存在"变成"结构不存在"；Step 8 只跑 `tests/store.test.ts` 与 `tests/maintenance.test.ts`。为什么仍然要 v6 结构、为什么不做迁移，见 [v6 派代际结构](../../../../.agents/notes/implemented/architecture/2026-10-22-atc-schema-v6-generations.md)。
+
+**Files：**
 - Create: `src/schema-v6.sql`
-- Create: `scripts/migrate-v6.ts`
-- Create: `tests/fixtures/schema-v5.sql`
 - Modify: `src/store.ts`
-- Test: `tests/migrate-v6.test.ts`
+- Modify: `src/maintenance.ts`（白名单改值，见 Task 13b）
+- Test: `tests/store.test.ts`、`tests/maintenance.test.ts`
 - Agent Note: `.agents/notes/implemented/architecture/2026-10-22-atc-schema-v6-generations.md`
 
 **Interfaces:**
-- Consumes: C 的 v5 `src/schema.sql`、`request.purpose_revision/purpose_version`、`request.summary_*`、`tool_call.*`、`derive_queue.*`、`dirty_since_ms`。
-- Produces: v6 表、索引、视图与 C 同模式的 `collector_state['migration:v6']` marker；`SCHEMA_VERSION=6`；`schema_migration_required`；`migrateV6(db, options)` 与 CLI；C 导出的 `RESTORABLE_SCHEMA_VERSIONS` 由 Task 13b 扩为 `[5,6]`（F 不新增 bundle 版本判断）。
+- Consumes: v5 的 `src/schema.sql`、`derive_queue`、`request` 与 `tool_call` 的既有列。
+- Produces: v6 表、索引与视图；`SCHEMA_VERSION=6`；空库建到 v6；低版本 `schema_rebuild_required`。
 
-迁移采用与 C 相同的两阶段 marker 模式，不按「表里有没有某列」猜状态：
-
-1. 第一阶段只做一次原子事务：执行 v6 DDL（含对既有 `derive_queue` 的 `ALTER TABLE ADD COLUMN`），写入 `collector_state['migration:v6']`（`complete:false`），并在同一事务把 `user_version` 置 6。与 C 的 v5 初始化一致：版本号表示结构已进入该版，完成标记表示数据复制已完成；普通 `openStore` 两者都检查。
-2. 复制阶段按组和 `req_id` 的持久 keyset 分批提交，每批同时写结果、游标、计数、摘要和暂存字节。
-3. 最后原子事务：校验全部组，更新发布指针，把 `migration:v6` 改为 `complete:true`（`user_version` 已是 6，重复设置保持幂等）。
-
-普通 `openStore` 只接受两种情况：全新库在同一事务内建 v5+v6+complete marker+`user_version=6`；已有库 `user_version=6` 且 `collector_state['migration:v6'].complete=true` 且结构与视图齐全。`user_version=5` 抛 `schema_migration_required`；`user_version=6` 但 marker incomplete 抛 `schema_v6_incomplete`。因此迁移中断后重启不会误打开半成品，`migrateV6` 是唯一能续跑 incomplete 的入口。
+**原计划的 Files（不执行）：** `scripts/migrate-v6.ts`、`tests/fixtures/schema-v5.sql`、`tests/migrate-v6.test.ts`。
 
 - [ ] **Step 1：冻结 v5 fixture。** 从 C 的 v5 提交取只读 fixture，并在首行记录来源提交。Run:
 
@@ -3012,7 +3009,8 @@ test('批中断保留旧列、incomplete marker与游标，修复后从游标续
 
 ```sql
 -- ATC schema v6: derive generations, staged results, work tables, publish pointer.
--- Executed once by migrate-v6.ts (phase 1) or by openStore() for a brand-new database.
+-- Executed by openStore() when it creates a brand-new database. v6 is not migrated into:
+-- an existing lower-version database is refused and rebuilt by the operator.
 -- Legacy request/tool_call columns stay in place and are never mixed field-by-field.
 
 ALTER TABLE derive_queue ADD COLUMN legacy_snapshot INTEGER NOT NULL DEFAULT 0;
@@ -3653,140 +3651,84 @@ git commit -m "feat(schema): add v6 derive generations with resumable v5 migrati
 ```
 
 
-### Task 13b：把 bundle 可恢复版本白名单扩到 v6
+### Task 13b：bundle 白名单只含当前版本
 
-**Files:**
-- Modify: `src/maintenance.ts`（只改 C 导出的 `RESTORABLE_SCHEMA_VERSIONS` 一处常量）
-- Modify: `tests/maintenance.test.ts`（在 C 的 bundle 用例旁补 v6 用例）
-- Agent Note: `.agents/notes/implemented/feature/2026-10-22-atc-bundle-schema-v6.md`
+**执行前提变更（用户决定，2026-10-23）。** 迁移取消之后，v5 的包搬回来也打不开（`openStore` 报 `schema_rebuild_required`），所以白名单不扩到 `[5, 6]`，而是从 `[5]` 改成只含当前版本 `[6]`。恢复侧的迁移标记校验与 `allowIncompleteMigration` 选项不实现 —— 那两样是给半迁移库用的，而半迁移库现在不存在。因此 Step 3 的实现是 `src/maintenance.ts` 里一处常量改值；Step 1 的用例收为一条：v6 库备份写出 `schema: 6` 并可恢复，白名单外版本在备份与恢复两侧都被拒。原先设计的「未完成 v6 只允许显式迁移恢复」「manifest 与包内版本不一致」两条用例随之取消。
+
+**Files：**
+- Modify: `src/maintenance.ts`（一处常量）
+- Modify: `tests/maintenance.test.ts`（一条用例）
+
+**原计划的 Files（不执行）：** `.agents/notes/implemented/feature/2026-10-22-atc-bundle-schema-v6.md`（该决策并入 Task 13 的 note）。
 
 **Interfaces:**
-- Consumes: C 导出的 `RESTORABLE_SCHEMA_VERSIONS`、`backupBundle(sourceDir, destinationDir)`、`restoreBundle(bundleDir, destinationDir, options?: { allowIncompleteMigration?: boolean })` 及其 manifest 与 `migration:v{version}` marker 解析、`loadBoundSaltTx(db, dataDir)`、`withStoppedDatabase(source, fn)`；Task 13 的 `migration:v6`。
-- Produces: `RESTORABLE_SCHEMA_VERSIONS` 取值 `[5, 6]`；F 以 C 的 `restoreBundle(bundle, dest, { allowIncompleteMigration: true })` 作为「恢复未完成 v6 再续跑迁移」的唯一入口，随后仍由 `migrateV6` 续跑。
+- Consumes: `RESTORABLE_SCHEMA_VERSIONS`、`backupBundle(sourceDir, destinationDir)`、`restoreBundle(bundleDir, destinationDir)` 及其 manifest 与包内 `PRAGMA user_version`、`withStoppedDatabase(source, fn)`。
+- Produces: `RESTORABLE_SCHEMA_VERSIONS` 取值 `[6]`。
 
-C 已经把 bundle 版本判断收敛到单一位点：`export const RESTORABLE_SCHEMA_VERSIONS: readonly number[] = [5];`，备份与恢复都只查这一处。备份读源库 `PRAGMA user_version`，不在白名单内抛 `backup_schema_unsupported`，并把该实际值写进 manifest 的 `schema`；恢复在发布 staging 之前依次查白名单 `RESTORABLE_SCHEMA_VERSIONS.includes(manifest.schema)`、包内数据库自身 `user_version === manifest.schema`、以及 `migration:v{version}` marker：marker 缺失、格式非法或版本不在白名单统一 `restore_bundle_invalid`，`complete !== true` 且未传 `allowIncompleteMigration: true` 抛 `restore_migration_incomplete`。
+**实现偏差（已按代码校正）。** 原计划假设恢复侧已经读 `migration:v{version}` marker 并支持 `allowIncompleteMigration`。实际代码里没有这两样（仓库里也没有 `restore_migration_incomplete` 这个码）：`restoreBundle` 只查白名单、包内 `user_version` 与清单哈希。既然迁移取消，这两样也不补 —— 它们的唯一用途是为半迁移库开口子，而现在不存在这种库。
 
-F 分支 B 只把该数组扩为 `[5, 6]`，不改备份、恢复、marker 解析或发布目录代码，也不新增第二份 manifest 判断与错误码。C 的「私有父目录 + `mkdirSync` 原子预留 + `rename` 替换本进程刚建的空目录」协议保持不变：目标已存在即 `destination_exists`，失败只 `rmdir` 自己预留的空目录，不递归删除、不覆盖既有目录。salt 绑定与独占读取仍走 C 导出的 `loadBoundSaltTx(db, dataDir)` 与 `withStoppedDatabase(source, fn)`；F 不另写打开路径。显式迁移恢复只放宽「搬运一份未完成库」，不放宽启动门：恢复后普通 `openStore` 仍抛 `schema_v6_incomplete`，续跑只由 `migrateV6` 完成。
+bundle 版本判断本来就只有一处常量：`export const RESTORABLE_SCHEMA_VERSIONS: readonly number[] = [5];`，备份与恢复都只查这一处。备份读源库 `PRAGMA user_version`，不在白名单内抛 `backup_schema_unsupported`，并把该实际值写进 manifest 的 `schema`；恢复依次查白名单、包内 `user_version === manifest.schema`、清单哈希与盐标识，任一项不符都是 `restore_bundle_invalid`。这次只把该常量改成 `[6]`：「私有父目录 + `mkdirSync` 原子预留 + `rename` 替换本进程刚建的空目录」协议、salt 绑定与独占读取全部保持不变。
 
-- [ ] **Step 1：写失败测试。** 覆盖四件事：v6 库备份写实际版本且可恢复；白名单外版本在备份与恢复两侧都被拒；manifest 版本与包内版本不一致被拒；未完成 v6 默认拒绝、显式允许后可搬运但普通启动仍拒绝。断言只使用 C 的错误码。
+- [ ] **Step 1：写失败测试。** 覆盖两件事：v6 库备份写实际版本（`schema: 6`）且可恢复；白名单外版本在备份与恢复两侧都被拒。断言只使用既有错误码。
 
 ```ts
 import { Database } from 'bun:sqlite';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { backupBundle, restoreBundle } from '../src/maintenance';
 import { openStore } from '../src/store';
 
-test('v6库备份写实际版本且可恢复', () => {
+test('v6库备份写实际版本，白名单外的版本两侧都拒', () => {
   const f = fixture();
   try {
+    loadBoundSalt(f.store, f.dir);
     f.store.close();
     const bundle = join(f.dir, 'bundle-v6');
     backupBundle(f.dir, bundle);
-    const manifest = JSON.parse(readFileSync(join(bundle, 'manifest.json'), 'utf8'));
+    const manifestPath = join(bundle, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
     expect(manifest.schema).toBe(6);
     const restored = join(f.dir, 'restored-v6');
     restoreBundle(bundle, restored);
-    expect(openStore(join(restored, 'trace.db'))).toBeDefined();
-  } finally { f.close(); }
-});
+    const store = openStore(join(restored, 'trace.db'));
+    try {
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 6 });
+    } finally { store.close(); }
 
-test('白名单外版本在备份与恢复两侧都被拒', () => {
-  const f = fixture();
-  try {
-    f.store.close();
+    // 白名单只有当前版本：低版本没有升级路径，搬回来也打不开。
     const db = new Database(join(f.dir, 'trace.db'));
-    db.run('PRAGMA user_version=7');
+    db.run('PRAGMA user_version=5');
     db.close();
-    expect(() => backupBundle(f.dir, join(f.dir, 'bundle-v7')))
+    expect(() => backupBundle(f.dir, join(f.dir, 'bundle-v5')))
       .toThrow('backup_schema_unsupported');
 
     const db6 = new Database(join(f.dir, 'trace.db'));
     db6.run('PRAGMA user_version=6');
     db6.close();
-    const bundle = join(f.dir, 'bundle-v6');
-    backupBundle(f.dir, bundle);
-    const manifestPath = join(bundle, 'manifest.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    writeFileSync(manifestPath, JSON.stringify({ ...manifest, schema: 7 }));
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, schema: 5 }));
     expect(() => restoreBundle(bundle, join(f.dir, 'bad-version')))
       .toThrow('restore_bundle_invalid');
-  } finally { f.close(); }
-});
-
-test('manifest与包内版本不一致时拒绝恢复', () => {
-  const f = fixture();
-  try {
-    f.store.close();
-    const bundle = join(f.dir, 'bundle-v6');
-    backupBundle(f.dir, bundle);
-    const manifestPath = join(bundle, 'manifest.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    // schema 5 在白名单内，但包内 user_version 是 6：manifest 不能只靠自述。
-    writeFileSync(manifestPath, JSON.stringify({ ...manifest, schema: 5 }));
-    expect(() => restoreBundle(bundle, join(f.dir, 'bad-mismatch')))
-      .toThrow('restore_bundle_invalid');
-  } finally { f.close(); }
-});
-
-test('未完成v6只允许显式迁移恢复', () => {
-  const f = fixture();
-  try {
-    f.store.close();
-    const bundle = join(f.dir, 'incomplete-bundle');
-    backupBundle(f.dir, bundle);
-    const db = new Database(join(bundle, 'trace.db'));
-    const marker = JSON.parse((db.query(
-      "SELECT value_json FROM collector_state WHERE key='migration:v6'").get() as any).value_json);
-    db.run("UPDATE collector_state SET value_json=? WHERE key='migration:v6'",
-      [JSON.stringify({ ...marker, complete: false, phase: 'copy' })]);
-    db.close();
-    // 连接关闭后 WAL 已合并，包内仍只含清单三文件，否则恢复会先报 restore_bundle_invalid。
-    expect(readdirSync(bundle).sort()).toEqual(['manifest.json', 'redaction.salt', 'trace.db']);
-    expect(() => restoreBundle(bundle, join(f.dir, 'no-allow')))
-      .toThrow('restore_migration_incomplete');
-    const allowed = join(f.dir, 'allowed');
-    restoreBundle(bundle, allowed, { allowIncompleteMigration: true });
-    expect(() => openStore(join(allowed, 'trace.db'))).toThrow('schema_v6_incomplete');
-  } finally { f.close(); }
-});
-
-test('恢复拒绝覆盖既有目录且不留下半成品', () => {
-  const f = fixture();
-  try {
-    f.store.close();
-    const bundle = join(f.dir, 'bundle-v6');
-    backupBundle(f.dir, bundle);
-    const occupied = join(f.dir, 'occupied');
-    mkdirSync(occupied, { recursive: false, mode: 0o700 });
-    writeFileSync(join(occupied, 'kept.txt'), 'keep', { mode: 0o600 });
-    expect(() => restoreBundle(bundle, occupied)).toThrow('destination_exists');
-    expect(readFileSync(join(occupied, 'kept.txt'), 'utf8')).toBe('keep');
-    expect(readdirSync(f.dir).filter(name => name.startsWith('.atc-restore-'))).toEqual([]);
   } finally { f.close(); }
 });
 ```
 
 - [ ] **Step 2：验证失败。** Run: `bun test tests/maintenance.test.ts -t 'v6库备份'`。Expected: FAIL，白名单仍是 `[5]`，备份 v6 库抛 `backup_schema_unsupported`。
 
-- [ ] **Step 3：把白名单扩到 v6。** 只改 C 那一处常量，6 之外的版本判断、备份写入、恢复校验、marker 解析、目录发布与 salt 校验都保持 C 的实现：
+- [ ] **Step 3：白名单只留当前版本。** 白名单是唯一版本位点，这次只改它的取值，版本判断、备份写入、恢复校验、目录发布与 salt 校验全部不动：
 
 ```ts
-// src/maintenance.ts（C 提供的唯一版本位点；除下面的数组内容外不改本文件其它行）
-export const RESTORABLE_SCHEMA_VERSIONS: readonly number[] = [5, 6];
+// src/maintenance.ts（唯一版本位点；除下面的数组内容外不改本文件其它行）
+export const RESTORABLE_SCHEMA_VERSIONS: readonly number[] = [6];
 ```
 
-F 不新增 `bundleSchema`、`requireMigrationMarker` 之类的第二份规则，也不新增恢复错误码：备份侧白名单外只是 `backup_schema_unsupported`；恢复侧的 manifest 不支持版本、包内版本与 manifest 不一致、marker 缺失或非法都是 C 的 `restore_bundle_invalid`，只有 `complete !== true` 且未传 `allowIncompleteMigration` 才是 `restore_migration_incomplete`。v6 的 marker 形状与解析权威同样在 C，F 只保证 `migrateV6` 写出的 marker 带布尔 `complete`（Task 13 已写：第一阶段 `complete:false`、最后阶段 `complete:true`），从而落进 C 的既有判断。
+不新增 `bundleSchema`、`requireMigrationMarker` 之类的第二份规则，也不新增恢复错误码：备份侧白名单外是 `backup_schema_unsupported`；恢复侧的清单不支持版本、包内版本与清单不一致、哈希或盐标识不符都是 `restore_bundle_invalid`。
 
-- [ ] **Step 4：运行。** Run: `bun test tests/maintenance.test.ts tests/secrets.test.ts tests/migrate-v6.test.ts tests/store.test.ts`。Expected: PASS，其中 C 既有的 v5 备份恢复用例继续通过。确认 v6 备份不被写成 `schema:5`、未传 `allowIncompleteMigration` 时 incomplete 库被拒且恢复后普通 `openStore` 仍拒绝。keep-sync 分支不改本文件，白名单仍是 C 的 `[5]`，因此 `RESTORABLE_SCHEMA_VERSIONS` 的类型与导入面不因分支而变。
+- [ ] **Step 4：运行。** Run: `bun test tests/maintenance.test.ts tests/secrets.test.ts tests/store.test.ts`。Expected: PASS，v5 时代的 bundle 用例（完整库的备份与恢复）继续通过且不再有半迁移包用例。确认 v6 库的清单写的是 `schema: 6`，且换成 v5 的清单会被拒。
 
-- [ ] **Step 5：提交。** 获授权后：
+- [ ] **Step 5：提交。** 与 Task 13 同一提交落地（两者是一件事：v6 结构上线且旧库重建）：
 
 ```bash
-git add src/maintenance.ts tests/maintenance.test.ts \
-  .agents/notes/implemented/feature/2026-10-22-atc-bundle-schema-v6.md
-git commit -m "fix(recovery): widen RESTORABLE_SCHEMA_VERSIONS to v6" \
-  -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
+git add src/maintenance.ts tests/maintenance.test.ts
 ```
 
 ### Task 14：代际生命周期、发布指针与同快照读取
@@ -5646,7 +5588,7 @@ if (report.scenario === 'long-10000-slice') {
 
 - [ ] **Step 5：运行等价性与门槛测试。** Run: `bun test tests/capacity-slice.test.ts tests/derive-slice.test.ts`。Expected: PASS。Run: `bun test tests/capacity-gate.test.ts`。Expected: PASS，包括缺少 slice 预算时退出 2。不要在本计划阶段实际跑完 10,000 请求的容量场景；只运行固定种子的等价性样本和 5 秒冒烟。
 
-- [ ] **Step 6：更新文档与决定记录。** `docs/operations.md` 增加：v5 库迁移命令、失败续跑（含从 bundle 恢复未完成 v6 的唯一入口 `restoreBundle(bundle, dest, { allowIncompleteMigration: true })`，随后用 `migrateV6` 续跑，并说明普通启动仍拒绝 incomplete）、普通启动拒绝、切片预算与 WAL 上限、`recoverSlice` 在启动时丢弃未发布代、retired 代保留上限。`docs/architecture-design.md` 增加代际键、发布指针、同快照读、旧代保留与 v6 marker。Agent Note 记录两个反例：`user_version` 写在事务外导致重启误开；逐字段 `COALESCE` 把旧标题当新结果。
+- [ ] **Step 6：更新文档与决定记录。** `docs/operations.md` 增加：v5 及更低版本库拒绝普通启动、由运维删除重建（没有迁移命令，也没有续跑入口）、切片预算与 WAL 上限、`recoverSlice` 在启动时丢弃未发布代、retired 代保留上限。`docs/architecture-design.md` 增加代际键、发布指针、同快照读、旧代保留与 v6 的版本门。Agent Note 记录两个反例：逐字段 `COALESCE` 把旧标题当新结果；把未发布代的暂存行当成可读结果。
 
 - [ ] **Step 7：最终交接门槛。** 只有以下全部成立才勾选本任务：
 

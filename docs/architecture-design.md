@@ -421,9 +421,11 @@ SQLite，WAL，单文件，放仓库外。默认路径 `~/Library/Application Su
 
 ### 版本与破坏式替换
 
-当前结构版本是 v5。普通 `openStore` 从不做 `ALTER`：空库直接建到 v5；低版本报 `schema_rebuild_required`；高版本报 `schema_version_unsupported`。
+当前结构版本是 v6。普通 `openStore` 从不做 `ALTER`：空库在同一个事务里建到 v6（v5 基础结构加代际结构，一次提交）；低版本报 `schema_rebuild_required`；高版本报 `schema_version_unsupported`。
 
 首版发布前不提供跨结构升级。旧库的处理是停采集器、把数据目录整体移走或删除，让新版本建新库；旧库里的正文与派生结果一起丢弃。因此不存在"结构已升级、数据未迁移"的中间态，也没有完成标记或续跑入口。
+
+v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，读口径的切换与发布指针的使用随派生切片实现落地。
 
 ### 脱敏盐绑定与可恢复快照
 

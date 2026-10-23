@@ -14,6 +14,8 @@ v4→v5 没有迁移路径。普通 `openStore` 只接受两种状态：空数�
 
 旧库的处理是显式动作：停采集器，把数据目录整体移走或删除，让新版本建新库；旧库里的正文与派生结果一起丢弃。需要留档时在升级前用旧版本导出，不依赖本仓库的工具读取旧结构。
 
+当前版本是 v6，同一条路径继续适用：空目录建到 v6，低版本报 `schema_rebuild_required`，bundle 白名单只含当前版本。v6 的结构与为什么仍不迁移，见 [v6 派生代际结构](2026-10-22-atc-schema-v6-generations.md)。
+
 源码随之删除：`V5_DELTA`、`initializeV5`、迁移状态机、守恒摘要与 `src/conservation.ts`，恢复时的迁移标记校验和 `--allow-incomplete-migration`，以及盐绑定的旧库确认入口（`confirmLegacy` 与 `confirmedLegacy`）。盐绑定仍保留"有数据却无绑定即拒绝"的规则，但不再有绕过方式。`scripts/backfill-fingerprint.ts` 保留为 v3/v4 时代的列补齐工具，它不会把旧库带到 v5；文档不再把它描述成升级到当前版本的路径。
 
 ## Alternatives considered
@@ -30,10 +32,10 @@ v4→v5 没有迁移路径。普通 `openStore` 只接受两种状态：空数�
 
 - 升级代码前必须显式处理旧数据目录；忘记时启动被 `schema_rebuild_required` 拒绝，不会带着半套结构运行。
 - 旧库里的正文无法通过本仓库工具读取；保留需求必须在升级前用旧版本导出。
-- 备份与恢复只接受白名单版本、且包内 `user_version` 与清单一致的 bundle；不存在半迁移包。
+- 备份与恢复只接受白名单版本（当前只有当前版本 `6`）、且包内 `user_version` 与清单一致的 bundle；不存在半迁移包。
 - 回滚要同时恢复旧代码与旧数据目录，不能只回滚代码。
 - 首次发布后若需要跨结构保留事实，重新引入迁移必须以那时的真实保留需求为依据，重新写一份提案。
 
 ## Testing
 
-`tests/store.test.ts` 的「低版本库拒绝打开，空库建到当前版本」锁定 `schema_rebuild_required` 与新建库的 `user_version=5`，「拒绝未知的高版本 schema」保持；`tests/maintenance.test.ts` 的 bundle 回归只覆盖完整库的备份与恢复，不再有半迁移包用例。
+`tests/store.test.ts` 的「低版本库拒绝打开，空库建到当前版本」锁定 `schema_rebuild_required` 与新建库的 `user_version=6`，「v5库拒绝普通启动且没有迁移入口」锁定当前版本之上仍无迁移入口，「拒绝未知的高版本 schema」保持；`tests/maintenance.test.ts` 的 bundle 回归只覆盖完整库的备份与恢复，不再有半迁移包用例。
