@@ -494,11 +494,189 @@ pre.raw{
 @media(prefers-reduced-motion:no-preference){
   .req-open-mark svg,.disclosures summary::before{transition:transform .12s}
 }
+/* 面板折叠、详情调宽与紧凑阅读布局。 */
+:root{--sidebar-width:236px;--inspector-width:380px;--canvas:var(--surface);--nav-bg:var(--page);--tool-accent:var(--k-assistant);padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+.topbar{height:48px;padding-inline:16px;gap:12px}
+.brand em{display:none}
+.app{grid-template-columns:var(--sidebar-width) minmax(0,1fr) 6px var(--inspector-width)}
+.col-main{background:var(--surface)}
+.col-rail{border-left:0}
+.col-sessions{background:var(--nav-bg)}
+body.sidebar-collapsed .app{grid-template-columns:0 minmax(0,1fr) 6px var(--inspector-width)}
+body.sidebar-collapsed .col-sessions{visibility:hidden}
+body.inspector-collapsed .app{grid-template-columns:var(--sidebar-width) minmax(0,1fr) 0 0}
+body.sidebar-collapsed.inspector-collapsed .app{grid-template-columns:0 minmax(0,1fr) 0 0}
+body.inspector-collapsed .col-rail,body.inspector-collapsed .resize-handle{visibility:hidden}
+.resize-handle{cursor:col-resize;border-left:1px solid var(--line);background:var(--surface);touch-action:none;position:relative}
+.resize-handle:hover,.resize-handle:focus-visible{background:var(--accent-soft);outline:0}
+.resize-handle::after{content:"";position:absolute;top:45%;left:1px;width:2px;height:30px;background:var(--line-strong);border-radius:2px}
+.sessions-head{padding:18px 14px 10px;gap:12px}
+.sessions-list{padding-inline:10px}
+.sess{padding:11px 9px;border-left:0;border-radius:5px}
+.sess[aria-current="true"]{background:var(--accent-soft);box-shadow:none}
+.group-label::after{display:none}
+.session-head{background:var(--surface);padding:20px 24px 0;border-bottom:0}
+.session-head .eyebrow{display:none}
+.session-head h1{font-size:18px;font-weight:600;margin-top:0}
+.session-facts{gap:6px 13px;margin-top:9px;line-height:1.6}
+.copy-session{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+.copy-session:hover{color:var(--accent)}
+.copy-session svg{width:12px;height:12px}
+.view-row{margin-top:17px;border-bottom:1px solid var(--line);gap:8px}
+.seg{border:0;border-radius:0;background:none;gap:18px;overflow:visible}
+.seg button{border:0;border-bottom:2px solid transparent;padding:9px 0;font-size:12px}
+.seg button[aria-pressed="true"]{background:none;border-bottom-color:var(--accent)}
+.view-row .hint{font-size:10px}
+.request-nav{padding:11px 0 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
+.request-nav-label{color:var(--muted);font-size:10px;flex:none}
+.request-nav-list{display:flex;gap:4px;flex:1;min-width:0;overflow:auto;padding:2px}
+.nav-request{min-width:25px;height:25px;border:1px solid var(--line);border-radius:3px;color:var(--muted);font:10px var(--mono);text-align:center;position:relative;flex:1}
+.nav-request:hover{border-color:var(--accent)}
+.nav-request[aria-current="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.nav-request[data-failed="true"]{border-bottom:3px solid var(--bad)}
+.nav-request[data-incomplete="true"]{border-bottom:3px dashed var(--warn)}
+.nav-legend{font-size:10px;color:var(--muted);white-space:nowrap}
+.ledger{padding:0 24px 30px}
+.ledger::before{display:none}
+.ledger-column-head{display:flex;justify-content:space-between;color:var(--muted);font-size:10px;padding:12px 10px 9px 100px;border-bottom:1px solid var(--line)}
+.req{margin:0;scroll-margin-top:200px;border-bottom:1px solid var(--line)}
+.req[aria-current="true"]{background:var(--accent-soft)}
+.req[data-status="failed"]{box-shadow:inset 2px 0 var(--bad)}
+.req-wrap{display:flex;align-items:stretch;min-width:0}
+.req-head{grid-template-columns:78px minmax(0,1fr) 130px;gap:0 12px;flex:1;min-width:0;padding:10px 8px!important;border-radius:0;min-height:57px}
+.req-head:hover{background:var(--hover)}
+.req-meta{display:grid;grid-template-columns:9px 1fr;align-content:center;align-items:center;gap:3px 7px;color:var(--muted)}
+.req-meta .req-node{width:7px;height:7px;border-width:1.5px}
+.req-number{font:11px var(--mono);color:var(--text-2)}
+.req-meta time{grid-column:2;font:9px var(--mono);color:var(--muted)}
+.req-line{gap:5px}
+.req-title,.req-sub{display:flex;gap:8px;align-items:center;min-width:0;font-size:12px;font-weight:400}
+.req-summary{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.row-label{width:34px;flex:none;padding:2px 3px;border-radius:3px;text-align:center;font:10px var(--ui);color:var(--k-user);background:var(--k-user-bg)}
+.row-label.tool{color:var(--k-tool);background:var(--k-tool-bg)}
+.row-label.reply{color:var(--k-assistant);background:var(--k-assistant-bg)}
+.row-label.aux{color:var(--k-system);background:var(--k-system-bg)}
+.req-sub .req-summary{font:10.5px var(--mono);color:var(--text-2)}
+.req-metrics{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:3px;font:10px var(--mono)}
+.req-expand{width:26px;flex:none;display:grid;place-items:center;color:var(--muted);font-size:14px}
+.req-expand:hover{color:var(--accent);background:var(--accent-soft)}
+.req-body{margin:3px 8px 12px;background:var(--surface);text-align:left}
+.step-list{padding:8px 24px 32px}
+.step-context{padding:9px 0;border-bottom:1px solid var(--line);color:var(--muted);font-size:11px}
+.step-context summary{cursor:pointer}
+.step-context pre{margin-top:8px}
+.step-row{display:grid;grid-template-columns:70px 38px minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;min-height:35px;padding:6px 9px;border-bottom:1px solid var(--line);border-left:2px solid transparent;text-align:left}
+.step-row:hover{background:var(--hover)}
+.step-row[aria-current="true"]{background:var(--accent-soft);border-left-color:var(--accent)}
+.step-row[data-error="true"]{border-left-color:var(--bad)}
+.step-meta{font:9px var(--mono);color:var(--muted)}
+.step-preview{font-size:12px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;min-width:0}
+.step-preview code{font-size:10.5px;color:var(--text-2)}
+.step-result{color:var(--muted);font-size:10px}
+.step-result.error{color:var(--bad)}
+.step-side{font:9px var(--mono);color:var(--muted)}
+.rail-head{padding:17px 18px 0}
+.rail-title{font-size:14px;margin-top:9px;line-height:1.6}
+.rail-body{padding-inline:18px}
+.rail-big{margin-inline:-18px;margin-top:14px;border:0;background:var(--surface)}
+.rail-big>div{padding:10px 18px;background:none}
+.rail-big .v{font-size:17px;margin-top:4px}
+.rail-tabs{margin-inline:-18px;padding-inline:18px;gap:7px}
+.rail-tabs button{padding:11px 8px}
+.rail-section{padding-block:17px}
+.rail-section h3{font-size:11px;letter-spacing:0;text-transform:none;color:var(--text-2)}
+.rail-explainer{font-size:10px;color:var(--muted);margin-top:9px}
+.rail-explainer summary{cursor:pointer}
+.rail-explainer p{padding-top:6px;line-height:1.7}
+.detail-label{font-size:10px;color:var(--muted);margin-bottom:7px}
+.detail-value{font-size:12px;line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap}
+.tool-state{font-size:11px;display:inline-flex;gap:5px;align-items:center;color:var(--text-2)}
+.tool-state.error{color:var(--bad)}
+.detail-actions{display:flex;gap:7px;margin-top:12px}
+.tool-link{color:var(--accent);font-size:10px;margin-top:10px}
+.conv{max-width:none;padding:18px 24px 40px}
+.conv-asst-card{box-shadow:none;border-radius:4px}
+.conv-note{margin-bottom:12px}
+.conv-cont{font-size:10px;color:var(--muted)}
+.toast{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);padding:8px 14px;background:var(--text);color:var(--surface);border-radius:5px;z-index:30;font-size:12px;max-width:90%}
+@media(min-width:1001px) and (max-width:1300px){:root{--sidebar-width:210px;--inspector-width:330px}.req-head{grid-template-columns:64px minmax(0,1fr) 90px;gap:8px}.session-head{padding-inline:18px}.ledger,.step-list{padding-inline:18px}.view-row .hint{display:none}.req-metrics .opt{display:inline}.nav-legend{display:none}}
+@media(max-width:1000px){body{padding-bottom:65px}.app,body.sidebar-collapsed .app,body.inspector-collapsed .app{display:block}.col-sessions{max-height:230px}.sessions-list{overflow:auto}.col-main{overflow:visible}.col-rail{border-top:1px solid var(--line)}.resize-handle{display:none}.sidebar-collapsed .col-sessions,.inspector-collapsed .col-rail{display:none}.session-head{padding-inline: max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}.ledger,.step-list,.conv{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}.view-row .hint{display:none}.req-head{grid-template-columns:64px minmax(0,1fr) 100px}.req-metrics{grid-column:auto;margin:0}.step-row{grid-template-columns:55px 34px minmax(0,1fr) auto}.session-facts .sum{width:100%}.nav-legend{display:none}.rail-head,.rail-body{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}}
+@media(max-width:620px){.topbar{gap:6px}.topbar>.grow{min-width:0}.toolbar-right{gap:4px}.brand{font-size:11px;gap:5px}.brand svg{width:16px}.demo-tag{font-size:8px}.req-head{grid-template-columns:48px minmax(0,1fr);gap:6px}.req-metrics{display:none}.req-meta time{font-size:8px}.req-number{font-size:10px}.req-title,.req-sub{font-size:11px;gap:5px}.req-expand{width:20px}.request-nav{gap:7px}.request-nav-label{display:none}.step-row{grid-template-columns:34px minmax(0,1fr);gap:6px}.step-meta,.step-side{display:none}.step-preview{font-size:11px}.ledger-column-head{padding-left:60px}.session-facts .mono{max-width:160px;overflow:hidden;text-overflow:ellipsis}.rail-big{grid-template-columns:repeat(3,minmax(0,1fr))}.rail-big>div{padding-inline:14px}.rail-big .v{font-size:15px}.step-result{display:none}}
+@media(forced-colors:active){.nav-request[data-failed="true"]{border-bottom-style:double}.req[aria-current="true"],.step-row[aria-current="true"]{outline:2px solid Highlight}.row-label{border:1px solid currentColor}}
+/* 单行步骤轨迹：详情默认折叠，模型请求读数靠右。 */
+body{padding-bottom:0}
+.timeline-tab{padding:10px 0;border-bottom:2px solid var(--accent);color:var(--accent);font-weight:550;font-size:12px}
+.timeline-latest{color:var(--accent);font-size:11px;margin-left:auto;padding:7px 0}
+.step-list{padding:0 24px 28px}
+.history-loader{display:flex;align-items:center;flex-wrap:wrap;gap:9px;justify-content:center;padding:17px 0 18px;border-bottom:1px solid var(--line)}
+.history-button{border:1px solid var(--line);border-radius:5px;padding:7px 13px;background:var(--surface);font-size:11px;color:var(--text-2)}
+.history-button:hover{border-color:var(--accent);color:var(--accent)}
+.history-button span{color:var(--muted);margin-left:7px;font-size:10px}
+.history-range{font-size:10px;color:var(--muted)}
+.history-start{font-size:11px;color:var(--muted)}
+.trace-group{scroll-margin-top:155px}
+.compact-row{display:flex;align-items:center;gap:10px;height:36px;border-bottom:1px solid var(--line);min-width:0;padding-inline:5px}
+.trace-group[aria-current="true"] .compact-row{background:var(--accent-soft)}
+.trace-group[data-status="failed"] .compact-meta{color:var(--bad)}
+.compact-select{display:flex;align-items:center;gap:9px;flex:1;min-width:0;text-align:left;height:100%}
+.compact-meta{display:flex;align-items:center;gap:8px;flex:none;width:86px;font:9px var(--mono);color:var(--muted)}
+.compact-meta b{font-weight:400;color:var(--text-2)}
+.compact-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:11px}
+.compact-preview code{font-size:10px}
+.compact-metrics{display:flex;justify-content:flex-end;gap:10px;flex:none;width:215px;white-space:nowrap;font:9px var(--mono);color:var(--muted)}
+.trace-result-preview{color:var(--muted);font-size:10px}
+.step-expand{width:22px;flex:none;height:30px;color:var(--muted);font-size:16px}
+.step-expand:hover{color:var(--accent);background:var(--hover)}
+.trace-step-detail{margin:5px 27px 10px 100px;padding:12px;background:var(--inset);border:1px solid var(--line);border-radius:4px;min-width:0}
+.trace-prose{font-size:12px;line-height:1.85;max-width:76ch;overflow-wrap:anywhere}
+.trace-prose p{margin-bottom:7px}
+.trace-prose p:last-child{margin-bottom:0}
+.inline-tool{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.inline-tool>div{min-width:0}
+.inline-tool pre.raw{white-space:pre-wrap;overflow-wrap:anywhere;border:0;padding:0;max-height:240px;font-size:10.5px}
+.trace-input-note{font-size:10px;color:var(--muted);padding:3px 0 8px}
+.trace-context{font-size:10px;color:var(--muted);margin-top:7px}
+.trace-context>summary{cursor:pointer;padding:5px 0}
+.trace-context .req-body{margin:6px 0}
+.trace-missing{font-size:11px;color:var(--muted);padding:6px 0}
+.trace-missing.error{color:var(--bad)}
+.timeline-end{display:flex;align-items:center;justify-content:center;gap:6px;padding:22px 0 5px;color:var(--muted);font-size:10px}
+.timeline-end span{width:5px;height:5px;background:var(--line-strong);border-radius:50%}
+.toast{bottom:20px}
+@media(max-width:1300px){.compact-metrics{width:163px;gap:7px;font-size:8px}.compact-metrics span:last-child{display:none}.compact-meta{width:76px;font-size:8px;gap:5px}}
+@media(max-width:1000px){.rail-big,.rail-tabs{margin-inline:0}.session-head{position:relative;padding-top:16px}.step-list{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}.trace-group{scroll-margin-top:16px}}
+@media(max-width:620px){.compact-row{gap:5px}.compact-meta{width:22px}.compact-meta time{display:none}.compact-select{gap:5px}.compact-metrics{width:69px;font-size:8px}.compact-metrics span:first-child{display:none}.compact-preview{font-size:11px}.trace-step-detail{margin-inline:0}.trace-result-preview{display:none}.history-range{width:100%;text-align:center}.timeline-latest{font-size:10px}}
+.compact-meta{width:24px!important;justify-content:center}.trace-step-detail{margin-left:38px}
+/* 右栏沿用生产的能力与消息渲染，窄栏内摘要单行、全文可换行。 */
+.col-rail .section{padding:16px 0;border-bottom:1px solid var(--line)}
+.col-rail .section-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.col-rail .section-head h3{font-size:11px;color:var(--text-2)}
+.col-rail .count,.col-rail .note{font-size:10px;color:var(--muted);line-height:1.7}
+.cap-block,.rail-structure>details{border:1px solid var(--line);border-radius:4px;margin-top:6px;min-width:0}
+.cap-block>summary,.rail-structure>details>summary{padding:8px;cursor:pointer;font-size:10px;color:var(--text-2)}
+.cap-list{list-style:none;padding:8px;display:grid;gap:9px}
+.cap-item{font-size:10px;min-width:0;overflow-wrap:anywhere}
+.cap-item summary{cursor:pointer;display:flex;gap:7px;min-width:0}
+.cap-name{font-size:10px;color:var(--text-2)}
+.cap-desc{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.msg-list{list-style:none;padding:0}
+.msg-head{display:flex;align-items:center;gap:6px;width:100%;min-width:0;height:32px;border-top:1px solid var(--line);text-align:left;padding:4px 6px}
+.msg-head .kind{max-width:62px;overflow:hidden;text-overflow:ellipsis;flex:none;font-size:8px}
+.msg-ord{font:9px var(--mono);color:var(--muted);flex:none}
+.msg-preview{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.msg-new{font-size:9px;color:var(--accent);flex:none}
+.rail-structure .body-panel{padding:8px;min-width:0}
+.rail-structure .bp-text{overflow-wrap:anywhere;font-size:11px;white-space:pre-wrap}
+.col-rail .reply-card{min-width:0}.col-rail .reply-text{overflow-wrap:anywhere;font-size:12px}
+.col-rail .reply-head{font-size:10px}.col-rail .conv-tools{display:flex;flex-wrap:wrap;gap:6px;padding:8px}
+.col-rail .tool-row{min-width:0;max-width:100%;display:flex;flex-wrap:wrap;gap:5px}
+.col-rail .raw{max-width:100%;overflow:auto}.col-rail .body-panel{min-width:0}
 </style>
 </head>
 <body>
 
 <header class="topbar">
+  <button class="icon-btn" id="sidebar-toggle" aria-label="折叠会话栏" aria-expanded="true" title="折叠会话栏">☷</button>
   <div class="brand">
     <svg width="20" height="22" viewBox="0 0 30 32" fill="none" aria-hidden="true"><path d="M5 4v24M5 9h12l8 7-8 7H5" stroke="currentColor" stroke-width="2.4"/><circle cx="5" cy="9" r="2.6" fill="currentColor"/><circle cx="25" cy="16" r="2.6" fill="currentColor"/><circle cx="5" cy="23" r="2.6" fill="currentColor"/></svg>
     <span>Trace Collector</span><em>请求账本</em>
@@ -508,6 +686,7 @@ pre.raw{
   <div class="toolbar-right">
     <span class="demo-tag">DEMO · 合成数据</span>
     <button class="icon-btn" id="theme-toggle" aria-label="切换主题" title="切换主题">◐</button>
+    <button class="icon-btn" id="inspector-toggle" aria-label="收起详情栏" aria-expanded="true" title="收起详情栏">◫</button>
   </div>
 </header>
 
@@ -526,13 +705,15 @@ pre.raw{
 
   <main class="col col-main" id="main"></main>
 
+  <div class="resize-handle" id="inspector-resize" role="separator" tabindex="0" aria-label="调整详情栏宽度" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="640" aria-valuenow="380" title="拖动调整宽度；双击恢复；方向键微调"></div>
   <aside class="col col-rail" aria-label="请求读数与正文">
     <div class="rail-head" id="rail-head"></div>
     <div class="rail-body" id="rail-body"></div>
   </aside>
 </div>
+<div class="toast" id="toast" role="status" hidden></div>
 
-<script>
+<script type="module">
 /* ==================================================================
    合成演示数据。不连接 magpie，不读取真实会话。
    字段语义对齐 magpie Route / Prompt / usage.Record：
@@ -549,7 +730,7 @@ const secs = (ms) => ms == null ? '—' : (ms/1000).toFixed(2)+' s';
 
 const TOOLS = [
   {type:'function', function:{name:'read_file', description:'读取项目中的文本文件。', parameters:{type:'object', properties:{path:{type:'string'}}, required:['path']}}},
-  {type:'function', function:{name:'run_check', description:'运行已存在的项目检查。', parameters:{type:'object', properties:{target:{type:'string'}}, required:['target']}}},
+  {type:'function', function:{name:'Bash', description:'在项目目录运行命令。', parameters:{type:'object', properties:{command:{type:'string'}}, required:['command']}}},
 ];
 
 const SYS = {role:'system', content:'你是项目开发助手。先理解代码，再修改。保留已有接口，完成后说明验证结果。'};
@@ -605,8 +786,12 @@ const M = {
   u6: {role:'user', content:'为请求列表补上空状态，保留现有筛选行为。'},
   c6: {role:'assistant', content:null, tool_calls:[{id:'call_03', type:'function', function:{name:'read_file', arguments:'{"path":"src/request-list.tsx"}'}}]},
   t6: {role:'tool', tool_call_id:'call_03', content:FILE_SHORT},
-  c6b: {role:'assistant', content:null, tool_calls:[{id:'call_04', type:'function', function:{name:'run_check', arguments:'{"target":"request-list"}'}}]},
+  c6b: {role:'assistant', content:null, tool_calls:[
+    {id:'call_04', type:'function', function:{name:'Bash', arguments:'{"command":"bun test tests/request-list.test.ts"}'}},
+    {id:'call_05', type:'function', function:{name:'Bash', arguments:'{"command":"git diff --check"}'}},
+  ]},
   t6b: {role:'tool', tool_call_id:'call_04', content:'PASS request-list\n3 checks passed: no requests, filtered empty, visible rows.'},
+  t6c: {role:'tool', tool_call_id:'call_05', content:'检查完成，未发现空白字符问题。'},
   a6: {role:'assistant', content:'已补上两种空状态：\n\n• 尚无请求时，提示等待第一笔请求。\n• 筛选结果为空时，提示调整筛选条件。\n\n现有筛选逻辑保持不变，列表检查 3 项通过。'},
   u7: {role:'user', content:'把刚才的改动整理成提交说明，并列出验证结果。'},
 };
@@ -762,7 +947,7 @@ const TIMELINE = [
     route:{affinity:'turn',kept:true,order:['relay-a/model-fast-v2'],served:'model-fast-v2'} },
 
   { id:'r-1047', at:'16:37:49', title:'运行检查后继续回答。',
-    newMsgs:[M.c6b, M.t6b], replyMsg:M.a6, model:'model-fast-v2',
+    newMsgs:[M.c6b, M.t6b, M.t6c], replyMsg:M.a6, model:'model-fast-v2',
     usage:{in:8200,out:780,cacheRead:12400,cacheWrite:800,cost:'0.0156'},
     tokens:21400, window:128000, turns:7, parts:[640,1500,0,5200,3300,10760],
     timing:{ms:4810,ttft:512,firstText:604,flow:4298},
@@ -770,7 +955,7 @@ const TIMELINE = [
     route:{affinity:'cache',kept:true,order:['relay-a/model-fast-v2'],served:'model-fast-v2'} },
 
   { id:'r-1048', at:'16:42:18', title:'把刚才的改动整理成提交说明，并列出验证结果。',
-    newMsgs:[M.a6, M.u7], replyMsg:{role:'assistant', content:'请求列表空状态（演示）\n\n改动\n- 区分「尚无请求」与「筛选无结果」两种空状态。\n- 空状态文案放到列表渲染层，筛选函数保持原签名。\n\n验证\n- run_check request-list：3 项通过。\n- 未运行浏览器端用例。'},
+    newMsgs:[M.a6, M.u7], replyMsg:{role:'assistant', content:'请求列表空状态（演示）\n\n改动\n- 区分「尚无请求」与「筛选无结果」两种空状态。\n- 空状态文案放到列表渲染层，筛选函数保持原签名。\n\n验证\n- bun test tests/request-list.test.ts：3 项通过。\n- 未运行浏览器端用例。'},
     model:'model-long-v2',
     usage:{in:48640,out:1268,cacheRead:32768,cacheWrite:1200,cost:'0.0412'},
     tokens:82608, window:200000, turns:8, parts:[2100,1850,3200,12400,8600,54458],
@@ -967,6 +1152,29 @@ const SESSIONS = [
     requests:['d-6001'] },
 ];
 
+const localMode = new URLSearchParams(location.search).get('data') === 'local';
+let localReader = null;
+if (localMode) {
+  document.querySelector('.demo-tag').textContent = 'DEMO · 本机真实数据';
+  try {
+    const {createLocalReader} = await import('./local-data.js');
+    localReader = createLocalReader();
+    await localReader.init();
+    const key = new URLSearchParams(location.search).get('session');
+    const initial = localReader.sessions.find(s => s.key === key) || localReader.sessions[0];
+    await localReader.load(initial);
+    const params = new URLSearchParams(location.search);
+    params.set('session',initial.key);
+    history.replaceState(null,'',location.pathname+'?'+params);
+    Object.keys(REQUESTS).forEach(key => delete REQUESTS[key]);
+    Object.assign(REQUESTS, localReader.requests);
+    SESSIONS.splice(0, SESSIONS.length, ...localReader.sessions);
+  } catch (error) {
+    document.getElementById('main').textContent = error.message;
+    throw error;
+  }
+}
+
 /* ---------------- 派生视图 ---------------- */
 function replyOf(r) {
   if (r.replyMsg) return r.replyMsg;
@@ -975,11 +1183,155 @@ function replyOf(r) {
 }
 function replyText(r) { return replyOf(r)?.content || ''; }
 function replyCalls(r) { return replyOf(r)?.tool_calls || []; }
+function callArgs(call) {
+  try { return JSON.parse(call.function.arguments); } catch { return {}; }
+}
+function callSummary(call) {
+  const args = callArgs(call);
+  return `${call.function.name} · ${args.command || args.path || args.target || args.query || call.function.arguments}`;
+}
 function replyLabel(r) {
   const calls = replyCalls(r);
-  if (calls.length) return `${calls[0].function.name}(${calls[0].function.arguments})`;
+  if (calls.length) return calls.map(callSummary).join(' ； ');
   const t = replyText(r);
-  return t ? t.replace(/\s+/g, ' ').slice(0, 90) : '';
+  return t ? t.replace(/\s+/g, ' ').slice(0, 180) : '';
+}
+function resultFor(callId) {
+  if (localMode) return Object.values(REQUESTS).flatMap(r=>replyCalls(r)).find(c=>c.id===callId)?.result || null;
+  for (const r of requestsOf(state.session)) {
+    const result = (r.newMsgs || []).find(m => m.role === 'tool' && m.tool_call_id === callId);
+    if (result) return {request:r, message:result};
+  }
+  return null;
+}
+function callFor(callId) {
+  for (const r of requestsOf(state.session)) {
+    const call = replyCalls(r).find(c => c.id === callId);
+    if (call) return {request:r, call};
+  }
+  return null;
+}
+function inputSummary(r) {
+  const users = (r.newMsgs || []).filter(m => m.role === 'user' && !m.ctx);
+  if (users.length) return {label:'用户', cls:'', text:users.map(m => m.content).join(' ')};
+  const results = (r.newMsgs || []).filter(m => m.role === 'tool');
+  if (results.length) return {label:'结果', cls:'tool', text:results.map(m => {
+    const match = callFor(m.tool_call_id);
+    return `${match ? callSummary(match.call) : '工具'} → ${m.content.replace(/\s+/g, ' ').slice(0, 80)}`;
+  }).join(' ； ')};
+  return {label:'输入', cls:'aux', text:r.request ? r.title : '正文未收到，输入不可读'};
+}
+const money = (value) => value == null ? '未报告' : `$${Number(value).toFixed(Number(value) < 0.001 ? 6 : 4)}`;
+function explainer(text) { return `<details class="rail-explainer"><summary>口径说明</summary><p>${text}</p></details>`; }
+const RECENT_PAGE = Math.max(30, Math.ceil(innerHeight / 34));
+function visibleRequests() { return localMode && new URLSearchParams(location.search).get('sample') === 'first50' ? requestsOf(state.session) : requestsOf(state.session).slice(-state.visibleCount); }
+function resetTimeline() {
+  state.visibleCount = RECENT_PAGE;
+  state.open = new Set();
+  state.stepOpen = new Set();
+}
+function revealRequest(id) {
+  const rows = requestsOf(state.session);
+  const index = rows.findIndex(r => r.id === id);
+  if (index >= 0) state.visibleCount = Math.max(state.visibleCount, rows.length-index);
+}
+async function loadEarlier() {
+  const main = document.getElementById('main');
+  const anchor = main.querySelector('.trace-group');
+  const anchorId = anchor?.dataset.req;
+  const previousTop = anchor?.getBoundingClientRect().top;
+  const scroller = getComputedStyle(main).overflowY === 'visible' ? document.scrollingElement : main;
+  const previousScroll = scroller.scrollTop;
+  if (localMode) {
+    const session = currentSession();
+    const button = document.getElementById('load-earlier');
+    if (button?.disabled) return;
+    if (button) {button.disabled = true; button.textContent = '正在加载更早记录…';}
+    try {
+      await localReader.load(session, true);
+      Object.assign(REQUESTS, localReader.requests);
+      if (state.session !== session.key) return;
+    } catch (error) {toast(error.message); renderMain(); return;}
+  }
+  state.visibleCount += RECENT_PAGE;
+  renderMain();
+  const restored = anchorId && main.querySelector(`.trace-group[data-req="${CSS.escape(anchorId)}"]`);
+  if (restored && previousTop != null) scroller.scrollTop = previousScroll + restored.getBoundingClientRect().top-previousTop;
+  toast('已加载更早记录');
+}
+function toast(text) {
+  const node = document.getElementById('toast');
+  node.textContent = text; node.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => {node.hidden = true;}, 2200);
+}
+function locateRequest(id) {
+  const previousCount = state.visibleCount;
+  revealRequest(id);
+  if (state.visibleCount !== previousCount) renderMain();
+  selectRequest(id);
+  requestAnimationFrame(() => {
+    document.querySelector(`[data-req="${CSS.escape(id)}"]`)?.scrollIntoView({block:'center', behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
+  });
+}
+function renderSteps() {
+  const all = requestsOf(state.session);
+  const rows = visibleRequests();
+  const remaining = localMode ? (localReader.hasMore(state.session) ? Math.max(1,(currentSession().total || 0)-all.length) : 0) : Math.max(0, all.length - rows.length);
+  let html = `<div class="step-list"><div class="history-loader">${remaining ? `<button id="load-earlier" class="history-button">↑ 加载更早记录 <span>还有 ${remaining} 笔请求</span></button>` : '<span class="history-start">已到会话起点</span>'}<span class="history-range">${localMode && new URLSearchParams(location.search).get('sample') === 'first50' ? '本机会话前 50 条步骤 · ' : ''}序号表示请求 · 时间从上往下 · 详情默认折叠</span></div>`;
+  for (const r of rows) {
+    const index = all.indexOf(r);
+    const steps = [];
+    for (const [i, user] of (r.newMsgs || []).filter(m => m.role === 'user' && !m.ctx).entries()) {
+      steps.push({key:`${r.id}:user:${i}`, label:'用户', cls:'', preview:esc(user.content), detail:`<div class="detail-value">${esc(user.content)}</div>`, attrs:`data-step-body="${esc(r.id)}" data-step-path="messages[${r.request.messages.indexOf(user)}]"`});
+    }
+    if (replyText(r)) steps.push({key:`${r.id}:reply`, label:'助手', cls:'reply', preview:esc(replyLabel(r)), detail:`<div class="trace-prose">${mdToHtml(replyText(r))}</div>`, attrs:`data-step-body="${esc(r.id)}" data-step-path="$response"`});
+    for (const call of replyCalls(r)) {
+      const result = resultFor(call.id);
+      const summary = result ? result.message.content.replace(/\s+/g, ' ').slice(0, 100) : '结果未记录';
+      steps.push({key:`${r.id}:tool:${call.id}`, label:'工具', cls:'tool', preview:`<code>${esc(callSummary(call))}</code><span class="trace-result-preview"> → ${esc(summary)}</span>`, detail:`<div class="inline-tool"><div><div class="detail-label">调用参数</div><pre class="raw">${esc(JSON.stringify(callArgs(call), null, 2))}</pre></div><div><div class="detail-label">${result ? `结果 · ${esc(result.request.id)}` : '结果未记录'}</div><pre class="raw">${esc(result?.message.content || '后续请求中尚未记录匹配结果。')}</pre></div></div>`, attrs:`data-tool-owner="${esc(r.id)}" data-tool-id="${esc(call.id)}"`});
+    }
+    if (!r.request || r.status === 'failed' || !steps.length) steps.push({key:`${r.id}:status`, label:r.status === 'failed' ? '失败' : '记录', cls:'aux', preview:esc(!r.request ? '正文未收到 · '+(r.caveat || '保留身份与读数') : r.status === 'failed' ? `请求失败 · HTTP ${r.attempts?.at(-1)?.status || '未知'}` : '没有可读的新增消息'), detail:'', attrs:`data-select="${esc(r.id)}"`});
+    if (r.local) steps.splice(0, steps.length, ...r.localSteps.map(step => ({
+      ...step, preview:esc(step.text),
+      attrs:step.call ? `data-tool-owner="${esc(r.id)}" data-tool-id="${esc(step.call.id)}"` : `data-select="${esc(r.id)}"`,
+      detail:step.call ? `<div class="detail-label">调用参数 · 结果关联 ${esc(step.call.pair?.state || 'unpaired')}</div><pre class="raw">${esc(step.call.function.arguments)}</pre><div class="detail-label">工具结果</div><pre class="raw">${esc(step.call.result?.message.content || '展开时读取已确认的配对结果；未确认关系不猜配。')}</pre>` : `<div class="trace-prose">${step.label === '助手' ? mdToHtml(step.raw) : esc(step.raw || step.text)}</div>`,
+    })));
+    const speed = r.timing?.flow && r.usage?.out ? Math.round(r.usage.out / (r.timing.flow / 1000)) : null;
+    const metrics = `<span class="compact-metrics" title="所属模型请求的读数；不表示工具执行耗时"><span>首字 ${secs(r.timing?.ttft)}</span><span>时长 ${secs(r.timing?.ms)}</span>${speed ? `<span>${speed} tok/s</span>` : ''}</span>`;
+    html += `<section class="trace-group" data-req="${esc(r.id)}" aria-current="${r.id === state.reqId}" data-status="${r.status}">`;
+    steps.forEach((step, i) => {
+      const open = state.stepOpen.has(step.key);
+      const number = index + 1;
+      html += `<div class="compact-step"><div class="compact-row"><button class="compact-select" ${step.attrs} title="${esc(r.id)} · 查看详情"><span class="compact-meta" title="请求 ${number}"><b>${number}</b></span><span class="row-label ${step.cls}">${step.label}</span><span class="compact-preview">${step.preview}</span></button>${i === steps.length - 1 && !r.sampleCut ? metrics : '<span class="compact-metrics"></span>'}<button class="step-expand" data-step-expand="${esc(step.key)}" aria-expanded="${open}" aria-label="${open ? '收起' : '展开'}请求 ${index+1} ${step.label}详情">${open ? '⌄' : '›'}</button></div>${open ? `<div class="trace-step-detail">${step.detail}<details class="trace-context"><summary>${r.local ? '已读取片段与请求详情' : '完整请求详情 · 上下文、路由与原始对象'}</summary>${requestBody(r, index)}</details></div>` : ''}</div>`;
+    });
+    html += '</section>';
+  }
+  return html + `<div class="timeline-end"><span></span> ${localMode && new URLSearchParams(location.search).get('sample') === 'first50' ? '前 50 条样本结束 · 后续内容未载入' : '已是最新记录'}</div></div>`;
+}
+function selectedTool() {
+  const selection = state.toolSelection;
+  const owner = selection && REQUESTS[selection.owner];
+  const call = owner && replyCalls(owner).find(c => c.id === selection.id);
+  return call ? {owner, call, result:resultFor(call.id)} : null;
+}
+function selectTool(owner, id) {
+  state.reqId = owner;
+  state.toolSelection = {owner, id};
+  state.railTab = 'overview';
+  document.body.classList.remove('inspector-collapsed');
+  syncPanelButtons();
+  renderAll();
+}
+function toolInspector(tool) {
+  const {owner, call, result} = tool;
+  const args = JSON.stringify(callArgs(call), null, 2);
+  if (state.railTab === 'params') return `<section class="rail-section"><h3>调用参数</h3><pre class="raw">${esc(args)}</pre></section>`;
+  if (state.railTab === 'result') return `<section class="rail-section"><h3>工具结果</h3><pre class="raw">${esc(result?.message.content || '后续请求中没有找到匹配的工具结果。')}</pre>${result ? `<button class="tool-link" data-locate="${esc(result.request.id)}">查看承载结果的请求 ${esc(result.request.id)} →</button>` : ''}</section>`;
+  if (state.railTab === 'schema') {
+    const schema = owner.request?.tools?.find(t => t.function.name === call.function.name);
+    return `<section class="rail-section"><h3>工具定义</h3><pre class="raw">${esc(schema ? JSON.stringify(schema.function, null, 2) : '本笔请求没有携带该工具的定义。')}</pre></section>`;
+  }
+  return `<section class="rail-section"><h3>工具往返</h3><dl class="chain"><div class="chain-row"><dt>结果</dt><dd>${result ? '✓ 已记录' : '○ 未记录'}</dd></div><div class="chain-row"><dt>发起请求</dt><dd class="mono">${esc(owner.id)}</dd></div><div class="chain-row"><dt>结果所在请求</dt><dd class="mono">${esc(result?.request.id || '未记录')}</dd></div><div class="chain-row"><dt>执行耗时</dt><dd>未采集</dd></div></dl></section><section class="rail-section"><h3>参数</h3><pre class="raw">${esc(args)}</pre></section><section class="rail-section"><h3>结果预览</h3><pre class="raw">${esc(result?.message.content || '未记录')}</pre></section><section class="rail-section"><h3>所属请求的模型计时</h3><dl class="chain"><div class="chain-row"><dt>首字</dt><dd>${secs(owner.timing?.ttft)}</dd></div><div class="chain-row"><dt>总时长</dt><dd>${secs(owner.timing?.ms)}</dd></div></dl>${explainer('模型请求计时覆盖模型响应过程，不能用作工具执行耗时。工具返回只表示结果已记录，是否成功需要依据明确的结果状态。')}</section>`;
 }
 
 function scalarItems(req) {
@@ -993,6 +1345,11 @@ function scalarItems(req) {
 }
 
 function items(r) {
+  if (r.local) return [
+    ...r.localSteps.map(step=>({path:step.path || step.key,kind:step.label === '用户' ? 'USER' : step.label === '助手' ? 'REPLY' : 'CALL',text:step.text,full:step.raw || step.call?.function.arguments || step.text})),
+    {path:'$detail',kind:'PARAM',text:'服务端请求详情',full:JSON.stringify(r.localDetail,null,2)},
+    {path:'$body',kind:'PARAM',text:'已读取的正文片段及覆盖范围',full:JSON.stringify(r.localBody,null,2)},
+  ];
   if (!r.request) return [];
   const out = scalarItems(r.request);
   for (const [key, value] of Object.entries(r.request)) {
@@ -1041,10 +1398,12 @@ const qp = new URLSearchParams(location.search);
 const state = {
   session: qp.get('session') || SESSIONS[0].key,
   reqId: qp.get('trace') || null,
-  view: qp.get('view') === 'ledger' ? 'ledger' : 'conversation',
+  toolSelection: null,
+  visibleCount: RECENT_PAGE,
+  stepOpen: new Set(),
   open: new Set(),
   selected: null,          // { req, path }
-  railTab: qp.get('tab') === 'body' ? 'body' : 'facts',
+  railTab: ['body','tools','route'].includes(qp.get('tab')) ? qp.get('tab') : 'facts',
   deltaOnly: new Set(),    // 处于“仅本轮新增”的请求 id
   searches: {},            // reqId -> 查找词
   query: '',
@@ -1061,9 +1420,9 @@ function ensureSelection() {
   const rows = requestsOf(state.session);
   if (!rows.some(r => r.id === state.reqId)) {
     state.reqId = rows.at(-1)?.id || null;
-    state.open = new Set(state.reqId ? [state.reqId] : []);
+    state.open = new Set();
     state.selected = null;
-    state.deltaOnly = false;
+    state.deltaOnly = new Set();
   }
 }
 
@@ -1094,7 +1453,6 @@ function sessionMatches(s) {
 function sessFlag(rows) {
   if (rows.some(r => r.status === 'failed')) return { color:'var(--bad)', text:'含失败' };
   if (rows.some(r => r.status === 'incomplete')) return { color:'var(--warn)', text:'含未完成' };
-  if (rows.some(r => r.status === 'unknown')) return { color:'var(--warn)', text:'待确认' };
   if (rows.some(r => !r.request)) return { color:'var(--muted)', text:'缺正文' };
   return { color:'var(--line-strong)', text:'' };
 }
@@ -1113,7 +1471,7 @@ function renderSessions() {
       <span class="sess-meta">
         <span class="dot" style="background:${flag.color}"></span>
         <span class="who">${esc(s.agent)}</span><span class="sep">·</span>
-        <span>${rows.length} 笔</span>
+        <span>${localMode ? s.total : rows.length} 笔</span>
         ${flag.text ? `<span class="sep">·</span><span style="color:${flag.color}">${flag.text}</span>` : ''}
       </span>
     </button>`;
@@ -1147,174 +1505,23 @@ function sessionHead() {
     <h1>${esc(s.title)}</h1>
     <div class="session-facts">
       <span><b>${esc(s.agent)}</b></span>
-      <span class="mono">${esc(s.session || '会话字段缺失 · 独立列出')}</span>
-      <span>共记录 <b>${rows.length}</b> 笔 Request</span>
+      ${s.session ? `<button class="copy-session" data-copy-session="${esc(s.session)}" title="复制完整 Session ID"><span class="mono">session ${esc(s.session.length > 20 ? s.session.slice(0,17)+'…' : s.session)}</span><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1" stroke="currentColor"/><path d="M10 3V2H2v8h1" stroke="currentColor"/></svg></button>` : '<span>未归属</span>'}
+      <span>${localMode ? '已载入' : '共记录'} <b>${rows.length}</b> 笔 Request</span>
       <span>${esc(rows[0]?.at)}–${esc(latest?.at)}</span>
-      ${hasUsage ? `<span class="sum">已记录请求相加：${kk(totalIn)} 提示 · ${kk(totalOut)} 输出 · $${totalCost.toFixed(4)}</span>` : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
+      ${hasUsage ? `<span class="sum">${localMode ? '已载入请求相加' : '已记录请求相加'}：${kk(totalIn)} 提示 · ${kk(totalOut)} 输出 · $${totalCost.toFixed(4)}</span>` : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
     </div>
-    <div class="view-row">
-      <div class="seg" role="group" aria-label="会话视图">
-        <button data-view="conversation" aria-pressed="${state.view === 'conversation'}">对话</button>
-        <button data-view="ledger" aria-pressed="${state.view === 'ledger'}">请求账本</button>
-      </div>
-      <span class="hint">${state.view === 'conversation'
-        ? '每个 ASSISTANT 块是一笔请求的合并回复；点开账本看上下文与路由。'
-        : '每行是一笔客户端请求；展开后读请求结构与本次回复。'}</span>
-    </div>
-    ${!s.session ? `<div class="session-note warn"><span>↳</span><span>这些请求没有可确认的会话归属。会话字段为空不等于没有会话，也不与其它请求合并。</span></div>` : ''}
-    ${latest && !latest.request ? `<div class="session-note warn"><span>↳</span><span>最新一笔（${esc(latest.id)}）缺正文。保留身份与读数，不用更早的请求替代。</span></div>` : ''}
-    ${rows.some(r => r.status === 'unknown') ? `<div class="session-note"><span>↳</span><span>有请求尚未与账本对齐。正文与元数据分开保存，关联状态单独显示。</span></div>` : ''}
+    <div class="view-row"><span class="timeline-tab">步骤轨迹</span><span class="hint">单行步骤 · 详情默认折叠</span><button class="timeline-latest" id="jump-latest">回到最新 ↓</button></div>
   </header>`;
 }
 
-/* ---------------- 对话视图 ---------------- */
-function convNote(rows) {
-  const first = rows[0];
-  const start = first?.request?.messages?.filter(m => m.role === 'system' || m.ctx) || [];
-  if (!start.length) return '';
-  const names = start.map(m => m.role === 'system' ? '系统提示' : '项目说明');
-  return `<div class="conv-note"><span>◆</span><span>会话起点：${names.join(' + ')}（第一笔请求的新增内容）。之后每一笔都会随全上下文重发，因此不在对话里重复展示。</span></div>`;
-}
-
-function convUserBlock(m, reqId) {
-  return `<div class="conv-user" data-select="${esc(reqId)}" title="选中这笔请求，右侧显示读数">
-    <div class="conv-who">USER</div>
-    <div class="conv-user-body">${esc(m.content)}</div>
-  </div>`;
-}
-
-function convStrip(r) {
-  const t = r.timing || {};
-  const u = r.usage || {};
-  const speed = (t.flow && u.out) ? Math.round(u.out / (t.flow / 1000)) : null;
-  const parts = [
-    t.ttft != null ? `首字 <b>${(t.ttft/1000).toFixed(2)}s</b>` : null,
-    t.ms != null ? `时长 <b>${(t.ms/1000).toFixed(2)}s</b>` : null,
-    u.in != null ? `↓ <b>${n(u.in)}</b>` : null,
-    u.cacheRead ? `⛁ <b>${n(u.cacheRead)}</b>` : null,
-    u.out != null ? `↑ <b>${n(u.out)}</b>` : null,
-    speed ? `<b>${speed}</b> tok/s` : null,
-    u.cost ? `$${u.cost}` : null,
-    r.attempts && r.attempts.length > 1 ? `<b>${r.attempts.length}</b> 次尝试` : null,
-  ].filter(Boolean);
-  return `<div class="conv-strip">${parts.map(p => `<span>${p}</span>`).join('<span class="sep">·</span>')}</div>`;
-}
-
-function convToolCard(r, results) {
-  const calls = replyCalls(r);
-  const chips = calls.map(c => {
-    const res = results.get(c.id);
-    return `<span class="tool-chip call" title="本响应发出的工具调用"><span>${esc(c.function.name)}(${esc(c.function.arguments)})</span></span>
-      ${res != null
-        ? `<span class="tool-chip res"><span>结果已记录 · ${res.split('\n').length} 行</span></span>`
-        : `<span class="tool-chip miss"><span>结果未出现在后续请求中</span></span>`}`;
-  }).join('');
-  const res = calls.length ? results.get(calls[0].id) : null;
-  return `<div class="conv-asst-card" data-select="${esc(r.id)}" title="选中这笔请求，右侧显示读数">
-    <div class="conv-asst-head">
-      <span class="conv-who">ASSISTANT</span>
-      <span class="mono muted" style="font-size:10px">${esc(r.replyState?.model || '模型名未报告')}</span>
-      <span class="grow"></span>
-      <span class="mono muted" style="font-size:10px">finish: ${esc(r.replyState?.finish)}</span>
-    </div>
-    <div class="conv-tools"><span class="label">发出调用</span>${chips}</div>
-    ${res != null ? `<details><summary>查看工具结果</summary><pre class="raw" tabindex="0">${esc(res)}</pre></details>` : ''}
-    ${convStrip(r)}
-  </div>`;
-}
-
-function convReplyCard(r) {
-  if (r.status === 'failed' || !replyOf(r)) {
-    return `<div class="conv-asst-card" data-select="${esc(r.id)}" title="选中这笔请求，右侧显示读数">
-      <div class="conv-asst-head">
-        <span class="conv-who">ASSISTANT</span><span class="grow"></span>
-        <span class="state-chip bad"><span class="d"></span>没有收到回复</span>
-      </div>
-      <div class="conv-fail"><span>✕</span><span>最近一次尝试返回 ${r.attempts?.at(-1)?.status ?? '未知状态'}。失败尝试的用量仍保留在账本里，不并入成功请求。这一轮没有 assistant 内容可读。</span></div>
-    </div>`;
-  }
-  return `<div class="conv-asst-card" data-select="${esc(r.id)}" title="选中这笔请求，右侧显示读数">
-    <div class="conv-asst-head">
-      <span class="conv-who">ASSISTANT</span>
-      <span class="mono muted" style="font-size:10px">${esc(r.replyState?.model || '模型名未报告')}</span>
-      <span class="grow"></span>
-      <span class="mono" style="font-size:10px;${r.replyState?.finish === 'length' ? 'color:var(--warn)' : 'color:var(--muted)'}">finish: ${esc(r.replyState?.finish)}</span>
-    </div>
-    <div class="conv-asst-body">${mdToHtml(replyText(r))}</div>
-    ${convStrip(r)}
-  </div>`;
-}
-
-function convMissing(r) {
-  return `<div class="conv-asst-card" data-select="${esc(r.id)}" title="选中这笔请求，右侧显示读数">
-    <div class="conv-asst-head">
-      <span class="conv-who">ASSISTANT</span><span class="grow"></span>
-      <span class="state-chip mute"><span class="d"></span>正文缺失</span>
-    </div>
-    <div class="conv-fail" style="color:var(--muted)">
-      <span>◇</span><span>这笔记录只有身份与读数，没有正文。${esc(r.caveat || '')}</span>
-    </div>
-    ${convStrip(r)}
-  </div>`;
-}
-
-function renderConversation() {
-  const rows = requestsOf(state.session);
-  const results = new Map();
-  for (const r of rows) for (const m of (r.newMsgs || [])) if (m.role === 'tool') results.set(m.tool_call_id, m.content);
-  let html = `<div class="conv">${convNote(rows)}`;
-  rows.forEach((r, i) => {
-    const users = (r.newMsgs || []).filter(m => m.role === 'user' && !m.ctx);
-    const card = !r.request ? convMissing(r) : replyCalls(r).length ? convToolCard(r, results) : convReplyCard(r);
-    html += `<section class="conv-req" data-req="${esc(r.id)}" data-current="${r.id === state.reqId}" aria-current="${r.id === state.reqId}">
-      <div class="conv-gutter"><b>${String(i+1).padStart(2,'0')}</b><em>${esc(r.at)}</em></div>
-      <div class="conv-main">
-        ${users.map(m => convUserBlock(m, r.id)).join('')}
-        ${users.length ? '' : `<div class="conv-cont" style="font-size:11px;color:var(--muted)">${(r.newMsgs || []).some(m => m.role === 'tool')
-          ? '这一笔没有新的用户消息，输入是上一笔的工具结果。'
-          : '这一笔没有可读的用户消息：正文回调缺失，输入未知。'}</div>`}
-        ${card}
-        <button class="conv-jump" data-ledger="${esc(r.id)}">在账本中查看 Request ${String(i+1).padStart(2,'0')} →</button>
-      </div>
-    </section>`;
-  });
-  return html + '</div>';
-}
-
-/* ---------------- 账本视图 ---------------- */
-function ledgerRow(r, idx) {
-  const open = state.open.has(r.id);
-  const flag =
-    r.status === 'failed' ? '<span class="req-flag bad">失败</span>' :
-    r.status === 'incomplete' ? '<span class="req-flag warn">未完成</span>' :
-    !r.request ? '<span class="req-flag mute">无正文</span>' :
-    r.ledger && !r.ledger.found ? '<span class="req-flag warn">待关联</span>' : '';
-  return `<article class="req" data-req="${esc(r.id)}" data-status="${r.status}" data-open="${open}" aria-current="${r.id === state.reqId}">
-    <button class="req-head" data-toggle="${esc(r.id)}" aria-expanded="${open}">
-      <span class="req-node" aria-hidden="true"></span>
-      <span class="req-time num">${esc(r.at)}</span>
-      <span class="req-line">
-        <span class="req-title">${esc(r.title)}</span>
-        <span class="req-sub">${flag}<span>${esc(replyLabel(r) || (r.request ? '没有收到回复' : (r.via === 'through' ? '正文回调缺失' : '当前来源没有正文')))}</span></span>
-      </span>
-      <span class="req-metrics">
-        ${r.timing?.ms != null ? `<span class="num">${secs(r.timing.ms)}</span>` : ''}
-        <span class="num opt">${r.usage?.in != null ? '↓' + kk(r.usage.in + (r.usage.cacheRead || 0) + (r.usage.cacheWrite || 0)) : '↓ 未报告'}</span>
-        ${r.usage?.out != null ? `<span class="num opt">↑ ${kk(r.usage.out)}</span>` : ''}
-        ${r.attempts && r.attempts.length > 1 ? `<span class="opt">${r.attempts.length} 次尝试</span>` : ''}
-        <span class="req-open-mark" aria-hidden="true"><svg width="9" height="9" viewBox="0 0 10 10" fill="none"><path d="M3 1.5L7 5l-4 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-      </span>
-    </button>
-    ${open ? requestBody(r, idx) : ''}
-  </article>`;
-}
-
+/* ---------------- 原位请求详情 ---------------- */
 function messageIndex(it) {
   const m = /^messages\[(\d+)\]$/.exec(it.path);
   return m ? Number(m[1]) : null;
 }
 
 function requestBody(r, idx) {
+  if (r.local) return `<div class="req-body"><div class="detail-label">请求 ${esc(r.id)} · 已读取片段（并非完整上下文）</div><pre class="raw">${esc(JSON.stringify(r.localBody,null,2))}</pre><details><summary>服务端请求详情</summary><pre class="raw">${esc(JSON.stringify(r.localDetail,null,2))}</pre></details></div>`;
   const rows = r.request ? items(r) : [];
   const fresh = newSet(r);
   const freshCount = fresh ? fresh.size : 0;
@@ -1479,9 +1686,7 @@ function renderMain() {
   const rows = requestsOf(state.session);
   const main = document.getElementById('main');
   const keep = main.scrollTop;
-  main.innerHTML = sessionHead() + (state.view === 'ledger'
-    ? `<div class="ledger">${rows.map((r, i) => ledgerRow(r, i)).join('') || '<p class="sess-empty">这个会话没有已记录的请求。</p>'}</div>`
-    : renderConversation());
+  main.innerHTML = sessionHead() + renderSteps();
   main.scrollTop = keep;
   applyAllItemSearches();
 }
@@ -1504,12 +1709,16 @@ function railHead() {
   if (!r) return '<div class="rail-id">未选择请求</div>';
   const s = currentSession();
   const idx = s.requests.indexOf(r.id) + 1;
+  const tool = selectedTool();
+  if (tool) return `<div class="rail-id"><span class="row-label tool">工具</span><span>Request ${String(idx).padStart(2,'0')}</span><span class="grow"></span><button class="icon-btn" data-close-tool="1" aria-label="返回请求详情">×</button></div><div class="rail-title mono">${esc(tool.call.function.name)}</div><div class="detail-label" style="margin-top:5px">${esc(callSummary(tool.call))}</div><div class="rail-tabs" role="tablist">${[['overview','概览'],['params','参数'],['result','结果'],['schema','Schema']].map(([key,label]) => `<button role="tab" data-rail="${key}" aria-pressed="${state.railTab === key}">${label}</button>`).join('')}</div>`;
   return `<div class="rail-id"><span>Request ${String(idx).padStart(2,'0')}</span><span class="muted">·</span><span>${esc(r.at)}</span><span class="grow"></span>${statusChip(r)}</div>
     <div class="rail-title">${esc(r.title)}</div>
     ${bigNumbers(r)}
     <div class="rail-tabs" role="tablist">
       <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">读数</button>
       <button role="tab" data-rail="body" aria-pressed="${state.railTab === 'body'}">正文</button>
+      <button role="tab" data-rail="tools" aria-pressed="${state.railTab === 'tools'}">工具${replyCalls(r).length ? ' '+replyCalls(r).length : ''}</button>
+      <button role="tab" data-rail="route" aria-pressed="${state.railTab === 'route'}">路由</button>
     </div>`;
 }
 
@@ -1545,11 +1754,11 @@ function timingSection(r) {
       </div>
       <div class="time-legend">${rows}</div>
     </div>
-    <p class="rail-note">${r.status === 'failed'
+    ${explainer(r.status === 'failed'
       ? '这笔请求最终失败，只有总耗时；首字与生成速度不可得。'
       : !replyOf(r)
-        ? '正文回调缺失，总耗时来自账本；首字与生成速度在这条通道上不可得。'
-        : '首字是到第一个内容（文本、推理或工具调用）；首个文本通常更晚，工具调用请求可以没有文本。生成耗时为总时长减去首字，速度只在两者都可得出时计算。'}</p>
+        ? '正文回调缺失，总耗时来自账本；首字与生成速度不可得。'
+        : '首字是到第一个内容。首个文本可以更晚；模型请求耗时不代表工具执行耗时。')}
   </section>`;
 }
 
@@ -1568,10 +1777,10 @@ function usageSection(r) {
       ${cell('缓存读取', u.cacheRead)}
       ${cell('缓存写入', u.cacheWrite)}
     </div>
-    <div class="u-total"><span>提示总量 <b>${total ? n(total) : '—'}</b></span><span>费用 <b>${u.cost ? '$' + u.cost : '未报告'}</b></span></div>
+    <div class="u-total"><span>提示总量 <b>${total ? n(total) : '—'}</b></span><span>费用 <b>${money(u.cost)}</b></span></div>
     ${hit != null ? `<div class="meter" aria-hidden="true"><i style="width:${hit}%"></i></div>
       <div class="u-total"><span>缓存命中 <b>${hit}%</b>（读取 ÷ 提示总量，展示比例，不是计费口径）</span></div>` : ''}
-    <p class="rail-note">输入不含缓存读取与写入。缺失保留为「未报告」，不当作 0 参与合计。</p>
+    ${explainer('输入不含缓存读取与写入。缺失保留为未报告，不当作 0 参与合计。')}
   </section>`;
 }
 
@@ -1593,11 +1802,7 @@ function promptSection(r) {
         <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}
     </div>
     <div class="u-total" style="margin-top:8px"><span>${p.counted ? '提示总量（上游校准）' : '提示总量（本地估计）'} <b>${n(p.tokens)}</b></span><span>${p.window ? `窗口 <b>${kk(p.window)}</b>` : '窗口未知'}</span></div>
-    <p class="rail-note">${p.counted
-      ? '总量已由上游输入量校准，六类仍按估计比例分配，不是逐类精确计数。'
-      : '总量与分类都来自本地估计，未经上游校准。'}
-      ${p.window ? '' : ' 分母未知，不显示占用率。'}
-      ${r.status === 'failed' ? ' 这笔最终失败：总量可能来自较早尝试，窗口取自最后尝试，两者不是同一次调用的快照。' : ''}</p>
+    ${explainer(`${p.counted ? '总量已由上游校准，各类仍按估计比例分配。' : '总量与分类来自本地估计。'}${p.window ? '' : '窗口未知，不显示占用率。'}${r.status === 'failed' ? '最终失败：提示总量与窗口可能来自不同尝试。' : ''}`)}
   </section>`;
 }
 
@@ -1639,15 +1844,28 @@ function completenessSection(r) {
 
 function railFacts() {
   const r = currentReq();
+  if (r?.local) return `${localReader.renderContext(r)}<section class="rail-section"><h3>本次回复</h3>${localReader.renderResponse(r)}</section>${usageSection(r)}<section class="rail-section"><h3>请求状态与身份</h3><div class="detail-value">请求 ${esc(r.id)} · ${esc(r.localDetail.model_served || r.localDetail.model_requested)}
+正文 ${esc(r.localDetail.body_state)} · 派生 ${esc(r.localDetail.derived_state)}
+前驱关系 ${esc(r.localDetail.prev_relation)}
+首个文本 ${secs(r.timing.firstText)}
+actor ${esc(r.localDetail.actor || '未知')}</div></section>`;
   if (!r) return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
-  return usageSection(r) + timingSection(r) + promptSection(r) + routeSection(r) + completenessSection(r);
+  return `<section class="rail-section"><h3>本次回复</h3><div class="detail-value">${esc(replyText(r) ? replyText(r).slice(0,260) : replyCalls(r).length ? replyLabel(r) : r.request ? '没有收到回复' : '正文未收到')}</div>${replyText(r).length > 260 ? '<button class="tool-link" data-rail="body">阅读全文 →</button>' : ''}</section>` + usageSection(r) + timingSection(r) + promptSection(r) + completenessSection(r);
 }
 
 function railBody() {
   const r = currentReq();
   if (!r) return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
+  const tool = selectedTool();
+  if (tool) return toolInspector(tool);
+  if (state.railTab === 'route' && r.local) return `<section class="rail-section"><h3>请求详情中的路由证据</h3><pre class="raw">${esc(JSON.stringify(r.localDetail,null,2))}</pre></section>`;
+  if (state.railTab === 'route') return `<section class="rail-section"><h3>路由与尝试</h3>${routeBlock(r)}</section>`;
+  if (state.railTab === 'tools') {
+    const calls = replyCalls(r);
+    return `<section class="rail-section"><h3>本次回复发起的工具调用</h3>${calls.length ? calls.map(c => `<button class="tool-chip call" style="margin-bottom:8px" data-tool-owner="${esc(r.id)}" data-tool-id="${esc(c.id)}"><span>${esc(callSummary(c))}</span></button>`).join('') : '<p class="note">本次回复没有工具调用。</p>'}</section>`;
+  }
   if (state.railTab === 'facts') return railFacts();
-  if (!r.request) {
+  if (!r.request && !r.local) {
     return `<div class="rail-empty"><b>没有可读的协议内容</b>${esc(r.caveat || '这笔记录没有正文。')}</div>`;
   }
   const rows = items(r);
@@ -1671,19 +1889,26 @@ function railBody() {
   </div>`;
 }
 
+let lastRailRequest = null;
 function renderRail() {
+  const rail = document.getElementById('rail-body');
+  const same = lastRailRequest === state.reqId;
+  const keep = same ? rail.scrollTop : 0;
+  const openCapabilities = same ? [...rail.querySelectorAll('.cap-section details')].map(node=>node.open) : [];
   document.getElementById('rail-head').innerHTML = railHead();
-  document.getElementById('rail-body').innerHTML = railBody();
-  document.getElementById('rail-body').scrollTop = 0;
+  rail.innerHTML = railBody();
+  rail.querySelectorAll('.cap-section details').forEach((node,i)=>{node.open=!!openCapabilities[i];});
+  rail.scrollTop = keep;
+  lastRailRequest = state.reqId;
 }
 
 /* ---------------- 交互 ---------------- */
 function updateURL() {
-  const p = new URLSearchParams();
+  const p = new URLSearchParams(location.search);
+  p.delete('variant'); p.delete('view');
   p.set('session', state.session);
   if (state.reqId) p.set('trace', state.reqId);
-  if (state.view === 'ledger') p.set('view', 'ledger');
-  if (state.railTab === 'body') p.set('tab', 'body');
+  if (['body','tools','route'].includes(state.railTab)) p.set('tab', state.railTab);
   history.replaceState(null, '', '?' + p.toString());
 }
 
@@ -1697,11 +1922,22 @@ function renderAll() {
   updateURL();
 }
 
-function selectSession(key) {
+let sessionLoad = 0;
+async function selectSession(key) {
+  const turn = ++sessionLoad;
+  if (localMode && !requestsOf(key).length) {
+    document.getElementById('main').textContent = '正在读取本机会话…';
+    try {
+      await localReader.load(SESSIONS.find(s=>s.key===key));
+      Object.assign(REQUESTS, localReader.requests);
+    } catch (error) {toast(error.message); renderMain(); return;}
+    if (turn !== sessionLoad) return;
+  }
   state.session = key;
   const rows = requestsOf(key);
   state.reqId = rows.at(-1)?.id || null;
-  state.open = new Set(state.reqId ? [state.reqId] : []);
+  resetTimeline();
+  state.toolSelection = null;
   state.selected = null;
   state.railTab = 'facts';
   state.searches = {};
@@ -1712,8 +1948,10 @@ function selectSession(key) {
 }
 
 function selectRequest(id) {
-  const same = state.reqId === id;
+  const same = state.reqId === id && state.toolSelection === null;
   state.reqId = id;
+  state.toolSelection = null;
+  if (!['facts','body','tools','route'].includes(state.railTab)) state.railTab = 'facts';
   renderCrumb();
   // 同一笔不重建主体，否则会关闭已经展开的工具结果
   if (!same) {
@@ -1723,19 +1961,9 @@ function selectRequest(id) {
   updateURL();
 }
 
-function jumpToLedger(id) {
-  state.view = 'ledger';
-  state.reqId = id;
-  state.open.add(id);
-  state.selected = null;
-  renderAll();
-  requestAnimationFrame(() => {
-    const el = document.querySelector(`[data-req="${CSS.escape(id)}"]`);
-    if (el) el.scrollIntoView({ block:'start', behavior:'smooth' });
-  });
-}
-
 function toggleRequest(id) {
+  state.toolSelection = null;
+  if (!['facts','body','tools','route'].includes(state.railTab)) state.railTab = 'facts';
   if (state.open.has(id)) state.open.delete(id);
   else state.open.add(id);
   state.reqId = id;
@@ -1745,6 +1973,8 @@ function toggleRequest(id) {
 }
 
 function selectItem(owner, path) {
+  state.reqId = owner;
+  state.toolSelection = null;
   state.selected = { req: owner, path };
   state.railTab = 'body';
   document.querySelectorAll('[data-item]').forEach(el => el.setAttribute('aria-current',
@@ -1764,22 +1994,87 @@ function applyAllItemSearches() {
   for (const id of Object.keys(state.searches)) applyItemSearch(id);
 }
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', async (e) => {
   const t = e.target;
+  if (t.closest('#load-earlier')) {loadEarlier(); return;}
+  if (t.closest('#jump-latest')) {locateRequest(requestsOf(state.session).at(-1).id); return;}
+  const stepExpand = t.closest('[data-step-expand]');
+  if (stepExpand) {
+    const key = stepExpand.dataset.stepExpand;
+    if (localMode && !state.stepOpen.has(key)) {
+      const step = currentSession().requests.flatMap(id=>REQUESTS[id]?.localSteps || []).find(s=>s.key===key);
+      if (step?.call) {
+        stepExpand.disabled = true;
+        try {await localReader.result(step.call);} catch (error) {toast(error.message); stepExpand.disabled=false; return;}
+        if (!document.contains(stepExpand)) return;
+      }
+    }
+    state.stepOpen.has(key) ? state.stepOpen.delete(key) : state.stepOpen.add(key);
+    renderMain(); return;
+  }
+  const structure = t.closest('[data-structure] > summary');
+  if (structure) {
+    e.preventDefault();
+    const row = REQUESTS[structure.parentElement.dataset.structure];
+    row.structure.open = !row.structure.open;
+    const load = row.structure.open && row.structure.entries.length === 0 && !row.structure.loading;
+    if (load) {
+      const pending = localReader.loadStructure(row);
+      renderRail();
+      await pending;
+      if (state.reqId === row.id) renderRail();
+    } else renderRail();
+    return;
+  }
+  const more = t.closest('[data-structure-more]');
+  if (more) {
+    const row = REQUESTS[more.dataset.structureMore];
+    const pending = localReader.loadStructure(row); renderRail(); await pending;
+    if (state.reqId === row.id) renderRail();
+    return;
+  }
+  const back = t.closest('[data-structure-back]');
+  if (back) {REQUESTS[back.dataset.structureBack].structure.selected=null; renderRail(); return;}
+  const message = t.closest('.rail-structure [data-msg]');
+  if (message) {currentReq().structure.selected=Number(message.dataset.msg); renderRail(); return;}
+  const copyMessage = t.closest('.rail-structure [data-copy-msg]');
+  if (copyMessage) {
+    const entry = currentReq().structure.entries.find(item=>item.ord===Number(copyMessage.dataset.copyMsg));
+    const text = localReader.messageCopyText(entry);
+    try {await navigator.clipboard.writeText(text); toast('已复制消息原文');} catch {copyFallback(text);}
+    return;
+  }
   // 原生 details 折叠不触发选中
   if (t.closest('summary')) return;
+  const copy = t.closest('[data-copy-session]');
+  if (copy) {
+    if (navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copySession).then(() => toast('已复制完整 Session ID')).catch(() => copyFallback(copy.dataset.copySession));
+    else copyFallback(copy.dataset.copySession);
+    return;
+  }
+  const locate = t.closest('[data-locate]');
+  if (locate) {locateRequest(locate.dataset.locate); return;}
+  const tool = t.closest('[data-tool-owner]');
+  if (tool) {
+    if (tool.dataset.localResult) {
+      const owner=REQUESTS[tool.dataset.toolOwner];
+      const call=replyCalls(owner).find(item=>item.id===tool.dataset.toolId);
+      tool.disabled=true;
+      try {await localReader.result(call);} catch(error) {toast(error.message);tool.disabled=false;return;}
+      if (state.reqId !== owner.id) return;
+      selectTool(owner.id,call.id);state.railTab='result';renderRail();
+    } else selectTool(tool.dataset.toolOwner, tool.dataset.toolId);
+    return;
+  }
+  if (t.closest('[data-close-tool]')) {state.toolSelection = null; state.railTab = 'facts'; renderAll(); return;}
+  const stepBody = t.closest('[data-step-body]');
+  if (stepBody) {selectRequest(stepBody.dataset.stepBody); selectItem(stepBody.dataset.stepBody,stepBody.dataset.stepPath); return;}
 
   const sess = t.closest('[data-session]');
   if (sess) { selectSession(sess.dataset.session); return; }
 
   const agent = t.closest('[data-agent]');
   if (agent) { state.agent = agent.dataset.agent; renderFilters(); renderSessions(); return; }
-
-  const view = t.closest('[data-view]');
-  if (view) { state.view = view.dataset.view; renderMain(); updateURL(); return; }
-
-  const ledger = t.closest('[data-ledger]');
-  if (ledger) { jumpToLedger(ledger.dataset.ledger); return; }
 
   const select = t.closest('[data-select]');
   if (select) { selectRequest(select.dataset.select); return; }
@@ -1826,8 +2121,8 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.target.matches('input, textarea, summary')) return;
-  if (e.key === 'Escape') { state.railTab = 'facts'; renderRail(); return; }
+  if (e.target.matches('input, textarea, summary, [contenteditable], [role="separator"]')) return;
+  if (e.key === 'Escape') { state.toolSelection = null; state.railTab = 'facts'; renderRail(); return; }
   const current = document.querySelector('.path-row[aria-current="true"]');
   if (!current) return;
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1858,14 +2153,52 @@ window.addEventListener('popstate', () => {
   const p = new URLSearchParams(location.search);
   state.session = p.get('session') || SESSIONS[0].key;
   state.reqId = p.get('trace');
-  state.view = p.get('view') === 'ledger' ? 'ledger' : 'conversation';
-  state.railTab = p.get('tab') === 'body' ? 'body' : 'facts';
+  resetTimeline();
+  if (state.reqId) revealRequest(state.reqId);
+  state.railTab = ['body','tools','route'].includes(p.get('tab')) ? p.get('tab') : 'facts';
+  state.toolSelection = null;
   renderAll();
 });
 
+function copyFallback(text) {
+  const field = document.createElement('textarea');
+  field.value = text; field.readOnly = true; field.style.position = 'fixed'; field.style.inset = '20px 16px auto';
+  document.body.append(field); field.focus(); field.select();
+  toast('复制受限，已选中 Session ID，可按 ⌘C / Ctrl+C');
+  field.addEventListener('blur', () => field.remove(), {once:true});
+}
+function syncPanelButtons() {
+  for (const [id, cls, name] of [['sidebar-toggle','sidebar-collapsed','会话栏'],['inspector-toggle','inspector-collapsed','详情栏']]) {
+    const button = document.getElementById(id);
+    const closed = document.body.classList.contains(cls);
+    button.setAttribute('aria-expanded', String(!closed));
+    button.setAttribute('aria-label', `${closed ? '展开' : '收起'}${name}`);
+    button.title = button.getAttribute('aria-label');
+  }
+}
+document.getElementById('sidebar-toggle').addEventListener('click', () => {document.body.classList.toggle('sidebar-collapsed'); syncPanelButtons();});
+document.getElementById('inspector-toggle').addEventListener('click', () => {document.body.classList.toggle('inspector-collapsed'); syncPanelButtons();});
+const resizer = document.getElementById('inspector-resize');
+function resizeInspector(width) {
+  const sidebar = document.body.classList.contains('sidebar-collapsed') ? 0 : document.querySelector('.col-sessions').getBoundingClientRect().width;
+  const limit = Math.min(640, Math.max(280, innerWidth - sidebar - 420));
+  const value = Math.round(Math.max(280, Math.min(limit,width)));
+  document.documentElement.style.setProperty('--inspector-width', `${value}px`);
+  resizer.setAttribute('aria-valuenow',String(value));
+  resizer.setAttribute('aria-valuemax',String(limit));
+}
+resizer.addEventListener('pointerdown', e => {resizer.setPointerCapture(e.pointerId);});
+resizer.addEventListener('pointermove', e => {if (resizer.hasPointerCapture(e.pointerId)) resizeInspector(innerWidth-e.clientX);});
+resizer.addEventListener('pointerup', e => {if (resizer.hasPointerCapture(e.pointerId)) resizer.releasePointerCapture(e.pointerId);});
+resizer.addEventListener('dblclick', () => {document.documentElement.style.removeProperty('--inspector-width'); resizer.setAttribute('aria-valuenow',String(Math.round(document.querySelector('.col-rail').getBoundingClientRect().width)));});
+resizer.addEventListener('keydown', e => {if (['ArrowLeft','ArrowRight'].includes(e.key)) {e.preventDefault(); resizeInspector(document.querySelector('.col-rail').getBoundingClientRect().width + (e.key === 'ArrowLeft' ? 20 : -20));}});
+window.addEventListener('resize', () => {if (innerWidth > 1000 && document.documentElement.style.getPropertyValue('--inspector-width')) resizeInspector(parseInt(document.documentElement.style.getPropertyValue('--inspector-width')));});
+
 applyTheme();
+syncPanelButtons();
 ensureSelection();
-if (state.reqId) state.open = new Set([state.reqId]);
+resetTimeline();
+if (state.reqId) revealRequest(state.reqId);
 renderAll();
 </script>
 </body>
