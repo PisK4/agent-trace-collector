@@ -1,7 +1,7 @@
 import { constants, zstdCompressSync } from 'node:zlib';
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
-import type { FileBatch } from './sources/files';
+import type { FileBatch, FileCursor } from './sources/files';
 import { redact } from './privacy';
 import {
   isRecord,
@@ -26,6 +26,81 @@ export type IngestLedgerResult = {
 
 function evidenceRef(generation: string, offset: number): string {
   return JSON.stringify(['file', generation, offset]);
+}
+
+/** 读一个来源文件的游标；没有就返回 null。调用方据此决定从哪里续读。 */
+export function readFileCursor(store: Store, sourceKind: string, sourceName: string): FileCursor | null {
+  const row = store.read.query<{
+    file_generation: string; committed_off: number; seen_size: number | null;
+    head_len: number | null; head_hash: string | null; rewrite_epoch: number;
+  }, [string, string]>(
+    'SELECT file_generation, committed_off, seen_size, head_len, head_hash, rewrite_epoch FROM source_cursor WHERE source_kind=? AND source_name=?',
+  ).get(sourceKind, sourceName);
+  if (row == null) return null;
+  return {
+    generation: row.file_generation,
+    rewriteEpoch: row.rewrite_epoch,
+    committedOff: row.committed_off,
+    seenSize: row.seen_size ?? 0,
+    headLen: row.head_len ?? 0,
+    headHash: row.head_hash,
+  };
+}
+
+/** 只推进 observed_off：提交位置不动，下一轮仍从 committed_off 重读，证据不会漏。 */
+export function observeSourceOffset(store: Store, sourceKind: string, sourceName: string,
+  observedOff: number): void {
+  store.write(db => db.run(
+    'UPDATE source_cursor SET observed_off=? WHERE source_kind=? AND source_name=?',
+    [observedOff, sourceKind, sourceName],
+  ));
+}
+
+/** 已提交的路由文件指纹：命中就跳过解压，同一份字节只解一次。 */
+export function committedRouteFingerprints(store: Store): Map<string, string | null> {
+  return new Map(
+    store.read.query<{ source_name: string; fingerprint: string | null }, []>(
+      "SELECT source_name, fingerprint FROM source_cursor WHERE source_kind IN ('route_file','route_gz')",
+    ).all().map(row => [row.source_name, row.fingerprint] as const),
+  );
+}
+
+/**
+ * 一个已解码路由文件的落库：解析行、记录坏行、ingest、推进该文件的游标。
+ *
+ * 路由文件没有物理行身份，游标以整文件指纹为代际，`committed_off` 是整份字节
+ * 长度；`.gz` 被整体替换时指纹变化，旧游标被覆盖，重读靠 route_id upsert 幂等。
+ * 坏行与账本共用同一张 issue 表、同一个 `recordIssue` 记账。
+ */
+export function ingestDecodedRouteFile(
+  store: Store,
+  file: { name: string; kind: 'jsonl' | 'gz'; fingerprint: string; lines: string[] },
+  salt: Uint8Array,
+  now: number,
+): void {
+  const kind = file.kind === 'gz' ? 'route_gz' : 'route_file';
+  const records: unknown[] = [];
+  store.write(db => {
+    for (const line of file.lines) {
+      if (line.trim() === '') continue;
+      try {
+        records.push(JSON.parse(line));
+      } catch {
+        recordIssue(db, 'route', JSON.stringify([file.name, file.fingerprint]),
+          'route_invalid_json', now, Buffer.byteLength(line));
+      }
+    }
+  });
+  ingestRoute(store, records, now, salt);
+  const committed = file.lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
+  store.write(db => db.run(
+    `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,fingerprint,last_ok_ms)
+     VALUES (?,?,?,?,?,?)
+     ON CONFLICT(source_kind,source_name) DO UPDATE SET
+       file_generation=excluded.file_generation,committed_off=excluded.committed_off,
+       fingerprint=excluded.fingerprint,last_ok_ms=excluded.last_ok_ms`,
+    [kind, file.name, file.fingerprint, committed, file.fingerprint, now],
+  ));
 }
 
 function recordIssue(

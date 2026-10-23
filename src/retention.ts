@@ -256,6 +256,36 @@ export function createAdmissionGate(
  * 删引用、删孤儿块、清骨架、改状态在同一事务里完成；
  * 已回收的请求不覆盖 body_prev_state，重复执行是幂等的。
  */
+/**
+ * 预算触顶时的回收执行。
+ *
+ * 正文占用到了预算的 EVICT_TARGET_RATIO、或总盘占用到了 DISK_METADATA_RATIO
+ * 就开始回收，不为空着等正文顶满；按批限量执行，收到目标水位为止，
+ * 单批事务不阻塞写入。回收后收缩文件，并让准入缓存作废——回收改变了
+ * 占用读数，闸门要重算。返回回收的请求数；0 表示没有触顶或没有可回收正文。
+ */
+export function enforceBodyBudget(store: Store, dataDir: string,
+  limits: { bodyBudget: number; diskLimit: number },
+  hooks: { invalidate(): void }): number {
+  const usage = measureStorage(store, dataDir);
+  const bodyFull = usage.body_bytes >= limits.bodyBudget * EVICT_TARGET_RATIO;
+  const diskTight = usage.total_bytes >= limits.diskLimit * DISK_METADATA_RATIO;
+  if (!bodyFull && !diskTight) return 0;
+  const target = limits.bodyBudget * EVICT_TARGET_RATIO;
+  let evicted = 0;
+  for (let batch = 0; batch < 20; batch++) {
+    if (measureBodyBytes(store) <= target && evicted > 0) break;
+    const result = evictOldestBodyBatch(store, Date.now());
+    if (result.requests === 0) break;
+    evicted += result.requests;
+  }
+  if (evicted > 0) {
+    shrinkStorage(store);
+    hooks.invalidate();
+  }
+  return evicted;
+}
+
 export function evictOldestBodyBatch(store: Store, now: number, limit = EVICT_BATCH): EvictResult {
   if (!Number.isInteger(limit) || limit < 1) throw new Error('invalid_evict_limit');
   const maxRequests = Math.min(limit, EVICT_BATCH);

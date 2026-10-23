@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { zstdDecompressSync } from 'node:zlib';
 import { fixture } from './fixtures';
 import type { FileBatch } from '../src/sources/files';
-import { ingestLedger, ingestRoute, resumePausedLedger } from '../src/reconcile';
+import { ingestDecodedRouteFile, ingestLedger, ingestRoute, observeSourceOffset, readFileCursor, resumePausedLedger } from '../src/reconcile';
 import { purgeMetadata } from '../src/maintenance';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
 import { readSourceFacts } from '../src/sources/facts';
@@ -692,6 +692,40 @@ test('路由摘要按 format 2 写入展示字段，缺失 prompt 保持 null', 
     });
     const second = JSON.parse(routeSummaryText(f, 9)) as Record<string, unknown>;
     expect(second).toMatchObject({ format: 2, kind: null, folder: null, effort: null, prompt: null });
+  } finally {
+    f.close();
+  }
+});
+
+test('路由文件落库推进指纹游标并记账坏行', () => {
+  const f = fixture();
+  try {
+    const good = JSON.stringify({
+      id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm',
+      provider: 'p', status: 200, in: 10, out: 5,
+    });
+    ingestDecodedRouteFile(f.store, {
+      name: '2026-10-20.jsonl', kind: 'jsonl', fingerprint: 'fp-1',
+      lines: ['not json', good],
+    }, salt, 1000);
+    const cursor = readFileCursor(f.store, 'route_file', '2026-10-20.jsonl');
+    expect(cursor?.generation).toBe('fp-1');
+    // committed_off 是整份字节长度：每行字节加一个换行。
+    expect(cursor?.committedOff)
+      .toBe(Buffer.byteLength('not json') + 1 + Buffer.byteLength(good) + 1);
+    const issue = f.store.read.query<{ byte_length: number | null }, []>(
+      "SELECT byte_length FROM ingest_issue WHERE reason='route_invalid_json'").get();
+    expect(issue?.byte_length).toBe(Buffer.byteLength('not json'));
+    expect(f.store.read.query<{ n: number }, []>(
+      'SELECT COUNT(*) AS n FROM route_summary WHERE route_id=7').get()?.n).toBe(1);
+    // observed_off 只推进观察位，提交位置不动。
+    observeSourceOffset(f.store, 'route_file', '2026-10-20.jsonl', 999);
+    const observed = f.store.read.query<{ observed_off: number }, [string, string]>(
+      'SELECT observed_off FROM source_cursor WHERE source_kind=? AND source_name=?',
+    ).get('route_file', '2026-10-20.jsonl');
+    expect(observed?.observed_off).toBe(999);
+    expect(readFileCursor(f.store, 'route_file', '2026-10-20.jsonl')?.committedOff)
+      .toBe(Buffer.byteLength('not json') + 1 + Buffer.byteLength(good) + 1);
   } finally {
     f.close();
   }
