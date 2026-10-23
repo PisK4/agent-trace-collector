@@ -32,11 +32,28 @@ const DERIVE_INTERVAL_MS = 2000;
 const RETENTION_INTERVAL_MS = 30_000;
 const RAW_PRUNE_INTERVAL_MS = 60 * 60_000;
 
-export async function startCollector(config: Config): Promise<{ port: number; stop(): Promise<void> }> {
+/**
+ * 切片模式的豁免通道，只给容量实验台用。
+ *
+ * 读模型还没迁移到发布指针：`queries.ts` 只读 `request` 派生列，而切片模式
+ * 不写这些列——旧值若恰好满足当前判据，读侧会把过期的派生结果当现行结论。
+ * 在读模型改经 `published_generation` 取结果之前，启用路径在这里拒绝切片
+ * 模式；容量实验台读数走 `readEffectiveGroup`，不受这个缺口影响，显式声明
+ * 身份后可以起切片采集器。
+ */
+export type CollectorOptions = { capacityExperiment?: boolean };
+
+export async function startCollector(
+  config: Config,
+  options?: CollectorOptions,
+): Promise<{ port: number; stop(): Promise<void> }> {
   // 维护命令运行时不允许采集器起来：两边同时写会得到自相矛盾的快照。
   // 陈旧锁不在这里自动清：把路径原样报出来，由操作者确认后删除。
   const heldLock = maintenanceLockPresent(config.dataDir);
   if (heldLock !== null) throw new Error(`maintenance_lock_present:${heldLock}`);
+  if (config.deriveBudget !== undefined && options?.capacityExperiment !== true) {
+    throw new Error('slice_read_unmigrated');
+  }
   const dbPath = join(config.dataDir, 'trace.db');
   const store = openStore(dbPath);
   // 派生路径按配置定下来，定时器之前就设好：一旦有派生任务进来，模式和预算都
