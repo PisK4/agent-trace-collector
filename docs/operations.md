@@ -223,6 +223,8 @@ WAL 闸门量的是整库增长，不只是这一代：别的写入把 WAL 抬�
 
 丢弃的记录留在库里，不静默：`derive_generation.state='discarded'` 是这一代被否掉的结论，`derive_queue.last_error` 是原因码（阶段预算、修订变化、覆盖不全、磁盘预算）。`pending_derivations` 只数未完成组数，不数被丢弃的代；判断"是不是一直在丢"要按 `discarded` 与 `last_error` 看。
 
+切片模式目前未启用。10,000 笔单链的实测排空是 878,696 ms（同步同输入 1,959 ms），`drain_ms` 的 120,000 ms 上限未过，门槛判 `slice_not_converged`，采集器继续走同步派生；同一轮的代际结构不变量（发布 1 代、丢弃 0 代、增量与全量逐字一致）全部成立，慢在切片入口的事务开销。跑法、逐项读数与预算出处记在[容量基线记录](superpowers/capacity/2026-10-22-atc-capacity-baseline.md#切片长组实测)。
+
 ## 切换核对与 AVA 下线
 
 `scripts/verify-cutover.ts` 只读比较 collector 与 AVA 的正文覆盖，用来判断能不能停 AVA。

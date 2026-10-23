@@ -80,6 +80,35 @@ bun scripts/capacity-gate.ts gate \
 
 门槛对单场景报告照常判两项：`route` 自身零失败项；退出码 1 来自另外七个场景在这份单场景报告里缺席（这条判定是有意的，见 [feature note](../../../.agents/notes/implemented/feature/2026-10-22-atc-capacity-budget-gate.md)）。
 
+## 切片长组实测
+
+切片模式的容量门槛单独跑过一次（2026-10-23）：输入与 `long-10000` 逐字相同（单会话 10,000 笔、`seed=1`、正文预算 64 MiB），只在排空入口上换成切片流水线。
+
+```sh
+bun scripts/capacity.ts long-10000-slice --acknowledge-long-run \
+  --slice-budget docs/superpowers/capacity/2026-10-22-atc-capacity-budget.json \
+  --report /private/tmp/atc-capacity-reports/long-10000-slice.json
+bun scripts/capacity-gate.ts gate \
+  --budget docs/superpowers/capacity/2026-10-22-atc-capacity-budget.json \
+  --report /private/tmp/atc-capacity-reports/long-10000-slice.json
+```
+
+| 读数 | 同步（`long-10000`） | 切片（`long-10000-slice`） |
+| --- | --- | --- |
+| 增量排空 `drain_ms` / 轮询 | 1,959 ms / 1 | 878,696 ms / 3,600 |
+| 单笔写事务 `max_write_tx_ms` | 1,959 ms | 689 ms |
+| 场景总时长 | 4,474 ms | 1,778,186 ms |
+| 结构不变量 | — | 发布 1 代、丢弃 0 代、增量与全量逐字一致 |
+| 存储峰值（库 / WAL） | — | 31.6 MB / 12.3 MB |
+
+门槛结论：**唯一实测失败项是 `drain_ms`**，即 878,696 ms 超过提案上限 120,000 ms 的七倍；另外八条失败是其余场景在这份单场景报告里缺席，与上文 `route` 的判定同形。三条结构不变量全部成立——切片算得并不少，慢的是每次事务的开销：入口每笔请求一个读事务、每页一个写事务，10,000 笔单链把它放大成 3,600 次轮询。切片模式因此保持关闭，采集器继续走同步派生（`slice_not_converged`）。
+
+这份报告与本次校准把 `scenarios['long-10000-slice']` 与预算文件的 `slice` 节一并写进 [预算文件](2026-10-22-atc-capacity-budget.json)；该文件自此的字节与上文登记、以及决策文件里登记的 `budget_sha256` 不同，两者对应的是追加这一节之前的那一版。
+
+## 指纹不可跨运行比较
+
+`long-10000` 与 `long-10000-slice` 的 `result_sha256` 列集与顺序相同，但两份报告来自不同时刻的运行，因此不相等：`runLong` 用 `Date.now()` 播种 `started_ms`，而标题的时间兜底精确到分钟。同一分钟内跑两次 `long-2000` 同步，指纹相同；与数小时前那一轮不同。跨路径等价由 `tests/capacity-slice.test.ts` 的固定种子样本承担，长组报告只证明切片内部"增量 = 全量"。
+
 ## 口径与已知偏差
 
 - 这一轮测量期间，同一台机器还跑过几秒的 `typecheck` 与测试（Task 7 的实现工作与基线重叠）。独立跑的那次 `baseline-1rps` 里 page 读 p95 是 33 ms、事件循环 p99 是 112 ms，这一轮分别是 152.85 ms 与 183.45 ms。两项在两轮里都超过 100 ms 的产品目标，事件循环这一项可信；page 读这一项按被污染记录，不作为结论。

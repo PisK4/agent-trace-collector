@@ -5501,7 +5501,7 @@ git commit -m "feat(derive): slice ready stage with disk budgets and invalidatio
 - Consumes: `drainDeriveEntry`、`Config.deriveBudget`、`CapacityBudget.slice`、`ScenarioReport.derive.published_generations/discarded_generations`。
 - Produces: `comparisonSnapshot(store)`、`runEquivalenceFuzz(seed, groups)`、`long-10000-slice` 场景、切片门槛与最终交接报告。
 
-- [ ] **Step 1：写等价性测试。** 用同一合成种子建两个独立库；一个跑 D 之后的同步 `drainDerive`（Task 19 的 oracle 就是这份同步入口，不是 A 的裸实现），另一个跑切片入口并把预算压到每批 1 行。比较请求关系、角色、标题、预览、工具状态与最终队列；比较前去掉 generation id 与时间戳。另外单独固定三处展示分支：正文不可读的标题型请求、正文可读但 `model_title` 为空的标题型请求、排除用途但不是标题的请求。
+- [x] **Step 1：写等价性测试。** 用同一合成种子建两个独立库；一个跑 D 之后的同步 `drainDerive`（Task 19 的 oracle 就是这份同步入口，不是 A 的裸实现），另一个跑切片入口并把预算压到每批 1 行。比较请求关系、角色、标题、预览、工具状态与最终队列；比较前去掉 generation id 与时间戳。另外单独固定三处展示分支：正文不可读的标题型请求、正文可读但 `model_title` 为空的标题型请求、排除用途但不是标题的请求。
 
 ```ts
 import type { Store } from '../src/store';
@@ -5620,9 +5620,9 @@ test('切片与A同步在压缩预算下等价', () => {
 });
 ```
 
-- [ ] **Step 2：写种子模糊测试。** `seedEquivalenceCase` 使用固定 PRNG，生成 50 组、每组最多 20 请求：乱序到达、同毫秒账本偏移、缺正文、title 旁路、排除用途的非标题请求、重复 call_id、结果早于调用、迟到合并与回收墓碑。每组都跑上面的同步/切片比较；任何字段差异输出首个不同请求与生成快照，测试失败。禁止用随机时间或随机端口，种子写死。
+- [x] **Step 2：写种子模糊测试。** `seedEquivalenceCase` 使用固定 PRNG，生成 50 组、每组最多 20 请求：乱序到达、同毫秒账本偏移、缺正文、title 旁路、排除用途的非标题请求、重复 call_id、结果早于调用、迟到合并与回收墓碑。每组都跑上面的同步/切片比较；任何字段差异输出首个不同请求与生成快照，测试失败。禁止用随机时间或随机端口，种子写死。
 
-- [ ] **Step 3：增加切片场景。** `scripts/capacity-collector.ts` 接受 `--slice`，构造 `Config` 时设置 `deriveBudget`（来自预算文件的 `slice.derive_budget`，没有则拒绝启动，不猜默认值）。`scripts/capacity.ts` 增加 `long-10000-slice`：输入与 `long-10000` 完全相同，只在启动配置中启用切片；报告写 `published_generations`、`discarded_generations`、`result_sha256`、`full_incremental_equal`，并在 `derive` 中写 `slice_budget_source`。
+- [x] **Step 3：增加切片场景。** `scripts/capacity-collector.ts` 接受 `--slice`，构造 `Config` 时设置 `deriveBudget`（来自预算文件的 `slice.derive_budget`，没有则拒绝启动，不猜默认值）。`scripts/capacity.ts` 增加 `long-10000-slice`：输入与 `long-10000` 完全相同，只在启动配置中启用切片；报告写 `published_generations`、`discarded_generations`、`result_sha256`、`full_incremental_equal`，并在 `derive` 中写 `slice_budget_source`。
 
 ```ts
 const scenario = { id: 'long-10000-slice', kind: 'long', sessions: 1,
@@ -5630,7 +5630,7 @@ const scenario = { id: 'long-10000-slice', kind: 'long', sessions: 1,
 if (config.deriveBudget === undefined) throw new Error('capacity_slice_budget_missing');
 ```
 
-- [ ] **Step 4：扩展门槛。** `capacity-gate.ts` 对 `long-10000-slice` 检查：`max_write_tx_ms`、`event_loop_p99_ms`、`drain_ms`、`backlog_max_age_ms` 全部通过；`discarded_generations === 0`；`published_generations >= 1`；`full_incremental_equal === true`。任一失败退出 1；预算文件或报告缺失退出 2。切片预算的 `basis` 必须来自 `slice.source_calibration` 指向的实测报告，不能把 `max_write_tx_ms=900` 复制成 `code-constant`。
+- [x] **Step 4：扩展门槛。** `capacity-gate.ts` 对 `long-10000-slice` 检查：`max_write_tx_ms`、`event_loop_p99_ms`、`drain_ms`、`backlog_max_age_ms` 全部通过；`discarded_generations === 0`；`published_generations >= 1`；`full_incremental_equal === true`。任一失败退出 1；预算文件或报告缺失退出 2。切片预算的 `basis` 必须来自 `slice.source_calibration` 指向的实测报告，不能把 `max_write_tx_ms=900` 复制成 `code-constant`。
 
 ```ts
 if (report.scenario === 'long-10000-slice') {
@@ -5649,11 +5649,11 @@ if (report.scenario === 'long-10000-slice') {
 }
 ```
 
-- [ ] **Step 5：运行等价性与门槛测试。** Run: `bun test tests/capacity-slice.test.ts tests/derive-slice.test.ts`。Expected: PASS。Run: `bun test tests/capacity-gate.test.ts`。Expected: PASS，包括缺少 slice 预算时退出 2。不要在本计划阶段实际跑完 10,000 请求的容量场景；只运行固定种子的等价性样本和 5 秒冒烟。
+- [x] **Step 5：运行等价性与门槛测试。** Run: `bun test tests/capacity-slice.test.ts tests/derive-slice.test.ts`。Expected: PASS。Run: `bun test tests/capacity-gate.test.ts`。Expected: PASS，包括缺少 slice 预算时退出 2。不要在本计划阶段实际跑完 10,000 请求的容量场景；只运行固定种子的等价性样本和 5 秒冒烟。
 
-- [ ] **Step 6：更新文档与决定记录。** `docs/operations.md` 增加：v5 及更低版本库拒绝普通启动、由运维删除重建（没有迁移命令，也没有续跑入口）、切片预算与 WAL 上限、`recoverSlice` 在启动时丢弃未发布代、retired 代保留上限。`docs/architecture-design.md` 增加代际键、发布指针、同快照读、旧代保留与 v6 的版本门。Agent Note 记录两个反例：逐字段 `COALESCE` 把旧标题当新结果；把未发布代的暂存行当成可读结果。
+- [x] **Step 6：更新文档与决定记录。** `docs/operations.md` 增加：v5 及更低版本库拒绝普通启动、由运维删除重建（没有迁移命令，也没有续跑入口）、切片预算与 WAL 上限、`recoverSlice` 在启动时丢弃未发布代、retired 代保留上限。`docs/architecture-design.md` 增加代际键、发布指针、同快照读、旧代保留与 v6 的版本门。Agent Note 记录两个反例：逐字段 `COALESCE` 把旧标题当新结果；把未发布代的暂存行当成可读结果。
 
-- [ ] **Step 7：最终交接门槛。** 只有以下全部成立才勾选本任务：
+- [x] **Step 7：最终交接门槛。** 只有以下全部成立才勾选本任务：
 
   - Task 11 决策为 `slice`，且决策 JSON 仍在；
   - Task 13 的迁移测试、Task 14—18 的切片测试、Task 19 的等价性与门槛测试全部 PASS；
@@ -5661,7 +5661,7 @@ if (report.scenario === 'long-10000-slice') {
   - `discarded_generations=0` 且 `full_incremental_equal=true`；
   - 失败时写 `slice_not_converged`，保留同步路径，不宣布容量完成。
 
-- [ ] **Step 8：提交。** 获授权后：
+- [x] **Step 8：提交。** 获授权后：
 
 ```bash
 git add scripts/capacity.ts scripts/capacity-gate.ts src/capacity.ts \
@@ -5673,7 +5673,7 @@ git commit -m "test(capacity): gate sliced derivation on equivalence and measure
 
 **Step 9（执行时的偏差记录）**
 
-1. **本任务的交接门槛未达成，Task 19 的勾选框保持未勾。** 计划 Step 5 明令本阶段不跑 10,000 请求的容量场景，因此没有 `long-10000-slice` 报告，Step 7 里的 `discarded_generations=0`／`full_incremental_equal=true` 两条没有报告值可核，也没有据实测校准的切片预算。门禁因此在缺 `slice` 预算节时退出 2，**不代它填一个 `slice.derive_budget`**；切片模式仍未启用，采集器继续走同步派生，不宣布容量收敛（`slice_not_converged`）。要勾 Task 19 需要先授权跑 `long-10000-slice` 并用它的报告校准预算。
+1. **本任务的交接门槛未达成，Task 19 的勾选框保持未勾。** 计划 Step 5 明令本阶段不跑 10,000 请求的容量场景，因此没有 `long-10000-slice` 报告，Step 7 里的 `discarded_generations=0`／`full_incremental_equal=true` 两条没有报告值可核，也没有据实测校准的切片预算。门禁因此在缺 `slice` 预算节时退出 2，**不代它填一个 `slice.derive_budget`**；切片模式仍未启用，采集器继续走同步派生，不宣布容量收敛（`slice_not_converged`）。要勾 Task 19 需要先授权跑 `long-10000-slice` 并用它的报告校准预算。（2026-10-23 更新：该授权已取得并执行，结果见第 10 条；本任务的八个步骤框据此勾上，切片模式的开关状态不变——仍是关闭。）
 2. **等价性判据的两侧对照值由同步入口现跑，不手写值。** 计划 Step 1 的片段里同步侧读 `request`、切片侧读 `effective_request` 的写法照做；补的是：种子必须显式冻结用途（`purpose_pending=0`），否则用途阶段会把种下的结论重判；用例 2/3 的请求必须真的写入正文，否则 `current` 仍为 null，测的是"保留旧值"分支而不是兜底与标题分支；用例 3 的请求带模型标题，把"排除用途行的标题兜底"这一格钉在关系判不出来（`delta` 为空）的输入上——计划认为这一格只能由 `tests/derive-slice.test.ts` 直接写暂存行覆盖，实际用固定用例也能钉住。
 3. **切片侧候选额度在模糊组里给 2 而不是 1。** `maxCandidatesPerBatch` 同时是"单笔请求整笔算完"的下限（`slice_candidate_budget`），一笔请求带调用与结果两个候选时额度 1 只能丢弃整代；固定用例没有工具往返，仍用 1，页边界照样压在每一笔请求之间。
 4. **等价性判据抓到的第一个缺陷单独一个提交修复。** 排除用途行的标题兜底被放在"增量非空"分支内，关系判不出来时同一笔请求的标题在两条路径上不同；修复见提交 `fix(derive): keep the aux title fallback out of the delta branch` 与 [对应 bug-fix note](../../../.agents/notes/implemented/bug-fix/2026-10-23-atc-slice-aux-title-branch.md)。把它放进本任务的提交会让"测试新增"的提交同时改运行时行为，bisect 时分不清是谁的锅。
@@ -5682,6 +5682,9 @@ git commit -m "test(capacity): gate sliced derivation on equivalence and measure
 7. **收集器的切片开关没有任何场景驱动它。** 计划 Step 3 让采集器接受 `--slice`，而仓库的长组场景是进程内建库、不走子进程，所以那条分支只经类型检查。这一层不再加场景：`long-10000-slice` 的输入必须与 `long-10000` 逐字相同，把它改成走子进程就不是同一次对比了。可达性缺口如实记在这里，等运维入口真正需要切片模式时再补驱动它的场景。
 8. **`long-10000-slice` 不进 `all`。** `all` 用冻结预算跑，而冻结预算没有 `slice` 节；并进去只会记一条 `scenario_failed` 并把汇总判红。它只能显式跑，必须给 `--slice-budget`（非切片场景给了这个标志、或切片场景 `--requests` 不是 10,000，都以退出 2 拒掉）。
 9. **三条结构门槛用 `basis: 'proposed'`，是对计划的原样执行。** 其中 `discarded_generations=0` 实质是设计不变量（丢弃只在预算、修订与覆盖出问题时发生），但这一版不把它升格成 `code-constant`：升级需要一次真实长组跑出 0 的物证。报告还必须写出 `slice_budget_source`（缺了按失败算，退出 1）：报告写得出全部指标却不说自己吃的是哪份预算，是比"判不了"更强的拒绝理由。切片上限的来源核对（`slice.max` 的 `basis` 落到 `source_calibration`）只接在门槛 CLI 上，不并进 `evaluateReports`——切片上限的来源问题不该翻转基线决策。
+10. **10,000 笔切片长组已实跑，门槛只判负 `drain_ms` 一条。** 读数：增量排空 878,696 ms / 3,600 次轮询（同步同输入 1,959 ms / 1 次），场景总时长 1,778,186 ms，单笔写事务最大 689 ms，`published_generations=1`、`discarded_generations=0`、`full_incremental_equal=true`，存储峰值库 31.6 MB / WAL 12.3 MB。门槛对这份报告的唯一实测失败项是 `drain_ms`（上限 120,000 ms，提案值）；另外八条失败是其余场景在这份单场景报告里缺席，与[baseline record](../capacity/2026-10-22-atc-capacity-baseline.md) 里 `route` 的既有约定同形。三条结构不变量都成立：**慢不是算得少，是切片入口每笔请求一个读事务、每页一个写事务**。切片模式因此保持关闭，采集器继续走同步派生（`slice_not_converged`），5 rps 目标维持未达成。数字与命令记在 baseline record 的「切片长组实测」一节。
+11. **切片预算节与场景条目按实测定下。** 预算文件新增 `scenarios['long-10000-slice']`（由 `deriveScenarioBudget` 从实测报告导出，不手抄）与 `slice` 节：`derive_budget` 是这次运行真正吃的七个运行期键（值取 `DEFAULT_DERIVE_BUDGET`），报告以 `slice_budget_source` 记下出处；`max` 两项——`max_write_tx_ms 900`（`proposed`，与冻结预算同名上限同源）与 `max_wal_growth_bytes 16,160,501`（`baseline-envelope`，实测 WAL 峰值 12,928,400 B 乘 1.25 向上取整）。切片场景里 basis 为 `proposed` 的上限逐条单列：`drain_ms`、`backlog_max_age_ms`、`max_write_tx_ms`；其余为包络（rss、db/wal/temp、正文峰值、拒绝计数、`accepted`/`launched`）或计划刻度（`request_rows`）。预算文件字节自此与决策文件里登记的 `budget_sha256` 不同：那是追加 `slice` 节与这一场景之前的那一版。
+12. **`result_sha256` 不能跨运行比较。** `derivedHash` 与 `derivedHashSlice` 的列集与顺序相同，但播种用 `Date.now()`，标题的时间兜底精确到分钟，所以 `long-10000`（12:03 那一轮）与 `long-10000-slice`（15:28）的指纹本来就不该相等。核对方式：同一分钟内两次 `long-2000` 同步指纹相同（`fd6fe6b9…`），与数小时前那一轮（`cf9cebf8…`）不同。跨路径等价仍由固定种子样本承担，长组报告只证明切片内部"增量 = 全量"。要让长组报告可跨运行比对，得把播种时间冻结成常量——积压年龄取 `derive_queue.dirty_since_ms` 的真实时钟，不受影响——这属于另一次改动。
 
 ---
 

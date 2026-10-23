@@ -418,6 +418,52 @@
         "launched": "product-target",
         "request_rows": "product-target"
       }
+    },
+    "long-10000-slice": {
+      "max": {
+        "max_write_tx_ms": 900,
+        "rss_peak_bytes": 191037441,
+        "db_wal_temp_bytes": 57565941,
+        "body_bytes_peak": 3521178,
+        "rejected_total": 1,
+        "rejected_busy": 1,
+        "drain_ms": 120000,
+        "backlog_max_age_ms": 30000,
+        "pending_groups_end": 0,
+        "pending_hooks": 0,
+        "open_gaps": 0,
+        "rejected_insufficient_storage": 0,
+        "rejected_writer_failed": 0,
+        "client_failed": 0,
+        "client_query_failed": 0,
+        "ticks_dropped": 0
+      },
+      "min": {
+        "accepted": 0,
+        "launched": 0,
+        "request_rows": 10000
+      },
+      "basis": {
+        "max_write_tx_ms": "proposed",
+        "rss_peak_bytes": "baseline-envelope",
+        "db_wal_temp_bytes": "baseline-envelope",
+        "body_bytes_peak": "baseline-envelope",
+        "rejected_total": "baseline-envelope",
+        "rejected_busy": "baseline-envelope",
+        "drain_ms": "proposed",
+        "backlog_max_age_ms": "proposed",
+        "pending_groups_end": "code-constant",
+        "pending_hooks": "code-constant",
+        "open_gaps": "code-constant",
+        "rejected_insufficient_storage": "code-constant",
+        "rejected_writer_failed": "code-constant",
+        "client_failed": "code-constant",
+        "client_query_failed": "code-constant",
+        "ticks_dropped": "product-target",
+        "accepted": "baseline-envelope",
+        "launched": "baseline-envelope",
+        "request_rows": "product-target"
+      }
     }
   },
   "unmet": {
@@ -534,6 +580,27 @@
       "retention_max_ms": "proposed",
       "cost_max_ms": "proposed",
       "raw_prune_max_ms": "proposed"
+    }
+  },
+  "slice": {
+    "frozen_at": "2026-10-23T08:02:43.666Z",
+    "source_calibration": "/private/tmp/atc-capacity-reports/long-10000-slice.json",
+    "max": {
+      "max_write_tx_ms": 900,
+      "max_wal_growth_bytes": 16160501
+    },
+    "basis": {
+      "max_write_tx_ms": "proposed",
+      "max_wal_growth_bytes": "baseline-envelope"
+    },
+    "derive_budget": {
+      "max_request_ms": 10,
+      "max_stage_batch_ms": 250,
+      "max_candidates_per_batch": 100,
+      "max_writes_per_batch": 500,
+      "max_staged_bytes": 67108864,
+      "max_wal_growth_bytes": 33554432,
+      "max_retired_generations": 2
     }
   }
 }
