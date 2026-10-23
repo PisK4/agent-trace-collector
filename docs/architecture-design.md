@@ -629,7 +629,7 @@ CREATE TABLE request_evidence (
   req_id      INTEGER NOT NULL,
   source_kind TEXT NOT NULL,           -- hook / ledger / route / api
   ref_key     TEXT NOT NULL,           -- hook_id / 物理记录三元组 / route_id
-  merge_state TEXT NOT NULL,           -- merged / pending / ambiguous
+  merge_state TEXT NOT NULL,           -- merged / pending；多候选歧义由 pending_hook.candidates 承载
   match_rule  TEXT,                    -- 命中的规范化规则与版本
   added_at    INTEGER NOT NULL,
   PRIMARY KEY (req_id, source_kind, ref_key)
