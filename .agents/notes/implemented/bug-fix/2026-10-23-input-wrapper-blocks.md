@@ -11,7 +11,7 @@ harness 的包装在真实消息里是按**内容块**出现的，一条用户�
 - `system-reminder` 19,758 块，其中 8,905 块不是消息的第一个块；2,820 条消息的可见输入里带着整段提醒。
 - `local-command-caveat` 804 / `local-command-stdout` 765 块同样排在后面。
 - 认不出的标签整段留在可见文本里：`file`（附件，64 块，块长 p50 12 KB）、`job`（omp 作业规格，53 块，规格之后才是用户的话）、`chat`（5 块）、`user`（3 块）。
-- `<pasted_content id=…>` 有 248 个开标签、249 个闭标签，但从不在同一条消息里配对：开标签独立成行、闭标签落在后续消息里，中间和之后都可能跟着用户的话。
+- `<pasted_content id=…>` 有 248 个开块；闭标签带属性（`</pasted_content …>`），落在同一条消息的后续块里（343 个块带闭标签），闭标签之后还常跟着用户自己的话。
 
 后果不只在页面气泡：`deriveTitle`、`previewOf`、`tailUserPreview`、`firstUserPreview` 都取第一个 `state='text'` 的可见文本首行，提醒或附件正文会成为标题与折叠行摘要。
 
