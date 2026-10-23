@@ -203,6 +203,26 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 
 回收在单个事务里删引用、删孤儿块、清骨架、改状态，`have` 与历史读数不动，`body_prev_state` 保留原状态。raw 层保留 7 天，到期只删原文、给证据标 `payload_state=expired`；仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。
 
+## 派生切片与代际
+
+普通启动（`bun run start`）不设切片预算，派生走同步组阶段：一次调用算完一批组，结果写回 `request` 行。切片模式由容量实验的两个入口注入预算：`long-10000-slice` 场景（`--slice-budget <预算文件>`，进程内建库）与容量实验的子进程采集器（`--slice --slice-budget <文件>`）。两者都只从预算文件的 `slice.derive_budget` 读，缺了以 `capacity_slice_budget_missing` 退出 2，不落回默认预算——那会把一条常量冒充成校准结果。运维入口的模式开关留到切片正式上线时再补。默认预算常量在 `src/derive-slice.ts` 的 `DEFAULT_DERIVE_BUDGET`，七项含义与超限时的行为：
+
+| 项 | 默认 | 超限时 |
+| --- | --- | --- |
+| `maxRequestMs` | 10 ms | 丢弃整代（`slice_request_budget` 等阶段预算失败） |
+| `maxStageBatchMs` | 250 ms | 本阶段批次到此为止，下一批继续 |
+| `maxCandidatesPerBatch` | 100 | 单笔请求的候选超过它就是丢弃整代（候选按请求整笔算） |
+| `maxWritesPerBatch` | 500 | 页写到上限即提交，下一批继续 |
+| `maxStagedBytes` | 64 MiB | 丢弃整代（`slice_disk_budget`，暂存行按行数估算） |
+| `maxWalGrowthBytes` | 32 MiB | 丢弃整代（同一个 `slice_disk_budget`；WAL 是真实字节，检查在事务外做 `PASSIVE` checkpoint） |
+| `maxRetiredGenerations` | 2 | 更旧的退役代连结果行一起删 |
+
+WAL 闸门量的是整库增长，不只是这一代：别的写入把 WAL 抬高时，这一组也拿不到发布资格，会在队列上保持 dirty 反复重建。停机时看到的 dirty 组数与队列行上的 `last_error` 是这两个预算的可见后果。
+
+启动时无论哪种模式都跑一次 `recoverSlice`：把队列上仍指向 `building`／`ready` 代的未发布代丢弃（`reopened_unpublished`），队列行保持 dirty 等下一轮重建。上一轮没发布完的半套结果因此不会被续跑成一代正式结果。
+
+丢弃的记录留在库里，不静默：`derive_generation.state='discarded'` 是这一代被否掉的结论，`derive_queue.last_error` 是原因码（阶段预算、修订变化、覆盖不全、磁盘预算）。`pending_derivations` 只数未完成组数，不数被丢弃的代；判断"是不是一直在丢"要按 `discarded` 与 `last_error` 看。
+
 ## 切换核对与 AVA 下线
 
 `scripts/verify-cutover.ts` 只读比较 collector 与 AVA 的正文覆盖，用来判断能不能停 AVA。
@@ -272,6 +292,6 @@ AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按
 
 ## schema 版本
 
-当前 `user_version=5`。空数据目录首次启动直接建到 v5；低版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
+当前 `user_version=6`。空数据目录首次启动直接建到 v6；低版本一律报 `schema_rebuild_required`（含 v5），高版本报 `schema_version_unsupported`。
 
-首版发布前不提供跨结构升级：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库。需要保留旧库里的正文时，在升级前用旧版本导出；`scripts/backfill-fingerprint.ts` 只补齐 v3/v4 时代的列，不会把旧库带到 v5。不要手改 `user_version`。
+首版发布前不提供跨结构升级，也没有迁移命令与续跑入口：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库；旧库里的正文与派生结果一起丢弃，没有"结构已升级、数据未迁移"的中间态。需要保留旧库里的正文时，在升级前用旧版本导出。`scripts/backfill-fingerprint.ts` 补的是 v3/v4 时代的派生列，不是到 v6 的路径——它把 `user_version` 写成 4，v6 的代码打不开它。不要手改 `user_version`。

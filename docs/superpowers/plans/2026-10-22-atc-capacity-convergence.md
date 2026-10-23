@@ -5671,6 +5671,18 @@ git commit -m "test(capacity): gate sliced derivation on equivalence and measure
   -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+**Step 9（执行时的偏差记录）**
+
+1. **本任务的交接门槛未达成，Task 19 的勾选框保持未勾。** 计划 Step 5 明令本阶段不跑 10,000 请求的容量场景，因此没有 `long-10000-slice` 报告，Step 7 里的 `discarded_generations=0`／`full_incremental_equal=true` 两条没有报告值可核，也没有据实测校准的切片预算。门禁因此在缺 `slice` 预算节时退出 2，**不代它填一个 `slice.derive_budget`**；切片模式仍未启用，采集器继续走同步派生，不宣布容量收敛（`slice_not_converged`）。要勾 Task 19 需要先授权跑 `long-10000-slice` 并用它的报告校准预算。
+2. **等价性判据的两侧对照值由同步入口现跑，不手写值。** 计划 Step 1 的片段里同步侧读 `request`、切片侧读 `effective_request` 的写法照做；补的是：种子必须显式冻结用途（`purpose_pending=0`），否则用途阶段会把种下的结论重判；用例 2/3 的请求必须真的写入正文，否则 `current` 仍为 null，测的是"保留旧值"分支而不是兜底与标题分支；用例 3 的请求带模型标题，把"排除用途行的标题兜底"这一格钉在关系判不出来（`delta` 为空）的输入上——计划认为这一格只能由 `tests/derive-slice.test.ts` 直接写暂存行覆盖，实际用固定用例也能钉住。
+3. **切片侧候选额度在模糊组里给 2 而不是 1。** `maxCandidatesPerBatch` 同时是"单笔请求整笔算完"的下限（`slice_candidate_budget`），一笔请求带调用与结果两个候选时额度 1 只能丢弃整代；固定用例没有工具往返，仍用 1，页边界照样压在每一笔请求之间。
+4. **等价性判据抓到的第一个缺陷单独一个提交修复。** 排除用途行的标题兜底被放在"增量非空"分支内，关系判不出来时同一笔请求的标题在两条路径上不同；修复见提交 `fix(derive): keep the aux title fallback out of the delta branch` 与 [对应 bug-fix note](../../../.agents/notes/implemented/bug-fix/2026-10-23-atc-slice-aux-title-branch.md)。把它放进本任务的提交会让"测试新增"的提交同时改运行时行为，bisect 时分不清是谁的锅。
+5. **提交清单与计划 Step 8 的 `git add` 不同。** 门槛脚本与收集器都要有切片变体（`scripts/capacity-collector.ts`、`scripts/capacity-support.ts`），门槛用例是本任务新增的测试文件，两者都不在计划的清单里；`src/capacity.ts` 不需要改。切片预算的键用运行期那七个（`max_request_ms`、`max_stage_batch_ms`、`max_candidates_per_batch`、`max_writes_per_batch`、`max_staged_bytes`、`max_wal_growth_bytes`、`max_retired_generations`），**不采用**计划 `CapacityBudget.slice.derive_budget` 里那八个与 `DeriveBudget` 对不上的名字：文件形状由 `keyof DeriveBudget` 的 snake_case 映射生成（`SliceDeriveBudgetFile`），两侧改名必然编译失败，唯一换算入口是 `sliceDeriveBudget`。预算文件的这一节直接就是运行期预算，中间不再放一层会漂移的映射，也不翻译旧的八键形状（旧形状按"切片预算缺失或非法"拒掉）。
+6. **Step 2（验证失败）没有作为红灯步骤执行。** 与前四个任务同样的情况：实现与测试同一轮写出。等价性判据的第一次红灯来自模糊组，它抓到的是上面第 4 条那个真实缺陷，而不是构造出来的失败。
+7. **收集器的切片开关没有任何场景驱动它。** 计划 Step 3 让采集器接受 `--slice`，而仓库的长组场景是进程内建库、不走子进程，所以那条分支只经类型检查。这一层不再加场景：`long-10000-slice` 的输入必须与 `long-10000` 逐字相同，把它改成走子进程就不是同一次对比了。可达性缺口如实记在这里，等运维入口真正需要切片模式时再补驱动它的场景。
+8. **`long-10000-slice` 不进 `all`。** `all` 用冻结预算跑，而冻结预算没有 `slice` 节；并进去只会记一条 `scenario_failed` 并把汇总判红。它只能显式跑，必须给 `--slice-budget`（非切片场景给了这个标志、或切片场景 `--requests` 不是 10,000，都以退出 2 拒掉）。
+9. **三条结构门槛用 `basis: 'proposed'`，是对计划的原样执行。** 其中 `discarded_generations=0` 实质是设计不变量（丢弃只在预算、修订与覆盖出问题时发生），但这一版不把它升格成 `code-constant`：升级需要一次真实长组跑出 0 的物证。报告还必须写出 `slice_budget_source`（缺了按失败算，退出 1）：报告写得出全部指标却不说自己吃的是哪份预算，是比"判不了"更强的拒绝理由。切片上限的来源核对（`slice.max` 的 `basis` 落到 `source_calibration`）只接在门槛 CLI 上，不并进 `evaluateReports`——切片上限的来源问题不该翻转基线决策。
+
 ---
 
 ## 执行完成判定

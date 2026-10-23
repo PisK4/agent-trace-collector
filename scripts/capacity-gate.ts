@@ -6,14 +6,44 @@
  * 读者不必猜这个数字是从哪来的；同时收紧的一条规则是——速率场景的下限取自
  * 计划刻度数，不取自这一轮实际发出多少，采集器跟不上时不能把自己的缺口
  * 冻结成标准。
+ *
+ * `slice` 是可选的一节：没有它时切片报告判不了，退出 2，而不是当作通过。
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { DurationSummary } from '../src/capacity';
+import type { DeriveBudget } from '../src/derive-slice';
 
 export type { DurationSummary };
 
-export type ThresholdBasis = 'code-constant' | 'product-target' | 'baseline-envelope' | 'proposed';
+const THRESHOLD_BASES = ['code-constant', 'product-target', 'baseline-envelope', 'proposed'] as const;
+export type ThresholdBasis = typeof THRESHOLD_BASES[number];
+
+/**
+ * camelCase 转 snake_case：大写字母前插一个下划线并转小写。
+ * 预算文件里的切片预算键名由它从 `DeriveBudget` 的键映射出来，不另抄一份。
+ */
+type SnakeCase<S extends string> = S extends `${infer Head}${infer Tail}`
+  ? `${Head extends Uppercase<Head> ? '_' : ''}${Lowercase<Head>}${SnakeCase<Tail>}`
+  : S;
+
+/**
+ * 切片运行预算在预算文件里的形状：键就是运行期预算的键，只是写成 snake_case。
+ *
+ * 键名与值类型都由 `DeriveBudget` 映射而来，所以两侧不会各自漂移。早期设计里那张
+ * 8 键表（`max_requests_per_slice`、`max_generation_bytes`、`retain_generations`）
+ * 与现行预算是两套量，做有损翻译只会让文件里的数字对不上运行时真正吃的上限。
+ */
+export type SliceDeriveBudgetFile = { [K in keyof DeriveBudget as SnakeCase<K>]: DeriveBudget[K] };
+
+/** 切片预算节：上限及其来源、校准报告指针，以及运行期真正吃的预算。 */
+export type SliceBudget = {
+  frozen_at: string;
+  source_calibration: string;
+  max: Record<string, number>;
+  basis: Record<string, ThresholdBasis>;
+  derive_budget: SliceDeriveBudgetFile;
+};
 
 export type ScenarioBudget = {
   basis: Record<string, ThresholdBasis>;
@@ -48,22 +78,7 @@ export type CapacityBudget = {
     max: Record<string, number>;
     basis: Record<string, ThresholdBasis>;
   };
-  slice?: {
-    frozen_at: string;
-    source_calibration: string;
-    max: Record<string, number>;
-    basis: Record<string, ThresholdBasis>;
-    derive_budget: {
-      max_requests_per_slice: number;
-      max_writes_per_slice: number;
-      max_candidates_per_call: number;
-      max_fingerprints_per_request: number;
-      max_slice_ms: number;
-      max_generation_bytes: number;
-      max_wal_bytes: number;
-      retain_generations: number;
-    };
-  };
+  slice?: SliceBudget;
 };
 
 export type StorageReading = {
@@ -150,6 +165,8 @@ export type ScenarioReport = {
     result_sha256: string | null;
     published_generations: number | null;
     discarded_generations: number | null;
+    /** 切片场景用哪份切片预算跑出来的：预算文件路径加 JSON 指针；同步场景为 null。 */
+    slice_budget_source?: string | null;
   };
   conservation: {
     hook_accepted: number;
@@ -271,7 +288,91 @@ export function loadBudget(path: string): CapacityBudget {
       if (scenario.basis[key] === undefined) throw new Error('capacity_budget_invalid');
     }
   }
+  if (parsed.slice !== undefined && !validSliceSection(parsed.slice)) {
+    throw new Error('capacity_budget_invalid');
+  }
   return parsed;
+}
+
+/** 文件里的切片预算键名清单，只用于运行期形状校验。 */
+const SLICE_DERIVE_BUDGET_KEYS = [
+  'max_request_ms', 'max_stage_batch_ms', 'max_candidates_per_batch', 'max_writes_per_batch',
+  'max_staged_bytes', 'max_wal_growth_bytes', 'max_retired_generations',
+] as const;
+// 双向核对：清单漏键时这条空的 `Record` 缺字段，键名写错时 `Exclude` 不为 never；两者都是编译错误。
+const SLICE_DERIVE_BUDGET_KEYS_COMPLETE:
+  Record<Exclude<keyof SliceDeriveBudgetFile, typeof SLICE_DERIVE_BUDGET_KEYS[number]>, never> = {};
+
+/**
+ * 文件形状 → 运行期预算。逐字段列出：缺字段、多字段与改名在这里全是编译错误。
+ * 运行期只认这一个换算，不做"默认值兜底"：兜底会让一份没量过的预算看起来像校准过的。
+ */
+export function sliceDeriveBudget(file: SliceDeriveBudgetFile): DeriveBudget {
+  return {
+    maxRequestMs: file.max_request_ms,
+    maxStageBatchMs: file.max_stage_batch_ms,
+    maxCandidatesPerBatch: file.max_candidates_per_batch,
+    maxWritesPerBatch: file.max_writes_per_batch,
+    maxStagedBytes: file.max_staged_bytes,
+    maxWalGrowthBytes: file.max_wal_growth_bytes,
+    maxRetiredGenerations: file.max_retired_generations,
+  };
+}
+
+/**
+ * 预算上限：非负整数。0 是合法的——它表示这条路径不放行（例如不保留任何 retired 代），
+ * 而"放行 0 字节"这类误配会以停滞或丢弃的形式在场景里暴露，不在这里替它猜。
+ */
+function validSliceDeriveBudgetFile(value: unknown): value is SliceDeriveBudgetFile {
+  if (value === null || typeof value !== 'object') return false;
+  const entries = Object.entries(value);
+  if (entries.length !== SLICE_DERIVE_BUDGET_KEYS.length) return false;
+  return entries.every(([key, item]) =>
+    (SLICE_DERIVE_BUDGET_KEYS as readonly string[]).includes(key)
+    && typeof item === 'number' && Number.isSafeInteger(item) && item >= 0);
+}
+
+function validSliceSection(value: unknown): value is SliceBudget {
+  if (value === null || typeof value !== 'object') return false;
+  const slice = value as Partial<SliceBudget>;
+  if (typeof slice.frozen_at !== 'string' || typeof slice.source_calibration !== 'string') return false;
+  if (slice.max === null || typeof slice.max !== 'object'
+    || slice.basis === null || typeof slice.basis !== 'object') return false;
+  for (const [key, item] of Object.entries(slice.max)) {
+    if (typeof item !== 'number' || !Number.isFinite(item)) return false;
+    if (slice.basis[key] === undefined || !THRESHOLD_BASES.includes(slice.basis[key])) return false;
+  }
+  return validSliceDeriveBudgetFile(slice.derive_budget);
+}
+
+export type SliceBudgetReading = {
+  budget: DeriveBudget;
+  /** 写进报告 `derive.slice_budget_source` 的来源：预算文件路径加 JSON 指针。 */
+  source: string;
+  /** 校准报告路径。切片上限的 `basis` 必须落在它上面，否则这条上限没有实测出处。 */
+  sourceCalibration: string;
+};
+
+/**
+ * 切片预算只从预算文件的 `slice.derive_budget` 读，缺失就拒绝启动。
+ *
+ * 兜底到 `DEFAULT_DERIVE_BUDGET` 是最坏的选项：那是"这一版代码觉得合适"的常量，
+ * 不是这台机器上量出来的斜率，用它跑出的容量结论读起来却像一次校准。
+ */
+export function loadSliceBudget(path: string): SliceBudgetReading {
+  const text = readText(path, 'capacity_budget_missing');
+  let parsed: CapacityBudget;
+  try {
+    parsed = JSON.parse(text) as CapacityBudget;
+  } catch {
+    throw new Error('capacity_budget_invalid');
+  }
+  if (!validSliceSection(parsed.slice)) throw new Error('capacity_slice_budget_missing');
+  return {
+    budget: sliceDeriveBudget(parsed.slice.derive_budget),
+    source: `${path}#slice.derive_budget`,
+    sourceCalibration: parsed.slice.source_calibration,
+  };
 }
 
 /**
@@ -474,13 +575,79 @@ function evaluateScenarioLimits(report: ScenarioReport, limits: ScenarioBudget):
   return failures;
 }
 
+/**
+ * 切片场景的结构门槛。这三条不是包络，是切片设计的不变量：算完的一代不允许被丢，
+ * 一次收敛至少要发布一代，全量重排必须与增量结果一致。它们因此不来自预算文件，
+ * 也不允许用"这台机器上量到的斜率"松动。
+ */
+export function evaluateSliceChecks(report: ScenarioReport): GateFailure[] {
+  if (report.mode !== 'slice') return [];
+  const failures: GateFailure[] = [];
+  const source = report.derive.slice_budget_source;
+  // 没写来源的报告不知道它吃的是哪份预算，与"缺切片预算"同类：判不了。
+  if (typeof source !== 'string' || source.length === 0) {
+    failures.push({
+      scenario: report.scenario, check: 'slice_budget_source', actual: 0, limit: 1,
+      kind: 'min', basis: 'schema',
+    });
+  }
+  if (report.derive.discarded_generations !== 0) {
+    failures.push({
+      scenario: report.scenario, check: 'discarded_generations',
+      actual: report.derive.discarded_generations ?? -1, limit: 0, kind: 'max', basis: 'proposed',
+    });
+  }
+  if ((report.derive.published_generations ?? 0) < 1) {
+    failures.push({
+      scenario: report.scenario, check: 'published_generations',
+      actual: report.derive.published_generations ?? -1, limit: 1, kind: 'min', basis: 'proposed',
+    });
+  }
+  if (report.derive.full_incremental_equal !== true) {
+    failures.push({
+      scenario: report.scenario, check: 'full_incremental_equal', actual: 0, limit: 1,
+      kind: 'max', basis: 'proposed',
+    });
+  }
+  return failures;
+}
+
+/**
+ * 切片上限的来源核对：每一条 `max` 都必须有一个能回溯到 `source_calibration` 的出处。
+ *
+ * `code-constant` 意思是"这个数是代码里的常量"，把 `max_write_tx_ms=900` 之流复制成它，
+ * 等于用一条实现细节冒充一次实测；缺 `basis` 的记录同样无从回溯。两者都记失败，
+ * 退出 1——判定不了不是问题，拿常量冒充实测才是。
+ */
+export function evaluateSliceBasis(budget: CapacityBudget): GateFailure[] {
+  const slice = budget.slice;
+  // 没有切片节就没有可核的上限；缺预算由调用方按"判不了"（退出 2）处理。
+  if (slice === undefined) return [];
+  const failures: GateFailure[] = [];
+  if (slice.source_calibration.length === 0) {
+    failures.push({
+      scenario: 'slice', check: 'source_calibration', actual: 0, limit: 1, kind: 'min', basis: 'schema',
+    });
+  }
+  for (const key of Object.keys(slice.max)) {
+    const basis = slice.basis[key];
+    if (basis === undefined || basis === 'code-constant') {
+      failures.push({
+        scenario: 'slice', check: `slice_basis:${key}`, actual: 1, limit: 0, kind: 'max',
+        basis: basis ?? 'missing',
+      });
+    }
+  }
+  return failures;
+}
+
 /** 一份报告对一份预算：报告场景不在预算里就是失败，不当作"没这项门槛"。 */
 export function evaluateGate(report: ScenarioReport, budget: CapacityBudget): GateFailure[] {
   const limits = budget.scenarios[report.scenario];
   if (limits === undefined) {
     return [{ scenario: report.scenario, check: 'scenario', actual: -1, limit: 1, kind: 'max', basis: 'schema' }];
   }
-  return evaluateScenarioLimits(report, limits);
+  return [...evaluateScenarioLimits(report, limits), ...evaluateSliceChecks(report)];
 }
 
 /** 汇总逐场景判：预算里多出来的场景同样记失败，不静默跳过。 */
@@ -531,7 +698,16 @@ if (import.meta.main) {
       process.stderr.write(`${error instanceof Error ? error.message : 'capacity_gate_invalid'}\n`);
       process.exit(2);
     }
-    const failures = evaluateReports(reports, budget);
+    // 切片报告没配切片预算就无法判定：报告说它跑在切片上，而预算文件里既没有
+    // 那套上限、也没有它们的出处。这是"判不了"，不是采集器失败，所以退出 2。
+    if (reports.some(report => report.mode === 'slice') && budget.slice === undefined) {
+      process.stderr.write('capacity_slice_budget_missing\n');
+      process.exit(2);
+    }
+    const failures = [
+      ...evaluateReports(reports, budget),
+      ...evaluateSliceBasis(budget),
+    ];
     process.stdout.write(`${JSON.stringify({ ok: failures.length === 0, scenarios: reports.map(r => r.scenario), failures }, null, 2)}\n`);
     process.exit(failures.length === 0 ? 0 : 1);
   } catch (error) {

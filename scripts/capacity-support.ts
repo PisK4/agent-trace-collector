@@ -5,6 +5,7 @@
 import { join } from 'node:path';
 import type { HookEnvelope } from '../src/hook';
 import type { Config } from '../src/config';
+import type { DeriveBudget } from '../src/derive-slice';
 
 export function mulberry32(seed: number): () => number {
   let state = seed >>> 0;
@@ -124,10 +125,14 @@ export function makeRouteLine(input: {
   }) + '\n';
 }
 
-/** 只由临时根构造；生产配置的默认路径不会出现在这里。 */
+/**
+ * 只由临时根构造；生产配置的默认路径不会出现在这里。
+ * `deriveBudget` 只在切片模式下给：给了它就是切片库，不给就是同步库，
+ * 这里不替调用方填默认值（默认值属于"这一版代码觉得合适"，不属于一次校准）。
+ */
 export function buildCapacityConfig(input: {
   root: string; upstreamPort: number; bodyBudget: number; diskLimit: number;
-  intervals?: Config['intervals'];
+  intervals?: Config['intervals']; deriveBudget?: DeriveBudget;
 }): Config {
   return {
     dataDir: join(input.root, 'data'),
@@ -139,6 +144,7 @@ export function buildCapacityConfig(input: {
     diskLimit: input.diskLimit,
     gatewayTimeoutMs: 2000,
     intervals: input.intervals,
+    deriveBudget: input.deriveBudget,
   };
 }
 
