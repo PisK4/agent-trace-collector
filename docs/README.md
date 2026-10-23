@@ -12,12 +12,12 @@
 | [auto-mode-classifier-research.md](auto-mode-classifier-research.md) | Claude Code auto mode 分类器请求：两条拼接消息、`<block>` 判定、出现频率、页面折叠与派生错位；附未决的识别与呈现选项 |
 | [atc-real-format-research.md](atc-real-format-research.md) | 真实库 v4 归档副本的形状普查：账本、路由、正文与语义层的键名、类型与计数，当前代码对上的键与未采用的读数，归档窗口外的 `conv` 对照与复核 SQL |
 | [agent-request-kind-review.md](agent-request-kind-review.md) | Agent 语义与字段保真联合评审；附请求触发、派生排序与摘要依赖、版本消费者、来源完整性及合成反例 |
-| [architecture-evolution-v2.md](architecture-evolution-v2.md) | 下一轮架构统筹提案：来源完整性、请求级触发、统一派生依赖、破坏式结构替换、阶段依赖与容量验收；具体证据见联合评审 |
+| [architecture-evolution-v2.md](architecture-evolution-v2.md) | 本轮架构演进的目标约束与阶段划分：来源完整性、请求级触发、统一派生依赖、破坏式结构替换、阶段依赖与容量验收；具体证据见联合评审 |
 | [architecture-design.md](architecture-design.md) | 收敛型架构设计：账本物理记录身份与增量读取协议、三路证据收敛、SQLite 表结构与正文状态、内容去重与语义指纹、乱序重算、查询接口、正文预算与总磁盘硬上限、版本与形状探针、访问控制、AVA 下线顺序与分步落地判据；文末附两轮评审的逐条对照 |
 | [architecture-review.md](architecture-review.md) | 基于设计提交的落地前评审：账本身份、持久化与恢复、正文预算和回收、乱序派生、协议与费用来源、安全边界及合成验收条件；文末两轮结论已逐条落进设计文档 |
 | [operations.md](operations.md) | 运维手册：维护命令与错误码、备份与恢复流程、维护锁、掉电边界、费用时钟冲突诊断、容量门槛、切换核对与 AVA 下线/回滚步骤 |
 | [AGENTS.md](AGENTS.md) | 文档分层、写作规则与文风禁区；note 与架构文档的接缝 |
-| [架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md) | A—F 批次依赖、跨计划验收与执行导航；运行时尚未实施 |
+| [架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md) | A—F 批次依赖、跨计划验收、执行导航与交付记录 |
 | [同步派生正确性](superpowers/plans/2026-10-22-atc-derive-correctness.md) | 正文可比较性、统一顺序、当前工具关联、摘要与事务完成；含调用者迁移、故障恢复和历史对齐验收 |
 | [来源与在线事实](superpowers/plans/2026-10-22-atc-source-projection.md) | 真实字段、统一隐私、owner 完整性、最终尝试及全部在线写入路径 |
 | [长期事实与显式重建](superpowers/plans/2026-10-22-atc-durable-rebuild.md) | v5、请求与组修订、来源依据、保留状态、迁移续跑与盐恢复 |
@@ -43,6 +43,6 @@
 
 C3 的真实并行观察、停 AVA 与回滚演练尚未执行，需要单独授权。magpie 与现有 AVA 保持未修改。
 
-下一轮实施从[架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md)进入，按 A—F 子计划及其依赖执行；容量测量触发后才实施条件切片。[架构演进方案 v2](architecture-evolution-v2.md)维护目标约束，理由见[架构演进提案](../.agents/notes/proposed/architecture/2026-10-22-atc-architecture-evolution.md)。[Agent Profile 原提案](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)与[字段保真原提案](../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)保留为输入材料，具体事实修正见[联合评审](agent-request-kind-review.md#与字段保真方案的联合评估)，分类器形状证据见[auto mode 分类器研究](auto-mode-classifier-research.md)。
+A—F 的实现与验收记录见[架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md)。[架构演进方案 v2](architecture-evolution-v2.md)维护目标约束与阶段划分，统筹理由见[架构演进决策](../.agents/notes/implemented/architecture/2026-10-22-atc-architecture-evolution.md)。[Agent Profile 原提案](../.agents/notes/proposed/architecture/2026-10-22-agent-request-kind-registry.md)与[字段保真原提案](../.agents/notes/proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)保留为输入材料，未建的批次留在提案里；具体事实修正见[联合评审](agent-request-kind-review.md#与字段保真方案的联合评估)，分类器形状证据见[auto mode 分类器研究](auto-mode-classifier-research.md)。
 
 仍在等待确认的问题列在架构文档末尾：超大请求的回调为什么丢失、direct 是否还会新增、分级保留的切分点、推理正文是否入库、路由摘要是否保留 prompt 分解、多实例标识、长期元数据的实际成本、direct 的稳定身份、是否开启请求归档、`handed_on` 行会不会真出现。
