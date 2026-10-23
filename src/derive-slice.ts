@@ -5,6 +5,7 @@ import type { Store } from './store';
 import { readBodyTx } from './body';
 import { modelTimeTitle } from './sources/magpie';
 import { drainRequestPurposesTx } from './request-purpose';
+import { queuePendingSql } from './derive-state';
 import {
   anthropicReplyCalls, anthropicRequestResults, commonPrefix, compareLogicalOrder,
   compareTraversalOrder, deriveTitle, drainDeriveTx, fingerprintsOf, firstUserPreview,
@@ -1323,7 +1324,7 @@ export function sliceGroupStep(store: Store, runtime: SliceRuntime,
   const candidate = store.read.query<{ conv_key: string; actor: string;
     compute_generation: string | null }, [string | null, string | null]>(`
     SELECT q.conv_key,q.actor,q.compute_generation FROM derive_queue q
-    WHERE q.state<>'clean' AND (? IS NULL OR q.conv_key=?)
+    WHERE ${queuePendingSql('q')} AND (? IS NULL OR q.conv_key=?)
       AND NOT EXISTS (SELECT 1 FROM request r WHERE r.conv_key=q.conv_key AND r.actor=q.actor
         AND r.actor_state='known' AND r.purpose_pending=1)
     ORDER BY q.last_claimed_ms IS NOT NULL,q.last_claimed_ms,q.dirty_since_ms,q.conv_key,q.actor
@@ -1334,7 +1335,7 @@ export function sliceGroupStep(store: Store, runtime: SliceRuntime,
   // 另一套算法算出来的。
   store.write(db => {
     db.run(`UPDATE derive_queue SET target_algorithm=? WHERE conv_key=? AND actor=?
-      AND state<>'clean' AND target_algorithm<>?`,
+      AND ${queuePendingSql()} AND target_algorithm<>?`,
     [DERIVE_ALGORITHM, candidate.conv_key, candidate.actor, DERIVE_ALGORITHM]);
     db.run('UPDATE derive_queue SET last_claimed_ms=? WHERE conv_key=? AND actor=?',
       [now, candidate.conv_key, candidate.actor]);
@@ -1437,7 +1438,7 @@ export function drainDeriveEntry(store: Store, limit = 100, scope?: DeriveScope)
     }
   }
   const remaining = store.read.query<{ n: number }, [string | null, string | null]>(`
-    SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'
+    SELECT COUNT(*) AS n FROM derive_queue WHERE ${queuePendingSql()}
       AND (? IS NULL OR conv_key=?)`).get(scope?.convKey ?? null, scope?.convKey ?? null)!.n;
   return {
     processed, remaining, groups, recomputed, retained, discarded,

@@ -1,6 +1,7 @@
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
+import { groupCurrentSql, groupIsCurrent } from './derive-state';
 
 export type Page<T> = { items: T[]; next_cursor: string | null };
 export type CostState = 'priced' | 'zero' | 'unpriced' | 'absent';
@@ -164,31 +165,27 @@ const SESSION_TITLE_SQL = `COALESCE(
    JOIN derive_queue q1 ON q1.conv_key = r1.conv_key AND q1.actor = r1.actor
    WHERE r1.conv_key = request.conv_key AND r1.purpose_chain = 'exclude'
      AND r1.model_title IS NOT NULL AND r1.purpose_pending = 0
-     AND q1.state = 'clean' AND q1.published_revision = q1.input_revision
-     AND q1.published_algorithm = q1.target_algorithm
+     AND ${groupCurrentSql('q1')}
    ORDER BY r1.started_ms DESC, r1.req_id DESC LIMIT 1),
   (SELECT r2.title FROM request r2
    JOIN derive_queue q2 ON q2.conv_key = r2.conv_key AND q2.actor = r2.actor
    WHERE r2.conv_key = request.conv_key AND r2.title_source = 'user_delta'
      AND r2.purpose_chain = 'participate' AND r2.chain_role = 'main'
      AND r2.title IS NOT NULL AND r2.purpose_pending = 0
-     AND q2.state = 'clean' AND q2.published_revision = q2.input_revision
-     AND q2.published_algorithm = q2.target_algorithm
+     AND ${groupCurrentSql('q2')}
    ORDER BY r2.started_ms ASC, r2.req_id ASC LIMIT 1),
   (SELECT r3.title FROM request r3
    JOIN derive_queue q3 ON q3.conv_key = r3.conv_key AND q3.actor = r3.actor
    WHERE r3.conv_key = request.conv_key AND r3.title_source = 'user_delta'
      AND r3.purpose_chain = 'participate' AND r3.title IS NOT NULL
      AND r3.purpose_pending = 0
-     AND q3.state = 'clean' AND q3.published_revision = q3.input_revision
-     AND q3.published_algorithm = q3.target_algorithm
+     AND ${groupCurrentSql('q3')}
    ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1),
   (SELECT r4.title FROM request r4
    JOIN derive_queue q4 ON q4.conv_key = r4.conv_key AND q4.actor = r4.actor
    WHERE r4.conv_key = request.conv_key AND r4.purpose_chain = 'participate'
      AND r4.title IS NOT NULL AND r4.purpose_pending = 0
-     AND q4.state = 'clean' AND q4.published_revision = q4.input_revision
-     AND q4.published_algorithm = q4.target_algorithm
+     AND ${groupCurrentSql('q4')}
    ORDER BY r4.started_ms ASC, r4.req_id ASC LIMIT 1)
 )`;
 
@@ -269,9 +266,14 @@ export function derivedStateOf(row: {
   group_input: number | null; group_published: number | null;
   target_algorithm: number | null; published_algorithm: number | null;
 }): DerivedState {
-  if (row.purpose_pending !== 0 || row.group_state !== 'clean'
-    || row.group_input !== row.group_published
-    || row.target_algorithm !== row.published_algorithm) return 'dirty';
+  // 组判据唯一落在 `groupIsCurrent`：这里只做 join 别名到队列列名的映射。
+  if (row.purpose_pending !== 0 || !groupIsCurrent({
+    state: row.group_state,
+    input_revision: row.group_input,
+    published_revision: row.group_published,
+    target_algorithm: row.target_algorithm,
+    published_algorithm: row.published_algorithm,
+  })) return 'dirty';
   if (row.summary_state === 'retained') return 'retained';
   if (row.summary_algorithm === null) return 'legacy';
   return 'current';

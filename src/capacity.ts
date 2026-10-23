@@ -6,6 +6,7 @@ import type { Config } from './config';
 import type { Store, WriteStats } from './store';
 import { measureStorage } from './retention';
 import type { StorageUsage } from './retention';
+import { queuePendingSql } from './derive-state';
 
 /**
  * 进程内容量观测。只保留固定原因码、计数与有界时延样本，不保存被拒正文、
@@ -130,8 +131,8 @@ export function queueSnapshot(store: Store): {
   const columns = tableColumns(store.read, 'derive_queue');
   const hasState = columns.includes('state');
   const hasDirtySince = columns.includes('dirty_since_ms');
-  // C 的现行屏蔽条件是 state <> 'clean'；v6 构建中的组仍为 dirty，不新增状态。
-  const filter = hasState ? "WHERE state <> 'clean'" : '';
+  // 待办判定用唯一片段；v6 构建中的组仍为 dirty，不新增状态。
+  const filter = hasState ? `WHERE ${queuePendingSql()}` : '';
   const pending = store.read.query<{ n: number }, []>(
     `SELECT COUNT(*) AS n FROM derive_queue ${filter}`).get()?.n ?? 0;
   const dirty = hasDirtySince
@@ -141,7 +142,7 @@ export function queueSnapshot(store: Store): {
   const request = store.read.query<{ oldest: number | null }, []>(`
     SELECT MIN(r.started_ms) AS oldest
     FROM derive_queue q JOIN request r ON r.conv_key=q.conv_key AND r.actor=q.actor
-    ${hasState ? "WHERE q.state <> 'clean'" : ''}`).get()?.oldest ?? null;
+    ${hasState ? `WHERE ${queuePendingSql('q')}` : ''}`).get()?.oldest ?? null;
   const now = Date.now();
   return {
     pending_groups: pending,

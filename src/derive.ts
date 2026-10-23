@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
-import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
+import { GROUP_ALGORITHM, markGroupDirtyTx, queuePendingSql } from './derive-state';
 import { drainRequestPurposesTx } from './request-purpose';
 import { readBodyTx } from './body';
 import { assistantText } from './protocols';
@@ -722,9 +722,9 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
   const columns = 'conv_key,actor,group_epoch,input_revision,target_algorithm';
   const groups = scope === undefined
     ? db.query<QueuedGroup, [number]>(`SELECT ${columns} FROM derive_queue
-        WHERE state<>'clean' ORDER BY conv_key,actor LIMIT ?`).all(limit)
+        WHERE ${queuePendingSql()} ORDER BY conv_key,actor LIMIT ?`).all(limit)
     : db.query<QueuedGroup, [string, number]>(`SELECT ${columns} FROM derive_queue
-        WHERE conv_key=? AND state<>'clean' ORDER BY actor LIMIT ?`).all(scope.convKey, limit);
+        WHERE conv_key=? AND ${queuePendingSql()} ORDER BY actor LIMIT ?`).all(scope.convKey, limit);
   const touched: Group[] = [];
   let processed = 0;
   let recomputed = 0;
@@ -824,9 +824,9 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
   }
   // clean 行是持久完成记录，不是积压。
   const remaining = scope === undefined
-    ? db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'`).get()!.n
+    ? db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM derive_queue WHERE ${queuePendingSql()}`).get()!.n
     : db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM derive_queue
-        WHERE conv_key=? AND state<>'clean'`).get(scope.convKey)!.n;
+        WHERE conv_key=? AND ${queuePendingSql()}`).get(scope.convKey)!.n;
   return {
     processed, remaining, groups: touched, recomputed, retained,
     purpose_processed: purposeProcessed, purpose_remaining: purposeRemaining,
