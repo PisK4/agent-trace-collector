@@ -2849,9 +2849,9 @@ git commit -m "docs(capacity): record measured baseline and keep synchronous der
 
 ### Task 13：v6 代际 schema（迁移部分已按用户决定取消）
 
-**执行前提变更（用户决定，2026-10-23）。** 原计划在这里按两阶段标记与 keyset 分批写 v5→v6 的可续跑迁移（`scripts/migrate-v6.ts`、`tests/fixtures/schema-v5.sql`、`migration:v5/v6` 标记）。用户明确「不需要数据库迁移」，与既定的破坏式立场一致（[旧库删除重建](../../../../.agents/notes/implemented/architecture/2026-10-23-destructive-schema-replacement.md)）。实际落地为：只建 v6 结构，`openStore` 的空库路径在同一事务里写 v5 基础结构 + v6 结构与 `user_version=6`；低版本一律 `schema_rebuild_required`，没有完成标记、没有续跑入口、也没有半迁移状态。
+**执行前提变更（用户决定，2026-10-23）。** 原计划在这里按两阶段标记与 keyset 分批写 v5→v6 的可续跑迁移（`scripts/migrate-v6.ts`、`tests/fixtures/schema-v5.sql`、`migration:v5/v6` 标记）。用户明确「不需要数据库迁移」，与既定的破坏式立场一致（[旧库删除重建](../../../.agents/notes/implemented/architecture/2026-10-23-destructive-schema-replacement.md)）。实际落地为：只建 v6 结构，`openStore` 的空库路径在同一事务里写 v5 基础结构 + v6 结构与 `user_version=6`；低版本一律 `schema_rebuild_required`，没有完成标记、没有续跑入口、也没有半迁移状态。
 
-因此下方 Step 1、2、5、6（v5 fixture、迁移测试、迁移实现、迁移 CLI）整段不执行；Step 4 的 DDL 与 Step 7 的版本门按破坏式简化执行（无 `assertV6Complete`、无标记写入）；Step 3 的"验证失败"由"用例不存在"变成"结构不存在"；Step 8 只跑 `tests/store.test.ts` 与 `tests/maintenance.test.ts`。为什么仍然要 v6 结构、为什么不做迁移，见 [v6 派代际结构](../../../../.agents/notes/implemented/architecture/2026-10-22-atc-schema-v6-generations.md)。
+因此下方 Step 1、2、5、6（v5 fixture、迁移测试、迁移实现、迁移 CLI）整段不执行；Step 4 的 DDL 与 Step 7 的版本门按破坏式简化执行（无 `assertV6Complete`、无标记写入）；Step 3 的"验证失败"由"用例不存在"变成"结构不存在"；Step 8 只跑 `tests/store.test.ts` 与 `tests/maintenance.test.ts`。为什么仍然要 v6 结构、为什么不做迁移，见 [v6 派生代际结构](../../../.agents/notes/implemented/architecture/2026-10-22-atc-schema-v6-generations.md)。
 
 **Files：**
 - Create: `src/schema-v6.sql`
