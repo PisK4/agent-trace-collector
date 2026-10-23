@@ -3,8 +3,8 @@ import { projectSteps, renderTraceRows, toolSummary } from '../web/trace-view.js
 
 const TOKEN = 'r1-' + 'a'.repeat(64);
 
-function row(overrides: Record<string, unknown> = {}) {
-  return {
+function row(overrides: Record<string, unknown> = {}): import('../src/queries').RequestRow {
+  return ({
     req_id: 7, conv_key: 'k', actor: 'a', agent: null, actor_state: 'known' as const, started_ms: 7,
     title: 't', title_source: null, status: 200, model_requested: null, model_served: 'm',
     in_tok: null, out_tok: null, cache_read: null, cache_write: null, cost: null,
@@ -15,7 +15,7 @@ function row(overrides: Record<string, unknown> = {}) {
     purpose_status: 'selected', purpose_version: 1, purpose_rule: null,
     purpose_chain: 'participate', derived_state: 'current' as const,
     ...overrides,
-  };
+  }) as import('../src/queries').RequestRow;
 }
 
 function detail(overrides: Record<string, unknown> = {}) {
@@ -30,14 +30,15 @@ function entry(ord: number, input: unknown, isInput: boolean) {
   return { ord, role: 'user', blocks: [], preview: '', input, isInput };
 }
 
-function read(detailJson: unknown, entries: unknown[], reply: unknown) {
+type ProjectableRead = Parameters<typeof projectSteps>[1];
+function read(detailJson: unknown, entries: unknown[], reply: unknown): ProjectableRead {
   return {
     detail: detailJson, meta: reply === null ? null : { reply, capabilities: null },
     messages: new Map(), entries,
     structure: { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null },
     delta: { next: 0, done: false, loading: false, error: null, unconfirmed: false },
     token: TOKEN,
-  };
+  } as unknown as ProjectableRead;
 }
 
 test('投影顺序与稳定键：旧 ord 不进步骤，新增与回复块按协议顺序', () => {

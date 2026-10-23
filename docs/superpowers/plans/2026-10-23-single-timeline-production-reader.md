@@ -573,7 +573,7 @@ export function toolSummary(name,inputText) {
 
 **Interfaces:** ConsumescreateReaderStore/projectSteps/renderTraceRows。Produces唯一生产步骤轨迹、选中/展开、顶部loadEarlier、refresh、jumpLatest和URL恢复。保留resolveTraceTarget、purposeLabel、isAuxRow、auxSummary、restoreScroll的有效行为；createReader测试随状态迁移到reader-store，删除旧的网络实现，不能同时留下details/bodies两套权威缓存。
 
-- [ ] **Step 1: 把页面相关状态缩到一个明确对象，并写窗口合并回归。** 选择身份用req_id/step.key/callOrd，不用数字序号。
+- [x] **Step 1: 把页面相关状态缩到一个明确对象，并写窗口合并回归。** 选择身份用req_id/step.key/callOrd，不用数字序号。
 
 ```js
 const state={session:null,reqId:null,selectedStep:null,toolOrd:null,
@@ -583,9 +583,9 @@ const state={session:null,reqId:null,selectedStep:null,toolOrd:null,
 
 store测试锁住loadEarlier prepend+去重+排序，失败保留旧rows/cursor；新latest刷新替换窗口并作废旧内容。web测试保留alias canonical、不存在及窗口外请求区分，补充旧view参数被忽略但session/trace仍恢复。默认选最新只设置选择不算完成，首屏渲染后必须让选中组进入main可见区域。URL明确trace时保留该请求语义；窗口外时读取其详情，在右栏可看并提示未在窗口，不静默改选最新，也不扫描全部历史定位。
 
-- [ ] **Step 2: 运行红测。** `bun test tests/web.test.ts tests/reader-store.test.ts tests/trace-view.test.ts`。
-- [ ] **Step 3: 接入生产请求窗口与分批读取。** 首屏selectSession使用older与按高度计算limit，默认选最新请求，详情全部折叠，并把选中组带入可见区域。先画列级占位，再按共享4并发加载窗口请求detail+meta+最多两片delta；每批完成仅重绘当前session，不等待所有route。删除prefetchDetails、prefetchBodies、BODY_PREFETCH、ensureDetail/ensureBody及30笔route预取，由store统一承担。中栏采用projectSteps，原位展开继续使用生产路由/完整性/原始对象区块，完整历史按需读取，原始对象标明当前已读范围。工具行在关系已确认时显示「结果见请求 N」入口；目标窗口外只读该请求详情并提示未在窗口，不扫描历史。关联状态与正文加载状态分开显示，未读取不写成未记录。
-- [ ] **Step 4: 实现顶部锚点与显式刷新。** 当前滚动容器：main为独立滚动时使用main，窄屏overflow visible时使用document.scrollingElement。记录可见第一条稳定step.key与top，prepend并分批补正文时均按该key补偿；用户主动滚动后不再强制补偿过期锚点。toggle行详情不触发另一选中操作。
+- [x] **Step 2: 运行红测。** `bun test tests/web.test.ts tests/reader-store.test.ts tests/trace-view.test.ts`。
+- [x] **Step 3: 接入生产请求窗口与分批读取。** 首屏selectSession使用older与按高度计算limit，默认选最新请求，详情全部折叠，并把选中组带入可见区域。先画列级占位，再按共享4并发加载窗口请求detail+meta+最多两片delta；每批完成仅重绘当前session，不等待所有route。删除prefetchDetails、prefetchBodies、BODY_PREFETCH、ensureDetail/ensureBody及30笔route预取，由store统一承担。中栏采用projectSteps，原位展开继续使用生产路由/完整性/原始对象区块，完整历史按需读取，原始对象标明当前已读范围。工具行在关系已确认时显示「结果见请求 N」入口；目标窗口外只读该请求详情并提示未在窗口，不扫描历史。关联状态与正文加载状态分开显示，未读取不写成未记录。
+- [x] **Step 4: 实现顶部锚点与显式刷新。** 当前滚动容器：main为独立滚动时使用main，窄屏overflow visible时使用document.scrollingElement。记录可见第一条稳定step.key与top，prepend并分批补正文时均按该key补偿；用户主动滚动后不再强制补偿过期锚点。toggle行详情不触发另一选中操作。
 
 ```js
 const before=anchor.getBoundingClientRect().top;
@@ -594,9 +594,9 @@ scroller.scrollTop+=sameAnchor.getBoundingClientRect().top-before;
 ```
 
 空页到起点后隐藏历史按钮。刷新重新读最近窗口、清步骤展开与旧token，显示读取时间；回到最新先刷新最近窗口再定位最后请求，不把已载入旧末尾称最新。历史追加与回到最新相互独立。旧view=ledger/conversation/variant参数读取时忽略，updateURL仅输出session/trace/tab；popstate作废旧会话异步代次。复制/折叠等状态不写入URL。
-- [ ] **Step 5: 删除双视图与旧样式。** 删除renderConversation、convCard、ledgerRow/ledgerRows、jumpToLedger和data-view/data-ledger分支；请求详情的正文组合保留供原位/右栏复用。删无引用CSS前搜索生产所有选择器，不能删除renderCapabilities/renderMessages/renderReply仍使用的类。中栏36px行用min-width:0、摘要ellipsis，按钮有aria-expanded、aria-controls及焦点样式。异常状态放在不被ellipsis裁剪的独立元素；摘要与计时的宽度按Task 0的测量决定，本任务不预设新的固定宽度。Task 0没有形成明确结论时保留现行215px与每请求一次计量，不引入未验证参数。每个请求只在最后完成步骤渲染一组请求读数；费用/token汇总仍按request遍历。
-- [ ] **Step 6: 运行绿测与合成浏览器操作。** 代码测试同Step 2及`bun run typecheck`。用临时合成服务检查1560×960首屏至少30行、默认展开0、相同请求共享编号、每行无time和模型；在1507×838复现默认选中最新时的可见性，选中组必须进入main可见区域。顶部加载后锚点偏移≤1px（等布局稳定）。工具行检查已确认结果入口、未读取/读取失败/未确认三种状态，以及窗口外结果不扫描历史。浏览器工具使用前读ego-browser用法，不复用真实collector生成测试样本；截图失败则记录未完成，几何检查不能冒称视觉通过。
-- [ ] **Step 7: 提交边界。** 建议 `feat(web): replace conversation and ledger views with a single trace`；本项已改变生产布局，创建新的implemented记录或把本提案分项转成已交付事实，链接原型note。旧固定账本与裁剪note部分取代，保持其仍有效的原因及验证，不提前整篇归档。
+- [x] **Step 5: 删除双视图与旧样式。** 删除renderConversation、convCard、ledgerRow/ledgerRows、jumpToLedger和data-view/data-ledger分支；请求详情的正文组合保留供原位/右栏复用。删无引用CSS前搜索生产所有选择器，不能删除renderCapabilities/renderMessages/renderReply仍使用的类。中栏36px行用min-width:0、摘要ellipsis，按钮有aria-expanded、aria-controls及焦点样式。异常状态放在不被ellipsis裁剪的独立元素；摘要与计时的宽度按Task 0的测量决定，本任务不预设新的固定宽度。Task 0没有形成明确结论时保留现行215px与每请求一次计量，不引入未验证参数。每个请求只在最后完成步骤渲染一组请求读数；费用/token汇总仍按request遍历。
+- [x] **Step 6: 运行绿测与合成浏览器操作。** 代码测试同Step 2及`bun run typecheck`。用临时合成服务检查1560×960首屏至少30行、默认展开0、相同请求共享编号、每行无time和模型；在1507×838复现默认选中最新时的可见性，选中组必须进入main可见区域。顶部加载后锚点偏移≤1px（等布局稳定）。工具行检查已确认结果入口、未读取/读取失败/未确认三种状态，以及窗口外结果不扫描历史。浏览器工具使用前读ego-browser用法，不复用真实collector生成测试样本；截图失败则记录未完成，几何检查不能冒称视觉通过。
+- [x] **Step 7: 提交边界。** 建议 `feat(web): replace conversation and ledger views with a single trace`；本项已改变生产布局，创建新的implemented记录或把本提案分项转成已交付事实，链接原型note。旧固定账本与裁剪note部分取代，保持其仍有效的原因及验证，不提前整篇归档。
 
 ## Task 7: 接入右栏请求上下文与工具详情
 

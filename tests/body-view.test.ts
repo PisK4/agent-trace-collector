@@ -183,10 +183,11 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
   expect(html).toContain(`data-tool-owner="${detail.req_id}"`);
   expect(html).toContain('data-call-ord="0"');
   // 两个调用指向同一目标消息的不同内容块：按钮身份仍是各自的调用序号。
-  const twin = toolEntries({ req_id: 42, tool_calls: [
+  const twinDetail = { req_id: 42, tool_calls: [
     { call_id: 'a', ord: 0, tool_name: 'read', result_req: 9, result_ord: 2, result_path: 'request.messages[2].content[0]', state: 'resolved' },
     { call_id: 'b', ord: 1, tool_name: 'read', result_req: 9, result_ord: 2, result_path: 'request.messages[2].content[1]', state: 'resolved' },
-  ] }, page({
+  ] } as never;
+  const twin = toolEntries(twinDetail as never, page({
     reply: { id: 'm', content: [
       { type: 'tool_use', id: 'a', name: 'read', input: { path: 'a' } },
       { type: 'tool_use', id: 'b', name: 'read', input: { path: 'b' } },

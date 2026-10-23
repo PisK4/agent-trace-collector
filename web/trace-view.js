@@ -1,3 +1,4 @@
+// @ts-check
 import { deltaOrdinals, messageBlocks, replyView } from './body-view.js';
 
 /**
@@ -7,14 +8,29 @@ import { deltaOrdinals, messageBlocks, replyView } from './body-view.js';
  * 结果正文是否已读由 reader-store 决定，不写进投影。
  */
 
-const esc = (value) => String(value ?? '').replace(/[&<>"']/g, c => (
+/**
+ * @typedef {Object} TraceStep 单行轨迹的一步。
+ * @property {string} key 稳定键：reqId:message:N / reqId:reply:text:N / reqId:call:N 等
+ * @property {number} reqId
+ * @property {'user'|'assistant'|'tool'|'record'|'aux'} kind
+ * @property {string} text 行文本（工具行是动作摘要）
+ * @property {number|null} messageOrd
+ * @property {number|null} callOrd
+ * @property {unknown} raw 原文或原始块
+ * @property {boolean} unrecognized
+ * @property {'failed'|'missing_body'|'missing_reply'|'unknown'|'truncated'|null} status
+ * @property {{state: 'resolved'|'pending'|'ambiguous'|'unpaired', reqId: number|null} | null} result
+ */
+
+/** @param {unknown} value @returns {string} */
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (/** @param {string} c */ c) => (
   { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c] ?? c
 ));
 
 const LENGTH_FINISH = new Set(['length', 'max_tokens']);
 const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use']);
 
-/** 工具行动作对象：命令、路径或查询优先，结果正文不当结论。 */
+/** 工具行动作对象：命令、路径或查询优先，结果正文不当结论。 @param {string} name @param {string} inputText @returns {string} */
 export function toolSummary(name, inputText) {
   let args = null;
   try { args = JSON.parse(inputText); } catch { /* 非 JSON 参数按原文展示 */ }
@@ -33,13 +49,17 @@ export function toolSummary(name, inputText) {
  * @returns {TraceStep[]}
  */
 export function projectSteps(row, read) {
+  /** @type {TraceStep[]} */
   const steps = [];
   const detail = read?.detail ?? null;
-  const record = (key, status, text, extra = {}) => steps.push({
-    key: `${row.req_id}:${key}`, reqId: row.req_id, kind: 'record', text,
-    messageOrd: null, callOrd: null, raw: null, unrecognized: false,
-    status, result: null, ...extra,
-  });
+  /** @param {string} key @param {TraceStep['status']} status @param {string} text @param {Partial<TraceStep>} [extra] */
+  const record = (key, status, text, extra = {}) => {
+    steps.push(/** @type {TraceStep} */ ({
+      key: `${row.req_id}:${key}`, reqId: row.req_id, kind: 'record', text,
+      messageOrd: null, callOrd: null, raw: null, unrecognized: false,
+      status, result: null, ...extra,
+    }));
+  };
   // 辅助请求一笔一条辅助记录：分类器输入不画成用户消息。
   if (row.purpose_chain === 'exclude' || row.chain_role === 'aux') {
     steps.push({ key:`${row.req_id}:aux`, reqId: row.req_id, kind: 'aux',
@@ -86,41 +106,39 @@ export function projectSteps(row, read) {
   const view = meta === null ? null : replyView(meta);
   if (view === null || view.state === 'absent') {
     record('reply', 'missing_reply', '未收到回复');
-  } else {
-    const multi = Array.isArray(meta.reply?.choices) && meta.reply.choices.length > 1;
+  } else if (meta !== null) {
+    const reply = /** @type {{content?: unknown, choices?: {message: unknown}[]} | null} */ (meta.reply ?? null);
+    const choices = Array.isArray(reply?.choices) ? reply.choices : null;
+    const multi = choices !== null && choices.length > 1;
     if (multi) {
-      record('choices', null, `多 choice 回复（${meta.reply.choices.length} 项）：保留原始对象，不按冲突序号提供工具定位`);
+      record('choices', null, `多 choice 回复（${choices.length} 项）：保留原始对象，不按冲突序号提供工具定位`);
     } else {
-      const reply = meta.reply ?? null;
+      // 两类协议统一经 messageBlocks 归一化：Anthropic 读 content 数组，
+      // Chat 的 tool_calls 在消息层，提升为 call 块；块序号沿用协议内位置。
       const blocks = reply !== null && Array.isArray(reply.content)
-        ? reply.content.map((block, index) => [block, index])
-        : [];
-      if (reply !== null && !Array.isArray(reply.content)) {
-        // Chat：单 choice 提升消息层 tool_calls，文本与调用分别成块。
-        const message = reply.choices?.[0]?.message ?? null;
-        if (message !== null) {
-          for (const block of messageBlocks(message)) blocks.push([block.raw ?? block, block.index]);
-        }
-      }
-      for (const [block, index] of blocks) {
-        const type = block?.type;
-        if (type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
+        ? messageBlocks({ role: 'assistant', content: reply.content })
+        : choices !== null && choices.length === 1
+          ? messageBlocks(choices[0]?.message ?? {})
+          : [];
+      for (const block of blocks) {
+        const index = block.index;
+        if (block.kind === 'text' && block.text.length > 0) {
           steps.push({ key:`${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
             text: block.text, messageOrd: null, callOrd: null, raw: block.text,
             unrecognized: false, status: null, result: null });
-        } else if (type === 'tool_use') {
+        } else if (block.kind === 'call') {
           const call = view.calls.find(item => item.ord === index) ?? null;
           const pair = detail.tool_calls?.find(item => item.ord === index) ?? null;
           steps.push({ key:`${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
-            text: toolSummary(call?.name ?? block.name ?? '', call?.inputText ?? JSON.stringify(block.input ?? null)),
-            messageOrd: null, callOrd: index, raw: block,
+            text: toolSummary(call?.name ?? '', call?.inputText ?? ''),
+            messageOrd: null, callOrd: index, raw: block.raw,
             unrecognized: false, status: null,
-            result: pair === null ? null : { state: pair.state, reqId: pair.result_req } });
-        } else if (type !== 'thinking') {
+            result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req } });
+        } else if (block.kind !== 'thinking') {
           // 未知块给记录入口，不做语义推测。
           steps.push({ key:`${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
-            text: `未知回复块 type=${String(type)}`, messageOrd: null, callOrd: null,
-            raw: block, unrecognized: true, status: null, result: null });
+            text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
+            raw: block.raw, unrecognized: true, status: null, result: null });
         }
       }
       if (blocks.length === 0 && view.text.length > 0) {
@@ -158,6 +176,7 @@ const STATUS_TEXT = {
 
 /**
  * 单行轨迹 HTML：每步一行，默认折叠，选中与展开是独立控件。
+ * @returns {string}
  * 计量只出现在该请求最后一个已投影步骤右侧（complete 才显示）；
  * 状态放在不被省略号裁剪的独立元素，颜色只作辅助。
  * @param {import('../src/queries').RequestRow} row
@@ -168,6 +187,7 @@ const STATUS_TEXT = {
  */
 export function renderTraceRows(row, steps, ordinal, open, complete) {
   const pieces = [];
+  /** @param {string} text @param {number} [max] */
   const clip = (text, max = 140) => [...String(text)].length <= max ? String(text)
     : `${[...String(text)].slice(0, max).join('')}…`;
   for (const [index, step] of steps.entries()) {
@@ -180,13 +200,14 @@ export function renderTraceRows(row, steps, ordinal, open, complete) {
         ? `<span class="step-status warn">关系${step.result.state === 'pending' ? '位置待定' : step.result.state === 'ambiguous' ? '多候选' : '未配对'}</span>`
         : '';
     const statusHtml = step.status === null
-      ? (step.kind === 'record' ? `<span class="step-status">${esc(clip(step.text))}</span>` : '')
+      ? (step.kind === 'record' || step.kind === 'aux' ? `<span class="step-status">${esc(clip(step.text))}</span>` : '')
       : `<span class="step-status ${step.status === 'failed' || step.status === 'missing_body' || step.status === 'missing_reply' ? 'bad' : step.status === 'truncated' ? 'warn' : ''}">${status} · ${esc(clip(step.text))}</span>`;
     const last = index === steps.length - 1;
     const metrics = last && complete
       ? `<span class="compact-metrics" title="所属模型请求的读数；不表示工具执行耗时"></span>`
       : '';
     pieces.push(`<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
+<div class="compact-row">
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="false">
     <span class="compact-meta" title="请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
@@ -194,6 +215,7 @@ export function renderTraceRows(row, steps, ordinal, open, complete) {
   </button>
   ${resultEntry}${statusHtml}${metrics}
   <button class="step-expand" data-step-expand="${esc(step.key)}" aria-expanded="${isOpen}" aria-label="${isOpen ? '收起' : '展开'}请求 ${ordinal} ${label}详情">${isOpen ? '⌄' : '›'}</button>
+</div>
 </div>`);
   }
   return pieces.join('');
