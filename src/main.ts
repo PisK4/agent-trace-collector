@@ -132,23 +132,28 @@ export async function startCollector(config: Config): Promise<{ port: number; st
   });
 
   const routeTick = guard('route', async () => {
-    const files = await readRouteFiles(config.routingDir);
+    // 每轮只读一次已提交指纹：命中就不解压，也不重复 ingest。
+    const cursors = new Map(
+      store.read.query<{ source_name: string; fingerprint: string | null }, []>(
+        "SELECT source_name, fingerprint FROM source_cursor WHERE source_kind IN ('route_file','route_gz')",
+      ).all().map(row => [row.source_name, row.fingerprint] as const),
+    );
+    const files = await readRouteFiles(
+      config.routingDir,
+      (name, fingerprint) => cursors.get(name) === fingerprint,
+    );
     metrics.route.record({
       files: files.length,
-      decoded: files.filter(file => file.error === null).length,
-      unchanged: 0,
-      errors: files.filter(file => file.error !== null).length,
+      decoded: files.filter(file => file.state === 'decoded').length,
+      unchanged: files.filter(file => file.state === 'unchanged').length,
+      errors: files.filter(file => file.state === 'error').length,
     });
     for (const file of files) {
-      if (file.error !== null) {
-        process.stderr.write(`route_file_error:${file.name}\n`);
+      if (file.state !== 'decoded') {
+        if (file.state === 'error') process.stderr.write(`route_file_error:${file.name}:${file.error}\n`);
         continue;
       }
       const kind = file.kind === 'gz' ? 'route_gz' : 'route_file';
-      const cursorRow = store.read.query<{ fingerprint: string | null }, [string, string]>(
-        'SELECT fingerprint FROM source_cursor WHERE source_kind=? AND source_name=?',
-      ).get(kind, file.name);
-      if (cursorRow?.fingerprint === file.fingerprint) continue;
       const now = Date.now();
       const records: unknown[] = [];
       for (const line of file.lines) {

@@ -333,6 +333,8 @@ CREATE TABLE source_cursor (
 
 跨午夜的迟到路由。凌晨之后到达的路由可能写进前一天的 `.jsonl`，所以读取不按当前日期筛文件，而按每个文件自己的游标判断。一个已经被判为彻底归档的日期文件被重新创建时，按新代际重读。
 
+路由入口每轮按三态记账：`decoded`（解压与切行成功）、`unchanged`（指纹命中已提交值，不解压、不切行）、`error`（`route_file_unreadable` 读取失败、`route_gzip_invalid` 解压失败、`route_gzip_limit` 输出超过 512 MiB）。只有 `decoded` 且 ingest 成功才推进 `source_cursor.fingerprint`；`unchanged` 与 `error` 都不推进，`error` 下一轮按同指纹重试。替换检测看整份字节的 SHA-256，不看 mtime 与长度。
+
 账本与路由共用一个读取器，只差解析函数。实测日增 22 MB（路由）加 10.7 MB（账本），按当前节奏一轮读几 KB 到几百 KB，不构成压力。
 
 ### `handed_on` 与 `kind` 是两件事
