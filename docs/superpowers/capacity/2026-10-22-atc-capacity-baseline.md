@@ -40,6 +40,17 @@ bun scripts/capacity-gate.ts gate \
 
 三个失败场景记在预算的 `unmet` 段。它们的产品目标不下调：`baseline-5rps` 实测只投递 3.39 rps（3,000 个刻度丢弃 969 个），`long-10000` 的单笔写事务 1,959 ms，`baseline-1rps` 的事件循环 p99 越过 100 ms —— 三者指向同一处机制：`drainDeriveTx` 每个脏组整组重算，脏组集合大小与组内累计请求数共同决定每轮成本。
 
+## 决策
+
+```sh
+bun scripts/capacity-decision.ts \
+  --report /private/tmp/atc-capacity-reports/baseline-all.json \
+  --budget docs/superpowers/capacity/2026-10-22-atc-capacity-budget.json \
+  --out docs/superpowers/capacity/2026-10-22-atc-capacity-decision.json
+```
+
+输出 `{"decision":"stop-non-long","primary":"baseline-5rps","severity":969}`，退出 0。判据与理由见 [decision note](../../../.agents/notes/implemented/feature/2026-10-22-atc-capacity-decision.md)：`stop-non-long` 说的是"当前同步设计不能按现状发布"，而 Part V 的切片由"5 rps 必须达成"这个产品决定触发，与这份决策是两件事。
+
 ## 路由解码对照
 
 路由入口改成"先按字节哈希、未变就不解压"（`4e36138`）之后重跑同一场景：

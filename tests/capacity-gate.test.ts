@@ -1,12 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   deriveBudget, deriveScenarioBudget, evaluateGate, evaluateReports, flattenReport,
-  loadBudget, loadReport, loadScenarioReports, loadSummary,
+  loadBudget, loadReport, loadScenarioReports, loadSummary, sha256File,
 } from '../scripts/capacity-gate';
-import type { CapacityBudget, ScenarioReport, ScenarioSummary } from '../scripts/capacity-gate';
+import { buildDecisionFile, decideCapacity } from '../scripts/capacity-decision';
+import type { CapacityBudget, GateFailure, ScenarioReport, ScenarioSummary } from '../scripts/capacity-gate';
 
 /** 全部为占位数字的合成报告：形状与负载端产出一致，不含任何真实测量值。 */
 function report(input: {
@@ -236,4 +237,77 @@ test('扁平化把正文与队列读数一起交给判定', () => {
   expect(flat.pending_hooks).toBe(0);
   expect(flat.db_wal_temp_bytes).toBe(13);
   expect(flat.metadata_per_request_bytes).toBe(1);
+});
+
+test('决策只在长组主因且无其它绝对失败时进入切片', () => {
+  const longFailure: GateFailure = {
+    scenario: 'long-10000', check: 'max_write_tx_ms',
+    actual: 5_000, limit: 900, kind: 'max', basis: 'proposed',
+  };
+  expect(decideCapacity({ failures: [longFailure], scenarios: ['baseline-1rps', 'long-10000'] }))
+    .toMatchObject({ decision: 'slice', primary: 'long-10000' });
+  expect(decideCapacity({ failures: [], scenarios: ['baseline-1rps'] }))
+    .toMatchObject({ decision: 'keep-sync' });
+  expect(decideCapacity({
+    failures: [{ ...longFailure, scenario: 'baseline-5rps' }],
+    scenarios: ['baseline-5rps', 'long-10000'],
+  })).toMatchObject({ decision: 'stop-non-long', primary: 'baseline-5rps' });
+  // 别处的绝对失败压在长组之上：同步设计不能只靠切片长组就宣布可发布。
+  expect(decideCapacity({
+    failures: [longFailure, {
+      scenario: 'baseline-1rps', check: 'query_latency_p95_ms',
+      actual: 200, limit: 100, kind: 'max', basis: 'product-target',
+    }],
+    scenarios: ['baseline-1rps', 'long-10000'],
+  })).toMatchObject({ decision: 'stop-non-long' });
+});
+
+test('决策按比值取主因，长组只有非同步派生项时也不切片', () => {
+  const failures: GateFailure[] = [
+    { scenario: 'baseline-5rps', check: 'accepted', actual: 2_031, limit: 2_970, kind: 'min', basis: 'product-target' },
+    { scenario: 'long-10000', check: 'max_write_tx_ms', actual: 1_959, limit: 900, kind: 'max', basis: 'proposed' },
+  ];
+  // 下限类按 限值 / 实测 算：2,970 / 2,031 = 1.46；长组的 1,959 / 900 = 2.18 更大，所以主因是长组。
+  // 但基线场景带 product-target 失败，长组做主因也不足以切片。
+  const verdict = decideCapacity({ failures, scenarios: ['baseline-5rps', 'long-10000'] });
+  expect(verdict.primary).toBe('long-10000');
+  expect(verdict.severity).toBeCloseTo(1_959 / 900, 5);
+  expect(verdict.decision).toBe('stop-non-long');
+
+  // 长组的失败只有时延类（非同步派生成本）时，主因不足以支撑切片。
+  const latencyOnly = decideCapacity({
+    failures: [{ ...failures[1]!, check: 'hook_latency_p95_ms', actual: 4_000, limit: 2_000 }],
+    scenarios: ['long-10000'],
+  });
+  expect(latencyOnly).toMatchObject({ decision: 'stop-non-long', primary: 'long-10000' });
+});
+
+test('没有失败项也没有被测量的场景时拒绝出决策', () => {
+  expect(() => decideCapacity({ failures: [], scenarios: [] })).toThrow('capacity_decision_no_scenarios');
+});
+
+test('决策文件记下两侧哈希与失败项，并按给定时刻落盘', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'capacity-decision-'));
+  try {
+    const reportPath = join(dir, 'summary.json');
+    const budgetPath = join(dir, 'budget.json');
+    writeFileSync(reportPath, JSON.stringify(summaryOf([report()])));
+    const budget = budgetOf('baseline-1rps', deriveScenarioBudget(report()));
+    writeFileSync(budgetPath, JSON.stringify(budget));
+    const file = buildDecisionFile({
+      failures: evaluateReports([report()], budget), scenarios: ['baseline-1rps'],
+      report: reportPath, budget: budgetPath,
+      command: 'bun scripts/capacity-decision.ts --report summary.json',
+      decidedAt: '2026-10-23T12:00:00.000Z',
+    });
+    expect(file).toMatchObject({
+      schema: 1, decision: 'keep-sync', primary: null, severity: 0,
+      decided_at: '2026-10-23T12:00:00.000Z', failures: [],
+    });
+    expect(file.report_sha256).toBe(sha256File(reportPath));
+    expect(file.budget_sha256).toBe(sha256File(budgetPath));
+    expect(file.command).toContain('capacity-decision.ts');
+    writeFileSync(join(dir, 'decision.json'), `${JSON.stringify(file, null, 2)}\n`);
+    expect(JSON.parse(readFileSync(join(dir, 'decision.json'), 'utf8'))).toEqual(file);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

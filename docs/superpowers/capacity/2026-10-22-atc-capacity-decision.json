@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "decision": "stop-non-long",
+  "primary": "baseline-5rps",
+  "severity": 969,
+  "report_sha256": "fc2eb638cb724e600cfb2b31507e6d549675df4c954a66281b8592db4d240b21",
+  "budget_sha256": "3daf270a64978b4fa1ac7a1df18cc3e5db57a4b9057645d43bbcc8a55b388bb9",
+  "failures": [
+    {
+      "scenario": "baseline-1rps",
+      "check": "query_latency_p95_ms",
+      "actual": 152.85391599999275,
+      "limit": 100,
+      "kind": "max",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "baseline-1rps",
+      "check": "event_loop_p99_ms",
+      "actual": 183.44887500000186,
+      "limit": 100,
+      "kind": "max",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "baseline-5rps",
+      "check": "hook_latency_p95_ms",
+      "actual": 3791.546417000005,
+      "limit": 2000,
+      "kind": "max",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "baseline-5rps",
+      "check": "hook_latency_p99_ms",
+      "actual": 4613.042457999894,
+      "limit": 2500,
+      "kind": "max",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "baseline-5rps",
+      "check": "query_latency_p95_ms",
+      "actual": 4086.097375000012,
+      "limit": 100,
+      "kind": "max",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "baseline-5rps",
+      "check": "event_loop_p99_ms",
+      "actual": 1994.513833999983,
+      "limit": 100,
+      "kind": "max",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "baseline-5rps",
+      "check": "max_write_tx_ms",
+      "actual": 5294.02804200002,
+      "limit": 900,
+      "kind": "max",
+      "basis": "proposed"
+    },
+    {
+      "scenario": "baseline-5rps",
+      "check": "ticks_dropped",
+      "actual": 969,
+      "limit": 0,
+      "kind": "max",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "baseline-5rps",
+      "check": "accepted",
+      "actual": 2031,
+      "limit": 2970,
+      "kind": "min",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "baseline-5rps",
+      "check": "launched",
+      "actual": 2031,
+      "limit": 2970,
+      "kind": "min",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "baseline-5rps",
+      "check": "request_rows",
+      "actual": 2031,
+      "limit": 2970,
+      "kind": "min",
+      "basis": "product-target"
+    },
+    {
+      "scenario": "long-10000",
+      "check": "max_write_tx_ms",
+      "actual": 1959.3482079999521,
+      "limit": 900,
+      "kind": "max",
+      "basis": "proposed"
+    }
+  ],
+  "decided_at": "2026-10-23T05:27:36.672Z",
+  "command": "bun scripts/capacity-decision.ts --report /private/tmp/atc-capacity-reports/baseline-all.json --budget docs/superpowers/capacity/2026-10-22-atc-capacity-budget.json --out docs/superpowers/capacity/2026-10-22-atc-capacity-decision.json"
+}
