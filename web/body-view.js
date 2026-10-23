@@ -14,7 +14,7 @@
  * @typedef {{ord: number, role: Role, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
  * @typedef {{id: string, name: string, inputText: string, ord: number}} ToolCallView
  * @typedef {{state: 'ok' | 'absent' | 'invalid', text: string, thinking: string[], calls: ToolCallView[], finish: string | null, model: string | null, raw: unknown}} ReplyView
- * @typedef {{call_id: string, name: string, inputText: string, ord: number, state: string, result_req: number | null, result_ord: number | null}} ToolEntry
+ * @typedef {{call_id: string, name: string, inputText: string, ord: number, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null}} ToolEntry
  * @typedef {{delta: Set<number> | null, limit?: number, selectedOrd?: number | null}} MessageOptions
  */
 
@@ -356,8 +356,11 @@ export function toolEntries(detail, page) {
       inputText: call.inputText,
       ord: call.ord,
       state: pair === null ? 'unpaired' : pair.state,
+      // 按钮身份用调用者 owner + 调用序号；不再按 result_req/result_ord 反查调用。
+      owner: detail === null ? null : detail.req_id,
       result_req: pair === null ? null : pair.result_req,
       result_ord: pair === null ? null : pair.result_ord,
+      result_path: pair === null ? null : pair.result_path,
     };
   });
 }
@@ -444,8 +447,8 @@ export function renderTools(tools) {
   if (tools.length === 0) return '';
   const rows = tools.map(tool => {
     const state = tool.state === 'resolved' && tool.result_req !== null && tool.result_ord !== null
-      ? `<span class="tool-chip res"><span>结果已配对</span></span>
-         <button class="chip-btn" data-tool-result="${tool.result_req}" data-tool-ord="${tool.result_ord}">查看结果 · req ${tool.result_req} #${tool.result_ord}</button>`
+      ? `<span class="tool-chip res"><span>结果已配对 · 请求 ${tool.result_req}</span></span>
+         <button class="chip-btn" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}">查看结果 · 请求 ${tool.result_req} #${tool.result_ord}</button>`
       : tool.state === 'ambiguous' ? '<span class="tool-chip miss"><span>结果有多个候选，未配对</span></span>'
         : tool.state === 'pending' ? '<span class="tool-chip miss"><span>结果位置未确认</span></span>'
           : '<span class="tool-chip miss"><span>还没有见到结果</span></span>';

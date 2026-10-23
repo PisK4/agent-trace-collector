@@ -123,7 +123,7 @@ test('页面模块白名单能取到阅读器依赖的脚本', async () => {
   try {
     const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
     // /app.js 会 import /body-view.js；它不在白名单里时页面会整块加载失败。
-    for (const [path, type] of [['/app.js', 'text/javascript'], ['/body-view.js', 'text/javascript'], ['/reader-store.js', 'text/javascript']]) {
+    for (const [path, type] of [['/app.js', 'text/javascript'], ['/body-view.js', 'text/javascript'], ['/reader-store.js', 'text/javascript'], ['/trace-view.js', 'text/javascript']]) {
       const response = await handler(new Request(`http://127.0.0.1:8320${path}`, {
         headers: { host: '127.0.0.1:8320', origin: 'http://127.0.0.1:8320' },
       }));
