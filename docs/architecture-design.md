@@ -425,7 +425,7 @@ SQLite，WAL，单文件，放仓库外。默认路径 `~/Library/Application Su
 
 首版发布前不提供跨结构升级。旧库的处理是停采集器、把数据目录整体移走或删除，让新版本建新库；旧库里的正文与派生结果一起丢弃。因此不存在"结构已升级、数据未迁移"的中间态，也没有完成标记或续跑入口。
 
-v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，读口径的切换与发布指针的使用随派生切片实现落地。
+v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，切片模式不写它们，同步模式照旧写。
 
 ### 脱敏盐绑定与可恢复快照
 
@@ -878,6 +878,27 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 未知归属的请求也要完成用途：它不在任何组里，但"这一笔是标题生成"是它自己的事实，与它属于谁无关。
 
 `DrainResult` 因此有两个排空条件：`remaining`（未完成组数）与 `purpose_remaining`（未判用途的请求数）。维护的排空循环要求两者都为 0，任一阶段无进展即报 `derive_no_progress`。
+
+#### 派生代际与发布指针
+
+同一组的派生结果可以整体按代存在，也可以逐字段写回请求行。两种模式共用请求用途阶段与同一份取值实现，区别只在组阶段写到哪里、读从哪里来。
+
+代际身份是 `derive_generation.generation`：由组键、`group_epoch`、`input_revision` 与算法号拼出，主键唯一；`i_derive_generation_published` 保证一个组同时只有一代 `published`。一代的构建拆成六个阶段（`requests`、`roles`、`role_assign`、`tools`、`summary`、`ready`），每个阶段带自己的续跑游标，进程重启后从游标继续，不从头重扫。构建期的四张工作表只建不改，发布即删。
+
+读口径由 `derive_queue.published_generation` 切换，不靠"行里有没有值"判断：
+
+| 视图 | 给出什么 |
+| --- | --- |
+| `published_derive_request` | 已发布代的请求结果行，按组键连接队列指针 |
+| `effective_request` | `request` 行 + 队列状态 + 该组已发布代的结果行，左连接 |
+
+`effective_request` 让一次查询拿到同一代的快照：结果行全部来自 `published_generation` 指向的那一代，不会一半来自旧代、一半来自新代。切片模式下 `request` 上的旧派生列不再被写，它们留在库里的是同步模式算过的那一份，读切片结果不走它们。
+
+发布是指针的原子切换，条件在切换前全部校验完：组修订与逐请求修订一致、每笔候选都有结果行、这一代覆盖了全部已知请求、暂存行与 WAL 增长都在预算内。任何一条不成立就丢弃整代（`derive_generation.state='discarded'`，队列行写 `last_error`），指针不动，旧代继续可读。丢弃不是"抛错回滚后的补救"，而是校验结论本身，与校验在同一个事务里提交。
+
+退役代按发布时间保留最近若干代（默认两代），更旧的连同 `derive_request_result`、`derive_tool_result` 一起删除。保留最近几代是为了历史详情与换算法前后的对照；删除最旧的那几代不改变指针，也不影响已发布代的读。
+
+算法号区分这套结果是谁算的：`derive_generation.algorithm` 与结果行的 `algorithm` 记切片号。认领一个 dirty 组时把队列行的 `target_algorithm` 归一到当前模式的算法号——两个写入口（同步路径的组标记与切片路径的认领）会写下不同的号，混合会让认领直接失败。
 
 ### 读模型里的派生状态
 

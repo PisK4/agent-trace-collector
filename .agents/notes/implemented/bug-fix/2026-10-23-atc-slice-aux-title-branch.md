@@ -28,4 +28,4 @@ Status: implemented
 
 ## Testing
 
-`bun test tests/capacity-slice.test.ts`：固定用例第三笔（排除用途、非标题、关系判不出来、有模型标题）落在这一格；固定种子的模糊组在压缩预算下逐行比对该列——修复前模糊组第一处差异就是这一列（同步 `模型标题 · …`/`model_title`，切片 `unknown · 00:00`/`model_time`），修复后两条路径逐行相等。见[切片派生的等价性判据与容量门槛](2026-10-22-atc-slice-equivalence.md)。
+`bun test tests/capacity-slice.test.ts`：固定用例第三笔（排除用途、非标题、关系判不出来、有模型标题）落在这一格；固定种子的模糊组在压缩预算下逐行比对该列——修复前模糊组第一处差异就是这一列（同步 `模型标题 · …`/`model_title`，切片 `unknown · 00:00`/`model_time`），修复后两条路径逐行相等。见[切片派生的等价性判据与容量门槛](../feature/2026-10-22-atc-slice-equivalence.md)。

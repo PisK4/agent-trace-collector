@@ -18,6 +18,8 @@ import type { CapacityMetrics, DurationSummary } from '../src/capacity';
 import { persistBodyTx } from '../src/body';
 import type { Config } from '../src/config';
 import { drainDeriveTx, enqueueDeriveTx, rebuildDerived } from '../src/derive';
+import { drainDeriveEntry } from '../src/derive-slice';
+import type { SliceRuntime } from '../src/derive-slice';
 import { PAGE_MAX } from '../src/protocols';
 import type { StorageUsage } from '../src/retention';
 import { openStore } from '../src/store';
@@ -27,13 +29,15 @@ import {
   makeRouteLine, waitForCollector,
 } from './capacity-support';
 import {
-  deriveBudget, loadSummary, sha256File,
+  deriveBudget, loadSliceBudget, loadSummary, sha256File,
 } from './capacity-gate';
-import type { CapacityBudget, ScenarioReport, ScenarioSummary, StorageReading } from './capacity-gate';
+import type {
+  CapacityBudget, ScenarioReport, ScenarioSummary, SliceBudgetReading, StorageReading,
+} from './capacity-gate';
 
 export type ScenarioName =
   | 'smoke' | 'baseline-1rps' | 'baseline-5rps' | 'burst'
-  | 'long' | 'route' | 'retention' | 'all' | 'budget' | 'calibrate';
+  | 'long' | 'long-10000-slice' | 'route' | 'retention' | 'all' | 'budget' | 'calibrate';
 
 export type PlanOptions = {
   full: boolean; requests?: number; acknowledgeLongRun?: boolean;
@@ -72,6 +76,13 @@ export function scenarioPlan(name: ScenarioName, options: PlanOptions): Scenario
       }
       return { durationMs: 0, rps: 0, bodyMix: [], concurrency: 1, requestBytes: 0, replyBytes: [256], sessions: 1, readerIntervalMs: 0, requests };
     }
+    case 'long-10000-slice':
+      // 输入与 `long-10000` 逐字相同：同一个单会话、同一批 10,000 笔；差别只在排空入口。
+      // 笔数固定，`--requests` 给别的数就直接拒绝——换掉输入就不是同一次对比了。
+      if (options.requests !== undefined && options.requests !== LONG_REQUESTS) {
+        throw new Error('capacity_invalid_requests');
+      }
+      return scenarioPlan('long', { ...options, requests: LONG_REQUESTS });
     case 'route':
       return { durationMs: options.durationMs ?? 30_000, rps: 1, bodyMix: [64 * 1024], concurrency: 1, requestBytes: 0, replyBytes: [1024], sessions: 2, readerIntervalMs: 500 };
     case 'retention':
@@ -124,11 +135,13 @@ export type Args = {
   /** 用户显式给出 `--body-budget` 时，场景不能再用自己的默认值覆盖。 */
   bodyBudgetExplicit: boolean;
   diskLimit: number;
+  /** 切片场景的预算文件；只有 `long-10000-slice` 接受它，缺了就是缺切片预算。 */
+  sliceBudget?: string;
 };
 
 const SCENARIOS: readonly ScenarioName[] = [
   'smoke', 'baseline-1rps', 'baseline-5rps', 'burst',
-  'long', 'route', 'retention', 'all', 'budget', 'calibrate',
+  'long', 'long-10000-slice', 'route', 'retention', 'all', 'budget', 'calibrate',
 ];
 
 const MIB = 1024 * 1024;
@@ -209,6 +222,9 @@ export function parseArgs(argv: readonly string[]): Args {
       case '--disk-limit':
         values.set('diskLimit', readValue());
         break;
+      case '--slice-budget':
+        values.set('sliceBudget', readValue());
+        break;
       default:
         throw new Error(`capacity_unknown_flag:${arg}`);
     }
@@ -235,13 +251,15 @@ export function parseArgs(argv: readonly string[]): Args {
     bodyBudget,
     bodyBudgetExplicit: values.has('bodyBudget'),
     diskLimit,
+    sliceBudget: values.get('sliceBudget'),
   };
 }
 
-/** 10 分钟、全场景或 10,000 笔长组都必须显式确认；其余短场景保持快速可跑。 */
+/** 10 分钟、全场景、10,000 笔长组与切片长组都必须显式确认；其余短场景保持快速可跑。 */
 export function requiresLongRunAck(args: Args): boolean {
   return args.full
     || args.scenario === 'all'
+    || args.scenario === 'long-10000-slice'
     || (args.durationMs ?? 0) >= MAX_DURATION_MS
     || (args.scenario === 'long' && (args.requests ?? 2_000) >= LONG_REQUESTS);
 }
@@ -441,6 +459,7 @@ function buildReport(input: {
     comparisons: number | null; decodes: number | null;
     full_incremental_equal: boolean | null; result_sha256: string | null;
     published_generations: number | null; discarded_generations: number | null;
+    slice_budget_source: string | null;
   };
   startedAt: number; stopAt: number; notes: string[];
 }): ScenarioReport {
@@ -500,6 +519,7 @@ function buildReport(input: {
       result_sha256: input.derive.result_sha256,
       published_generations: input.derive.published_generations,
       discarded_generations: input.derive.discarded_generations,
+      slice_budget_source: input.derive.slice_budget_source,
     },
     conservation: input.conservation,
     notes: input.notes,
@@ -836,6 +856,7 @@ async function runHttpScenario(
       derive: {
         comparisons: null, decodes: null, full_incremental_equal: null,
         result_sha256: null, published_generations: null, discarded_generations: null,
+        slice_budget_source: null,
       },
       startedAt: load.startedAt, stopAt: load.stopAt,
       notes: [`rss 与存储峰值按 ${PEAK_INTERVAL_MS} ms 采样，共 ${load.peaks.samples} 次（含最终快照）。`],
@@ -986,6 +1007,7 @@ async function runBurst(args: Args): Promise<ScenarioReport> {
       derive: {
         comparisons: null, decodes: null, full_incremental_equal: null,
         result_sha256: null, published_generations: null, discarded_generations: null,
+        slice_budget_source: null,
       },
       startedAt, stopAt,
       notes: ['rss 与存储峰值取自并发结束与排空后的两次快照。'],
@@ -1019,19 +1041,29 @@ function delayedBody(text: string, delayMs: number): () => ReadableStream<Uint8A
   };
 }
 
-/** 长组场景直接建库，不走 HTTP：先写全部正文与队列，再按批次排空。 */
-async function runLong(args: Args): Promise<ScenarioReport> {
-  const plan = scenarioPlan('long', args);
+/**
+ * 长组场景直接建库，不走 HTTP：先写全部正文与队列，再按批次排空。
+ *
+ * 给了切片预算就是切片长组：输入与 `long-10000` 逐字相同，只有排空入口与读数不同，
+ * 两个场景的 `result_sha256` 才能放在一起比。
+ */
+async function runLong(args: Args, slice?: SliceBudgetReading): Promise<ScenarioReport> {
+  const plan = scenarioPlan(slice === undefined ? 'long' : 'long-10000-slice', args);
   const requests = plan.requests ?? 2_000;
-  const scenario = `long-${requests}`;
+  const scenario = slice === undefined ? `long-${requests}` : 'long-10000-slice';
   const root = mkdtempSync(join(tmpdir(), 'atc-capacity-'));
   const dataDir = join(root, 'data');
+  const runtime: SliceRuntime | undefined = slice === undefined ? undefined : {
+    budget: slice.budget, dataDir, dbPath: join(dataDir, 'trace.db'),
+  };
   let store: Store | null = null;
   let metrics: CapacityMetrics | null = null;
   try {
     mkdirSync(dataDir, { recursive: true });
     const opened = openStore(join(dataDir, 'trace.db'));
     store = opened;
+    // 模式在任何派生任务进来之前定下来，运行期不再切——与 startCollector 同一处事实。
+    if (runtime !== undefined) opened.deriveRuntime = runtime;
     const openedMetrics = createCapacityMetrics(opened, dataDir, Date.now());
     metrics = openedMetrics;
     openedMetrics.eventLoop.start();
@@ -1079,31 +1111,49 @@ async function runLong(args: Args): Promise<ScenarioReport> {
 
     peaks.observe(openedMetrics.snapshot(opened, dataDir) as unknown as Snapshot);
     const backlogMaxAge = queueSnapshot(opened).oldest_dirty_age_ms;
+    // 排空按运行模式走各自的入口：同步入口一次一批，切片入口一次推进一步。
+    // 切片丢弃的代在整个场景里累计——重排阶段丢的代同样是容量问题，不是另一回事。
+    let discardedGenerations = 0;
+    const drainAll = (stuckCode: string): number => {
+      let polls = 0;
+      for (;;) {
+        polls += 1;
+        if (runtime === undefined) {
+          const result = opened.write(db => drainDeriveTx(db, { limit: 100 }));
+          if (result.remaining === 0) return polls;
+          if (result.processed === 0) throw new Error(stuckCode);
+          continue;
+        }
+        const result = drainDeriveEntry(opened, 1);
+        discardedGenerations += result.discarded;
+        if (result.remaining === 0) return polls;
+        // 切片入口一次只推进一个阶段步：既没推进也没丢代就是卡住，不能原地空转。
+        if (result.processed === 0 && result.discarded === 0) throw new Error(stuckCode);
+      }
+    };
     const drainStarted = performance.now();
-    let drainPolls = 0;
-    for (;;) {
-      const result = opened.write(db => drainDeriveTx(db, { limit: 100 }));
-      drainPolls += 1;
-      if (result.remaining === 0) break;
-      if (result.processed === 0) throw new Error('capacity_long_drain_stuck');
-    }
+    const drainPolls = drainAll('capacity_long_drain_stuck');
     const drainMs = performance.now() - drainStarted;
-    const incrementalHash = derivedHash(opened, convKey);
+    const incrementalHash = runtime === undefined
+      ? derivedHash(opened, convKey)
+      : derivedHashSlice(opened, convKey, actor);
+    // 已发布代在增量排空之后、重排之前读：重排会换掉发布指针，那时读到的已经是新代。
+    const publishedGenerations = runtime === undefined
+      ? null
+      : countPublishedGenerations(opened, convKey, actor);
     peaks.observe(openedMetrics.snapshot(opened, dataDir) as unknown as Snapshot);
 
-    // 全量重算是同一同步入口的 oracle：重排整组后结果必须与增量排空一致。
+    // 全量重算是各自的 oracle：重排整组后结果必须与增量排空逐字段一致。
     rebuildDerived(opened, convKey);
-    for (;;) {
-      const result = opened.write(db => drainDeriveTx(db, { limit: 100 }));
-      if (result.remaining === 0) break;
-      if (result.processed === 0) throw new Error('capacity_long_rebuild_stuck');
-    }
-    const fullHash = derivedHash(opened, convKey);
+    drainAll('capacity_long_rebuild_stuck');
+    const fullHash = runtime === undefined
+      ? derivedHash(opened, convKey)
+      : derivedHashSlice(opened, convKey, actor);
     const stopAt = Date.now();
     const queue = queueSnapshot(opened);
     const snapshot = openedMetrics.snapshot(opened, dataDir) as unknown as Snapshot;
     peaks.observe(snapshot);
-    const decodes = countRows(opened.read,
+    const decodes = runtime !== undefined ? null : countRows(opened.read,
       "SELECT COUNT(*) AS n FROM request WHERE conv_key=? AND skeleton_z IS NOT NULL AND body_state IN ('available','partial')",
       [convKey]);
     const requestRows = countRows(opened.read,
@@ -1111,8 +1161,23 @@ async function runLong(args: Args): Promise<ScenarioReport> {
     const missing: string[] = [];
     if (requestRows !== requests) missing.push(`request:${requestRows}!=${requests}`);
     if (queue.pending_groups !== 0) missing.push(`pending_groups:${queue.pending_groups}!=0`);
+    const notes = [
+      'long 场景直接写临时库，不经 HTTP 或子进程采集器；client 计数为 0。',
+      'comparisons 按单组前缀比较数 n(n-1)/2 计。',
+      'rss 与存储峰值取自写入完成、增量排空后与全量重排后的三次快照。',
+    ];
+    const sliceBudgetSource = slice?.source ?? null;
+    if (sliceBudgetSource === null) {
+      notes.push('decodes 按可解码正文行数计，指纹取自请求行上的派生列。');
+    } else {
+      notes.push(`切片预算来自 ${sliceBudgetSource}；published_generations 取该组 state=published 的代际数，`
+        + 'discarded_generations 是整个场景（含重排阶段）累计丢弃的未发布代数。');
+      // 切片路径不落 `skeleton_z`（正文只解到 delta_ordinals 为止），这个读数没有对应物，
+      // 报 null 而不是 0：0 会被读成"一条正文都没解开"。
+      notes.push('切片路径不落 skeleton_z，decodes 报 null；指纹取自该组已发布的 result 行，列集与同步路径相同。');
+    }
     const report = buildReport({
-      plan: { ...plan, scenario, mode: 'baseline', seed: args.seed },
+      plan: { ...plan, scenario, mode: runtime === undefined ? 'baseline' : 'slice', seed: args.seed },
       args, root,
       client: newClientCounters(),
       hookLatency: new DurationRecorder(),
@@ -1134,16 +1199,18 @@ async function runLong(args: Args): Promise<ScenarioReport> {
         decodes,
         full_incremental_equal: incrementalHash === fullHash,
         result_sha256: incrementalHash,
-        published_generations: null, discarded_generations: null,
+        published_generations: publishedGenerations,
+        discarded_generations: runtime === undefined ? null : discardedGenerations,
+        slice_budget_source: sliceBudgetSource,
       },
-      startedAt, stopAt,
-      notes: [
-        'long 场景直接写临时库，不经 HTTP 或子进程采集器；client 计数为 0。',
-        'comparisons 按单组前缀比较数 n(n-1)/2 计，decodes 按可解码正文行数计。',
-        'rss 与存储峰值取自写入完成、增量排空后与全量重排后的三次快照。',
-      ],
+      startedAt, stopAt, notes,
     });
     if (incrementalHash !== fullHash) report.ok = false;
+    // 切片的结构不变量：一次收敛至少发布一代，且一代都不许丢。丢代说明预算或校验
+    // 把"算得对不对"换成了"跑得完跑不完"，那正是本任务要压的东西。
+    if (runtime !== undefined && (discardedGenerations > 0 || (publishedGenerations ?? 0) < 1)) {
+      report.ok = false;
+    }
     return report;
   } finally {
     metrics?.eventLoop.stop();
@@ -1159,6 +1226,37 @@ function derivedHash(store: Store, convKey: string): string {
     model_title,req_kind,purpose_chain
     FROM request WHERE conv_key=? ORDER BY req_id`).all(convKey);
   return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+}
+
+/**
+ * 切片结果的指纹：同一列集、同一顺序，只是派生列取自该组**已发布**的 result 行。
+ *
+ * `model_title` 与 `req_kind` 是请求行上的事实（不是派生产物），因此 join 回来——
+ * 少两列或换一处取值，`long-10000` 与 `long-10000-slice` 的 `result_sha256` 就没法比了。
+ * 发布指针只有一个，所以这里读到的永远是当前那一代。
+ */
+export function derivedHashSlice(store: Store, convKey: string, actor: string): string {
+  const rows = store.read.query(`SELECT r.req_id AS req_id, d.prev_req_id AS prev_req_id,
+    d.prev_relation AS prev_relation, d.delta_ordinals AS delta_ordinals,
+    d.chain_role AS chain_role, d.title AS title, d.title_source AS title_source,
+    d.input_preview AS input_preview, d.input_preview_kind AS input_preview_kind,
+    d.reply_preview AS reply_preview, r.model_title AS model_title, r.req_kind AS req_kind,
+    d.purpose_chain AS purpose_chain
+    FROM derive_queue q
+    JOIN derive_request_result d ON d.generation=q.published_generation
+    JOIN request r ON r.req_id=d.req_id
+    WHERE q.conv_key=? AND q.actor=? ORDER BY r.req_id`).all(convKey, actor);
+  return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+}
+
+/**
+ * 该组当前发布的代数。发布指针是唯一索引，所以正常收敛下它是 1，
+ * 0 说明这一轮没发布任何东西（未发布代不计入——它们还只是暂存行）。
+ */
+export function countPublishedGenerations(store: Store, convKey: string, actor: string): number {
+  return countRows(store.read,
+    "SELECT COUNT(*) AS n FROM derive_generation WHERE conv_key=? AND actor=? AND state='published'",
+    [convKey, actor]);
 }
 
 const RAW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -1291,6 +1389,21 @@ async function main(argv: readonly string[]): Promise<void> {
     process.exitCode = 2;
     return;
   }
+  // `--slice-budget` 只属于切片场景。别的场景给它是把场景和预算配错，
+  // 一律拒绝：静默丢掉这份预算，报告看起来像跑过切片，实际没有。
+  if (args.sliceBudget !== undefined && args.scenario !== 'long-10000-slice') {
+    process.stderr.write('capacity_slice_scenario_required\n');
+    process.exitCode = 2;
+    return;
+  }
+  // 切片场景的笔数固定为 10,000：换掉输入就不是与 `long-10000` 的同一次对比了。
+  // 参数不合在跑之前退出 2，不留一份"跑了才发现换个输入"的报告。
+  if (args.scenario === 'long-10000-slice'
+      && args.requests !== undefined && args.requests !== LONG_REQUESTS) {
+    process.stderr.write('capacity_invalid_requests\n');
+    process.exitCode = 2;
+    return;
+  }
   switch (args.scenario) {
     case 'budget': {
       // 预算只能从 `all` 汇总生成：单场景报告生成不了"全部场景"的预算，
@@ -1335,6 +1448,28 @@ async function main(argv: readonly string[]): Promise<void> {
     }
     case 'long': {
       const report = await runLong(args);
+      writeJson(args.report, report);
+      process.exitCode = report.ok ? 0 : 1;
+      return;
+    }
+    case 'long-10000-slice': {
+      // 预算在跑之前读：缺切片预算、文件缺切片节、字段对不上，都在启动前退出 2，
+      // 不留一份"跑了一半才发现没预算"的报告。
+      const budgetPath = args.sliceBudget;
+      if (budgetPath === undefined) {
+        process.stderr.write('capacity_slice_budget_missing\n');
+        process.exitCode = 2;
+        return;
+      }
+      let reading: SliceBudgetReading;
+      try {
+        reading = loadSliceBudget(budgetPath);
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : 'capacity_slice_budget_missing'}\n`);
+        process.exitCode = 2;
+        return;
+      }
+      const report = await runLong(args, reading);
       writeJson(args.report, report);
       process.exitCode = report.ok ? 0 : 1;
       return;
