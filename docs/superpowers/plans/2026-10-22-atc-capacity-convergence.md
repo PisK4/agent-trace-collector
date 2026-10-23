@@ -4749,6 +4749,19 @@ git commit -m "feat(derive): resume chain matching and exact role assignment in 
   -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+**Step 7（执行时的偏差记录）**
+
+1. **`finishRoleWork` 必须把 `parent_req_id` 写回 `derive_role_work`。** 计划的实现在结算时只更新 `relation` 与 `state`，而角色传播读的正是工作行的 `parent_req_id`——它永远是 NULL，于是每个节点都长得像根，trunk 继承整段失效。实测三笔（第 2 笔正文不可读）：切片把第 3 笔判成 `branch`，同步给的是 `main`。这是"逐行一致"用例第一次跑就抓出来的真缺陷。
+2. **顺序未证实（`uncertainOrderIds`）计划完全没处理。** 同步路径把"同毫秒桶里来源位置不足以证明先后"的请求排除在祖先候选之外，但仍让后续请求知道"前面有参与请求、而且那段证据不可比"。切片用同一个信息量表示：这类请求照旧在 `derive_chain_work` 占一行，但 `fingerprints_json` 写 NULL——与"正文不可读"共用同一种"不可作祖先"的表示。它因此照样计入 `saw_earlier`/`unreadable_earlier`，只是不参与前缀比对。实测（2 与 3 同毫秒、排序键是 `ledger|000N`）两边都得到 `first`/`unknown`/`unknown`/`confirmed`。
+3. **未证实只在同一 `started_ms` 桶内判定。** `uncertainOrderIds` 的判据本来就只看桶内位置、不跨桶，所以按请求查一次同毫秒的排序键就够，不必把整组的排序键读进内存逐轮重算（那样每步都是 O(组大小)，合计 O(n²)）。
+4. **零长度祖先不构成父节点。** 同步的 `matchPredecessor` 要求 `shared > 0`：空序列是任何序列的前缀，认它当父节点等于用"那一笔没有消息"证明"本笔续自它"。计划里的 `best_parent_len === 0 ? 'first' : 'confirmed'` 分支在这条规则下不可能到达，已删除。
+5. **主链根按遍历序选，且"根"的定义与同步一致。** 计划用 `ORDER BY started_ms,req_id` 且要求 `parent_req_id IS NULL`。排序键错了（A 的判据是遍历序），条件也漏了一档：父节点存在但不是可比参与请求（不可读、顺序未证实、或排除用途）时，同步把它当根，计划把它排除在根之外，两边的 trunk 会分叉。现在按 `traversal_ord` 取第一个"父节点为空、或父节点不是可比参与请求"的参与请求。
+6. **每一步一个写事务。** 与 Task 15 同一条实测结论：把整个阶段包在一个 `store.write` 里、内部再嵌套 `db.transaction` 不是 savepoint，"每页一个独立事务"是假象；而丢弃整代必须在失败事务之外另开一次写。现在驱动的每一步（一页祖先、一次结算、一页角色）各自一次 `store.write`，超预算就停在可续跑的位置。
+7. **逐请求的用途修订校验保留，但把它覆盖的范围写清楚。** 用途重判改了链身份或请求类别时会 `markKnownGroup` 把组标脏，那种情况组级校验已经拦下；剩下的是"重判到同一结论但换了修订"这一档，只有逐请求比对能发现——结果行里记的 `purpose_revision` 是发布出去的事实，不能停在旧值上。
+8. **计划里两条用例的期望值是错的，已改用真实同步实现算出来的对照。** 实测：同毫秒那组是 `[first/main, unknown/null/main, unknown/null/main, confirmed→1 delta[1,2]/main]`（计划写的是第 3 笔 `branch`、第 4 笔 `branch`）；不可读祖先那组是 `[first/main, unknown/null/main, confirmed→1 delta[1,2]/main]`（计划写的是第 3 笔 `unknown`、`prev_req_id` 为空）。测试改成两条路径逐行比对 + 已核对的具体值，另补"两个互不相接的根（delta 为整段）"一例——那才真正覆盖 trunk 选取。
+9. **`seedChain` 冻结用途（`purpose_pending=0`）。** 不冻结的话，同步侧的用途阶段会把种下的 `purpose_chain` 重判掉（实测：种成 `exclude` 的第 2 笔被改回 `participate`），排除用途那一条就根本测不到。链与角色阶段本来就只消费已定下来的用途，冻结正是它的真实前置条件。
+10. **Step 2（验证失败）没有作为红灯步骤执行。** 与 Task 15 同样的情况：实现与测试同一轮写出。如实记录，不当作已通过。
+
 ### Task 17：工具配对阶段
 
 **Files:**

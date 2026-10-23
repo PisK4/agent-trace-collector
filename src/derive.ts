@@ -115,8 +115,8 @@ export function compareSequence(
   };
 }
 
-/** 两条序列的公共前缀长度。 */
-function commonPrefix(left: readonly string[], right: readonly string[]): number {
+/** 两条序列的公共前缀长度。导出给切片派生：祖先比对的判据只有这一处实现。 */
+export function commonPrefix(left: readonly string[], right: readonly string[]): number {
   const limit = Math.min(left.length, right.length);
   let index = 0;
   while (index < limit && left[index] === right[index]) index += 1;
@@ -318,7 +318,7 @@ function blocksOf(db: Database, reqId: number): number[] | null {
  * 空数组是有效证据（这一笔确实没有消息），会占主链根；无骨架、无消息计数或
  * 引用不完整则说明读不出可比内容，调用方据此判成未知。
  */
-function fingerprintsOf(db: Database, reqId: number): string[] | null {
+export function fingerprintsOf(db: Database, reqId: number): string[] | null {
   const row = db.query<{
     body_state: string; skeleton_z: Uint8Array | null; msg_count: number | null;
   }, [number]>(`SELECT body_state,skeleton_z,msg_count

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from '../src/store';
 import type { Store } from '../src/store';
-import { persistBodyTx } from '../src/body';
+import { persistBody, persistBodyTx } from '../src/body';
 
 export function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'collector-test-'));
@@ -166,4 +166,49 @@ export function seedRequest(
     }
   });
   return rows.map(row => row.req_id);
+}
+
+export type ChainSeed = {
+  texts: string[];
+  startedMs?: number;
+  purposeChain?: 'participate' | 'exclude';
+};
+
+/**
+ * 一条可比消息链的会话种子。
+ *
+ * 用途一并冻结（`purpose_pending=0`）：链与角色阶段只消费已经定下来的用途，
+ * 而 `seedChain` 的调用方要的正是"这组请求的用途就是这些"，不让用途阶段重判
+ * 覆盖掉种下的值。
+ */
+export function seedChain(
+  store: Store,
+  sessions: readonly ChainSeed[],
+  group: { convKey: string; actor: string } = SEED_GROUP,
+): number[] {
+  const ids: number[] = [];
+  for (const [index, session] of sessions.entries()) {
+    const reqId = index + 1;
+    seedRequest(store, [{
+      req_id: reqId,
+      started_ms: session.startedMs ?? 1000 + index,
+      sort_source: 'ledger',
+      sort_key: `ledger|${String(index).padStart(4, '0')}`,
+    }], group);
+    persistBody(store, reqId, {
+      protocol: 'anthropic',
+      request: {
+        messages: session.texts.map(text => ({
+          role: 'user', content: [{ type: 'text', text }],
+        })),
+      },
+      reply: { id: `msg_${reqId}`, content: [{ type: 'text', text: 'ok' }] },
+      redact_version: 1,
+    });
+    store.write(db => db.run(
+      'UPDATE request SET purpose_chain=?,purpose_pending=0 WHERE req_id=?',
+      [session.purposeChain ?? 'participate', reqId]));
+    ids.push(reqId);
+  }
+  return ids;
 }

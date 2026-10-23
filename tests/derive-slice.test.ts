@@ -1,10 +1,13 @@
 import { expect, test } from 'bun:test';
-import { fixture, seedRequest, SEED_GROUP } from './fixtures';
+import { fixture, seedChain, seedRequest, SEED_GROUP } from './fixtures';
+import type { ChainSeed } from './fixtures';
 import { persistBody } from '../src/body';
+import { drainDeriveTx } from '../src/derive';
 import {
   DEFAULT_DERIVE_BUDGET, DERIVE_ALGORITHM, beginGeneration, discardGeneration,
-  publishGeneration, readEffectiveGroup, recoverSlice, sliceRequestsStage,
+  publishGeneration, readEffectiveGroup, recoverSlice, sliceRequestsStage, sliceRolesStage,
 } from '../src/derive-slice';
+import type { SliceStep } from '../src/derive-slice';
 
 function seedGroup(f: ReturnType<typeof fixture>): void {
   f.store.write(db => {
@@ -159,17 +162,42 @@ function switchToSliceAlgorithm(f: ReturnType<typeof fixture>): void {
   ));
 }
 
-function drainStage(
+type StageFn = (store: ReturnType<typeof fixture>['store'], generation: string,
+  budget: typeof DEFAULT_DERIVE_BUDGET, now: number) => SliceStep;
+
+/** 把一个阶段驱动到不再前进为止；返回最后那次（无事可做或阶段已推进）的结果。 */
+function runStage(
   f: ReturnType<typeof fixture>,
   generation: string,
-  budget: typeof DEFAULT_DERIVE_BUDGET,
-) {
-  let step = sliceRequestsStage(f.store, generation, budget, 20);
+  stage: StageFn,
+  budget: typeof DEFAULT_DERIVE_BUDGET = DEFAULT_DERIVE_BUDGET,
+): SliceStep {
+  let step = stage(f.store, generation, budget, 20);
   let guard = 0;
-  while (step.status === 'advanced' && guard++ < 50) {
-    step = sliceRequestsStage(f.store, generation, budget, 20);
+  while (step.status === 'advanced' && guard++ < 5000) {
+    step = stage(f.store, generation, budget, 20);
   }
   return step;
+}
+
+type ChainOutcome = {
+  req_id: number; prev_req_id: number | null; prev_relation: string | null;
+  delta_ordinals: string | null; chain_role: string;
+};
+
+const CHAIN_COLUMNS = 'req_id,prev_req_id,prev_relation,delta_ordinals,chain_role';
+
+function sliceChainRows(f: ReturnType<typeof fixture>, generation: string): ChainOutcome[] {
+  return f.store.read.query<ChainOutcome, [string]>(`SELECT ${CHAIN_COLUMNS}
+    FROM derive_request_result WHERE generation=? ORDER BY req_id`).all(generation);
+}
+
+/** 同步路径在同一组输入上的对照结果：等价性就是拿它与切片逐行比。 */
+function syncChainRows(f: ReturnType<typeof fixture>): ChainOutcome[] {
+  f.store.write(db => drainDeriveTx(db, { limit: 100 }));
+  return f.store.read.query<ChainOutcome, [string, string]>(`SELECT ${CHAIN_COLUMNS}
+    FROM request WHERE conv_key=? AND actor=? ORDER BY req_id`)
+    .all(SEED_GROUP.convKey, SEED_GROUP.actor);
 }
 
 test('请求切片分批物化并按A比较器写traversal_ord', () => {
@@ -202,7 +230,7 @@ test('请求切片分批物化并按A比较器写traversal_ord', () => {
 
     const generation = beginGeneration(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
     const budget = { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 2, maxWritesPerBatch: 8 };
-    const step = drainStage(f, generation, budget);
+    const step = runStage(f, generation, sliceRequestsStage, budget);
     // 驱动到停为止：最后一次调用无事可做，stage 已经过到角色阶段。
     expect(step.status).toBe('idle');
     expect(step.stage).toBe('roles');
@@ -259,5 +287,141 @@ test('请求切片在读取窗口内输入变化时丢弃整代', () => {
     expect(f.store.read.query<{ compute_generation: string | null; last_error: string | null }, []>(
       'SELECT compute_generation,last_error FROM derive_queue').get())
       .toEqual({ compute_generation: null, last_error: 'slice_group_revision_changed' });
+  } finally { f.close(); }
+});
+
+/**
+ * 把同一组输入喂给切片与同步两条路径，返回两边的关系与角色。
+ *
+ * `prepare` 在两个 fixture 上做同一件事：要构造不可读正文这类状态时，
+ * 两边必须一样，否则比的不是路径差异而是输入差异。
+ */
+function chainOnBothPaths(
+  sessions: readonly ChainSeed[],
+  prepare?: (f: ReturnType<typeof fixture>) => void,
+): { slice: ChainOutcome[]; sync: ChainOutcome[] } {
+  const sliced = fixture();
+  const synced = fixture();
+  try {
+    seedChain(sliced.store, sessions);
+    seedChain(synced.store, sessions);
+    prepare?.(sliced);
+    prepare?.(synced);
+    switchToSliceAlgorithm(sliced);
+    const generation = beginGeneration(
+      sliced.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    const budget = { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 1, maxWritesPerBatch: 2 };
+    runStage(sliced, generation, sliceRequestsStage, budget);
+    runStage(sliced, generation, sliceRolesStage, budget);
+    return { slice: sliceChainRows(sliced, generation), sync: syncChainRows(synced) };
+  } finally {
+    sliced.close();
+    synced.close();
+  }
+}
+
+test('线性链与分叉树的切片结果与同步路径逐行一致', () => {
+  const sessions = [['S'], ['S', 'A'], ['S', 'B'], ['S', 'A', 'C'], ['S', 'B', 'D']]
+    .map(texts => ({ texts }));
+  const { slice, sync } = chainOnBothPaths(sessions);
+  expect(slice).toEqual(sync);
+  // 关系本身也逐个写清楚：整组都等价但两边一起错了的情况要能被看到。
+  expect(slice).toEqual([
+    { req_id: 1, prev_req_id: null, prev_relation: 'first', delta_ordinals: '[0]', chain_role: 'main' },
+    { req_id: 2, prev_req_id: 1, prev_relation: 'confirmed', delta_ordinals: '[1]', chain_role: 'main' },
+    { req_id: 3, prev_req_id: 1, prev_relation: 'confirmed', delta_ordinals: '[1]', chain_role: 'main' },
+    { req_id: 4, prev_req_id: 2, prev_relation: 'confirmed', delta_ordinals: '[2]', chain_role: 'main' },
+    { req_id: 5, prev_req_id: 3, prev_relation: 'confirmed', delta_ordinals: '[2]', chain_role: 'main' },
+  ]);
+});
+
+test('同毫秒且来源位置不足为证时两边都判顺序未证实', () => {
+  const sessions: ChainSeed[] = [
+    { texts: ['S'], startedMs: 1000 },
+    { texts: ['S', 'A'], startedMs: 2000 },
+    { texts: ['S', 'B'], startedMs: 2000 },
+    { texts: ['S', 'B', 'C'], startedMs: 3000 },
+  ];
+  const { slice, sync } = chainOnBothPaths(sessions);
+  expect(slice).toEqual(sync);
+  // 2 与 3 同毫秒且排序键是 `ledger|000N`（解析不出账本偏移），整桶顺序未证实：
+  // 可以遍历，但谁都只能算"没法比"，也不作为后面那一笔的祖先候选。
+  expect(slice.map(row => [row.req_id, row.prev_relation]))
+    .toEqual([[1, 'first'], [2, 'unknown'], [3, 'unknown'], [4, 'confirmed']]);
+  expect(slice[3]).toMatchObject({ prev_req_id: 1, delta_ordinals: '[1,2]' });
+});
+
+test('不可读祖先让后续关系降为unknown并保留旧标题', () => {
+  const sessions = [['S'], ['S', 'A'], ['S', 'A', 'B']].map(texts => ({ texts }));
+  const { slice, sync } = chainOnBothPaths(sessions, f => {
+    f.store.write(db => db.run(`UPDATE request SET body_state='missing',
+      title='kept title',title_source='user_delta' WHERE req_id=2`));
+  });
+  expect(slice).toEqual(sync);
+  expect(slice.map(row => [row.req_id, row.prev_relation]))
+    .toEqual([[1, 'first'], [2, 'unknown'], [3, 'confirmed']]);
+  expect(slice[2]).toMatchObject({ prev_req_id: 1, delta_ordinals: '[1,2]' });
+});
+
+test('两个互不相接的根按遍历序选主链', () => {
+  const sessions: ChainSeed[] = [
+    { texts: ['S', 'X'], startedMs: 1000 },
+    { texts: ['Y', 'Z'], startedMs: 2000 },
+  ];
+  const { slice, sync } = chainOnBothPaths(sessions);
+  expect(slice).toEqual(sync);
+  expect(slice).toEqual([
+    { req_id: 1, prev_req_id: null, prev_relation: 'first', delta_ordinals: '[0,1]', chain_role: 'main' },
+    { req_id: 2, prev_req_id: null, prev_relation: 'branch', delta_ordinals: null, chain_role: 'branch' },
+  ]);
+});
+
+test('排除用途不写chain_work，也不进角色森林', () => {
+  const sliced = fixture();
+  const synced = fixture();
+  try {
+    const sessions: ChainSeed[] = [
+      { texts: ['S'], purposeChain: 'participate' },
+      { texts: ['S', 'A'], purposeChain: 'exclude' },
+      { texts: ['S', 'A', 'B'], purposeChain: 'participate' },
+    ];
+    seedChain(sliced.store, sessions);
+    seedChain(synced.store, sessions);
+    switchToSliceAlgorithm(sliced);
+    const generation = beginGeneration(sliced.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    runStage(sliced, generation, sliceRequestsStage);
+    runStage(sliced, generation, sliceRolesStage);
+    expect(sliceChainRows(sliced, generation)).toEqual(syncChainRows(synced));
+    expect(sliceChainRows(sliced, generation).map(row =>
+      [row.req_id, row.prev_relation, row.chain_role]))
+      .toEqual([[1, 'first', 'main'], [2, 'aux', 'aux'], [3, 'confirmed', 'main']]);
+    // 排除用途既不进祖先台账，也不占角色扫描的行。
+    expect(sliced.store.read.query('SELECT COUNT(*) AS n FROM derive_chain_work WHERE generation=? AND req_id=2')
+      .get(generation)).toEqual({ n: 0 });
+    expect(sliced.store.read.query('SELECT COUNT(*) AS n FROM derive_chain_work WHERE generation=?')
+      .get(generation)).toEqual({ n: 2 });
+  } finally {
+    sliced.close();
+    synced.close();
+  }
+});
+
+test('用途在物化之后被重判时丢弃整代', () => {
+  const f = fixture();
+  try {
+    seedChain(f.store, [['S'], ['S', 'A']].map(texts => ({ texts })));
+    switchToSliceAlgorithm(f);
+    const generation = beginGeneration(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    const budget = { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 1, maxWritesPerBatch: 1 };
+    const requests = runStage(f, generation, sliceRequestsStage, budget);
+    expect(requests.stage).toBe('roles');
+    // 用途重判到同一结论但换了修订：组修订没动，组级校验拦不住，逐请求校验要拦。
+    f.store.write(db => db.run('UPDATE request SET purpose_revision=purpose_revision+1 WHERE req_id=1'));
+    const roles = sliceRolesStage(f.store, generation, budget, 21);
+    expect(roles.status).toBe('discarded');
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_request_result WHERE generation=?')
+      .get(generation)).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_chain_work WHERE generation=?')
+      .get(generation)).toEqual({ n: 0 });
   } finally { f.close(); }
 });
