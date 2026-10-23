@@ -26,7 +26,10 @@ import {
   createFakeUpstream, makeHookEnvelope, makeLedgerLine, makeMessages, makeReply,
   makeRouteLine, waitForCollector,
 } from './capacity-support';
-import type { ScenarioReport, StorageReading } from './capacity-gate';
+import {
+  deriveBudget, loadSummary, sha256File,
+} from './capacity-gate';
+import type { CapacityBudget, ScenarioReport, ScenarioSummary, StorageReading } from './capacity-gate';
 
 export type ScenarioName =
   | 'smoke' | 'baseline-1rps' | 'baseline-5rps' | 'burst'
@@ -115,21 +118,12 @@ export type Args = {
   requests?: number;
   seed: number;
   report: string;
+  /** `budget` 子命令的落盘位置；其余场景只写 `--report`。 */
+  out?: string;
   bodyBudget: number;
   /** 用户显式给出 `--body-budget` 时，场景不能再用自己的默认值覆盖。 */
   bodyBudgetExplicit: boolean;
   diskLimit: number;
-};
-
-export type SummaryReport = {
-  schema: 1;
-  kind: 'capacity-summary';
-  started_at: string;
-  duration_ms: number;
-  environment: { bun: string; platform: string; arch: string };
-  scenarios: Record<string, ScenarioReport>;
-  notes: string[];
-  ok: boolean;
 };
 
 const SCENARIOS: readonly ScenarioName[] = [
@@ -206,6 +200,9 @@ export function parseArgs(argv: readonly string[]): Args {
       case '--report':
         values.set('report', readValue());
         break;
+      case '--out':
+        values.set('out', readValue());
+        break;
       case '--body-budget':
         values.set('bodyBudget', readValue());
         break;
@@ -233,6 +230,8 @@ export function parseArgs(argv: readonly string[]): Args {
       : undefined,
     seed: integerFlag('seed', values.get('seed'), 1, 0, Number.MAX_SAFE_INTEGER),
     report: values.get('report') ?? join(tmpdir(), `atc-capacity-${scenario}.json`),
+    /** `budget` 子命令的落盘位置；其余场景只写 `--report`。 */
+    out: values.get('out'),
     bodyBudget,
     bodyBudgetExplicit: values.has('bodyBudget'),
     diskLimit,
@@ -1240,7 +1239,7 @@ function writeJson(path: string, value: unknown): void {
 }
 
 /** 汇总按顺序重跑全部场景；单个场景失败只记录阶段并继续，不删报告重跑掩盖。 */
-async function runAll(args: Args): Promise<SummaryReport> {
+async function runAll(args: Args): Promise<ScenarioSummary> {
   const startedAt = Date.now();
   const scenarios: Record<string, ScenarioReport> = {};
   const notes: string[] = [];
@@ -1293,10 +1292,31 @@ async function main(argv: readonly string[]): Promise<void> {
     return;
   }
   switch (args.scenario) {
-    case 'budget':
-      process.stderr.write('capacity_budget_not_implemented_until_task_7\n');
-      process.exitCode = 2;
+    case 'budget': {
+      // 预算只能从 `all` 汇总生成：单场景报告生成不了"全部场景"的预算，
+      // 用它冒充全部会把没跑到的场景静默漏掉。
+      const out = args.out;
+      if (out === undefined || out.length === 0) {
+        process.stderr.write('capacity_budget_out_required\n');
+        process.exitCode = 2;
+        return;
+      }
+      let budget: CapacityBudget;
+      try {
+        budget = deriveBudget(loadSummary(args.report), { sourceReport: args.report });
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : 'capacity_budget_invalid'}\n`);
+        process.exitCode = 2;
+        return;
+      }
+      writeJson(out, budget);
+      const unmet = Object.keys(budget.unmet);
+      process.stdout.write(`${JSON.stringify({
+        out, sha256: sha256File(out), scenarios: Object.keys(budget.scenarios), unmet,
+      }, null, 2)}\n`);
+      process.exitCode = 0;
       return;
+    }
     case 'calibrate':
       process.stderr.write('capacity_calibrate_not_implemented\n');
       process.exitCode = 2;

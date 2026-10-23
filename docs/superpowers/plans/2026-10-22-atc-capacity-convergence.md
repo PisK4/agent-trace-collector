@@ -71,7 +71,7 @@ F 依赖 C 已冻结的以下事实，不重新定义：
 | A：保留同步 | 最终基线门槛通过，或失败项不属于长组主因 | 观测代码、负载器、冻结预算、最终报告、文档；不创建 v6 文件，不迁移 schema |
 | B：长组切片 | 最终门槛失败，且失败严重度最高的场景是 `long-10000`，至少一项失败来自 `max_write_tx_ms`、`event_loop_p99_ms` 或 `drain_ms`，其它场景没有绝对门槛失败 | Task 13 至 Task 19 全部完成，v6 迁移、发布指针、同快照查询、等价性与切片容量门槛全部通过 |
 
-失败但不是长组主因时，Task 11 写入 `stop-non-long`，保留同步路径并列出实际失败项，不进入 Part V。该结果不能宣布容量目标完成；需要针对失败项另行测量，但不在本文伪装成已解决。
+失败但不是长组主因时，Task 11 写入 `stop-non-long`：它表示当前同步设计不能按现状发布，保留同步路径并列出实际失败项。该结果不能宣布容量目标完成。是否进入 Part V 由产品决定与脚本判定分开：`decideCapacity` 不为产品决定代签，产品目标未达成时按 Part V 的执行条件另行触发，触发理由记在决策文件之外。
 
 ### 观测口径
 
@@ -2717,7 +2717,7 @@ export function decideCapacity(input: {
 
 **实测与判定条件的冲突（需在 Task 11 执行前改条件，不能机械照抄）。** 上面的规则把进入切片的前提写成"主因是 `long-10000`，且其它场景没有 `product-target` 失败"。`baseline-5rps` 的实测推翻了这个前提：它失败在 `min.accepted`/`max.ticks_dropped`/`event_loop_p99_ms` 上（都是 `product-target`），而它的主因与长组是同一处机制 —— `drainDeriveTx` 每个脏组整组重算，5 rps 下 20 个会话每轮全脏，derive 占 600 s 的 48%、单轮 max 5.46 s，writer 占 56%。也就是说"同步写入成本只在长组咬人"这一假设不成立，按现规则会判成 `stop-non-long` 并把已经知道原因的失败留在一个不被执行的路径上。
 
-改法（二选一，执行前定）：把"主因场景是 `long-10000`"放宽为"主因场景属于同步派生成本场景（`long-10000` 或速率基线）且该场景至少一项失败属于 `max_write_tx_ms`、`event_loop_p99_ms`、`drain_ms`、`backlog_max_age_ms`、`min.accepted`"；或者保留 `decideCapacity` 作为"当前同步设计能否按现状发布"的自动闸门，把 Part V 的执行条件改成"决策为 `slice` **或** 产品目标明确未达成"。后者更干净：脚本判的是能不能留用，Part V 是"5 rps 必须达成"这个产品决定，不靠脚本代签。
+改法（二选一，执行前定）：把"主因场景是 `long-10000`"放宽为"主因场景属于同步派生成本场景（`long-10000` 或速率基线）且该场景至少一项失败属于 `max_write_tx_ms`、`event_loop_p99_ms`、`drain_ms`、`backlog_max_age_ms`、`min.accepted`"；或者保留 `decideCapacity` 作为"当前同步设计能否按现状发布"的自动闸门，把 Part V 的执行条件改成"决策为 `slice` **或** 产品目标明确未达成"。**已定：取后者。** `decideCapacity` 的判定规则一字不改，`stop-non-long` 照旧表示"当前同步设计不能按现状发布"，脚本不为产品决定代签；Part V 由"5 rps 必须达成"这个产品决定触发，并在决策文件之外单独记录触发理由。
 
 - [ ] **Step 4：写决策文件。** 决策 JSON 包含报告 sha256、预算 sha256、失败项、主因、严重度、`decided_at` 与执行命令。没有预算时先由 Task 7 退出 2，不生成决策。
 
@@ -2845,7 +2845,7 @@ git commit -m "docs(capacity): record measured baseline and keep synchronous der
 
 ## Part V：条件分支 B，长组切片
 
-**执行条件：** Task 11 的决策为 `slice`。决策为 `keep-sync` 或 `stop-non-long` 时，本部分全部任务保持未勾选，不创建任何 v6 文件，不运行迁移。
+**执行条件：** Task 11 的决策为 `slice`，**或**产品目标明确未达成（本计划已如此决定：`baseline-5rps` 的 5 rps 目标保持未达成，实测只投递 3.36 rps，主因是派生整组重算）。此时决策文件里的 `decision` 应为 `stop-non-long`，它表示"当前同步设计不能按现状发布"，不是"不得开工"；触发理由单独记在决策文件之外。决策为 `keep-sync` 时，本部分全部任务保持未勾选，不创建任何 v6 文件，不运行迁移。
 
 ### Task 13：v6 代际 schema 与显式迁移
 

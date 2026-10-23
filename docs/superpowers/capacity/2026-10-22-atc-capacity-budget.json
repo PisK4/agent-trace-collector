@@ -1,0 +1,539 @@
+{
+  "schema": 1,
+  "frozen_at": "2026-10-23T05:18:00.425Z",
+  "source_report": "/private/tmp/atc-capacity-reports/baseline-all.json",
+  "source_report_sha256": "fc2eb638cb724e600cfb2b31507e6d549675df4c954a66281b8592db4d240b21",
+  "bun_version": "1.4.0",
+  "scenarios": {
+    "smoke": {
+      "max": {
+        "hook_latency_p95_ms": 2000,
+        "hook_latency_p99_ms": 2500,
+        "query_latency_p95_ms": 100,
+        "event_loop_p99_ms": 100,
+        "max_write_tx_ms": 900,
+        "rss_peak_bytes": 86118401,
+        "db_wal_temp_bytes": 1956771,
+        "body_bytes_peak": 3818,
+        "rejected_total": 1,
+        "rejected_busy": 1,
+        "drain_ms": 120000,
+        "backlog_max_age_ms": 30000,
+        "pending_groups_end": 0,
+        "pending_hooks": 0,
+        "open_gaps": 0,
+        "rejected_insufficient_storage": 0,
+        "rejected_writer_failed": 0,
+        "client_failed": 0,
+        "client_query_failed": 0,
+        "ticks_dropped": 0
+      },
+      "min": {
+        "accepted": 9,
+        "launched": 9,
+        "request_rows": 9
+      },
+      "basis": {
+        "hook_latency_p95_ms": "product-target",
+        "hook_latency_p99_ms": "product-target",
+        "query_latency_p95_ms": "product-target",
+        "event_loop_p99_ms": "product-target",
+        "max_write_tx_ms": "proposed",
+        "rss_peak_bytes": "baseline-envelope",
+        "db_wal_temp_bytes": "baseline-envelope",
+        "body_bytes_peak": "baseline-envelope",
+        "rejected_total": "baseline-envelope",
+        "rejected_busy": "baseline-envelope",
+        "drain_ms": "proposed",
+        "backlog_max_age_ms": "proposed",
+        "pending_groups_end": "code-constant",
+        "pending_hooks": "code-constant",
+        "open_gaps": "code-constant",
+        "rejected_insufficient_storage": "code-constant",
+        "rejected_writer_failed": "code-constant",
+        "client_failed": "code-constant",
+        "client_query_failed": "code-constant",
+        "ticks_dropped": "product-target",
+        "accepted": "product-target",
+        "launched": "product-target",
+        "request_rows": "product-target"
+      }
+    },
+    "baseline-1rps": {
+      "max": {
+        "hook_latency_p95_ms": 2000,
+        "hook_latency_p99_ms": 2500,
+        "query_latency_p95_ms": 100,
+        "event_loop_p99_ms": 100,
+        "max_write_tx_ms": 900,
+        "rss_peak_bytes": 416993281,
+        "db_wal_temp_bytes": 10477271,
+        "body_bytes_peak": 297180,
+        "rejected_total": 1,
+        "rejected_busy": 1,
+        "drain_ms": 120000,
+        "backlog_max_age_ms": 30000,
+        "pending_groups_end": 0,
+        "pending_hooks": 0,
+        "open_gaps": 0,
+        "rejected_insufficient_storage": 0,
+        "rejected_writer_failed": 0,
+        "client_failed": 0,
+        "client_query_failed": 0,
+        "ticks_dropped": 0
+      },
+      "min": {
+        "accepted": 594,
+        "launched": 594,
+        "request_rows": 594
+      },
+      "basis": {
+        "hook_latency_p95_ms": "product-target",
+        "hook_latency_p99_ms": "product-target",
+        "query_latency_p95_ms": "product-target",
+        "event_loop_p99_ms": "product-target",
+        "max_write_tx_ms": "proposed",
+        "rss_peak_bytes": "baseline-envelope",
+        "db_wal_temp_bytes": "baseline-envelope",
+        "body_bytes_peak": "baseline-envelope",
+        "rejected_total": "baseline-envelope",
+        "rejected_busy": "baseline-envelope",
+        "drain_ms": "proposed",
+        "backlog_max_age_ms": "proposed",
+        "pending_groups_end": "code-constant",
+        "pending_hooks": "code-constant",
+        "open_gaps": "code-constant",
+        "rejected_insufficient_storage": "code-constant",
+        "rejected_writer_failed": "code-constant",
+        "client_failed": "code-constant",
+        "client_query_failed": "code-constant",
+        "ticks_dropped": "product-target",
+        "accepted": "product-target",
+        "launched": "product-target",
+        "request_rows": "product-target"
+      }
+    },
+    "baseline-5rps": {
+      "max": {
+        "hook_latency_p95_ms": 2000,
+        "hook_latency_p99_ms": 2500,
+        "query_latency_p95_ms": 100,
+        "event_loop_p99_ms": 100,
+        "max_write_tx_ms": 900,
+        "rss_peak_bytes": 478474241,
+        "db_wal_temp_bytes": 18904551,
+        "body_bytes_peak": 1006370,
+        "rejected_total": 9,
+        "rejected_busy": 9,
+        "drain_ms": 120000,
+        "backlog_max_age_ms": 30000,
+        "pending_groups_end": 0,
+        "pending_hooks": 0,
+        "open_gaps": 0,
+        "rejected_insufficient_storage": 0,
+        "rejected_writer_failed": 0,
+        "client_failed": 0,
+        "client_query_failed": 0,
+        "ticks_dropped": 0
+      },
+      "min": {
+        "accepted": 2970,
+        "launched": 2970,
+        "request_rows": 2970
+      },
+      "basis": {
+        "hook_latency_p95_ms": "product-target",
+        "hook_latency_p99_ms": "product-target",
+        "query_latency_p95_ms": "product-target",
+        "event_loop_p99_ms": "product-target",
+        "max_write_tx_ms": "proposed",
+        "rss_peak_bytes": "baseline-envelope",
+        "db_wal_temp_bytes": "baseline-envelope",
+        "body_bytes_peak": "baseline-envelope",
+        "rejected_total": "baseline-envelope",
+        "rejected_busy": "baseline-envelope",
+        "drain_ms": "proposed",
+        "backlog_max_age_ms": "proposed",
+        "pending_groups_end": "code-constant",
+        "pending_hooks": "code-constant",
+        "open_gaps": "code-constant",
+        "rejected_insufficient_storage": "code-constant",
+        "rejected_writer_failed": "code-constant",
+        "client_failed": "code-constant",
+        "client_query_failed": "code-constant",
+        "ticks_dropped": "product-target",
+        "accepted": "product-target",
+        "launched": "product-target",
+        "request_rows": "product-target"
+      }
+    },
+    "burst": {
+      "max": {
+        "hook_latency_p95_ms": 2000,
+        "hook_latency_p99_ms": 2500,
+        "event_loop_p99_ms": 100,
+        "max_write_tx_ms": 900,
+        "rss_peak_bytes": 256819201,
+        "db_wal_temp_bytes": 1915571,
+        "body_bytes_peak": 9351,
+        "rejected_total": 45,
+        "rejected_busy": 45,
+        "drain_ms": 120000,
+        "backlog_max_age_ms": 30000,
+        "pending_groups_end": 0,
+        "pending_hooks": 0,
+        "open_gaps": 0,
+        "rejected_insufficient_storage": 0,
+        "rejected_writer_failed": 0,
+        "client_failed": 0,
+        "client_query_failed": 0,
+        "ticks_dropped": 0
+      },
+      "min": {
+        "accepted": 10,
+        "launched": 10,
+        "request_rows": 9
+      },
+      "basis": {
+        "hook_latency_p95_ms": "product-target",
+        "hook_latency_p99_ms": "product-target",
+        "event_loop_p99_ms": "product-target",
+        "max_write_tx_ms": "proposed",
+        "rss_peak_bytes": "baseline-envelope",
+        "db_wal_temp_bytes": "baseline-envelope",
+        "body_bytes_peak": "baseline-envelope",
+        "rejected_total": "baseline-envelope",
+        "rejected_busy": "baseline-envelope",
+        "drain_ms": "proposed",
+        "backlog_max_age_ms": "proposed",
+        "pending_groups_end": "code-constant",
+        "pending_hooks": "code-constant",
+        "open_gaps": "code-constant",
+        "rejected_insufficient_storage": "code-constant",
+        "rejected_writer_failed": "code-constant",
+        "client_failed": "code-constant",
+        "client_query_failed": "code-constant",
+        "ticks_dropped": "product-target",
+        "accepted": "baseline-envelope",
+        "launched": "baseline-envelope",
+        "request_rows": "baseline-envelope"
+      }
+    },
+    "long-2000": {
+      "max": {
+        "max_write_tx_ms": 900,
+        "rss_peak_bytes": 303022081,
+        "db_wal_temp_bytes": 10638721,
+        "body_bytes_peak": 702389,
+        "rejected_total": 1,
+        "rejected_busy": 1,
+        "drain_ms": 120000,
+        "backlog_max_age_ms": 30000,
+        "pending_groups_end": 0,
+        "pending_hooks": 0,
+        "open_gaps": 0,
+        "rejected_insufficient_storage": 0,
+        "rejected_writer_failed": 0,
+        "client_failed": 0,
+        "client_query_failed": 0,
+        "ticks_dropped": 0
+      },
+      "min": {
+        "accepted": 0,
+        "launched": 0,
+        "request_rows": 2000
+      },
+      "basis": {
+        "max_write_tx_ms": "proposed",
+        "rss_peak_bytes": "baseline-envelope",
+        "db_wal_temp_bytes": "baseline-envelope",
+        "body_bytes_peak": "baseline-envelope",
+        "rejected_total": "baseline-envelope",
+        "rejected_busy": "baseline-envelope",
+        "drain_ms": "proposed",
+        "backlog_max_age_ms": "proposed",
+        "pending_groups_end": "code-constant",
+        "pending_hooks": "code-constant",
+        "open_gaps": "code-constant",
+        "rejected_insufficient_storage": "code-constant",
+        "rejected_writer_failed": "code-constant",
+        "client_failed": "code-constant",
+        "client_query_failed": "code-constant",
+        "ticks_dropped": "product-target",
+        "accepted": "baseline-envelope",
+        "launched": "baseline-envelope",
+        "request_rows": "product-target"
+      }
+    },
+    "long-10000": {
+      "max": {
+        "max_write_tx_ms": 900,
+        "rss_peak_bytes": 368189441,
+        "db_wal_temp_bytes": 38150271,
+        "body_bytes_peak": 3521178,
+        "rejected_total": 1,
+        "rejected_busy": 1,
+        "drain_ms": 120000,
+        "backlog_max_age_ms": 30000,
+        "pending_groups_end": 0,
+        "pending_hooks": 0,
+        "open_gaps": 0,
+        "rejected_insufficient_storage": 0,
+        "rejected_writer_failed": 0,
+        "client_failed": 0,
+        "client_query_failed": 0,
+        "ticks_dropped": 0
+      },
+      "min": {
+        "accepted": 0,
+        "launched": 0,
+        "request_rows": 10000
+      },
+      "basis": {
+        "max_write_tx_ms": "proposed",
+        "rss_peak_bytes": "baseline-envelope",
+        "db_wal_temp_bytes": "baseline-envelope",
+        "body_bytes_peak": "baseline-envelope",
+        "rejected_total": "baseline-envelope",
+        "rejected_busy": "baseline-envelope",
+        "drain_ms": "proposed",
+        "backlog_max_age_ms": "proposed",
+        "pending_groups_end": "code-constant",
+        "pending_hooks": "code-constant",
+        "open_gaps": "code-constant",
+        "rejected_insufficient_storage": "code-constant",
+        "rejected_writer_failed": "code-constant",
+        "client_failed": "code-constant",
+        "client_query_failed": "code-constant",
+        "ticks_dropped": "product-target",
+        "accepted": "baseline-envelope",
+        "launched": "baseline-envelope",
+        "request_rows": "product-target"
+      }
+    },
+    "route": {
+      "max": {
+        "hook_latency_p95_ms": 2000,
+        "hook_latency_p99_ms": 2500,
+        "query_latency_p95_ms": 100,
+        "event_loop_p99_ms": 100,
+        "max_write_tx_ms": 900,
+        "rss_peak_bytes": 119009281,
+        "db_wal_temp_bytes": 5574911,
+        "body_bytes_peak": 10904,
+        "rejected_total": 1,
+        "rejected_busy": 1,
+        "drain_ms": 120000,
+        "backlog_max_age_ms": 30000,
+        "pending_groups_end": 0,
+        "pending_hooks": 0,
+        "open_gaps": 0,
+        "rejected_insufficient_storage": 0,
+        "rejected_writer_failed": 0,
+        "client_failed": 0,
+        "client_query_failed": 0,
+        "ticks_dropped": 0
+      },
+      "min": {
+        "accepted": 29,
+        "launched": 29,
+        "request_rows": 29
+      },
+      "basis": {
+        "hook_latency_p95_ms": "product-target",
+        "hook_latency_p99_ms": "product-target",
+        "query_latency_p95_ms": "product-target",
+        "event_loop_p99_ms": "product-target",
+        "max_write_tx_ms": "proposed",
+        "rss_peak_bytes": "baseline-envelope",
+        "db_wal_temp_bytes": "baseline-envelope",
+        "body_bytes_peak": "baseline-envelope",
+        "rejected_total": "baseline-envelope",
+        "rejected_busy": "baseline-envelope",
+        "drain_ms": "proposed",
+        "backlog_max_age_ms": "proposed",
+        "pending_groups_end": "code-constant",
+        "pending_hooks": "code-constant",
+        "open_gaps": "code-constant",
+        "rejected_insufficient_storage": "code-constant",
+        "rejected_writer_failed": "code-constant",
+        "client_failed": "code-constant",
+        "client_query_failed": "code-constant",
+        "ticks_dropped": "product-target",
+        "accepted": "product-target",
+        "launched": "product-target",
+        "request_rows": "product-target"
+      }
+    },
+    "retention": {
+      "max": {
+        "hook_latency_p95_ms": 2000,
+        "hook_latency_p99_ms": 2500,
+        "query_latency_p95_ms": 100,
+        "event_loop_p99_ms": 100,
+        "max_write_tx_ms": 900,
+        "rss_peak_bytes": 243548161,
+        "db_wal_temp_bytes": 5638081,
+        "body_bytes_peak": 5688,
+        "rejected_total": 1,
+        "rejected_busy": 1,
+        "drain_ms": 120000,
+        "backlog_max_age_ms": 30000,
+        "pending_groups_end": 0,
+        "pending_hooks": 0,
+        "open_gaps": 0,
+        "rejected_insufficient_storage": 0,
+        "rejected_writer_failed": 0,
+        "client_failed": 0,
+        "client_query_failed": 0,
+        "ticks_dropped": 0
+      },
+      "min": {
+        "accepted": 118,
+        "launched": 118,
+        "request_rows": 118
+      },
+      "basis": {
+        "hook_latency_p95_ms": "product-target",
+        "hook_latency_p99_ms": "product-target",
+        "query_latency_p95_ms": "product-target",
+        "event_loop_p99_ms": "product-target",
+        "max_write_tx_ms": "proposed",
+        "rss_peak_bytes": "baseline-envelope",
+        "db_wal_temp_bytes": "baseline-envelope",
+        "body_bytes_peak": "baseline-envelope",
+        "rejected_total": "baseline-envelope",
+        "rejected_busy": "baseline-envelope",
+        "drain_ms": "proposed",
+        "backlog_max_age_ms": "proposed",
+        "pending_groups_end": "code-constant",
+        "pending_hooks": "code-constant",
+        "open_gaps": "code-constant",
+        "rejected_insufficient_storage": "code-constant",
+        "rejected_writer_failed": "code-constant",
+        "client_failed": "code-constant",
+        "client_query_failed": "code-constant",
+        "ticks_dropped": "product-target",
+        "accepted": "product-target",
+        "launched": "product-target",
+        "request_rows": "product-target"
+      }
+    }
+  },
+  "unmet": {
+    "baseline-1rps": [
+      {
+        "scenario": "baseline-1rps",
+        "check": "query_latency_p95_ms",
+        "actual": 152.85391599999275,
+        "limit": 100,
+        "kind": "max",
+        "basis": "product-target"
+      },
+      {
+        "scenario": "baseline-1rps",
+        "check": "event_loop_p99_ms",
+        "actual": 183.44887500000186,
+        "limit": 100,
+        "kind": "max",
+        "basis": "product-target"
+      }
+    ],
+    "baseline-5rps": [
+      {
+        "scenario": "baseline-5rps",
+        "check": "hook_latency_p95_ms",
+        "actual": 3791.546417000005,
+        "limit": 2000,
+        "kind": "max",
+        "basis": "product-target"
+      },
+      {
+        "scenario": "baseline-5rps",
+        "check": "hook_latency_p99_ms",
+        "actual": 4613.042457999894,
+        "limit": 2500,
+        "kind": "max",
+        "basis": "product-target"
+      },
+      {
+        "scenario": "baseline-5rps",
+        "check": "query_latency_p95_ms",
+        "actual": 4086.097375000012,
+        "limit": 100,
+        "kind": "max",
+        "basis": "product-target"
+      },
+      {
+        "scenario": "baseline-5rps",
+        "check": "event_loop_p99_ms",
+        "actual": 1994.513833999983,
+        "limit": 100,
+        "kind": "max",
+        "basis": "product-target"
+      },
+      {
+        "scenario": "baseline-5rps",
+        "check": "max_write_tx_ms",
+        "actual": 5294.02804200002,
+        "limit": 900,
+        "kind": "max",
+        "basis": "proposed"
+      },
+      {
+        "scenario": "baseline-5rps",
+        "check": "ticks_dropped",
+        "actual": 969,
+        "limit": 0,
+        "kind": "max",
+        "basis": "product-target"
+      },
+      {
+        "scenario": "baseline-5rps",
+        "check": "accepted",
+        "actual": 2031,
+        "limit": 2970,
+        "kind": "min",
+        "basis": "product-target"
+      },
+      {
+        "scenario": "baseline-5rps",
+        "check": "launched",
+        "actual": 2031,
+        "limit": 2970,
+        "kind": "min",
+        "basis": "product-target"
+      },
+      {
+        "scenario": "baseline-5rps",
+        "check": "request_rows",
+        "actual": 2031,
+        "limit": 2970,
+        "kind": "min",
+        "basis": "product-target"
+      }
+    ],
+    "long-10000": [
+      {
+        "scenario": "long-10000",
+        "check": "max_write_tx_ms",
+        "actual": 1959.3482079999521,
+        "limit": 900,
+        "kind": "max",
+        "basis": "proposed"
+      }
+    ]
+  },
+  "retention": {
+    "max": {
+      "retention_max_ms": 900,
+      "cost_max_ms": 900,
+      "raw_prune_max_ms": 900
+    },
+    "basis": {
+      "retention_max_ms": "proposed",
+      "cost_max_ms": "proposed",
+      "raw_prune_max_ms": "proposed"
+    }
+  }
+}
