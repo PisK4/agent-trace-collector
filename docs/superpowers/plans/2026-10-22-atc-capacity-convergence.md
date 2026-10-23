@@ -4945,6 +4945,19 @@ git commit -m "feat(derive): slice tool candidate pairing" \
   -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+**Step 7（执行时的偏差记录）**
+
+1. **`derive_result_work.confirmed` 必须由角色阶段写。** 计划把它留成物化时的 0，但它的判据是"结果的 ord 落在确定增量里"，而增量只有角色阶段算完才有。不写的后果是：所有结果都不算本轮新增，配对只能建立 `pending` 候选——唯一配对永远升不到 `resolved`。现在在 `finishRoleWork` 结算关系时按同步的 `ordinalConfirmed` 写回（`first` 全部算，`confirmed` 只看增量的 ord，其余不算）。端到端用例（两笔请求、一次工具往返）第一次跑就是这个缺口。
+2. **候选与行的筛选按 `purpose_chain`，不按 `chain_role`。** 计划写的是 `COALESCE(d.chain_role,'main')<>'aux'`。D 之后链身份与工具配对的判据就是 `purpose_chain`；`chain_role` 是角色传播的产物，两者在封闭域下等价，但一个是事实、一个是推论。按事实筛。
+3. **`tool_count` 由工具阶段累加。** 计划没写它，而 `publishGeneration` 的覆盖校验要求它等于本代工具结果行数；停在 0 的话每一代都发布不了。
+4. **`retention_state` 恒为 `recomputed`。** 同步要把正文已回收的请求在 `tool_call` 旧表上标 `retained`，因为那是跨轮持久表、里面有历史行。切片的 `derive_tool_result` 每代新建：正文不可读的请求根本不产生候选 work 行，也就没有行需要标保留。
+5. **`basis_json` 记代际身份**（`{generation, call_id, algorithm}`），不抄同步的组键——代际已经带着组身份，再存一份只会多一个可能不一致的地方。
+6. **`algorithm_version` 写切片算法号。** 同步写 `GROUP_ALGORITHM`；`derive_tool_result` 也没有 `derive_version` 列（那是 `tool_call` 旧表的列）。
+7. **同一 call 的结果顺序按 `(traversal_ord, req_id, ord, path)`。** 同步按消息序号加内容下标读结果；`path` 是字符串，同一条消息里多个结果时字典序与下标序可能不同。差别只落在"保留首次位置"这一条上，且只在同一条消息里出现重复 `call_id` 这种病态输入才显现；不为它再加一列排序键。
+8. **`slice_tool_coverage` 这个收尾校验今天是**不可能触发的**：它的筛选条件（参与用途 + 有结果行）与配对函数自己早期返回的条件是同一套，凡是进不了配对的行也进不了这条校验。留着它是因为它断言的是阶段边界上的不变量（"参与请求的每一笔候选都有结果行"），而这条不变量目前由配对函数的实现细节保证；代价是每代一次 COUNT 查询。`publishGeneration` 的 `tools === tool_count` 是同一件事的另一个说法（计数相等）。
+9. **一步一页一个写事务，丢弃在失败事务之外。** 与 Task 15/16 同一条实测结论。
+10. **Step 2（验证失败）没有作为红灯步骤执行。** 与前三项同样的情况：实现与测试同一轮写出。
+
 ### Task 18：完成、发布、磁盘预算与失效回收
 
 **Files:**
