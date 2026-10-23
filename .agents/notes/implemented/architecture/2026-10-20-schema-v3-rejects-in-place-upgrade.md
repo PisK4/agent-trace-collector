@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-这条策略在 schema 升到 v3 时确立；当前版本为 v5。`openStore` 遇到低版本直接报 `schema_rebuild_required`，不提供启动时自动升级；遇到更高版本报 `schema_version_unsupported`；空库首次打开时建到当前版本。v5 起没有跨结构迁移：旧库由运维删除后重建，见[旧库删除重建](2026-10-23-destructive-schema-replacement.md)。[scripts/backfill-fingerprint.ts](../../../../scripts/backfill-fingerprint.ts) 只覆盖 v3/v4 时代的列补齐与派生重跑，不会把旧库带到 v5；它自己开 SQLite 连接，绕过版本检查，补齐块指纹与预览列、链角色相关列与索引，再整库重跑派生与工具配对。脚本可重复执行，只处理还没有指纹的块；解不开的块指纹留空，派生把它当成不可比。
+这条策略在 schema 升到 v3 时确立；当前版本为 v6。`openStore` 遇到低版本直接报 `schema_rebuild_required`，不提供启动时自动升级；遇到更高版本报 `schema_version_unsupported`；空库首次打开时建到当前版本。v5 起没有跨结构迁移：旧库由运维删除后重建，见[旧库删除重建](2026-10-23-destructive-schema-replacement.md)。[scripts/backfill-fingerprint.ts](../../../../scripts/backfill-fingerprint.ts) 只覆盖 v3/v4 时代的列补齐与派生重跑，不会把旧库带到 v6；它自己开 SQLite 连接，绕过版本检查，补齐块指纹与预览列、链角色相关列与索引，再整库重跑派生与工具配对。脚本可重复执行，只处理还没有指纹的块；解不开的块指纹留空，派生把它当成不可比。
 
 版本常量与拒绝逻辑见 [src/store.ts](../../../../src/store.ts)，表结构见 [src/schema.sql](../../../../src/schema.sql)。
 
