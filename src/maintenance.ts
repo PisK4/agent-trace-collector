@@ -12,7 +12,7 @@ import type { Store } from './store';
 import { rebuildDerived } from './derive';
 import { drainDeriveEntry } from './derive-slice';
 import { upgradePurposeTargetTx } from './request-purpose';
-import { GROUP_ALGORITHM, markGroupDirtyTx } from './derive-state';
+import { GROUP_ALGORITHM, markGroupDirtyTx, queuePendingSql } from './derive-state';
 import { readLocalSecret, saltId } from './config';
 
 /**
@@ -146,7 +146,8 @@ export function verifyDatabase(path: string): VerifyReport {
         SELECT source_kind, ref_key FROM request_evidence GROUP BY source_kind, ref_key HAVING COUNT(*) > 1
       )`).get();
     // clean 行是完成记录，不是积压。
-    const pending = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM derive_queue WHERE state<>'clean'").get();
+    const pending = db.query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM derive_queue WHERE ${queuePendingSql()}`).get();
     return {
       integrity,
       dangling_blocks: dangling?.n ?? 0,
@@ -808,7 +809,7 @@ export async function runMaintenance(argv: string[], io: {
         const legacy = store.read.query<{ n: number }, [string]>(`
           SELECT COUNT(*) AS n FROM request WHERE conv_key=? AND summary_state='legacy'`).get(session)?.n ?? 0;
         const pending = store.read.query<{ n: number }, [string]>(`
-          SELECT COUNT(*) AS n FROM derive_queue WHERE conv_key=? AND state<>'clean'`).get(session)?.n ?? 0;
+          SELECT COUNT(*) AS n FROM derive_queue WHERE conv_key=? AND ${queuePendingSql()}`).get(session)?.n ?? 0;
         // 正文与 raw 都没了的分组只报告数量和原因，旧标题与工具关系保持原样。
         out(JSON.stringify({
           ok: true, session, queued: report.queued, unavailable: report.unavailable,

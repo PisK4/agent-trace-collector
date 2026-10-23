@@ -5,6 +5,40 @@ import type { Database } from 'bun:sqlite';
 export const GROUP_ALGORITHM = 1;
 
 /**
+ * 队列待办判定的 SQL 片段。待办查询一律用它拼条件，不再各处手写；
+ * 语义（`clean` 行是持久完成记录，不是积压）由 durable-input note 持有。
+ */
+export function queuePendingSql(alias = ''): string {
+  const q = alias === '' ? '' : `${alias}.`;
+  return `${q}state<>'clean'`;
+}
+
+/**
+ * 组产物「当前」判定的 SQL 片段：clean 且修订与算法都追上。
+ *
+ * 三个条件列都是 `derive_queue` 独有，但 `request` 行也有自己的
+ * `input_revision`，所以拼进 join 时必须带队列别名，不能裸内插。
+ * 修订语义由 group-publish note 持有，这里只固定判定的唯一写法。
+ */
+export function groupCurrentSql(alias: string): string {
+  const q = `${alias}.`;
+  return `${q}state='clean' AND ${q}published_revision=${q}input_revision`
+    + ` AND ${q}published_algorithm=${q}target_algorithm`;
+}
+
+/** `groupCurrentSql` 的行形态；输入是队列行的原始列名。 */
+export function groupIsCurrent(row: {
+  state: string | null;
+  input_revision: number | null;
+  published_revision: number | null;
+  target_algorithm: number | null;
+  published_algorithm: number | null;
+}): boolean {
+  return row.state === 'clean' && row.input_revision === row.published_revision
+    && row.target_algorithm === row.published_algorithm;
+}
+
+/**
  * 把一组标成待派生。
  *
  * `group_epoch` 标识组的世代：组被删除后重建会拿到新 epoch，旧完成记录因此
