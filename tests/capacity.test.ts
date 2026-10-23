@@ -7,7 +7,9 @@ import {
   metadataSnapshot, summarizeDurations,
 } from '../src/capacity';
 import { intervalOf, loadConfig, type Config } from '../src/config';
-import { createPeakTracker, offeredShortfall, requiresLongRunAck, scenarioPlan, scheduledTicks } from '../scripts/capacity';
+import {
+  createPeakTracker, finalQueueMissing, offeredShortfall, requiresLongRunAck, scenarioPlan, scheduledTicks,
+} from '../scripts/capacity';
 import type { Args } from '../scripts/capacity';
 import { buildCapacityConfig, makeHookEnvelope, makeLedgerLine, mulberry32 } from '../scripts/capacity-support';
 import { fixture } from './fixtures';
@@ -189,6 +191,10 @@ test('计划速率按绝对刻度记账，少发的刻度进报告缺口', () =>
   expect(offeredShortfall({ launched: 3_000, ticks_scheduled: 3_000, ticks_dropped: 0 })).toEqual([]);
   expect(offeredShortfall({ launched: 1_703, ticks_scheduled: 3_000, ticks_dropped: 1_297 }))
     .toEqual(['offered:1703<3000']);
+  // 收敛读数说 0、终值快照还有脏组：请求行数会变，不能让报告按已收敛记。
+  expect(finalQueueMissing({ derive_queue: { pending_groups: 0 } })).toEqual([]);
+  expect(finalQueueMissing({ derive_queue: { pending_groups: 4 } }))
+    .toEqual(['pending_groups_final:4!=0']);
 });
 
 test('峰值追踪只取实际观测到的快照', () => {

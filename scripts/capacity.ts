@@ -96,6 +96,16 @@ export function offeredShortfall(client: {
     : [];
 }
 
+/**
+ * 收敛读数与终值快照必须互相印证。收敛判定要求连续静默一个窗口，
+ * 快照里却仍有脏组，说明停输入之后又插进了请求：那一刻的请求行数还会变，
+ * 报告不能按"已收敛"记，否则冻结出来的阈值建在一个会动的数上。
+ */
+export function finalQueueMissing(snapshot: { derive_queue: { pending_groups: number } }): string[] {
+  const pending = snapshot.derive_queue.pending_groups;
+  return pending === 0 ? [] : [`pending_groups_final:${pending}!=0`];
+}
+
 export type Args = {
   scenario: ScenarioName;
   full: boolean;
@@ -531,7 +541,14 @@ async function readOnce(port: number, headers: Record<string, string>): Promise<
 /**
  * 停止输入后每 100 ms 读一次队列，直到未发布组为 0 或超时。
  * 积压年龄优先用 dirty_since_ms；最老请求年龄只作回退观测。
+ *
+ * 三个计数同时为 0 只说明"这一刻没有积压"，不等于"已经安顿"：账本与路由读取、
+ * hook 对账都在自己的间隔上跑，停输入后仍可能再插进请求并把组标脏，于是
+ * 收敛读数与随后的终值快照会互相矛盾。所以要连续 `SETTLE_STABLE_MS` 保持干净才收工，
+ * 这个窗口长于采集器最慢的来源间隔（对账 5 秒）。
  */
+const SETTLE_STABLE_MS = 5_000;
+
 async function pollDrain(
   url: string, statsUrl: string, headers: Record<string, string>,
   stopAtMs: number, timeoutMs = 120_000,
@@ -541,6 +558,7 @@ async function pollDrain(
   let maxAge: number | null = null;
   let pendingHooks = 0;
   let openGaps = 0;
+  let settledSince: number | null = null;
   for (;;) {
     polls += 1;
     const snapshot = await fetch(url, { headers }).then(response => response.json()) as Snapshot;
@@ -557,7 +575,9 @@ async function pollDrain(
     const age = queue.oldest_dirty_age_ms ?? queue.oldest_request_age_ms;
     if (age !== null) maxAge = Math.max(maxAge ?? 0, age);
     // 队列排空还不够：hook 要等账本/路由证据对账，账本区间要读完，否则请求行数会对不上。
-    if (queue.pending_groups === 0 && pendingHooks === 0 && openGaps === 0) {
+    const quiet = queue.pending_groups === 0 && pendingHooks === 0 && openGaps === 0;
+    settledSince = quiet ? (settledSince ?? Date.now()) : null;
+    if (settledSince !== null && Date.now() - settledSince >= SETTLE_STABLE_MS) {
       return {
         drain_ms: Date.now() - stopAtMs, polls, max_age_ms: maxAge,
         pending: 0, pending_hooks: 0, open_gaps: 0,
@@ -808,6 +828,7 @@ async function runHttpScenario(
       conservation.missing.push(`open_gaps:${final.open_gaps}!=0`);
     }
     conservation.missing.push(...offeredShortfall(load.client));
+    conservation.missing.push(...finalQueueMissing(snapshot));
     const report = buildReport({
       plan: { ...plan, scenario: name, mode: 'baseline', seed: args.seed },
       args, root: handle.root,
