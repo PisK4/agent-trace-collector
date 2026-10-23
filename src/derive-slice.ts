@@ -3,16 +3,18 @@ import { statSync } from 'node:fs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type { Store } from './store';
 import { readBodyTx } from './body';
-import { modelTimeTitle } from './sources/magpie';
 import { drainRequestPurposesTx } from './request-purpose';
 import { queuePendingSql } from './derive-state';
 import {
-  anthropicReplyCalls, anthropicRequestResults, commonPrefix, compareLogicalOrder,
-  compareTraversalOrder, deriveTitle, drainDeriveTx, fingerprintsOf, firstUserPreview,
-  flattenToolContent, messageAt, previewOf, replyInfoOf, tailUserPreview, toolResultPreview,
-  uncertainOrderIds,
+  anthropicReplyCalls, anthropicRequestResults, chainTrunk, chainTrunkRoot, commonPrefix,
+  flattenToolContent, initialPairState, pairOutcome, presentationDecision, settleRelation,
+} from './derive-decision';
+import type { ResolvedTool } from './derive-decision';
+import {
+  compareLogicalOrder, compareTraversalOrder, drainDeriveTx, fingerprintsOf, presentationPortsOf,
+  replyInfoOf, uncertainOrderIds,
 } from './derive';
-import type { DeriveScope, DrainResult, LogicalRow, ResolvedTool } from './derive';
+import type { DeriveScope, DrainResult, LogicalRow } from './derive';
 
 /** 切片派生的算法号。与同步组的 `GROUP_ALGORITHM` 分开：两者算出的结果不能互相复用。 */
 export const DERIVE_ALGORITHM = 5;
@@ -504,10 +506,9 @@ function requestUncertain(db: Database, generation: string, startedMs: number,
 /**
  * 这一笔扫完祖先后的关系结算。
  *
- * 关系、父节点与增量逐条复刻同步路径的 `matchPredecessor`：父节点要求祖先序列是
- * 本笔的完整前缀且公共长度大于零（零长度祖先不构成证据），长度相同保留先遇到的那个；
- * 前面存在任何参与请求（含正文不可读的）才算"有更早的一笔"；分支关系遇到不可读或
- * 顺序未证实的祖先降为 unknown。
+ * 结算唯一落在共享内核的 `settleRelation`：扫描侧（`scanRoleStep`）只累计三个量
+ * ——最长完整前缀祖先、前面有没有参与请求、有没有不可比祖先——与同步路径的
+ * `matchPredecessor` 消费同一份判据，不再各自维护一套结论规则。
  */
 function finishRoleWork(db: Database, generation: string, work: RoleWork): void {
   let relation = 'unknown';
@@ -518,18 +519,16 @@ function finishRoleWork(db: Database, generation: string, work: RoleWork): void 
   } else if (work.fingerprints_json === null) {
     relation = 'unknown';
   } else {
-    const current = JSON.parse(work.fingerprints_json) as string[];
-    if (work.best_parent_len !== null) {
-      const length = work.best_parent_len;
-      relation = 'confirmed';
-      parent = work.best_parent_req;
-      delta = current.slice(length).map((_, offset) => offset + length);
-    } else if (work.saw_earlier === 0) {
-      relation = 'first';
-      delta = current.map((_, index) => index);
-    } else {
-      relation = work.unreadable_earlier === 1 ? 'unknown' : 'branch';
-    }
+    const settled = settleRelation({
+      current: JSON.parse(work.fingerprints_json) as string[],
+      parent: work.best_parent_len === null ? null
+        : { reqId: work.best_parent_req!, length: work.best_parent_len },
+      sawEarlier: work.saw_earlier === 1,
+      unreadableEarlier: work.unreadable_earlier === 1,
+    });
+    relation = settled.relation;
+    parent = settled.parent;
+    delta = settled.delta;
   }
   db.run(`UPDATE derive_request_result SET prev_req_id=?,prev_relation=?,delta_ordinals=?
     WHERE generation=? AND req_id=?`,
@@ -572,19 +571,26 @@ function openRoleWork(db: Database, generation: string): StageOutcome {
     ORDER BY traversal_ord LIMIT 1`,
   [generation, roleGen(db, generation)!.role_scan_ord]);
   if (next === null) {
-    // 主链根与同步路径同一判据：按遍历序第一个"没有父节点、或父节点不是可比参与请求"
-    // 的参与请求。只按 started_ms/req_id 取会把父节点是未知行的那一笔漏掉，
-    // 而同步路径把它当根，两边的 trunk 就会分叉。
-    const root = one<{ req_id: number }>(db, `
-      SELECT w.req_id AS req_id FROM derive_role_work w
-      LEFT JOIN derive_role_work p ON p.generation=w.generation AND p.req_id=w.parent_req_id
-      WHERE w.generation=? AND w.participating=1 AND w.relation IS NOT NULL AND w.relation<>'unknown'
-        AND (w.parent_req_id IS NULL OR p.req_id IS NULL OR p.participating<>1
-          OR p.relation IS NULL OR p.relation='unknown')
-      ORDER BY w.traversal_ord LIMIT 1`, [generation]);
+    // 根与 trunk 由共享判定给出：遍历序第一个「没有可比较父节点」的参与请求是根，
+    // 根的可达集是主链。早先只按 started_ms/req_id 取根会把父节点是未知行的那一笔
+    // 漏掉，与同步路径分叉——判据收进 chainTrunkRoot/chainTrunk 后只剩一个位置。
+    // 成员归属在收尾的这个事务里写进工作行，角色传播按它读，不再逐行从父行继承；
+    // 长组这里是单笔事务里最多的一次写入（每行一列），量级与同步路径整组重算相当。
+    const nodes = db.query<{ req_id: number; parent_req_id: number | null;
+      participating: number; relation: string | null }, [string]>(`
+      SELECT req_id,parent_req_id,participating,relation FROM derive_role_work
+      WHERE generation=? ORDER BY traversal_ord`).all(generation);
+    const chain = nodes.filter(row => row.participating === 1
+        && row.relation !== null && row.relation !== 'unknown')
+      .map(row => ({ reqId: row.req_id, parentReqId: row.parent_req_id }));
+    const root = chainTrunkRoot(chain);
+    const trunk = chainTrunk(chain, root);
+    const mark = db.prepare(
+      'UPDATE derive_role_work SET in_trunk=? WHERE generation=? AND req_id=?');
+    for (const node of chain) mark.run(trunk.has(node.reqId) ? 1 : 0, generation, node.reqId);
     db.run(`UPDATE derive_generation SET stage='role_assign',role_assign_ord=-1,
-      role_root_req=? WHERE generation=?`, [root?.req_id ?? null, generation]);
-    return { kind: 'advanced', stage: 'role_assign', rows: 0, writes: 1 };
+      role_root_req=? WHERE generation=?`, [root, generation]);
+    return { kind: 'advanced', stage: 'role_assign', rows: 0, writes: chain.length + 2 };
   }
   const current = one<{ purpose_revision: number }>(db,
     'SELECT purpose_revision FROM request WHERE req_id=?', [next.req_id]);
@@ -655,10 +661,9 @@ function scanRoleStep(db: Database, generation: string, budget: DeriveBudget): S
 /**
  * 一页主链角色传播。
  *
- * 与同步路径的森林遍历等价：父节点的遍历序一定更早，所以按遍历序推进时父行已经
- * 定好。父节点不是可比参与请求（不存在、不参与、或关系未知）的行按根处理——
- * 同步路径的根就是"没有父节点、或父节点不在参与森林里"。排除用途写 aux；
- * 参与但关系未知的行保持中性 main。角色传播不碰标题与摘要。
+ * trunk 归属已在角色扫描收尾时由共享判定（`chainTrunkRoot`/`chainTrunk`）写进
+ * 工作行，这里只把它翻成角色：排除用途写 aux；参与但关系未知的行保持中性 main，
+ * 不误标分支；其余按 in_trunk 给 main/branch。角色传播不碰标题与摘要。
  */
 function assignRoleStep(db: Database, generation: string, gen: RoleGen,
   budget: DeriveBudget): StageOutcome {
@@ -671,30 +676,20 @@ function assignRoleStep(db: Database, generation: string, gen: RoleGen,
     return { kind: 'advanced', stage: 'tools', rows: 0, writes: 1 };
   }
   for (const row of rows) {
-    let inTrunk = 0;
-    let role = 'main';
+    let role: string;
     if (row.participating !== 1) {
       role = 'aux';
     } else if (row.relation === null || row.relation === 'unknown') {
       role = 'main';
     } else {
-      const parent = row.parent_req_id === null ? null
-        : roleWork(db, generation, row.parent_req_id);
-      const parentIsNode = parent !== null && parent.participating === 1
-        && parent.relation !== null && parent.relation !== 'unknown';
-      // 父行一定更早，它的 in_trunk 已经定好；根节点只能是本次选出的那一个。
-      if (parentIsNode) inTrunk = parent!.in_trunk;
-      else inTrunk = row.req_id === gen.role_root_req ? 1 : 0;
-      role = inTrunk === 1 ? 'main' : 'branch';
+      role = row.in_trunk === 1 ? 'main' : 'branch';
     }
-    db.run('UPDATE derive_role_work SET in_trunk=? WHERE generation=? AND req_id=?',
-      [inTrunk, generation, row.req_id]);
     db.run('UPDATE derive_request_result SET chain_role=? WHERE generation=? AND req_id=?',
       [role, generation, row.req_id]);
   }
   db.run('UPDATE derive_generation SET role_assign_ord=? WHERE generation=?',
     [rows[rows.length - 1]!.traversal_ord, generation]);
-  return { kind: 'work', stage: 'role_assign', rows: rows.length, writes: rows.length * 2 + 1 };
+  return { kind: 'work', stage: 'role_assign', rows: rows.length, writes: rows.length + 1 };
 }
 
 function roleStep(db: Database, generation: string, budget: DeriveBudget): StageOutcome {
@@ -801,11 +796,12 @@ function candidateCalls(db: Database, generation: string, callId: string): Candi
 }
 
 /**
- * 一笔请求的工具配对。逐条复刻同步路径的 `pairToolCallsTx`：
+ * 一笔请求的工具配对。
  *
- * 结果必须晚于调用（同毫秒且顺序未证实不算证据）；重复回传的结果不能把已确认的
- * 配对降级；未确认的增量只建立 pending 候选，并且只记首次见到的位置。
- * 只读 work 行与结果行，不读正文。
+ * 阶梯顺序（多候选 → 结果必须更晚 → 同毫秒顺序可证 → resolved 终态 →
+ * 未确认增量只建 pending 且保留首见位置）在共享内核的 `pairOutcome` 里，
+ * 与同步路径的 `pairToolCallsTx` 消费同一份判据；这里只读 work 行与结果行、
+ * 把结论写进本代的工具结果表，不读正文。
  */
 function pairRequestTools(db: Database, generation: string, reqId: number): number {
   const own = one<{ purpose_chain: string }>(db, `SELECT purpose_chain
@@ -822,7 +818,7 @@ function pairRequestTools(db: Database, generation: string, reqId: number): numb
       result_req,result_ord,result_path,state,algorithm_version,basis_json,retention_state)
       VALUES (?,?,?,?,?,NULL,NULL,NULL,?,?,?,'recomputed')`,
     [generation, call.req_id, call.ord, call.call_id, call.tool_name,
-      candidates.length > 1 ? 'ambiguous' : 'pending', DERIVE_ALGORITHM,
+      initialPairState(candidates.length), DERIVE_ALGORITHM,
       toolBasis(generation, call.call_id)]);
     writes += 1;
     const results = db.query<ResultWork, [string, string]>(`
@@ -845,28 +841,22 @@ function pairRequestTools(db: Database, generation: string, reqId: number): numb
       }
       const resultOrder = orderOf(db, generation, result.req_id);
       if (callOrder === null || resultOrder === null) continue;
-      // 结果必须晚于调用。同一毫秒且顺序未证实时不配对：身份字典序不是证据。
-      if (compareLogicalOrder(callOrder, resultOrder) >= 0) continue;
-      if (callOrder.started_ms === resultOrder.started_ms
-        && (requestUncertain(db, generation, callOrder.started_ms, call.req_id)
-          || requestUncertain(db, generation, resultOrder.started_ms, result.req_id))) continue;
       const paired = one<{ state: string }>(db, `SELECT state FROM derive_tool_result
         WHERE generation=? AND req_id=? AND ord=?`, [generation, call.req_id, call.ord]);
-      // 已确认的配对是终态：后续请求会重发整段历史，重发样本只可能把它降级成
-      // pending，因此直接跳过。
-      if (paired?.state === 'resolved') continue;
-      if (result.confirmed !== 1) {
-        // 增量关系未知：只建立候选，不标 resolved；已有候选时保留更早的位置。
-        if (paired?.state === 'pending') continue;
-        db.run(`UPDATE derive_tool_result SET result_req=?,result_ord=?,result_path=?,
-          state='pending' WHERE generation=? AND req_id=? AND ord=?`,
-        [result.req_id, result.ord, result.path, generation, call.req_id, call.ord]);
-        writes += 1;
-        continue;
-      }
+      const outcome = pairOutcome({
+        candidateCount: candidates.length,
+        resultLater: compareLogicalOrder(callOrder, resultOrder) < 0,
+        orderCertain: callOrder.started_ms !== resultOrder.started_ms
+          || (!requestUncertain(db, generation, callOrder.started_ms, call.req_id)
+            && !requestUncertain(db, generation, resultOrder.started_ms, result.req_id)),
+        alreadyResolved: paired?.state === 'resolved',
+        alreadyPending: paired?.state === 'pending',
+        resultConfirmed: result.confirmed === 1,
+      });
+      if (outcome === 'skip') continue;
       db.run(`UPDATE derive_tool_result SET result_req=?,result_ord=?,result_path=?,
-        state='resolved' WHERE generation=? AND req_id=? AND ord=?`,
-      [result.req_id, result.ord, result.path, generation, call.req_id, call.ord]);
+        state=? WHERE generation=? AND req_id=? AND ord=?`,
+      [result.req_id, result.ord, result.path, outcome, generation, call.req_id, call.ord]);
       writes += 1;
     }
   }
@@ -962,10 +952,9 @@ export function sliceToolsStage(store: Store, generation: string,
 // ---------------------------------------------------------------------------
 // 摘要阶段：标题、输入摘要与回复摘要。
 //
-// 展示分支是同步路径 `writePresentationTx` 的逐条转录，只换读值与写值：
-// 读的是**当前** `request` 行（用途、标题、旧预览都是事实，不是这一代物化那一刻的快照），
-// 写的是本代的结果行。判据一份实现、两处调用，两套写法会让同一份正文在两条路径上
-// 得到不同的标题。
+// 展示分支住在共享内核的 `presentationDecision`，两条路径消费同一份判据；
+// 这里读的是**当前** `request` 行（用途、标题、旧预览都是事实，不是这一代物化
+// 那一刻的快照），写的是本代的结果行。
 // ---------------------------------------------------------------------------
 
 /** 一页写多少笔摘要。页是事务边界，也是一次调用里最小的可续跑单位。 */
@@ -1016,8 +1005,9 @@ function pageAssociations(db: Database, generation: string,
 /**
  * 一页请求的展示结果。
  *
- * 分支顺序与同步路径一致：标题请求 → 正文不可读 → 增量非空 → 增量存在但为空 →
- * 关系未知。降级顺序有意义：标题请求先判，不可读的标题请求也要走标题分支。
+ * 分支顺序（标题请求 → 正文不可读 → 增量非空 → 增量存在但为空 → 关系未知）
+ * 由共享内核的 `presentationDecision` 固定；这里只做用途修订守卫、可读性判定
+ * 与本代结果行的写回。
  */
 function summaryStep(db: Database, generation: string, budget: DeriveBudget): StageOutcome {
   const gen = summaryGen(db, generation);
@@ -1046,6 +1036,7 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
     return { kind: 'advanced', stage: 'ready', rows: 0, writes: 1 };
   }
   const associations = pageAssociations(db, generation, page.map(row => row.req_id));
+  const ports = presentationPortsOf(db);
   let writes = 0;
   for (const row of page) {
     const rowStarted = performance.now();
@@ -1061,73 +1052,30 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
     const replyInfo = current === null
       ? { preview: row.live_reply_preview }
       : replyInfoOf(db, row.req_id);
-    const isTitle = row.req_kind === 'title';
-    const isAux = row.purpose_chain === 'exclude';
-    const modelTitle = row.model_title;
-    const delta = row.delta_ordinals === null
-      ? null : JSON.parse(row.delta_ordinals) as number[];
-    const fallback = modelTimeTitle(row.model_served, row.started_ms);
-    let title = fallback;
-    let source: 'user_delta' | 'model_time' | 'model_title' = 'model_time';
-    let inputPreview: string | null = null;
-    let inputKind: 'delta' | 'tail' | 'tool_result' | 'title' | null = null;
-    if (isTitle) {
-      // 标题请求不产生用户标题：它的正式标题只来自用途阶段写下的 model_title。
-      title = modelTitle ?? (current === null ? row.live_title ?? fallback : fallback);
-      source = modelTitle !== null ? 'model_title'
-        : current === null && row.live_title_source === 'model_title' ? 'model_title' : 'model_time';
-      inputPreview = firstUserPreview(db, row.req_id) ?? '生成会话标题';
-      inputKind = 'title';
-    } else if (current === null) {
-      // 正文已回收：旧标题与旧摘要都是当时按正文算出来的，原样保留。
-      title = row.live_title ?? fallback;
-      source = row.live_title_source === 'user_delta' || row.live_title_source === 'model_time'
-        || row.live_title_source === 'model_title' ? row.live_title_source : 'model_time';
-      inputPreview = row.live_input_preview;
-      inputKind = row.live_input_preview_kind === 'delta' || row.live_input_preview_kind === 'tail'
-        || row.live_input_preview_kind === 'tool_result'
-        || row.live_input_preview_kind === 'title' ? row.live_input_preview_kind : null;
-    } else {
-      // 排除用途但不是标题请求：不把用户增量变成标题，只用已存的模型标题或时间兜底。
-      // 输入摘要仍按同一套关系取值，不为 aux 另写一份规则。这一段必须在增量分支
-      // **之前**：排除用途的行常常连关系都判不出来（`delta` 为空），兜底不能只在
-      // 有增量时才生效，否则同一个模型标题会随"判不判得出关系"变成两种结果。
-      if (isAux) {
-        title = modelTitle ?? fallback;
-        source = modelTitle !== null ? 'model_title' : 'model_time';
-      }
-      if (delta !== null && delta.length > 0) {
-        // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
-        const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
-        if (!isAux) {
-          const derived = deriveTitle(messages, delta.map((_, index) => index), fallback, row.agent);
-          title = derived.title;
-          source = derived.source;
+    const decision = presentationDecision(ports, {
+      reqId: row.req_id,
+      agent: row.agent,
+      modelServed: row.model_served,
+      startedMs: row.started_ms,
+      isAux: row.purpose_chain === 'exclude',
+      isTitle: row.req_kind === 'title',
+      modelTitle: row.model_title,
+      current,
+      delta: row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[],
+      retained: current === null
+        ? {
+          title: row.live_title,
+          titleSource: row.live_title_source,
+          inputPreview: row.live_input_preview,
+          inputPreviewKind: row.live_input_preview_kind,
         }
-        // 增量里常常只有工具结果或系统消息，没有用户文本。
-        // 有用户文本才算"新增"，否则照实说这一轮回传了什么工具结果。
-        const fresh = previewOf(messages, row.agent);
-        if (fresh !== null) {
-          inputPreview = fresh;
-          inputKind = 'delta';
-        } else {
-          inputPreview = toolResultPreview(db, row.req_id, delta, associations);
-          inputKind = inputPreview === null ? null : 'tool_result';
-        }
-      } else if (delta !== null) {
-        // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
-        inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
-        inputKind = 'tool_result';
-      } else {
-        // 关系未知、另起一支或排除用途：没有"新增"可言，但折叠行仍要有东西可读。
-        inputPreview = tailUserPreview(db, row.req_id);
-        inputKind = inputPreview === null ? null : 'tail';
-      }
-    }
+        : null,
+      replyPreview: replyInfo.preview,
+    }, associations);
     db.run(`UPDATE derive_request_result SET title=?,title_source=?,input_preview=?,
       input_preview_kind=?,reply_preview=?,retention_state=? WHERE generation=? AND req_id=?`,
-    [title, source, inputPreview, inputKind,
-      current === null ? row.live_reply_preview : replyInfo.preview,
+    [decision.title, decision.titleSource, decision.inputPreview, decision.inputKind,
+      decision.replyPreview,
       current === null ? 'retained' : 'recomputed', generation, row.req_id]);
     if (performance.now() - rowStarted > budget.maxRequestMs) {
       throw new Error('slice_summary_budget');

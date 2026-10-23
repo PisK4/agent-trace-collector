@@ -1,82 +1,25 @@
 import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
-import { modelTimeTitle } from './sources/magpie';
 import { GROUP_ALGORITHM, markGroupDirtyTx, queuePendingSql } from './derive-state';
 import { drainRequestPurposesTx } from './request-purpose';
 import { readBodyTx } from './body';
 import { assistantText } from './protocols';
 import { interpretMessage } from './input-interpretation';
+import {
+  anthropicReplyCalls, anthropicRequestResults, chainTrunk, chainTrunkRoot, clip,
+  initialPairState, matchPredecessor, pairOutcome, presentationDecision, replyToolSummary,
+  toolResultPreviewOf,
+} from './derive-decision';
+import type { PredecessorMatch, PresentationPorts, ResolvedTool } from './derive-decision';
 
 /**
- * 从回复里取工具调用；两种协议结构都认。
+ * 派生的同步路径与共享读取层。
  *
- * 导出给切片派生复用：候选抽取只有这一处实现，切片与同步不能各有一套
- * 「什么算一次工具调用」的判据。
+ * 「怎么判」住在 `derive-decision.ts`：这里负责读正文、整理输入形状、
+ * 在事务里按序落库。导出的读取 helpers（指纹、摘要、消息定位）同时是
+ * 切片路径的取值实现。
  */
-export function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
-  if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return [];
-  const content = (reply as Record<string, unknown>).content;
-  if (!Array.isArray(content)) {
-    // chat 形状：choices[0].message.tool_calls
-    const choices = (reply as Record<string, unknown>).choices;
-    if (!Array.isArray(choices)) return [];
-    const out: { id: string; name: string; ord: number }[] = [];
-    for (const choice of choices) {
-      if (choice === null || typeof choice !== 'object') continue;
-      const message = (choice as Record<string, unknown>).message;
-      if (message === null || typeof message !== 'object') continue;
-      const calls = (message as Record<string, unknown>).tool_calls;
-      if (!Array.isArray(calls)) continue;
-      for (const [index, call] of calls.entries()) {
-        if (call === null || typeof call !== 'object') continue;
-        const record = call as Record<string, unknown>;
-        const id = record.id;
-        const fn = record.function;
-        if (typeof id !== 'string' || fn === null || typeof fn !== 'object') continue;
-        out.push({ id, name: String((fn as Record<string, unknown>).name ?? ''), ord: index });
-      }
-    }
-    return out;
-  }
-  const out: { id: string; name: string; ord: number }[] = [];
-  for (const [ord, block] of content.entries()) {
-    if (block === null || typeof block !== 'object') continue;
-    const record = block as Record<string, unknown>;
-    if (record.type !== 'tool_use' || typeof record.id !== 'string') continue;
-    out.push({ id: record.id, name: String(record.name ?? ''), ord });
-  }
-  return out;
-}
-
-/** 从请求里取工具结果；Anthropic 的 tool_result 与 chat 的 role=tool。导出理由同上。 */
-export function anthropicRequestResults(request: unknown): { id: string; ord: number; path: string; value: unknown }[] {
-  if (request === null || typeof request !== 'object' || Array.isArray(request)) return [];
-  const messages = (request as Record<string, unknown>).messages;
-  if (!Array.isArray(messages)) return [];
-  const out: { id: string; ord: number; path: string; value: unknown }[] = [];
-  for (const [ord, message] of messages.entries()) {
-    if (message === null || typeof message !== 'object') continue;
-    const record = message as Record<string, unknown>;
-    if (record.role === 'tool' && typeof record.tool_call_id === 'string') {
-      out.push({ id: record.tool_call_id, ord, path: `request.messages[${ord}]`, value: record.content ?? null });
-      continue;
-    }
-    const content = record.content;
-    if (!Array.isArray(content)) continue;
-    for (const [index, block] of content.entries()) {
-      if (block === null || typeof block !== 'object') continue;
-      const entry = block as Record<string, unknown>;
-      if (entry.type !== 'tool_result' || typeof entry.tool_use_id !== 'string') continue;
-      out.push({
-        id: entry.tool_use_id, ord,
-        path: `request.messages[${ord}].content[${index}]`,
-        value: entry.content ?? null,
-      });
-    }
-  }
-  return out;
-}
 
 /**
  * 派生：前驱关系、确定增量、标题与工具往返。
@@ -84,126 +27,6 @@ export function anthropicRequestResults(request: unknown): { id: string; ord: nu
  * 归属未知（actor_state='unknown'）的请求不参与派生：不进队列、不算增量、
  * 不配工具、标题回落到模型时间。身份确认后才入队，避免跨子代理串数据。
  */
-
-export type SequenceRelation = 'first' | 'confirmed' | 'unknown' | 'branch' | 'aux';
-
-export type SequenceResult = {
-  relation: SequenceRelation;
-  delta: number[] | null;
-};
-
-/**
- * 比较两笔请求的消息序列。只有前驱的序列是本笔的完整前缀时才确认增量；
- * 压缩、裁剪或结构指令变化一律未知，不猜。
- *
- * 传入的是语义指纹而不是块哈希：块哈希带 cache_control，缓存断点一移动
- * 同一段历史就换哈希，会把完整的链读成互不相干的请求。
- */
-export function compareSequence(
-  previous: readonly string[] | null,
-  current: readonly string[],
-  hasPredecessor: boolean,
-): SequenceResult {
-  if (!hasPredecessor) return { relation: 'first', delta: current.map((_, index) => index) };
-  if (previous === null || previous.length > current.length ||
-      previous.some((id, index) => id !== current[index])) {
-    return { relation: 'unknown', delta: null };
-  }
-  return {
-    relation: 'confirmed',
-    delta: current.slice(previous.length).map((_, offset) => offset + previous.length),
-  };
-}
-
-/** 两条序列的公共前缀长度。导出给切片派生：祖先比对的判据只有这一处实现。 */
-export function commonPrefix(left: readonly string[], right: readonly string[]): number {
-  const limit = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < limit && left[index] === right[index]) index += 1;
-  return index;
-}
-
-export type PredecessorMatch = {
-  /** 完整前缀匹配到的祖先；null 表示本笔另起一支。 */
-  parent: number | null;
-  relation: SequenceRelation;
-  delta: number[] | null;
-  /** 找到的最长部分前缀祖先与它的公共长度，用于说明"最接近的一支"。 */
-  near: { reqId: number; shared: number } | null;
-};
-
-/**
- * 在链上所有已知祖先里找本笔的前驱。
- *
- * 只看立即前驱不够：一个会话里会并行开出子代理、重放历史、从更早的上下文
- * 分叉。本笔的上下文完整包含了某笔祖先时，那才是真正的前驱，哪怕中间还
- * 夹着别的请求。
- *
- * 判据仍然严格：只有"祖先序列是本笔的完整前缀"才算确认。找不到就另起一支，
- * 并记下最接近的那一支，界面据此说明，而不是只丢一句"无法确认"。
- *
- * @param ancestors 已按时间正序处理过的请求，携带各自的指纹序列
- * @param current 本笔的指纹序列
- * @param hasEarlier 本笔之前还有请求（哪怕它的正文不可读）
- */
-export function matchPredecessor(
-  ancestors: readonly { reqId: number; fingerprints: readonly string[] }[],
-  current: readonly string[],
-  hasEarlier = ancestors.length > 0,
-): PredecessorMatch {
-  let best: { reqId: number; shared: number } | null = null;
-  let parent: { reqId: number; length: number } | null = null;
-
-  for (const ancestor of ancestors) {
-    const shared = commonPrefix(ancestor.fingerprints, current);
-    if (shared > 0 && (best === null || shared > best.shared)) {
-      best = { reqId: ancestor.reqId, shared };
-    }
-    // 完整前缀：祖先整条都在本笔里。取最长的那条，即最深的祖先。
-    // shared > 0 排除零长度祖先：空序列是任何序列的前缀，认它当父节点等于
-    // 用"这一笔没有消息"证明"本笔续自它"，那是没有证据的边。
-    if (shared > 0 && shared === ancestor.fingerprints.length && shared <= current.length
-      && (parent === null || ancestor.fingerprints.length > parent.length)) {
-      parent = { reqId: ancestor.reqId, length: ancestor.fingerprints.length };
-    }
-  }
-
-  if (parent !== null) {
-    const delta = current.slice(parent.length).map((_, offset) => offset + parent.length);
-    return {
-      parent: parent.reqId,
-      relation: 'confirmed',
-      delta,
-      near: best,
-    };
-  }
-  // 本组第一笔：没有更早的请求可比，整笔都是新增。
-  if (!hasEarlier) {
-    return { parent: null, relation: 'first', delta: current.map((_, index) => index), near: null };
-  }
-  return { parent: null, relation: 'branch', delta: null, near: best };
-}
-
-const TITLE_UNICODE_LIMIT = 60;
-
-/** 取第一个确定新增 USER 文本的首行；没有可用增量时回落到模型时间。 */
-export function deriveTitle(
-  messages: readonly unknown[],
-  delta: readonly number[] | null,
-  fallback: string,
-  agent: string | null = null,
-): { title: string; source: 'user_delta' | 'model_time' } {
-  if (delta === null) return { title: fallback, source: 'model_time' };
-  for (const ordinal of delta) {
-    const view = interpretMessage(messages[ordinal], agent, ordinal);
-    if (view.input === null || view.input.state !== 'text') continue;
-    // 解释已经剥掉外层包装，这里只取首行并压空白。
-    const cleaned = view.input.text.split('\n')[0]?.replace(/\s+/g, ' ').trim();
-    if (cleaned === undefined || cleaned.length === 0) continue;
-    return { title: [...cleaned].slice(0, TITLE_UNICODE_LIMIT).join(''), source: 'user_delta' };
-  }
-  return { title: fallback, source: 'model_time' };
-}
 
 /** 只接受已确认归属的分组；调用方先守卫，这里再挡一层。 */
 export function enqueueDerive(store: Store, convKey: string, actor: string, fromSort: string): void {
@@ -334,33 +157,6 @@ export function fingerprintsOf(db: Database, reqId: number): string[] | null {
   return refs.map(ref => ref.fingerprint);
 }
 
-/** 摘要长度按 Unicode 字符算，避免把中文截成半个字。 */
-const PREVIEW_UNICODE_LIMIT = 90;
-/** 工具结果只取开头一小段：折叠行只需要提示这一笔在回传什么。 */
-const TOOL_RESULT_PREVIEW_LIMIT = 100;
-
-function clip(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  const chars = [...flat];
-  return chars.length <= PREVIEW_UNICODE_LIMIT ? flat : `${chars.slice(0, PREVIEW_UNICODE_LIMIT).join('')}…`;
-}
-
-/**
- * 折叠行摘要：本轮新增的用户输入，剥掉 harness 包装后取首段。
- *
- * 导出给切片派生复用：剥包装与取首段是一条判据，两套实现会让同一份正文
- * 在同步与切片两条路径上得到不同的摘要。
- */
-export function previewOf(messages: readonly (unknown | null)[], agent: string | null): string | null {
-  for (const [ordinal, message] of messages.entries()) {
-    const input = interpretMessage(message, agent, ordinal).input;
-    if (input === null || input.state !== 'text') continue;
-    const cleaned = input.text.trim();
-    if (cleaned.length > 0) return clip(cleaned);
-  }
-  return null;
-}
-
 /**
  * 关系未知时折叠行的兜底摘要：正文里最后一条用户文本。
  *
@@ -423,72 +219,35 @@ type PresentationInput = {
  * 写标题与折叠行摘要。必须在工具配对之后调用：增量里的工具结果轮次
  * 只能消费本次确定下来的关联，不能跨组按 call_id 取首行。
  *
+ * 判定在 `presentationDecision`（两条路径唯一）；这里只负责取旧值、组装输入、
+ * 把判定结果连同摘要依据写回 `request` 行。
+ *
  * 正文可读时标题从当前输入重算，不沿用旧派生值；正文不可读时旧标题与旧摘要
  * 原样保留——那是当时按正文算出来的，没有正文重算只会把它们降级成时间兜底。
  */
 function writePresentationTx(db: Database, input: PresentationInput,
   associations: readonly ResolvedTool[], group: QueuedGroup): void {
   const { row, current, replyInfo, isAux, isTitle, modelTitle, match } = input;
-  const delta = match.delta;
-  const fallback = modelTimeTitle(row.model_served, row.started_ms);
-  let title = fallback;
-  let source: 'user_delta' | 'model_time' | 'model_title' = 'model_time';
-  let inputPreview: string | null = null;
-  let inputKind: 'delta' | 'tail' | 'tool_result' | 'title' | null = null;
-  if (isTitle) {
-    // 标题请求不产生用户标题；它的正式标题只来自用途阶段写下的 model_title。
-    title = modelTitle ?? (current === null ? row.title ?? fallback : fallback);
-    source = modelTitle !== null ? 'model_title'
-      : current === null && row.title_source === 'model_title' ? 'model_title' : 'model_time';
-    inputPreview = firstUserPreview(db, row.req_id) ?? '生成会话标题';
-    inputKind = 'title';
-  } else if (current === null) {
-    // 正文已回收：旧标题与旧摘要都是当时按正文算出来的，原样保留。
-    title = row.title ?? fallback;
-    source = row.title_source === 'user_delta' || row.title_source === 'model_time'
-      || row.title_source === 'model_title' ? row.title_source : 'model_time';
-    inputPreview = row.input_preview;
-    inputKind = row.input_preview_kind === 'delta' || row.input_preview_kind === 'tail'
-      || row.input_preview_kind === 'tool_result' || row.input_preview_kind === 'title'
-      ? row.input_preview_kind : null;
-  } else {
-    // 排除用途但不是标题请求：不把用户增量变成标题，只用已存的模型标题或时间兜底。
-    // 输入摘要仍按同一套关系取值，不为 aux 另写一份规则。
-    if (isAux) {
-      title = modelTitle ?? fallback;
-      source = modelTitle !== null ? 'model_title' : 'model_time';
-    }
-    if (delta !== null && delta.length > 0) {
-      // delta 里存的是本笔的 ord；取出对应消息后按 0..n-1 重新编号给 deriveTitle。
-      const messages = delta.map(ordinal => messageAt(db, row.req_id, ordinal));
-      if (!isAux) {
-        const derived = deriveTitle(messages, delta.map((_, index) => index), fallback, row.agent);
-        title = derived.title;
-        source = derived.source;
+  const decision = presentationDecision(presentationPortsOf(db), {
+    reqId: row.req_id,
+    agent: row.agent,
+    modelServed: row.model_served,
+    startedMs: row.started_ms,
+    isAux,
+    isTitle,
+    modelTitle,
+    current,
+    delta: match.delta,
+    retained: current === null
+      ? {
+        title: row.title,
+        titleSource: row.title_source,
+        inputPreview: row.input_preview,
+        inputPreviewKind: row.input_preview_kind,
       }
-      // 增量里常常只有工具结果或系统消息，没有用户文本。
-      // 有用户文本才标成"新增"；否则照实说这一轮回传了什么工具结果。
-      // 不要回退到"末轮输入"——那会把同一句旧用户消息重复到每一笔请求上。
-      const fresh = previewOf(messages, row.agent);
-      if (fresh !== null) {
-        inputPreview = fresh;
-        inputKind = 'delta';
-      } else {
-        inputPreview = toolResultPreview(db, row.req_id, delta, associations);
-        inputKind = inputPreview === null ? null : 'tool_result';
-      }
-    } else if (delta !== null) {
-      // 这一笔没有新增消息：输入就是上一轮的工具结果，摘要照实说。
-      inputPreview = '输入是上一轮的工具结果，没有新的用户消息';
-      inputKind = 'tool_result';
-    } else {
-      // 关系未知、另起一支或排除用途：没有"新增"可言，但折叠行仍要有东西可读。
-      // 取正文里最后一条用户消息，界面会把它标成"末轮输入"而不是"新增"。
-      inputPreview = tailUserPreview(db, row.req_id);
-      inputKind = inputPreview === null ? null : 'tail';
-    }
-  }
-  const replyPreview = current === null ? row.reply_preview : replyInfo.preview;
+      : null,
+    replyPreview: replyInfo.preview,
+  }, associations);
   // 摘要与标题是派生结果，不是来源事实：可比较时记下算法与本次消费的输入身份，
   // 不可比较时保留原算法与 basis 只把状态标成 retained——不能把旧值冒充成本次重算。
   const inputRow = db.query<{ input_epoch: string; input_revision: number }, [number]>(
@@ -504,93 +263,18 @@ function writePresentationTx(db: Database, input: PresentationInput,
     summary_basis=CASE WHEN ?=1 THEN ? ELSE summary_basis END,
     summary_state=CASE WHEN ?=1 THEN 'recomputed' ELSE 'retained' END
     WHERE req_id=?`, [
-    title, source, inputPreview, inputKind, replyPreview,
+    decision.title, decision.titleSource, decision.inputPreview, decision.inputKind,
+    decision.replyPreview,
     comparable ? 1 : 0, GROUP_ALGORITHM, comparable ? 1 : 0, basis, comparable ? 1 : 0,
     row.req_id,
   ]);
 }
 
 /**
- * 工具结果内容压平；数组形状里只取 text 块。
- *
- * 导出给切片派生复用：结果正文怎么压平是一条判据，两套实现会让同一份工具结果
- * 在同步与切片两条路径上得到不同的摘要。
- */
-export function flattenToolContent(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) {
-    const parts: string[] = [];
-    for (const block of value) {
-      if (typeof block === 'string') {
-        parts.push(block);
-        continue;
-      }
-      if (block === null || typeof block !== 'object') continue;
-      const text = (block as Record<string, unknown>).text;
-      if (typeof text === 'string') parts.push(text);
-    }
-    return parts.join(' ');
-  }
-  if (value === null || value === undefined) return '';
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return '';
-  }
-}
-
-/**
- * 增量里没有用户文本时的输入摘要：这一笔回传的工具结果。
- *
- * 名字只从本次配对确定下来的关联取，按调用位置与结果 path 精确定位；
- * 不查上一轮表、其它组或不可重算的保留行。顺序按消息出现顺序，同名合并计数。
- *
- * 导出给切片派生复用：名称选取、内容兜底、合并计数与截断都只有这一份实现，
- * 关联数组由调用方按 `ResolvedTool` 形状交出本代已确认的往返。
- */
-export function toolResultPreview(db: Database, reqId: number, delta: readonly number[],
-  associations: readonly ResolvedTool[]): string | null {
-  const names: string[] = [];
-  let content: string | null = null;
-  // 稀疏位留给结果提取跳过：ord 必须保持原位置，不能压缩。
-  const messages: unknown[] = [];
-  for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal);
-  for (const result of anthropicRequestResults({ messages })) {
-    const matches = associations.filter(link => link.resultReq === reqId
-      && link.resultOrd === result.ord && link.resultPath === result.path
-      && link.callId === result.id);
-    if (matches.length === 1 && matches[0]!.name.length > 0) names.push(matches[0]!.name);
-    if (content !== null) continue;
-    const flat = flattenToolContent(result.value).replace(/\s+/g, ' ').trim();
-    if (flat.length > 0) content = flat;
-  }
-  if (names.length > 0) {
-    const counts = new Map<string, number>();
-    for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
-    const parts = [...counts].map(([name, count]) => count > 1 ? `${name} ×${count}` : name);
-    return clip(`工具结果 · ${parts.join(', ')}`);
-  }
-  if (content === null) return null;
-  const chars = [...content];
-  const truncated = chars.length <= TOOL_RESULT_PREVIEW_LIMIT
-    ? content
-    : `${chars.slice(0, TOOL_RESULT_PREVIEW_LIMIT).join('')}…`;
-  return `工具结果 · ${truncated}`;
-}
-
-/** 回复没有文本时的兜底：这一笔发起的工具调用名，按出现顺序列出。 */
-function replyToolSummary(reply: unknown): string | null {
-  const calls = anthropicReplyCalls(reply);
-  if (calls.length === 0) return null;
-  const names = calls.map(call => call.name.length > 0 ? call.name : 'unknown');
-  return `工具调用 · ${names.join(', ')}`;
-}
-
-/**
  * 折叠行摘要：回复文本首段；没有文本时退到工具调用名。
  *
- * 导出给切片派生复用：正文不可读时回复摘要必须原样保留旧值，能读时重算，
- * 这个分档与文本兜底同上，只有一份实现。
+ * 正文不可读时回复摘要必须原样保留旧值，能读时重算，这个分档与文本兜底同上，
+ * 只有一份实现。
  */
 export type ReplyInfo = { preview: string | null };
 
@@ -612,6 +296,29 @@ export function messageAt(db: Database, reqId: number, ordinal: number): unknown
   } catch {
     return null;
   }
+}
+
+/** db 版工具结果摘要：按 delta 的原始 ord 稀疏取消息，判定交给共享实现。 */
+function toolResultPreview(db: Database, reqId: number, delta: readonly number[],
+  associations: readonly ResolvedTool[]): string | null {
+  // 稀疏位留给结果提取跳过：ord 必须保持原位置，不能压缩。
+  const messages: unknown[] = [];
+  for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal);
+  return toolResultPreviewOf(messages, reqId, associations);
+}
+
+/**
+ * 展示判定的 db 适配：两条路径的正文读取只有这一份实现，
+ * 切片路径与同步路径传同一个构造结果给 `presentationDecision`。
+ */
+export function presentationPortsOf(db: Database): PresentationPorts {
+  return {
+    firstUserPreview: reqId => firstUserPreview(db, reqId),
+    messageAt: (reqId, ordinal) => messageAt(db, reqId, ordinal),
+    toolResultPreview: (reqId, delta, associations) =>
+      toolResultPreview(db, reqId, delta, associations),
+    tailUserPreview: reqId => tailUserPreview(db, reqId),
+  };
 }
 
 /**
@@ -637,27 +344,9 @@ function assignChainRoles(db: Database, convKey: string, actor: string): void {
   const ordered = [...rows].sort(compareTraversalOrder);
   const first = ordered[0];
   if (first === undefined) return;
-  const ids = new Set(ordered.map(row => row.req_id));
-  const children = new Map<number, number[]>();
-  const roots: number[] = [];
-  for (const row of ordered) {
-    if (row.prev_req_id === null || !ids.has(row.prev_req_id)) {
-      roots.push(row.req_id);
-      continue;
-    }
-    const list = children.get(row.prev_req_id);
-    if (list === undefined) children.set(row.prev_req_id, [row.req_id]);
-    else list.push(row.req_id);
-  }
-  const trunkRoot = roots[0] ?? first.req_id;
-  const trunk = new Set<number>();
-  const stack = [trunkRoot];
-  while (stack.length > 0) {
-    const id = stack.pop();
-    if (id === undefined || trunk.has(id)) continue;
-    trunk.add(id);
-    for (const child of children.get(id) ?? []) stack.push(child);
-  }
+  const nodes = ordered.map(row => ({ reqId: row.req_id, parentReqId: row.prev_req_id }));
+  // 根与 trunk 是共享判定（chainTrunkRoot/chainTrunk）；切片路径按同一判据传播。
+  const trunk = chainTrunk(nodes, chainTrunkRoot(nodes) ?? first.req_id);
   const update = db.prepare('UPDATE request SET chain_role=? WHERE req_id=?');
   for (const row of rows) update.run(trunk.has(row.req_id) ? 'main' : 'branch', row.req_id);
 }
@@ -775,10 +464,9 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
         // 顺序未证实：同毫秒的来源身份只够排序，不够当因果证据。
         match = { parent: null, relation: 'unknown', delta: null, near: null };
       } else {
-        const found = matchPredecessor(ancestors, current, sawEarlier);
-        match = found.relation === 'branch' && unreadableEarlier
-          ? { ...found, relation: 'unknown' }
-          : found;
+        // 顺序未证实的行在祖先扫描里仍占位（sawEarlier/unreadableEarlier 已记账），
+        // 分支到 unknown 的降级在 settleRelation 里完成，不再由调用方修补。
+        match = matchPredecessor(ancestors, current, sawEarlier, unreadableEarlier);
       }
       if (!isAux) {
         // 排除用途是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
@@ -862,12 +550,6 @@ export type PairRow = LogicalRow & {
   prev_relation: string | null; delta_ordinals: string | null;
 };
 
-/** 本次确定下来的一个工具往返：调用位置与结果位置都精确到 ord 与 path。 */
-export type ResolvedTool = {
-  callReq: number; callOrd: number; callId: string; name: string;
-  resultReq: number; resultOrd: number; resultPath: string;
-};
-
 type PairResult = {
   resolved: number; ambiguous: number; pending: number;
   associations: ResolvedTool[];
@@ -929,7 +611,7 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
   let pending = 0;
   for (const call of calls) {
     const candidates = byCallId.get(call.call_id) ?? [];
-    const state = candidates.length > 1 ? 'ambiguous' : 'pending';
+    const state = initialPairState(candidates.length);
     if (state === 'ambiguous') ambiguous += 1;
     else pending += 1;
     db.run(
@@ -955,35 +637,29 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
       continue;
     }
     const call = candidates[0]!;
-    // 结果必须晚于调用。同一毫秒且顺序未证实时不配对：身份字典序不是证据。
     const callRow = rows[call.index]!;
     const resultRow = rows[result.index]!;
-    if (compareLogicalOrder(callRow, resultRow) >= 0) continue;
-    if (callRow.started_ms === resultRow.started_ms
-      && (uncertain.has(callRow.req_id) || uncertain.has(resultRow.req_id))) continue;
-    // 后续请求会重发整段历史，同一结果会反复出现。已确认的配对是终态，
-    // 重发样本只可能把它降级成 pending，因此直接跳过。
     const paired = db.query<{ state: string }, [number, number]>(
       'SELECT state FROM tool_call WHERE req_id=? AND ord=?',
     ).get(call.req_id, call.ord);
-    if (paired?.state === 'resolved') continue;
-    if (!result.confirmed) {
-      // 增量关系未知：只建立候选，不标 resolved。若这一格此前已有候选位置，
-      // 保留更早的那个位置——候选只记首次见到的地方。
-      if (paired?.state === 'pending') continue;
-      db.run(
-        `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='pending'
-         WHERE req_id=? AND ord=?`,
-        [result.req_id, result.ord, result.path, call.req_id, call.ord],
-      );
-      continue;
-    }
+    // 阶梯顺序（多候选 → 必须更晚 → 顺序可证 → resolved 终态 → pending 保留首见）
+    // 在 pairOutcome 里，两条路径共用。
+    const outcome = pairOutcome({
+      candidateCount: candidates.length,
+      resultLater: compareLogicalOrder(callRow, resultRow) < 0,
+      orderCertain: callRow.started_ms !== resultRow.started_ms
+        || (!uncertain.has(callRow.req_id) && !uncertain.has(resultRow.req_id)),
+      alreadyResolved: paired?.state === 'resolved',
+      alreadyPending: paired?.state === 'pending',
+      resultConfirmed: result.confirmed,
+    });
+    if (outcome === 'skip') continue;
     db.run(
-      `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='resolved'
+      `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state=?
        WHERE req_id=? AND ord=?`,
-      [result.req_id, result.ord, result.path, call.req_id, call.ord],
+      [result.req_id, result.ord, result.path, outcome, call.req_id, call.ord],
     );
-    resolved += 1;
+    if (outcome === 'resolved') resolved += 1;
   }
 
   // 本次确定下来的关联：只从本轮新建且最终 resolved 的调用行形成。

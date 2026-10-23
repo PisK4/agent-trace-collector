@@ -6,8 +6,8 @@ import { fixture, seedPurposeRequest } from './fixtures';
 import { openStore } from '../src/store';
 import { runMaintenance } from '../src/maintenance';
 import type { Store } from '../src/store';
-import { compareSequence, deriveTitle, drainDerive, drainDeriveTx, enqueueDerive,
-  matchPredecessor } from '../src/derive';
+import { deriveTitle, matchPredecessor } from '../src/derive-decision';
+import { drainDerive, drainDeriveTx, enqueueDerive } from '../src/derive';
 import { PURPOSE_VERSION } from '../src/semantics';
 import { GROUP_ALGORITHM } from '../src/derive-state';
 import { listSessions } from '../src/queries';
@@ -18,11 +18,9 @@ import { persistBody } from '../src/body';
 import type { BodyInput } from '../src/body';
 
 test('重复消息仍按位置计新增', () => {
-  expect(compareSequence(['a', 'b'], ['a', 'b', 'a'], true)).toEqual({ relation: 'confirmed', delta: [2] });
-  expect(compareSequence(['a', 'b'], ['b', 'a'], true)).toEqual({ relation: 'unknown', delta: null });
-  expect(compareSequence(null, ['a', 'b'], true)).toEqual({ relation: 'unknown', delta: null });
-  expect(compareSequence(null, ['a', 'b'], false)).toEqual({ relation: 'first', delta: [0, 1] });
-  expect(compareSequence(['a'], ['a'], true)).toEqual({ relation: 'confirmed', delta: [] });
+  // 集合差会吞掉真正新增的那条；序列比较按位置计增量，判据在 matchPredecessor。
+  expect(matchPredecessor([], ['u:hello', 'u:hello'], false))
+    .toEqual({ parent: null, relation: 'first', delta: [0, 1], near: null });
 });
 
 test('前驱在链上任意祖先里找，不只看上一笔', () => {
