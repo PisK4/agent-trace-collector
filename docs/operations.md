@@ -296,4 +296,4 @@ AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按
 
 当前 `user_version=6`。空数据目录首次启动直接建到 v6；低版本一律报 `schema_rebuild_required`（含 v5），高版本报 `schema_version_unsupported`。
 
-首版发布前不提供跨结构升级，也没有迁移命令与续跑入口：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库；旧库里的正文与派生结果一起丢弃，没有"结构已升级、数据未迁移"的中间态。需要保留旧库里的正文时，在升级前用旧版本导出。`scripts/backfill-fingerprint.ts` 补的是 v3/v4 时代的派生列，不是到 v6 的路径——它把 `user_version` 写成 4，v6 的代码打不开它。不要手改 `user_version`。
+首版发布前不提供跨结构升级，也没有迁移命令与续跑入口：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库；旧库里的正文与派生结果一起丢弃，没有"结构已升级、数据未迁移"的中间态。重建后的历史只有元数据：账本与路由的重放不产生正文，而正文只能从 hook 拿到，所以重建前的正文、预览与工具配对都补不回来。要留住正文就在升级前导出：正文落在旧库的 `block.z` 与 `request.skeleton_z`，`raw_hook` 里的原文在完成关联后通常已经清空，不是可靠的导出源。`scripts/backfill-fingerprint.ts` 补的是 v3/v4 时代的派生列，不是到 v6 的路径——它把 `user_version` 写成 4，v6 的代码打不开它。不要手改 `user_version`。
