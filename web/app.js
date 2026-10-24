@@ -747,13 +747,14 @@ if (typeof document !== 'undefined') {
   function traceHtml() {
     const window = store.getWindow();
     const rows = currentRows();
-    let html = `<div class="step-list"><div class="history-loader">`;
+    // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载更早
+    // 记录后 rows.length 累计，重绘时重算，不按首次加载上限截断。
+    const ordDigits = Math.max(1, String(rows.length).length);
+    let html = `<div class="step-list" style="--ord-digits:${ordDigits}"><div class="history-loader">`;
     if (window.loading) {
       html += '<span class="history-start">正在读取更早记录…</span>';
     } else if (window.olderCursor !== null) {
       html += '<button id="load-earlier" class="history-button">↑ 加载更早记录</button>';
-    } else if (rows.length > 0) {
-      html += '<span class="history-start">已到会话起点</span>';
     }
     html += '<span class="history-range">序号表示当前窗口内的请求 · 时间从上往下 · 点击行查看详情</span></div>';
     for (const r of rows) {
