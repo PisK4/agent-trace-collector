@@ -740,3 +740,34 @@ test('重建把目标会话的 Chat System 分类器改为 exclude，其他会�
     f.close();
   }
 });
+
+test('重建把目标会话的派生算法号追平，阅读派生结果按新算法重算', async () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'algo-catchup', purposeTarget: 1, purposeVersion: 1,
+      purposeStatus: 'unrecognized', purposePending: 0, cleanGroup: true,
+      messages: [{ role: 'user', content: 'synthetic input' }],
+      reply: { content: [{ type: 'text', text: 'hello' }] },
+    });
+    // 旧算法号的已完成组：重建必须换代重算，而不是沿用旧结果。
+    f.store.write(db => db.run(
+      `UPDATE derive_queue SET target_algorithm=1, published_algorithm=1, state='clean'
+       WHERE conv_key='algo-catchup'`));
+    const lines: string[] = [];
+    const code = await runMaintenance(['rebuild', '--db', join(f.dir, 'trace.db'),
+      '--session', 'algo-catchup'], { out: line => lines.push(line), err: () => {} });
+    expect(code).toBe(0);
+    const queue = f.store.read.query<{ target_algorithm: number; published_algorithm: number;
+      state: string; published_generation: string | null }, [string]>(
+      'SELECT target_algorithm, published_algorithm, state, published_generation FROM derive_queue WHERE conv_key=?')
+      .get('algo-catchup');
+    expect(queue).toMatchObject({ target_algorithm: GROUP_ALGORITHM, published_algorithm: GROUP_ALGORITHM });
+    expect(queue?.state === 'clean' || queue?.state === 'dirty').toBe(true);
+    expect(f.store.read.query<{ purpose_target: number }, [number]>(
+      'SELECT purpose_target FROM request WHERE req_id=?').get(id))
+      .toEqual({ purpose_target: PURPOSE_VERSION });
+  } finally {
+    f.close();
+  }
+});

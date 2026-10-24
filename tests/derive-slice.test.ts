@@ -24,7 +24,7 @@ function seedGroup(f: ReturnType<typeof fixture>): void {
         'old title','model_time','e1',7,11,3,'chat','model title')`);
     db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,input_revision,
       published_revision,target_algorithm,published_algorithm,state,dirty_since_ms)
-      VALUES ('c','a','','g1',7,7,5,5,'dirty',50)`);
+      VALUES ('c','a','','g1',7,7,${DERIVE_ALGORITHM},${DERIVE_ALGORITHM},'dirty',50)`);
   });
 }
 
@@ -33,7 +33,7 @@ function seedResult(f: ReturnType<typeof fixture>, generation: string, title: st
     generation,req_id,input_epoch,input_revision,sort_source,sort_key,started_ms,
     title,title_source,traversal_ord,purpose_revision,purpose_version,algorithm,
     retention_state,basis_json)
-    VALUES (?,1,'e1',7,NULL,NULL,100,?,'model_time',0,11,3,5,'recomputed','{}')`,
+    VALUES (?,1,'e1',7,NULL,NULL,100,?,'model_time',0,11,3,${DERIVE_ALGORITHM},'recomputed','{}')`,
     [generation, title]));
 }
 
@@ -53,7 +53,7 @@ test('发布指针原子切换并保留旧代结果', () => {
     expect(publishGeneration(f.store.db, first, 1100)).toBe(true);
     let queue = f.store.read.query('SELECT * FROM derive_queue').get() as Record<string, unknown>;
     expect(queue).toMatchObject({ state: 'clean', published_generation: first,
-      published_revision: 7, published_algorithm: 5, legacy_snapshot: 0 });
+      published_revision: 7, published_algorithm: DERIVE_ALGORITHM, legacy_snapshot: 0 });
     expect(queue.compute_generation).toBeNull();
 
     f.store.write(db => db.run(`UPDATE derive_queue SET state='dirty',
@@ -675,7 +675,7 @@ test('排除用途的行不从用户增量取标题', () => {
             '旁路旧标题','user_delta','e1',1,11,1,'exclude','chat',?,'模型X')`, [modelTitle]);
         db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,input_revision,
           published_revision,target_algorithm,state,dirty_since_ms)
-          VALUES ('c','a','','g1',1,0,5,'dirty',1)`);
+          VALUES ('c','a','','g1',1,0,${DERIVE_ALGORITHM},'dirty',1)`);
       });
       persistBody(f.store, 1, {
         protocol: 'anthropic',
@@ -690,7 +690,7 @@ test('排除用途的行不从用户增量取标题', () => {
         db.run(`INSERT INTO derive_request_result(generation,req_id,input_epoch,input_revision,
           started_ms,traversal_ord,purpose_revision,purpose_version,chain_role,delta_ordinals,
           algorithm,retention_state,basis_json)
-          VALUES (?,1,'e1',1,100,0,11,1,'aux','[0]',5,'recomputed','{}')`, [generation]);
+          VALUES (?,1,'e1',1,100,0,11,1,'aux','[0]',${DERIVE_ALGORITHM},'recomputed','{}')`, [generation]);
         db.run(`UPDATE derive_generation SET stage='summary',summary_cursor_ord=-1,
           request_count=1 WHERE generation=?`, [generation]);
       });
@@ -893,5 +893,48 @@ test('切片入口分批推进到发布，没有运行时的库走同步路径',
     expect(f.store.read.query<{ prev_relation: string }, [number]>(
       'SELECT prev_relation FROM request WHERE req_id=2').get(2))
       .toEqual({ prev_relation: 'confirmed' });
+  } finally { f.close(); }
+});
+
+test('多 choice 回复经切片派生也不发布工具行，组照常发布', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, [
+      { req_id: 1, started_ms: 100, sort_source: 'ledger', sort_key: 'ledger|0000' },
+      { req_id: 2, started_ms: 200, sort_source: 'ledger', sort_key: 'ledger|0001' },
+    ]);
+    const callOf = (id: string) => ({ id, type: 'function', function: { name: 'read', arguments: '{}' } });
+    persistBody(f.store, 1, {
+      protocol: 'chat',
+      request: { messages: [{ role: 'user', content: '读一下' }] },
+      reply: { choices: [
+        { finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [callOf('choice_left')] } },
+        { finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [callOf('choice_right')] } },
+      ] },
+      redact_version: 1,
+    });
+    persistBody(f.store, 2, {
+      protocol: 'chat',
+      request: { messages: [
+        { role: 'user', content: '读一下' },
+        { role: 'tool', tool_call_id: 'choice_left', content: 'file body' },
+      ] },
+      reply: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'done' } }] },
+      redact_version: 1,
+    });
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE conv_key=? AND actor=?',
+      [SEED_GROUP.convKey, SEED_GROUP.actor]));
+    enqueueDerive(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, '');
+    f.store.deriveRuntime = sliceRuntime(f);
+    for (let index = 0; index < 200; index++) {
+      const result = drainDeriveEntry(f.store, 1);
+      if (result.remaining === 0) break;
+    }
+    const queue = f.store.read.query('SELECT * FROM derive_queue').get() as Record<string, unknown>;
+    expect(queue).toMatchObject({ state: 'clean', published_algorithm: DERIVE_ALGORITHM });
+    // 两个 choice 的调用序号都是 0：切片发布代里不出现确定工具位置。
+    expect(f.store.read.query<{ n: number }, [string]>(
+      'SELECT COUNT(*) AS n FROM derive_tool_result WHERE generation=?')
+      .get(String(queue.published_generation))).toEqual({ n: 0 });
   } finally { f.close(); }
 });

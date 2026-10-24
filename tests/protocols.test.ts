@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { anthropicReplyCalls } from '../src/derive-decision';
 import { parseProtocol } from '../src/protocols';
 
 test('请求有效而回复缺失仍可阅读请求', () => {
@@ -94,4 +95,19 @@ test('messages 存在但不是数组时消息数不明', () => {
   const parsed = parseProtocol('chat', { messages: 'oops' }, { id: 'chatcmpl_z', choices: [] });
   expect(parsed.parse_state).toBe('ok');
   expect(parsed.message_count).toBeNull();
+});
+
+test('多 choice 不发布只有 ord 的确定调用身份', () => {
+  const reply = {
+    choices: ['left', 'right'].map(id => ({ message: {
+      role: 'assistant', content: null,
+      tool_calls: [{ id, type: 'function', function: { name: 'read', arguments: '{}' } }],
+    } })),
+  };
+  expect(parseProtocol('chat', { messages: [] }, reply).calls).toEqual([]);
+  expect(anthropicReplyCalls(reply)).toEqual([]);
+  // 单 choice 路径与序号保持原义。
+  const single = { choices: [reply.choices[0]] };
+  expect(parseProtocol('chat', { messages: [] }, single).calls.map(call => call.ord)).toEqual([0]);
+  expect(anthropicReplyCalls(single)).toEqual([{ id: 'left', name: 'read', ord: 0 }]);
 });
