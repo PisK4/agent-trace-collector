@@ -21,12 +21,12 @@
   --k-system:#6b4fbb; --k-user:#1c7a4f; --k-assistant:#9a6206; --k-tool:#0f6f78; --k-field:#5c6c7a;
   --k-system-bg:rgba(107,79,187,.10); --k-user-bg:rgba(28,122,79,.10); --k-assistant-bg:rgba(154,98,6,.12);
   --k-tool-bg:rgba(15,111,120,.10); --k-field-bg:rgba(92,108,122,.10);
-  /* 工具身份强调色：Read 蓝、Edit 橙、Write 紫、Bash 红、Skill 黄、Agent 绿、其余中性青灰。
-     与 --p1..p6 上下文槽位是两套语义，不共用变量。 */
+  /* 工具身份强调色：Read 蓝、Edit 橙、Write 紫、Bash 玫红（红留给失败语义）、
+     Skill 黄、Agent 绿、其余中性青灰。与 --p1..p6 上下文槽位是两套语义，不共用变量。 */
   --tool-read:#2569c4; --tool-read-bg:rgba(37,105,196,.11);
   --tool-edit:#d95d28; --tool-edit-bg:rgba(217,93,40,.11);
   --tool-write:#7a52c9; --tool-write-bg:rgba(122,82,201,.11);
-  --tool-bash:#b03040; --tool-bash-bg:rgba(176,48,64,.11);
+  --tool-bash:#c2497d; --tool-bash-bg:rgba(194,73,125,.11);
   --tool-skill:#8f7408; --tool-skill-bg:rgba(143,116,8,.13);
   --tool-agent:#187a52; --tool-agent-bg:rgba(24,122,82,.11);
   --tool-other:#566b7a; --tool-other-bg:rgba(86,107,122,.11);
@@ -52,7 +52,7 @@
     --tool-read:#6fa9ee; --tool-read-bg:rgba(111,169,238,.14);
     --tool-edit:#ef8a55; --tool-edit-bg:rgba(239,138,85,.14);
     --tool-write:#b49af0; --tool-write-bg:rgba(180,154,240,.14);
-    --tool-bash:#f27a8a; --tool-bash-bg:rgba(242,122,138,.13);
+    --tool-bash:#f190bd; --tool-bash-bg:rgba(241,144,189,.13);
     --tool-skill:#e3c96a; --tool-skill-bg:rgba(227,201,106,.14);
     --tool-agent:#6fd0a0; --tool-agent-bg:rgba(111,208,160,.13);
     --tool-other:#93a5b3; --tool-other-bg:rgba(147,165,179,.13);
@@ -250,9 +250,10 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .row-label.reply{color:var(--k-assistant);background:var(--k-assistant-bg)}
 .row-label.system{color:var(--k-system);background:var(--k-system-bg)}
 .row-label.aux{color:var(--k-system);background:var(--k-system-bg)}
-/* 工具 chip 沿用 row-label 的低饱和底色模式，宽度随内容伸缩，超长省略号截断。 */
+/* 工具 chip 沿用 row-label 的低饱和底色模式，色类只包工具名；宽度随内容伸缩，
+   超长省略号截断。参数摘要与结果正文以普通文本跟随，不进色类。 */
 .row-tint{flex:none;max-width:170px;padding:2px 5px;border-radius:3px;font:9.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.row-arrow{flex:none;color:var(--muted);font-size:10px}
+.row-arrow{color:var(--muted);font-size:10px;margin:0 4px}
 /* 失败的工具结果行整行 warn 软色；正常行不新增状态元素。 */
 .compact-row.step-error{background:var(--warn-soft)}
 .compact-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:11px}

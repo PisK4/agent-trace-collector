@@ -270,22 +270,23 @@ test('结果行前缀三级：缓存内同款摘要、缓存外只工具名、�
     return { name: 'Read', inputText: JSON.stringify({ file_path: '/u/src/q.ts', offset: 1400, limit: 130 }) };
   };
   const cached = renderTraceRows(row(), steps, 1, null, callOf);
-  // 一级：chip 与调用行同款摘要（工具名 · 参数段），正文以 muted 箭头跟随。
-  expect(cached).toContain('row-tint tint-read">Read · q.ts · 1400–1530 行</span>');
-  expect(cached).toContain('row-arrow');
-  expect(cached).toContain('文件正文');
-  // 二级：装配层查不到调用方（返回 null）时只显示工具名，仍带工具色。
+  // 一级：chip 只包工具名，参数摘要以普通文本跟随，muted 箭头后接结果正文。
+  expect(cached).toContain('row-tint tint-read">Read</span>');
+  expect(cached).toContain('<code>q.ts · 1400–1530 行</code><span class="row-arrow" aria-hidden="true">→</span><code>文件正文</code>');
+  // 二级：装配层查不到调用方（返回 null）时只显示工具名，箭头后直接接结果正文。
   const outside = renderTraceRows(row(), steps, 1, null,
     () => null);
   expect(outside).toContain('row-tint tint-read">Read</span>');
-  expect(outside).not.toContain('row-arrow');
-  // 三级：未配对（pairOwner 为 null）中性 chip，不猜归属。
+  expect(outside).not.toContain('<code>q.ts');
+  expect(outside).toContain('<span class="row-arrow" aria-hidden="true">→</span><code>文件正文</code>');
+  // 三级：未配对（pairOwner 为 null）中性 chip，不猜归属，也没有调用侧箭头。
   const unpairedSteps = projectSteps(row(), read(detail({ delta_ordinals: [2] }), [carrier],
     { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
   const unpaired = renderTraceRows(row(), unpairedSteps, 1, null, callOf);
   expect(unpaired).toContain('row-tint tint-other">Tool result</span>');
-  // 结果行悬停给完整结果正文。
-  expect(cached).toContain('title="文件正文"');
+  expect(unpaired).not.toContain('row-arrow');
+  // 结果行悬停给调用摘要与完整结果正文。
+  expect(cached).toContain('title="q.ts · 1400–1530 行 → 文件正文"');
 });
 
 test('调用行悬停放完整参数 JSON，预览只放参数段', () => {
@@ -425,16 +426,17 @@ test('工具摘要按工具分派：Skill、Agent、协作与查询工具', () =
     .toBe('ToolSearch · select:SendMessage');
 });
 
-test('工具摘要回退：非 JSON 参数原文、未知工具回退链、截断只作用参数段', () => {
+test('工具摘要回退：非 JSON 参数原文、未知工具回退链、超长不做字符截断', () => {
   expect(toolSummary('mcp__srv__do', 'not json')).toBe('mcp__srv__do · not json');
   expect(toolSummary('x', '{"command":"ls","cmd":"fallback-cmd"}')).toBe('x · ls');
   expect(toolSummary('x', '{"file_path":"src/a.ts"}')).toBe('x · a.ts');
   expect(toolSummary('x', '{"path":"lib/b.py"}')).toBe('x · b.py');
   expect(toolSummary('', '{"path":"p"}')).toBe('未命名工具 · p');
+  // 截断交给中栏列宽的省略号，摘要本身不再按固定字数砍。
   const long = toolSummary('Read', JSON.stringify({ file_path: '/a/'.concat('b'.repeat(300), '.ts') }));
   expect(long.startsWith('Read · ')).toBe(true);
-  expect([...long].length).toBeLessThan(160);
-  expect(long.endsWith('…')).toBe(true);
+  expect(long).not.toContain('…');
+  expect([...long].length).toBeGreaterThan(300);
 });
 
 test('工具身份色类：六个核心工具各一色，其余统一中性', () => {

@@ -42,7 +42,7 @@ Status: implemented
 | Edit | `Edit · derive.ts · 42→18 行` | old_string 与 new_string 的行数对比（按换行计，空串 0 行）；`replace_all=true` 追加 `· 全部替换` |
 | Write | `Write · memory.md · 1.2 KB` | content 字节数，不足 1KB 显示 B，其余 KB 一位小数，满 1 MB 用 MB |
 | Bash / bash | `Bash · 重跑全量测试` | description 优先；缺失取 command 第一个非空行 |
-| Skill | `Skill · ponytail · 打开本地页面截图` | skill 名必有；args 非空时追加（共享 140 预算） |
+| Skill | `Skill · ponytail · 打开本地页面截图` | skill 名必有；args 非空时追加 |
 | Agent | `Agent · general-purpose · 核对派生方案` | subagent_type 加 description |
 | SendMessage | `SendMessage · 收束结论 → ab12cd34` | summary 加收件方 id 前 8 位 |
 | SubagentHandback | `SubagentHandback · 消息首行` | message 首行 |
@@ -50,20 +50,21 @@ Status: implemented
 | ToolSearch | `ToolSearch · select:SendMessage` | query 原样 |
 | 其他 / 未识别 / MCP | 回退链保留 | command→cmd→file_path→path→pattern→原文；file_path 与 path 同样 basename 化 |
 
-核心键缺失的已知工具（如 Read 无 file_path）回落回退链，不冒充文件摘要。140 字符截断保留，只作用于参数段，工具名与 basename 不截；悬停 title 放完整参数 JSON（超 2000 字符截断，避免大参数撑爆属性）。行区间是显示折算不是事实断言：offset 的基数语义因客户端而异，区间只作扫读锚点，悬停与右栏仍给原始键值。
+核心键缺失的已知工具（如 Read 无 file_path）回落回退链，不冒充文件摘要。摘要不在字符数上预截断：Bash description 一类自述要读到中栏列宽为止，预览文本完整进 DOM，超长由 CSS 省略号收在列宽内（2026-10-25 用户修订，取代原 140 字符预算）；悬停 title 放完整参数 JSON（超 2000 字符截断，避免大参数撑爆属性）。行区间是显示折算不是事实断言：offset 的基数语义因客户端而异，区间只作扫读锚点，悬停与右栏仍给原始键值。
 
 ### 结果行带调用方前缀
 
 后端零改动：`RequestDetail.tool_results` 本身携带 `tool_name`，结果步骤把配对索引里的 `tool_name` 带上（`TraceStep.toolName`），缓存外仍可知工具名。前缀分三级：
 
-1. **配对确认且调用方在窗口缓存**（装配层以 `store.peekRequest` 提供调用方摘要查询）：chip 显示与调用行同款的 `工具名 · 参数段` 摘要，结果正文紧随其后，chip 与正文间用 muted 的 `→` 分隔。
-2. **配对确认但调用方不在缓存**：chip 只显示工具名，颜色仍按该工具。
-3. **未配对**：中性 chip 显示 `Tool result`（现状文案），不猜归属。
+1. **配对确认且调用方在窗口缓存**（装配层以 `store.peekRequest` 提供调用方摘要查询）：chip 只包工具名（与调用行同色类），参数摘要以普通文本跟随，其后 muted 的 `→` 接结果正文。
+2. **配对确认但调用方不在缓存**：chip 只显示工具名，`→` 后直接接结果正文。
+3. **未配对**：中性 chip 显示 `Tool result`（现状文案），不猜归属，无调用侧箭头。
 
 ### 工具强调色
 
-- `web/body-view.js` 新增 `toolTint(name)`：与 `partColor` 同属共享显示原语。映射 `tint-read / -edit / -write / -bash / -skill / -agent / -other` 七个色类；`index.html` 对应 `--tool-*` 七个色对（前景加背景，亮暗两套），背景沿用 `--k-*` 的 0.11–0.14 透明度模式。色相：Read 蓝、Edit 橙、Write 紫、Bash 红、Skill 黄、Agent 绿、其他青灰。
+- `web/body-view.js` 新增 `toolTint(name)`：与 `partColor` 同属共享显示原语。映射 `tint-read / -edit / -write / -bash / -skill / -agent / -other` 七个色类；`index.html` 对应 `--tool-*` 七个色对（前景加背景，亮暗两套），背景沿用 `--k-*` 的 0.11–0.14 透明度模式。色相：Read 蓝、Edit 橙、Write 紫、Bash 玫红（红色保留给失败语义，2026-10-25 用户修订）、Skill 黄、Agent 绿、其他青灰。
 - 不复用 `--p1..p6`：那是上下文组成条的固定槽位，两套语义不混。
+- 色类只包工具名（2026-10-25 用户修订）：参数摘要与结果正文以普通文本渲染，不进色类；着色元素只承担「这是哪个工具」一个识别任务。
 - 中栏应用位：调用行 chip 显示工具名、结果行按三级前缀，取代 `Tool call` / `Tool result` 文字小标（`row-kind` 类删除）。配对 result 沿用 call 的颜色，未配对用 `--tool-other`。
 - 右栏应用位：配对页 Call 与 Result 面板头（`bp-kind`）与正文页 `tool-chip.call`（工具往返折叠行、工具页列表）换用同款色类，配对页 Call 面板头的工具名不再在 `bp-meta` 重复；Result 面板头配对确认后显示工具名并沿用 call 色类，未确认保持中性 `Tool result`。
 - 角色标签 `User` / `Assistant` / `Tool` / `System` 的文案与配色不动。颜色只承载工具身份一个语义：正常态无装饰，异常才着色。
@@ -96,4 +97,4 @@ Status: implemented
 
 ## Testing
 
-`bun test tests/trace-view.test.ts tests/trace-pair.test.ts tests/body-view.test.ts`（79 项）与 `bun run typecheck` 通过（2026-10-25）。覆盖：逐工具摘要断言（Read offset/limit 四种组合、Edit 含与不含 replace_all、Bash 有与无 description、Skill 有与无 args、协作与查询工具、非 JSON 参数回退原文、未知工具回退链、截断只作用参数段）；结果行三级前缀各有用例（缓存命中给摘要带箭头、缓存外只工具名、未配对中性 chip）；chip 色类映射（六核心工具、bash 小写、其他统一，配对面板头配对后与 call 同色）；`is_error=true` 的中栏行与 Result 面板带异常态类而正常态没有；Edit 对照块、其余键缩进 JSON 与原始 JSON 折叠键；调用行悬停放完整参数 JSON；参数文本含 HTML 字符仍转义（既有断言保持）。
+`bun test tests/trace-view.test.ts tests/trace-pair.test.ts tests/body-view.test.ts`（79 项）与 `bun run typecheck` 通过（2026-10-25）。覆盖：逐工具摘要断言（Read offset/limit 四种组合、Edit 含与不含 replace_all、Bash 有与无 description、Skill 有与无 args、协作与查询工具、非 JSON 参数回退原文、未知工具回退链、超长摘要不做字符截断）；结果行三级前缀各有用例（缓存命中给工具名 chip 加参数摘要与箭头、缓存外只工具名带箭头、未配对中性 chip 无箭头）；chip 色类只包工具名；色类映射（六核心工具、bash 小写、其他统一，配对面板头配对后与 call 同色）；`is_error=true` 的中栏行与 Result 面板带异常态类而正常态没有；Edit 对照块、其余键缩进 JSON 与原始 JSON 折叠键；调用行悬停放完整参数 JSON、结果行悬停放调用摘要加完整结果正文；参数文本含 HTML 字符仍转义（既有断言保持）。
