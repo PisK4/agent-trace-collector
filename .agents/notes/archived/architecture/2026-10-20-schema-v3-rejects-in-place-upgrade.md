@@ -1,6 +1,7 @@
 # Agent Note: schema v3 拒绝原地升级，回填走独立脚本
 
 Status: implemented
+Archived: 2026-10-24
 
 ## Problem
 

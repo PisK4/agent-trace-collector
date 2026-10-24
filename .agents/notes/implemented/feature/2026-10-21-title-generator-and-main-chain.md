@@ -20,7 +20,7 @@ Claude Code 的 Title Generator 是会话旁路请求：输入是单个 `<sessio
 
 **按后继子树大小选主链。** 第一版实现按「后续请求最多」选主链。真实会话里第一笔用户请求（req 25627）因为一条后来独立重跑的 148 笔链共享 `conv_key`/`actor` 而被标成 `branch`。主链是会话的第一笔真实请求，不是最忙的那条；该规则在后续修复中被推翻，现在是按时间最早的根选。
 
-**结构变更后删库重建。** 标题与链角色都是派生列，删库再重放来源最省事；实现时也一度按这个方向接受删除。后来改为由回填脚本补列，保住已有正文，见 [schema 升级 note](../architecture/2026-10-20-schema-v3-rejects-in-place-upgrade.md)。v5 起改回破坏式替换，与本条决定无关。
+**结构变更后删库重建。** 标题与链角色都是派生列，删库再重放来源最省事；实现时也一度按这个方向接受删除。后来改为由回填脚本补列，保住已有正文，见 [schema 升级 note](../../archived/architecture/2026-10-20-schema-v3-rejects-in-place-upgrade.md)。v5 起改回破坏式替换，与本条决定无关。
 
 ## Consequences
 

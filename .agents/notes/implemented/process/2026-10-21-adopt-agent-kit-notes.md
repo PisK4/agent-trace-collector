@@ -33,7 +33,7 @@ ATC 第一版完成后，决策依据散在 README、架构设计、评审记录
 ## Related
 
 - [语义指纹与任意祖先共同前缀](../architecture/2026-10-20-semantic-fingerprint-and-ancestor-predecessor.md)
-- [schema v3 拒绝原地升级，回填走独立脚本](../architecture/2026-10-20-schema-v3-rejects-in-place-upgrade.md)
+- [schema v3 拒绝原地升级，回填走独立脚本](../../archived/architecture/2026-10-20-schema-v3-rejects-in-place-upgrade.md)
 - [容量三门槛与正文回收](../architecture/2026-10-20-retention-three-gates.md)
 - [维护锁与备份的独占探测](./2026-10-20-maintenance-lock-and-backup-probe.md)
 - [隐私边界与本地接口防护](../architecture/2026-10-20-privacy-and-local-access-boundary.md)

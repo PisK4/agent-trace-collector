@@ -28,7 +28,7 @@ magpie 补充调研围绕未决问题展开，优先借鉴缺失语义、来源�
 
 ## 与现有决策的关系
 
-统筹范围里的两份提案仍保持 proposed：已交付的部分由各自批次的 implemented note 持有，未建的批次留在提案里作为待办，不互相改写。本轮交付扩展了[schema 显式回填](2026-10-20-schema-v3-rejects-in-place-upgrade.md)、[容量三门槛](2026-10-20-retention-three-gates.md)、[隐私与本地访问边界](2026-10-20-privacy-and-local-access-boundary.md)、[任意祖先前驱](2026-10-20-semantic-fingerprint-and-ancestor-predecessor.md)、[标题与主链](../feature/2026-10-21-title-generator-and-main-chain.md)与[不可读请求保持中性](../bug-fix/2026-10-21-unreadable-requests-stay-neutral.md)，没有反转或归档其中任何一项。
+统筹范围里的两份提案仍保持 proposed：已交付的部分由各自批次的 implemented note 持有，未建的批次留在提案里作为待办，不互相改写。本轮交付扩展了[schema 显式回填](../../archived/architecture/2026-10-20-schema-v3-rejects-in-place-upgrade.md)、[容量三门槛](2026-10-20-retention-three-gates.md)、[隐私与本地访问边界](2026-10-20-privacy-and-local-access-boundary.md)、[任意祖先前驱](2026-10-20-semantic-fingerprint-and-ancestor-predecessor.md)、[标题与主链](../feature/2026-10-21-title-generator-and-main-chain.md)与[不可读请求保持中性](../bug-fix/2026-10-21-unreadable-requests-stay-neutral.md)，没有反转其中任何一项。schema 显式回填一篇后随破坏式替换作废并归档，见[旧库删除重建](2026-10-23-destructive-schema-replacement.md)；其余各篇仍在活跃区。
 
 ## Alternatives considered
 
