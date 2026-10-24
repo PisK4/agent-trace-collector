@@ -1,14 +1,14 @@
 import { expect, test } from 'bun:test';
 import { zstdDecompressSync } from 'node:zlib';
 import { fixture } from './fixtures';
-import type { FileBatch } from '../src/sources/files';
-import { ingestDecodedRouteFile, ingestLedger, ingestRoute, observeSourceOffset, readFileCursor, resumePausedLedger } from '../src/reconcile';
+import type { SourceRead } from '../src/sources/files';
+import { ingestLedger, ingestRoute, ingestSource, observeSourceOffset, readFileCursor, resumePausedLedger } from '../src/reconcile';
 import { purgeMetadata } from '../src/maintenance';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
 import { readSourceFacts } from '../src/sources/facts';
 import { PRIVACY_TRANSFORM_VERSION } from '../src/privacy';
 
-function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatch {
+function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): SourceRead {
   let offset = startOffset;
   const lines = rows.map(row => {
     const text = typeof row === 'string' ? row : JSON.stringify(row);
@@ -17,6 +17,10 @@ function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatc
     return { offset: start, end: offset, text };
   });
   return {
+    sourceKind: 'ledger',
+    name: 'usage.jsonl',
+    mode: 'appendable',
+    state: 'decoded',
     generation,
     rewriteEpoch: 0,
     lines,
@@ -25,8 +29,45 @@ function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatc
     seenSize: offset,
     headLen: 0,
     headHash: null,
+    fingerprint: null,
     issues: [],
+    startOff: startOffset,
+    error: null,
   };
+}
+
+/** 一个路由来源的读取结果；默认是当日 `.jsonl`，可覆盖成封口 gz。 */
+function sourceRead(
+  lines: string[],
+  overrides: Partial<SourceRead> = {},
+): SourceRead {
+  let offset = 0;
+  const parsed = lines.map(text => {
+    const start = offset;
+    offset += Buffer.byteLength(text) + 1;
+    return { offset: start, end: offset, text };
+  });
+  const sourceKind = overrides.sourceKind ?? 'route_file';
+  const fingerprint = overrides.fingerprint ?? null;
+  const base: SourceRead = {
+    sourceKind,
+    name: sourceKind === 'route_gz' ? '2026-10-20.jsonl.gz' : '2026-10-20.jsonl',
+    mode: sourceKind === 'route_gz' ? 'sealed' : 'appendable',
+    state: 'decoded',
+    generation: fingerprint ?? 'gen-1',
+    rewriteEpoch: 0,
+    lines: parsed,
+    committedOff: offset,
+    observedOff: offset,
+    seenSize: offset,
+    headLen: 0,
+    headHash: null,
+    fingerprint,
+    issues: [],
+    startOff: 0,
+    error: null,
+  };
+  return { ...base, ...overrides };
 }
 
 const salt = new Uint8Array(32).fill(7);
@@ -162,7 +203,9 @@ test('坏完整行记录issue并推进游标，后续正常行入库', () => {
   const f = fixture();
   try {
     const batch = batchOf(['not json', { t: '2026-10-20T00:00:00Z', route_id: 9, agent: 'demo', model: 'm', provider: 'p', status: 200, in: 1 }]);
+    const before = f.store.writeStats.count;
     expect(ingestLedger(f.store, 'usage.jsonl', batch, 1, salt)).toEqual({ accepted: 1, invalid: 1, duplicate: 0, purged_skip: 0 });
+    expect(f.store.writeStats.count - before).toBe(1);
     expect(f.store.read.query('SELECT committed_off FROM source_cursor').get()).toEqual({ committed_off: batch.committedOff });
     expect(f.store.read.query('SELECT reason FROM ingest_issue').all()).toEqual([{ reason: 'ledger_invalid_json' }]);
     expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 1 });
@@ -697,72 +740,218 @@ test('路由摘要按 format 2 写入展示字段，缺失 prompt 保持 null', 
   }
 });
 
-test('路由文件落库推进游标并记账坏行', () => {
+test('路由文件落库推进游标并记账坏行，整批一个写事务', () => {
   const f = fixture();
   try {
     const good = JSON.stringify({
       id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm',
       provider: 'p', status: 200, in: 10, out: 5,
     });
-    const lines = ['not json', good];
-    const committed = lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
-    ingestDecodedRouteFile(f.store, {
-      name: '2026-10-20.jsonl', kind: 'jsonl', fingerprint: '',
-      state: 'decoded', lines, error: null, startOff: 0,
+    const read = sourceRead(['not json', good], {
       issues: [{ offset: 0, end: 5, reason: 'line_too_large' }],
-      cursor: {
-        sourceKind: 'route_file', generation: 'gen-1', committedOff: committed,
-        observedOff: committed, seenSize: committed, headLen: 0, headHash: null,
-        rewriteEpoch: 0, fingerprint: null,
-      },
-    }, salt, 1000);
+    });
+    const before = f.store.writeStats.count;
+    const result = ingestSource(f.store, read, salt, 1000);
+    // 坏行、路由证据与游标在同一个写事务里。
+    expect(f.store.writeStats.count - before).toBe(1);
+    expect(f.store.writeStats.by_name.route?.count).toBe(1);
+    expect(result).toMatchObject({ accepted: 1, invalid: 2, duplicate: 0 });
     const cursor = readFileCursor(f.store, 'route_file', '2026-10-20.jsonl');
-    expect(cursor?.generation).toBe('gen-1');
-    // 提交位置来自读取器的完整行末尾，不再由行文本重算。
-    expect(cursor?.committedOff).toBe(committed);
+    expect(cursor).toMatchObject({
+      sourceKind: 'route_file', generation: 'gen-1', committedOff: read.committedOff,
+      fingerprint: null,
+    });
     const issue = f.store.read.query<{ reason: string; byte_length: number | null }, []>(
       'SELECT reason, byte_length FROM ingest_issue ORDER BY reason').all();
     expect(issue).toEqual([
       { reason: 'route_invalid_json', byte_length: Buffer.byteLength('not json') },
       { reason: 'route_line_too_large', byte_length: 5 },
     ]);
+    // 可追加文件的坏行引用键带批次起点。
+    const parseIssue = f.store.read.query<{ ref_key: string }, []>(
+      "SELECT ref_key FROM ingest_issue WHERE reason='route_invalid_json'").get();
+    expect(parseIssue?.ref_key).toBe(JSON.stringify(['2026-10-20.jsonl', 'gen-1:0', 0]));
     expect(f.store.read.query<{ n: number }, []>(
       'SELECT COUNT(*) AS n FROM route_summary WHERE route_id=7').get()?.n).toBe(1);
     // observed_off 只推进观察位，提交位置不动。
     observeSourceOffset(f.store, 'route_file', '2026-10-20.jsonl', 999);
+    observeSourceOffset(f.store, 'route_file', '2026-10-20.jsonl', 10);
     const observed = f.store.read.query<{ observed_off: number }, [string, string]>(
       'SELECT observed_off FROM source_cursor WHERE source_kind=? AND source_name=?',
     ).get('route_file', '2026-10-20.jsonl');
     expect(observed?.observed_off).toBe(999);
     expect(readFileCursor(f.store, 'route_file', '2026-10-20.jsonl')?.committedOff)
-      .toBe(committed);
+      .toBe(read.committedOff);
   } finally {
     f.close();
   }
 });
 
-test('gzip路由文件落库以整份指纹作游标', () => {
+test('gzip路由文件以整份指纹作游标，坏行按指纹编号', () => {
   const f = fixture();
   try {
     const good = JSON.stringify({
       id: 9, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm',
       provider: 'p', status: 200, in: 10, out: 5,
     });
-    const committed = Buffer.byteLength(good) + 1;
-    ingestDecodedRouteFile(f.store, {
-      name: '2026-10-20.jsonl.gz', kind: 'gz', fingerprint: 'fp-gz',
-      state: 'decoded', lines: [good], error: null, startOff: 0, issues: [],
-      cursor: {
-        sourceKind: 'route_gz', generation: 'fp-gz', committedOff: committed,
-        observedOff: committed, seenSize: 1024, headLen: 0, headHash: null,
-        rewriteEpoch: 0, fingerprint: 'fp-gz',
-      },
-    }, salt, 1000);
+    const read = sourceRead(['not json', good], {
+      sourceKind: 'route_gz', name: '2026-10-20.jsonl.gz',
+      fingerprint: 'fp-gz', seenSize: 1024,
+    });
+    const before = f.store.writeStats.count;
+    const result = ingestSource(f.store, read, salt, 1000);
+    expect(f.store.writeStats.count - before).toBe(1);
+    expect(result).toMatchObject({ accepted: 1, invalid: 1, duplicate: 0 });
     const cursor = readFileCursor(f.store, 'route_gz', '2026-10-20.jsonl.gz');
-    expect(cursor?.generation).toBe('fp-gz');
-    const row = f.store.read.query<{ fingerprint: string | null }, [string]>(
-      'SELECT fingerprint FROM source_cursor WHERE source_name=?').get('2026-10-20.jsonl.gz');
-    expect(row?.fingerprint).toBe('fp-gz');
+    expect(cursor).toMatchObject({
+      sourceKind: 'route_gz', generation: 'fp-gz', fingerprint: 'fp-gz',
+      committedOff: read.committedOff, headLen: 0, headHash: null, rewriteEpoch: 0,
+    });
+    // 封口文件没有文件偏移，坏行引用键用整份指纹。
+    const issue = f.store.read.query<{ ref_key: string; reason: string }, []>(
+      'SELECT ref_key, reason FROM ingest_issue').all();
+    expect(issue).toEqual([{
+      ref_key: JSON.stringify(['2026-10-20.jsonl.gz', 'fp-gz', 0]),
+      reason: 'route_invalid_json',
+    }]);
+  } finally {
+    f.close();
+  }
+});
+
+test('账本事务失败时坏行、证据与游标一起回滚，下轮重读同批', () => {
+  const f = fixture();
+  try {
+    const read = batchOf(['not json', {
+      t: '2026-10-20T00:00:00Z', route_id: 21, agent: 'demo', session: 's',
+      model: 'm', provider: 'p', status: 200, in: 10,
+    }]);
+    f.store.write(db => db.run(
+      `CREATE TRIGGER synthetic_cursor_failure BEFORE INSERT ON source_cursor
+       BEGIN SELECT RAISE(ABORT,'synthetic_failure'); END`,
+    ));
+    expect(() => ingestSource(f.store, read, salt, 1)).toThrow('synthetic_failure');
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM raw_ledger').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM ingest_issue').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM source_cursor').get()).toEqual({ n: 0 });
+
+    // 游标没前进，同一批会被重读；坏行重新记一次，证据按物理身份幂等。
+    f.store.write(db => db.run('DROP TRIGGER synthetic_cursor_failure'));
+    expect(ingestSource(f.store, read, salt, 2))
+      .toEqual({ accepted: 1, invalid: 1, duplicate: 0, purged_skip: 0 });
+    expect(f.store.read.query('SELECT reason FROM ingest_issue').all())
+      .toEqual([{ reason: 'ledger_invalid_json' }]);
+    expect(readFileCursor(f.store, 'ledger', 'usage.jsonl')?.committedOff)
+      .toBe(read.committedOff);
+  } finally {
+    f.close();
+  }
+});
+
+test('路由事务失败时坏行、路由证据与游标一起回滚', () => {
+  const f = fixture();
+  try {
+    const read = sourceRead(['not json', JSON.stringify({
+      id: 22, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's',
+      model: 'm', provider: 'p', status: 200,
+    })]);
+    f.store.write(db => db.run(
+      `CREATE TRIGGER synthetic_cursor_failure BEFORE INSERT ON source_cursor
+       BEGIN SELECT RAISE(ABORT,'synthetic_failure'); END`,
+    ));
+    expect(() => ingestSource(f.store, read, salt, 1)).toThrow('synthetic_failure');
+    expect(f.store.read.query('SELECT count(*) AS n FROM raw_route').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM route_summary').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM ingest_issue').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM source_cursor').get()).toEqual({ n: 0 });
+
+    f.store.write(db => db.run('DROP TRIGGER synthetic_cursor_failure'));
+    expect(ingestSource(f.store, read, salt, 2))
+      .toEqual({ accepted: 1, invalid: 1, duplicate: 0, purged_skip: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM raw_route').get()).toEqual({ n: 1 });
+    expect(readFileCursor(f.store, 'route_file', '2026-10-20.jsonl')?.committedOff)
+      .toBe(read.committedOff);
+  } finally {
+    f.close();
+  }
+});
+
+test('路由游标同代不倒退，换代后允许归零', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(
+      `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,
+         observed_off,seen_size,head_len,head_hash,last_ok_ms,rewrite_epoch,fingerprint)
+       VALUES ('route_file','2026-10-20.jsonl','gen-1',100,100,100,0,NULL,1,0,NULL)`,
+    ));
+    const stale = sourceRead([JSON.stringify({
+      id: 31, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's',
+    })], { generation: 'gen-1', committedOff: 10, observedOff: 10 });
+    ingestSource(f.store, stale, salt, 2);
+    expect(readFileCursor(f.store, 'route_file', '2026-10-20.jsonl')).toMatchObject({
+      generation: 'gen-1', committedOff: 100, observedOff: 100,
+    });
+
+    const next = sourceRead([JSON.stringify({
+      id: 32, time: '2026-10-20T00:01:00Z', agent: 'demo', session: 's',
+    })], { generation: 'gen-2', committedOff: 20, observedOff: 20 });
+    ingestSource(f.store, next, salt, 3);
+    expect(readFileCursor(f.store, 'route_file', '2026-10-20.jsonl')).toMatchObject({
+      generation: 'gen-2', committedOff: 20, observedOff: 20,
+    });
+  } finally {
+    f.close();
+  }
+});
+
+test('gz游标同指纹不倒退，指纹换代后允许归零', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(
+      `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,
+         observed_off,seen_size,head_len,head_hash,last_ok_ms,rewrite_epoch,fingerprint)
+       VALUES ('route_gz','2026-10-20.jsonl.gz','fp-old',500,500,1024,0,NULL,1,0,'fp-old')`,
+    ));
+    const stale = sourceRead([JSON.stringify({
+      id: 33, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's',
+    })], {
+      sourceKind: 'route_gz', name: '2026-10-20.jsonl.gz', fingerprint: 'fp-old',
+      committedOff: 10, observedOff: 10,
+    });
+    ingestSource(f.store, stale, salt, 2);
+    expect(readFileCursor(f.store, 'route_gz', '2026-10-20.jsonl.gz')).toMatchObject({
+      generation: 'fp-old', committedOff: 500, observedOff: 500,
+    });
+
+    const next = sourceRead([JSON.stringify({
+      id: 34, time: '2026-10-20T00:01:00Z', agent: 'demo', session: 's',
+    })], {
+      sourceKind: 'route_gz', name: '2026-10-20.jsonl.gz', fingerprint: 'fp-new',
+      committedOff: 20, observedOff: 20,
+    });
+    ingestSource(f.store, next, salt, 3);
+    expect(readFileCursor(f.store, 'route_gz', '2026-10-20.jsonl.gz')).toMatchObject({
+      generation: 'fp-new', fingerprint: 'fp-new', committedOff: 20, observedOff: 20,
+    });
+  } finally {
+    f.close();
+  }
+});
+
+test('未变与读取失败不进入摄入，游标不推进', () => {
+  const f = fixture();
+  try {
+    const unchanged = sourceRead([], { state: 'unchanged' });
+    expect(() => ingestSource(f.store, unchanged, salt, 1))
+      .toThrow('source_not_decoded:unchanged');
+    const failed = sourceRead([], {
+      sourceKind: 'route_gz', name: '2026-10-20.jsonl.gz',
+      fingerprint: 'fp-bad', state: 'error', error: 'route_gzip_invalid',
+    });
+    expect(() => ingestSource(f.store, failed, salt, 2))
+      .toThrow('source_not_decoded:error');
+    expect(f.store.read.query('SELECT count(*) AS n FROM source_cursor').get()).toEqual({ n: 0 });
   } finally {
     f.close();
   }

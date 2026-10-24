@@ -1,7 +1,7 @@
 import { constants, zstdCompressSync } from 'node:zlib';
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
-import type { FileBatch, FileCursor, RouteCursor, RouteFile } from './sources/files';
+import type { FileBatch, SourceCursor, SourceIssue, SourceRead } from './sources/files';
 import { redact } from './privacy';
 import {
   isRecord,
@@ -19,116 +19,174 @@ import { markOwnershipChangeTx, markRequestInputTx, requestGroupTx } from './der
 import type { RequestProjection } from './sources/projection';
 import { closeSourceGapsTx, markStaleGapsTx, recordPausedBatchTx } from './retention';
 
-export type IngestLedgerResult = {
+/** 一次来源摄入的计数。账本与路由共用同一组字段，便于调用方统一记录。 */
+export type SourceIngestResult = {
   accepted: number; invalid: number; duplicate: number; purged_skip: number;
 };
+
+/** 兼容旧入口的返回类型。 */
+export type IngestLedgerResult = SourceIngestResult;
 
 function evidenceRef(generation: string, offset: number): string {
   return JSON.stringify(['file', generation, offset]);
 }
 
-/** 读一个来源文件的游标；没有就返回 null。调用方据此决定从哪里续读。 */
-export function readFileCursor(store: Store, sourceKind: string, sourceName: string): FileCursor | null {
-  const row = store.read.query<{
-    file_generation: string; committed_off: number; seen_size: number | null;
-    head_len: number | null; head_hash: string | null; rewrite_epoch: number;
-  }, [string, string]>(
-    'SELECT file_generation, committed_off, seen_size, head_len, head_hash, rewrite_epoch FROM source_cursor WHERE source_kind=? AND source_name=?',
-  ).get(sourceKind, sourceName);
-  if (row == null) return null;
+type CursorRow = {
+  source_kind: SourceCursor['sourceKind']; source_name: string; file_generation: string;
+  committed_off: number; observed_off: number; seen_size: number | null;
+  head_len: number | null; head_hash: string | null; fingerprint: string | null;
+  rewrite_epoch: number;
+};
+
+const CURSOR_COLUMNS = `source_kind, source_name, file_generation, committed_off, observed_off,
+  seen_size, head_len, head_hash, fingerprint, rewrite_epoch`;
+
+function cursorFromRow(row: CursorRow): SourceCursor {
   return {
+    sourceKind: row.source_kind,
+    name: row.source_name,
     generation: row.file_generation,
     rewriteEpoch: row.rewrite_epoch,
     committedOff: row.committed_off,
+    observedOff: row.observed_off,
     seenSize: row.seen_size ?? 0,
     headLen: row.head_len ?? 0,
     headHash: row.head_hash,
+    fingerprint: row.fingerprint,
   };
+}
+
+/** 读一个来源的游标；没有就返回 null。调用方据此决定从哪里续读。 */
+export function readFileCursor(store: Store, sourceKind: string, sourceName: string): SourceCursor | null {
+  const row = store.read.query<CursorRow, [string, string]>(
+    `SELECT ${CURSOR_COLUMNS} FROM source_cursor WHERE source_kind=? AND source_name=?`,
+  ).get(sourceKind, sourceName);
+  return row == null ? null : cursorFromRow(row);
 }
 
 /** 只推进 observed_off：提交位置不动，下一轮仍从 committed_off 重读，证据不会漏。 */
 export function observeSourceOffset(store: Store, sourceKind: string, sourceName: string,
   observedOff: number): void {
   store.write(db => db.run(
-    'UPDATE source_cursor SET observed_off=? WHERE source_kind=? AND source_name=?',
+    'UPDATE source_cursor SET observed_off=MAX(observed_off,?) WHERE source_kind=? AND source_name=?',
     [observedOff, sourceKind, sourceName],
   ));
 }
 
-/** 路由来源的游标：`.jsonl` 用身份与偏移，`.gz` 用整份指纹。 */
-export function readRouteCursors(store: Store): Map<string, RouteCursor> {
+/** 路由来源的游标：`.jsonl` 用身份与偏移，`.gz` 用整份指纹，形状同为 SourceCursor。 */
+export function readRouteCursors(store: Store): Map<string, SourceCursor> {
   return new Map(
-    store.read.query<{
-      source_kind: 'route_file' | 'route_gz'; source_name: string; file_generation: string;
-      committed_off: number; observed_off: number; seen_size: number | null;
-      head_len: number | null; head_hash: string | null; fingerprint: string | null;
-      rewrite_epoch: number;
-    }, []>(
-      `SELECT source_kind, source_name, file_generation, committed_off, observed_off,
-         seen_size, head_len, head_hash, fingerprint, rewrite_epoch
-       FROM source_cursor WHERE source_kind IN ('route_file','route_gz')`,
-    ).all().map(row => [row.source_name, {
-      sourceKind: row.source_kind,
-      generation: row.file_generation,
-      committedOff: row.committed_off,
-      observedOff: row.observed_off,
-      seenSize: row.seen_size ?? 0,
-      headLen: row.head_len ?? 0,
-      headHash: row.head_hash,
-      rewriteEpoch: row.rewrite_epoch,
-      fingerprint: row.fingerprint,
-    }]),
+    store.read.query<CursorRow, []>(
+      `SELECT ${CURSOR_COLUMNS} FROM source_cursor WHERE source_kind IN ('route_file','route_gz')`,
+    ).all().map(row => [row.source_name, cursorFromRow(row)]),
   );
 }
 
 /**
- * 一批已读路由行的落库：坏行记账、ingest、推进该文件的游标。
+ * 坏行引用键的形态差异。
  *
- * `.jsonl` 的游标是文件身份 + 已提交偏移，`.gz` 的游标是整份指纹。两个来源
- * 都只在本轮确实读到新内容时写游标，未变与错误不推进。坏行引用键带本批
- * 起始位置，增量读取时不与之前批次互相覆盖。
+ * 可追加文件按批次起点编号，同一文件的不同批次不互相覆盖；封口 gz 按整份
+ * 指纹编号，重读同一份内容命中同一行 issue。除了引用基址与游标字段，两种
+ * 形态的摄入路径相同。
  */
-export function ingestDecodedRouteFile(
+type SourceAdapter = {
+  routeRecordIssueRef(read: SourceRead, value: number): string;
+  routeParseIssueRef(read: SourceRead, slot: number): string;
+  routeLineIssueRef(read: SourceRead, issue: SourceIssue): string;
+};
+
+function appendableRefBase(read: SourceRead): string {
+  return `${read.generation}:${read.startOff}`;
+}
+
+function sealedRefBase(read: SourceRead): string {
+  return read.fingerprint ?? read.generation;
+}
+
+const APPENDABLE_ADAPTER: SourceAdapter = {
+  routeRecordIssueRef: (read, value) =>
+    JSON.stringify(['route-invalid', appendableRefBase(read), value]),
+  routeParseIssueRef: (read, slot) =>
+    JSON.stringify([read.name, appendableRefBase(read), slot]),
+  routeLineIssueRef: (read, issue) =>
+    JSON.stringify([read.name, appendableRefBase(read), issue.offset]),
+};
+
+const SEALED_ADAPTER: SourceAdapter = {
+  routeRecordIssueRef: (read, value) =>
+    JSON.stringify(['route-invalid', sealedRefBase(read), value]),
+  routeParseIssueRef: (read, slot) =>
+    JSON.stringify([read.name, sealedRefBase(read), slot]),
+  routeLineIssueRef: (read, issue) =>
+    JSON.stringify([read.name, sealedRefBase(read), issue.offset]),
+};
+
+/**
+ * 一个已解码来源的完整摄入：坏行记账、证据写入、游标推进在同一个事务里。
+ *
+ * 失败直接抛出，由 SQLite 整笔回滚。坏行也随事务回滚，但这无损：游标没有
+ * 前进，下一轮仍读同一批内容，坏行会被重新记一次；证据写入按物理身份或
+ * route_id 幂等，重放不会重复。
+ *
+ * 只有 decoded 能进这里；unchanged 与 error 由读取器表达，调用方不得推进游标。
+ */
+export function ingestSource(
   store: Store,
-  file: RouteFile,
+  read: SourceRead,
   salt: Uint8Array,
   now: number,
-): void {
-  const cursor = file.cursor;
-  if (cursor === null) return;
-  const refBase = file.kind === 'gz'
-    ? file.fingerprint
-    : `${cursor.generation}:${file.startOff}`;
+): SourceIngestResult {
+  if (read.state !== 'decoded') throw new Error(`source_not_decoded:${read.state}`);
+  const adapter = read.mode === 'appendable' ? APPENDABLE_ADAPTER : SEALED_ADAPTER;
+  return store.write(db => {
+    const result = read.sourceKind === 'ledger'
+      ? ingestLedgerRowsTx(db, read, salt, now)
+      : ingestRouteFileTx(db, read, salt, now, adapter);
+    upsertSourceCursorTx(db, read, now);
+    if (read.sourceKind === 'ledger') {
+      // 本轮提交的区间若覆盖了此前的暂停缺口，就在这里关闭它；
+      // 换代时旧代际的缺口一并判死，避免之后被当作可补区间重读。
+      markStaleGapsTx(db, 'ledger', read.name, now);
+      closeSourceGapsTx(db, 'ledger', read.name, read.generation, 0, read.committedOff, now);
+    }
+    return result;
+  }, read.sourceKind === 'ledger' ? 'ledger' : 'route');
+}
+
+/** 一个路由文件批次的记录级摄入；调用方负责把它放进已有事务。 */
+function ingestRouteFileTx(
+  db: Database,
+  read: SourceRead,
+  salt: Uint8Array,
+  now: number,
+  adapter: SourceAdapter,
+): SourceIngestResult {
+  let invalid = 0;
+  for (const issue of read.issues) {
+    recordIssue(db, 'route', adapter.routeLineIssueRef(read, issue),
+      'route_line_too_large', now, issue.end - issue.offset);
+    invalid += 1;
+  }
   const records: unknown[] = [];
-  store.write(db => {
-    for (const issue of file.issues) {
-      recordIssue(db, 'route', JSON.stringify([file.name, refBase, issue.offset]),
-        'route_line_too_large', now, issue.end - issue.offset);
+  for (let index = 0; index < read.lines.length; index++) {
+    const line = read.lines[index]!;
+    if (line.text.trim() === '') continue;
+    try {
+      records.push(JSON.parse(line.text));
+    } catch {
+      recordIssue(db, 'route', adapter.routeParseIssueRef(read, index),
+        'route_invalid_json', now, Buffer.byteLength(line.text));
+      invalid += 1;
     }
-    for (let index = 0; index < file.lines.length; index++) {
-      const line = file.lines[index]!;
-      if (line.trim() === '') continue;
-      try {
-        records.push(JSON.parse(line));
-      } catch {
-        recordIssue(db, 'route', JSON.stringify([file.name, refBase, index]),
-          'route_invalid_json', now, Buffer.byteLength(line));
-      }
-    }
-  });
-  ingestRoute(store, records, now, salt, refBase);
-  store.write(db => db.run(
-    `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,seen_size,head_len,head_hash,fingerprint,last_ok_ms,rewrite_epoch,observed_off)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)
-     ON CONFLICT(source_kind,source_name) DO UPDATE SET
-       file_generation=excluded.file_generation, committed_off=excluded.committed_off,
-       seen_size=excluded.seen_size, head_len=excluded.head_len, head_hash=excluded.head_hash,
-       fingerprint=excluded.fingerprint, last_ok_ms=excluded.last_ok_ms,
-       rewrite_epoch=excluded.rewrite_epoch, observed_off=excluded.observed_off`,
-    [cursor.sourceKind, file.name, cursor.generation, cursor.committedOff, cursor.seenSize,
-     cursor.headLen, cursor.headHash, cursor.fingerprint, now, cursor.rewriteEpoch,
-     cursor.observedOff],
-  ));
+  }
+  const result = ingestRouteRecordsTx(db, records, now, salt,
+    value => adapter.routeRecordIssueRef(read, value));
+  return {
+    accepted: result.accepted,
+    invalid: invalid + result.invalid,
+    duplicate: result.duplicate,
+    purged_skip: 0,
+  };
 }
 
 function recordIssue(
@@ -146,10 +204,17 @@ function recordIssue(
   );
 }
 
-function upsertCursor(db: Database, sourceKind: string, sourceName: string, batch: FileBatch, now: number): void {
+/**
+ * 写回一个来源的游标。账本与两种路由文件共用这一处。
+ *
+ * committed_off 与 observed_off 只在文件代际与 rewrite_epoch 都没变时取 MAX，
+ * 防止并发或迟到的读把游标拉回去；代际或重写计数变了说明已经是另一份内容，
+ * 旧偏移不限制新游标。封口 gz 的代际就是整份指纹，换代即重读。
+ */
+function upsertSourceCursorTx(db: Database, cursor: SourceCursor, now: number): void {
   db.run(
-    `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,seen_size,head_len,head_hash,last_ok_ms,rewrite_epoch,observed_off)
-     VALUES (?,?,?,?,?,?,?,?,?,?)
+    `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,seen_size,head_len,head_hash,fingerprint,last_ok_ms,rewrite_epoch,observed_off)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)
      ON CONFLICT(source_kind,source_name) DO UPDATE SET
        file_generation=excluded.file_generation,
        committed_off=CASE WHEN source_cursor.file_generation=excluded.file_generation AND source_cursor.rewrite_epoch=excluded.rewrite_epoch
@@ -157,21 +222,15 @@ function upsertCursor(db: Database, sourceKind: string, sourceName: string, batc
        seen_size=excluded.seen_size,
        head_len=excluded.head_len,
        head_hash=excluded.head_hash,
+       fingerprint=excluded.fingerprint,
        last_ok_ms=excluded.last_ok_ms,
        rewrite_epoch=excluded.rewrite_epoch,
        observed_off=CASE WHEN source_cursor.file_generation=excluded.file_generation AND source_cursor.rewrite_epoch=excluded.rewrite_epoch
          THEN MAX(source_cursor.observed_off,excluded.observed_off) ELSE excluded.observed_off END`,
     [
-      sourceKind,
-      sourceName,
-      batch.generation,
-      batch.committedOff,
-      batch.seenSize,
-      batch.headLen,
-      batch.headHash,
-      now,
-      batch.rewriteEpoch,
-      batch.observedOff,
+      cursor.sourceKind, cursor.name, cursor.generation, cursor.committedOff,
+      cursor.seenSize, cursor.headLen, cursor.headHash, cursor.fingerprint,
+      now, cursor.rewriteEpoch, cursor.observedOff,
     ],
   );
 }
@@ -457,6 +516,12 @@ function mergeLedgerRow(
   applyLedgerOwnershipTx(db, reqId, fields, projection, now);
 }
 
+/**
+ * 兼容入口：账本批次交给同一个 ingestSource。
+ *
+ * 调用方已经持有读取器批次；SourceRead 与测试构造的 FileBatch 都满足这里的
+ * 形状。新代码直接调 ingestSource，让读取结果本身充当游标。
+ */
 export function ingestLedger(
   store: Store,
   sourceName: string,
@@ -464,77 +529,97 @@ export function ingestLedger(
   now: number,
   salt: Uint8Array,
 ): IngestLedgerResult {
-  return store.write(db => {
-    let accepted = 0;
-    let invalid = 0;
-    let duplicate = 0;
-    let purged_skip = 0;
-    for (const issue of batch.issues) {
-      recordIssue(db, 'ledger', evidenceRef(batch.generation, issue.offset), issue.reason, now, issue.end - issue.offset);
+  return ingestSource(store, {
+    sourceKind: 'ledger',
+    name: sourceName,
+    mode: 'appendable',
+    state: 'decoded',
+    generation: batch.generation,
+    rewriteEpoch: batch.rewriteEpoch,
+    committedOff: batch.committedOff,
+    observedOff: batch.observedOff,
+    seenSize: batch.seenSize,
+    headLen: batch.headLen,
+    headHash: batch.headHash,
+    fingerprint: null,
+    lines: batch.lines,
+    issues: batch.issues,
+    startOff: 0,
+    error: null,
+  }, salt, now);
+}
+
+/** 账本记录级摄入；调用方负责把它放进已有事务。 */
+function ingestLedgerRowsTx(
+  db: Database,
+  read: SourceRead,
+  salt: Uint8Array,
+  now: number,
+): SourceIngestResult {
+  let accepted = 0;
+  let invalid = 0;
+  let duplicate = 0;
+  let purged_skip = 0;
+  for (const issue of read.issues) {
+    recordIssue(db, 'ledger', evidenceRef(read.generation, issue.offset), issue.reason, now, issue.end - issue.offset);
+    invalid += 1;
+  }
+  for (const line of read.lines) {
+    const refKey = evidenceRef(read.generation, line.offset);
+    const owned = db.query<{ req_id: number }, [string, string]>(
+      'SELECT req_id FROM request_evidence WHERE source_kind=? AND ref_key=?',
+    ).get('ledger', refKey);
+    if (owned != null) {
+      duplicate += 1;
+      continue;
+    }
+    // 主动淘汰过的证据只留墓碑：来源再回放也不复活，计 purged_skip 而不是新证据。
+    if (isPurgedEvidence(db, 'ledger', refKey)) {
+      purged_skip += 1;
+      continue;
+    }
+    if (line.text.trim() === '') {
+      recordIssue(db, 'ledger', refKey, 'ledger_empty_line', now, line.end - line.offset);
       invalid += 1;
+      continue;
     }
-    for (const line of batch.lines) {
-      const refKey = evidenceRef(batch.generation, line.offset);
-      const owned = db.query<{ req_id: number }, [string, string]>(
-        'SELECT req_id FROM request_evidence WHERE source_kind=? AND ref_key=?',
-      ).get('ledger', refKey);
-      if (owned != null) {
-        duplicate += 1;
-        continue;
-      }
-      // 主动淘汰过的证据只留墓碑：来源再回放也不复活，计 purged_skip 而不是新证据。
-      if (isPurgedEvidence(db, 'ledger', refKey)) {
-        purged_skip += 1;
-        continue;
-      }
-      if (line.text.trim() === '') {
-        recordIssue(db, 'ledger', refKey, 'ledger_empty_line', now, line.end - line.offset);
-        invalid += 1;
-        continue;
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line.text);
-      } catch {
-        recordIssue(db, 'ledger', refKey, 'ledger_invalid_json', now, line.end - line.offset);
-        invalid += 1;
-        continue;
-      }
-      if (!isRecord(parsed)) {
-        recordIssue(db, 'ledger', refKey, 'ledger_invalid_object', now, line.end - line.offset);
-        invalid += 1;
-        continue;
-      }
-      // 脱敏先于映射：raw 列、payload 与投影都只来自同一个已脱敏对象，
-      // 否则列与 payload 会各说一套，而 payload 的未脱敏副本会绕开脱敏边界。
-      const redacted = redact(parsed, salt);
-      if (!isRecord(redacted)) {
-        recordIssue(db, 'ledger', refKey, 'ledger_invalid_redaction', now, line.end - line.offset);
-        invalid += 1;
-        continue;
-      }
-      const fields = mapLedgerRow(redacted);
-      if (fields === null) {
-        recordIssue(db, 'ledger', refKey, 'ledger_invalid_time', now, line.end - line.offset);
-        invalid += 1;
-        continue;
-      }
-      const payloadJson = JSON.stringify(redacted);
-      const ref: LedgerPhysicalRef = { generation: batch.generation, offset: line.offset };
-      if (!insertPreparedLedgerTx(db, ref, fields, payloadJson)) {
-        duplicate += 1;
-        continue;
-      }
-      mergeLedgerRow(db, fields, refKey, now);
-      accepted += 1;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line.text);
+    } catch {
+      recordIssue(db, 'ledger', refKey, 'ledger_invalid_json', now, line.end - line.offset);
+      invalid += 1;
+      continue;
     }
-    upsertCursor(db, 'ledger', sourceName, batch, now);
-    // 本轮真正提交的区间若覆盖了此前的暂停缺口，就在这里关闭它；
-    // 换代时旧代际的缺口一并判死，避免之后被当作可补区间重读。
-    markStaleGapsTx(db, 'ledger', sourceName, now);
-    closeSourceGapsTx(db, 'ledger', sourceName, batch.generation, 0, batch.committedOff, now);
-    return { accepted, invalid, duplicate, purged_skip };
-  });
+    if (!isRecord(parsed)) {
+      recordIssue(db, 'ledger', refKey, 'ledger_invalid_object', now, line.end - line.offset);
+      invalid += 1;
+      continue;
+    }
+    // 脱敏先于映射：raw 列、payload 与投影都只来自同一个已脱敏对象，
+    // 否则列与 payload 会各说一套，而 payload 的未脱敏副本会绕开脱敏边界。
+    const redacted = redact(parsed, salt);
+    if (!isRecord(redacted)) {
+      recordIssue(db, 'ledger', refKey, 'ledger_invalid_redaction', now, line.end - line.offset);
+      invalid += 1;
+      continue;
+    }
+    const fields = mapLedgerRow(redacted);
+    if (fields === null) {
+      recordIssue(db, 'ledger', refKey, 'ledger_invalid_time', now, line.end - line.offset);
+      invalid += 1;
+      continue;
+    }
+    const payloadJson = JSON.stringify(redacted);
+    const ref: LedgerPhysicalRef = { generation: read.generation, offset: line.offset };
+    if (!insertPreparedLedgerTx(db, ref, fields, payloadJson)) {
+      duplicate += 1;
+      continue;
+    }
+    mergeLedgerRow(db, fields, refKey, now);
+    accepted += 1;
+  }
+  return { accepted, invalid, duplicate, purged_skip };
 }
 
 function saveRouteSummary(db: Database, route: RouteFields, now: number): void {
@@ -591,46 +676,71 @@ function saveRouteSummary(db: Database, route: RouteFields, now: number): void {
   );
 }
 
+/** 路由记录级摄入；调用方负责把它放进已有事务。 */
+function ingestRouteRecordsTx(
+  db: Database,
+  records: unknown[],
+  now: number,
+  salt: Uint8Array,
+  issueKey: (value: number) => string,
+): SourceIngestResult {
+  let accepted = 0;
+  let invalid = 0;
+  let duplicate = 0;
+  const seen = new Set<number>();
+  for (let index = 0; index < records.length; index++) {
+    const record = records[index];
+    if (!isRecord(record)) {
+      recordIssue(db, 'route', issueKey(index), 'route_invalid_object', now, null);
+      invalid += 1;
+      continue;
+    }
+    // 与账本同一条规则：raw 列、payload 与长期摘要都来自同一个已脱敏对象。
+    const redacted = redact(record, salt);
+    if (!isRecord(redacted)) {
+      recordIssue(db, 'route', issueKey(index), 'route_invalid_redaction', now, null);
+      invalid += 1;
+      continue;
+    }
+    const route = mapRouteRow(redacted);
+    if (route === null) {
+      const id = optionalNumber(redacted, 'id') ?? optionalNumber(redacted, 'route_id');
+      recordIssue(db, 'route', issueKey(id ?? index), 'route_invalid_identity', now, null);
+      invalid += 1;
+      continue;
+    }
+    if (seen.has(route.routeId)) {
+      duplicate += 1;
+      continue;
+    }
+    seen.add(route.routeId);
+    const existing = db.query<{ req_id: number }, [number]>(
+      "SELECT req_id FROM request WHERE route_id=? AND via!='rejected' ORDER BY req_id LIMIT 1",
+    ).get(route.routeId);
+    // 基线要在写入 raw 行之前取：投影读的是 raw payload，写完之后再读就永远相同。
+    const baseline = existing === null ? null : projectionBaselineTx(db, existing.req_id);
+    upsertPreparedRouteTx(db, route, JSON.stringify(redacted));
+    saveRouteSummary(db, route, now);
+    if (existing != null) applyRouteToRequest(db, existing.req_id, route, now, baseline);
+    accepted += 1;
+  }
+  return { accepted, invalid, duplicate, purged_skip: 0 };
+}
+
+/**
+ * 兼容入口：只有记录、没有文件位置的调用走这里，游标由调用方另行维护。
+ *
+ * 文件入口 ingestSource 复用同一个记录级内核，坏行引用键由来源适配器给出。
+ */
 export function ingestRoute(
   store: Store,
   records: unknown[],
   now: number,
   salt: Uint8Array,
   refBase?: string,
-): void {
+): SourceIngestResult {
   const issueKey = (value: number) => JSON.stringify(refBase === undefined
     ? ['route-invalid', value]
     : ['route-invalid', refBase, value]);
-  store.write(db => {
-    const seen = new Set<number>();
-    for (let index = 0; index < records.length; index++) {
-      const record = records[index];
-      if (!isRecord(record)) {
-        recordIssue(db, 'route', issueKey(index), 'route_invalid_object', now, null);
-        continue;
-      }
-      // 与账本同一条规则：raw 列、payload 与长期摘要都来自同一个已脱敏对象。
-      const redacted = redact(record, salt);
-      if (!isRecord(redacted)) {
-        recordIssue(db, 'route', issueKey(index), 'route_invalid_redaction', now, null);
-        continue;
-      }
-      const route = mapRouteRow(redacted);
-      if (route === null) {
-        const id = optionalNumber(redacted, 'id') ?? optionalNumber(redacted, 'route_id');
-        recordIssue(db, 'route', issueKey(id ?? index), 'route_invalid_identity', now, null);
-        continue;
-      }
-      if (seen.has(route.routeId)) continue;
-      seen.add(route.routeId);
-      const existing = db.query<{ req_id: number }, [number]>(
-        "SELECT req_id FROM request WHERE route_id=? AND via!='rejected' ORDER BY req_id LIMIT 1",
-      ).get(route.routeId);
-      // 基线要在写入 raw 行之前取：投影读的是 raw payload，写完之后再读就永远相同。
-      const baseline = existing === null ? null : projectionBaselineTx(db, existing.req_id);
-      upsertPreparedRouteTx(db, route, JSON.stringify(redacted));
-      saveRouteSummary(db, route, now);
-      if (existing != null) applyRouteToRequest(db, existing.req_id, route, now, baseline);
-    }
-  });
+  return store.write(db => ingestRouteRecordsTx(db, records, now, salt, issueKey));
 }

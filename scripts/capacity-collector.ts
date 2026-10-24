@@ -66,8 +66,7 @@ const config = buildCapacityConfig({
   deriveBudget,
 });
 assertCapacityIsolation({ root: input.root, config, upstreamPort: input.upstream_port });
-// 切片模式在生产启用路径上被拒绝（读模型未迁移到发布指针）；实验台读数走
-// readEffectiveGroup，不消费 request 派生列，在这里声明身份后放行。
+// 生产切片仍等待读取完整性与长组容量验收；实验台在这里显式声明身份后放行。
 const collector = await startCollector(config, { capacityExperiment: true });
 process.stdout.write(`collector_listening:${collector.port}\n`);
 const stop = async (): Promise<void> => {

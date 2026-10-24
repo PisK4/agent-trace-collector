@@ -10,7 +10,7 @@ Status: implemented
 
 任务体下放到拥有对应概念的 module，`main.ts` 只留 wiring（timer、防重入锁、配置装配、进程日志）：
 
-- `reconcile.ts` 新增 `readFileCursor`（游标读取，死代码删除）、`observeSourceOffset`（只推进观察位）、`committedRouteFingerprints`（已提交指纹）、`ingestDecodedRouteFile`（一个已解码路由文件的完整落库：坏行按 `recordIssue` 记账、`ingestRoute`、推进指纹游标）；
+- `reconcile.ts` 持有 `readFileCursor`、`readRouteCursors`（游标读取）、`observeSourceOffset`（只推进观察位）与 `ingestSource`（一个已解码文件的坏行、证据、游标原子落库）；摄入入口与事务收敛依据见[来源摄入](2026-10-24-source-ingest-unit.md)。
 - `retention.ts` 新增 `enforceBodyBudget`（触顶判定、按批回收、收缩文件、失效准入缓存），返回回收请求数；
 - `routeTick`/`ledgerTick`/`retentionTick` 的任务体各自缩成对上述入口的调用加 `stderr` 日志；`pendingTick`/`deriveTick`/`gapTick`/`costTick` 原本就是一行委托，不动。
 
@@ -26,4 +26,4 @@ Status: implemented
 
 - 行格式与游标规则一个家：改路由游标语义只动 `reconcile.ts`，改触顶策略只动 `retention.ts`。
 - 路由落库与预算回收首次有了直接测试（`reconcile.test.ts` 的指纹游标与坏行记账、`retention.test.ts` 的触顶回收与闸门失效），此前只有 `queries.test.ts`/`maintenance.test.ts` 间接覆盖。
-- `main.ts` 仍然没有直接测试文件；剩余的任务体都是一行委托，进程装配（signal、server、启动顺序）留给端到端用例。
+- `tests/main.test.ts` 验证切片启用断言、起停和在线来源接线；任务内部规则仍在所属 module 直接测试，信号与真实进程生命周期留给端到端用例。

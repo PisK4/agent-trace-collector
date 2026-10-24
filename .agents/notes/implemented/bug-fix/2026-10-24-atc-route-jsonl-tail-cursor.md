@@ -12,7 +12,7 @@ Status: implemented
 
 ## Decision
 
-`.jsonl` 与 `.gz` 由同一个 `readRouteFiles(dir, cursors)` 用两种游标读取：
+`.jsonl` 与 `.gz` 由同一个 `readRouteFiles(dir, cursors)` 按两种文件形态读取，游标与读取结果的统一形状见[来源摄入](../architecture/2026-10-24-source-ingest-unit.md)：
 
 - `.jsonl` 走账本同一个行读取器 `readBatch`：文件身份（dev + inode + birthtime）、`committed_off`、冻结的头部基线；每批最多 128 行或 8 MiB，只消费换行结束的完整行，末行没有换行就留到下一轮。身份、epoch、头部基线与截断的判定规则与账本一致，替换或截断则从偏移 0 重读，`route_id` upsert 保证重读幂等。
 - `.gz` 保持整份字节的 SHA-256 作 `fingerprint`：摘要没变就跳过，变了整份解压重读。
@@ -45,7 +45,7 @@ Status: implemented
 
 ## Testing
 
-`bun test tests/files.test.ts` 覆盖追加只读新增完整行、半行不提交、原地重写与截断换代重读、空文件不写游标，以及未变 `.gz` 不解压与损坏 `.gz` 保留指纹。`bun test tests/reconcile.test.ts` 覆盖 `.jsonl` 游标按读取器偏移落库、坏行与超长行记账、`.gz` 以指纹作游标。`bun run typecheck` 覆盖 `RouteCursor` 与 `routeTick` 接线。
+`bun test tests/files.test.ts` 覆盖追加只读新增完整行、半行不提交、原地重写与截断换代重读、空文件不写游标，以及未变 `.gz` 不解压与损坏 `.gz` 保留指纹。`bun test tests/reconcile.test.ts` 覆盖 `.jsonl` 游标按读取器偏移落库、坏行与超长行记账、`.gz` 以指纹作游标。`bun run typecheck` 覆盖 `SourceCursor`、`SourceRead` 与 `routeTick` 接线。
 
 ## Related
 

@@ -48,7 +48,7 @@ function drain(store: Store, limit: number, scope: DeriveScope | undefined,
             AND r.actor_state='known' AND r.purpose_pending=1)
         ORDER BY q.conv_key,q.actor LIMIT 1`).get(scope?.convKey ?? null, scope?.convKey ?? null);
       if (candidate === null) break;
-      // shortcut: 同步单组不可中断，单大组的硬上限需要 C1.5 读侧迁移后启用切片。
+      // shortcut: 同步单组不可中断，需在读取与长组容量验收后启用切片。
       const group = store.write(db => drainDeriveGroupTx(db, candidate.conv_key, candidate.actor), 'derive');
       if (group === null) break;
       result.processed += group.processed;
