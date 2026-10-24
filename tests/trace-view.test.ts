@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { resolveSelectedSource } from '../web/app.js';
 import { projectSteps, renderTraceRows, toolSummary } from '../web/trace-view.js';
 
 const TOKEN = 'r1-' + 'a'.repeat(64);
@@ -279,4 +280,89 @@ test('多 choice 回复保留原始对象并说明限制', () => {
   const steps = projectSteps(row(), read(detail(), [], reply));
   expect(steps.some(s => s.kind === 'assistant')).toBe(false);
   expect(steps.some(s => s.text.includes('多 choice'))).toBe(true);
+});
+
+test('选中来源解析：回复四块各自定位，两个文本不再共享整份回复', () => {
+  const reply = { stop_reason: 'tool_use', content: [
+    { type: 'text', text: 't0' },
+    { type: 'tool_use', id: 'c1', name: 'Bash', input: {} },
+    { type: 'text', text: 't2' },
+    { type: 'tool_use', id: 'c3', name: 'Read', input: {} },
+  ] };
+  const steps = projectSteps(row(), read(detail(), [], reply));
+  expect(steps.map(s => s.key)).toEqual(['7:reply:text:0', '7:call:1', '7:reply:text:2', '7:call:3']);
+  expect(resolveSelectedSource(steps[0] ?? null)).toEqual({
+    side: 'reply', target: 'text', path: 'reply.content[0]', blockIndex: 0, text: 't0',
+  });
+  expect(resolveSelectedSource(steps[1] ?? null)).toEqual({
+    side: 'reply', target: 'call', path: 'reply.content[1]', callOrd: 1,
+  });
+  expect(resolveSelectedSource(steps[2] ?? null)).toMatchObject({ path: 'reply.content[2]', blockIndex: 2, text: 't2' });
+  expect(resolveSelectedSource(steps[3] ?? null)).toMatchObject({ path: 'reply.content[3]', callOrd: 3 });
+  // 无选择回到整份回复；请求级记录不落在协议对象上。
+  expect(resolveSelectedSource(null)).toEqual({ side: 'none' });
+  const record = projectSteps(row(), null);
+  expect(resolveSelectedSource(record[0] ?? null)).toEqual({ side: 'none' });
+});
+
+test('选中来源解析：输入消息、顶层 System 与未知块', () => {
+  const d = detail({ delta_ordinals: [2] });
+  const user = {
+    ord: 2, role: 'user', rawRole: 'user',
+    blocks: [{ kind: 'text', text: 'q', index: 0, raw: 'q', path: 'content[0]' }],
+    preview: 'q', input: { state: 'text', text: 'q', original: 'q' }, isInput: true,
+  };
+  const steps = projectSteps(row(), read(d, [user], { stop_reason: 'end_turn', content: [{ type: 'mystery', x: 1 }] }));
+  expect(resolveSelectedSource(steps.find(s => s.kind === 'user') ?? null)).toEqual({
+    side: 'request', target: 'message', path: 'request.messages[2]', messageOrd: 2,
+  });
+  const unknown = steps.find(s => s.key === '7:reply:block:0');
+  expect(resolveSelectedSource(unknown ?? null)).toEqual({
+    side: 'reply', target: 'block', path: 'reply.content[0]', blockIndex: 0, raw: unknown?.raw,
+  });
+  const sysRead = read(d, [], { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] });
+  (sysRead as { meta: Record<string, unknown> }).meta = {
+    reply: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] },
+    request_fields: { system: 'base' }, capabilities: null,
+  };
+  const sysSteps = projectSteps(row(), sysRead, { text: 'base', changed: null });
+  expect(resolveSelectedSource(sysSteps.find(s => s.key === '7:system') ?? null)).toEqual({
+    side: 'request', target: 'system', path: 'request.system', text: 'base',
+  });
+});
+
+test('截图形状：Skill 调用定位本笔回复，结果步骤不按时间跳下一笔', () => {
+  // 请求 A：输入两条，回复含 Skill(ponytail)。
+  const rowA = row({ req_id: 108 });
+  const dA = detail({ req_id: 108, delta_ordinals: [0, 1], tool_calls: [
+    { call_id: 'p', ord: 0, tool_name: 'Skill', result_req: 110, result_ord: 0, result_path: 'request.messages[2].content[0]', state: 'resolved' },
+  ] });
+  const userA = (ord: number) => ({
+    ord, role: 'user', rawRole: 'user',
+    blocks: [{ kind: 'text', text: `q${ord}`, index: 0, raw: `q${ord}`, path: 'content[0]' }],
+    preview: `q${ord}`, input: { state: 'text', text: `q${ord}`, original: `q${ord}` }, isInput: true,
+  });
+  const stepsA = projectSteps(rowA, read(dA, [userA(0), userA(1)],
+    { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'p', name: 'Skill', input: {} }] }));
+  expect(stepsA.filter(s => s.kind === 'user')).toHaveLength(2);
+  expect(resolveSelectedSource(stepsA.find(s => s.kind === 'tool') ?? null)).toMatchObject({
+    side: 'reply', target: 'call', path: 'reply.content[0]', callOrd: 0,
+  });
+  // 请求 B：输入四条（两条用户文本、一条工具结果、再一条用户文本），回复含 Skill(memmy)。
+  const rowB = row({ req_id: 110 });
+  const dB = detail({ req_id: 110, delta_ordinals: [2, 3, 4, 5] });
+  const resultMsg = {
+    ord: 4, role: 'user', rawRole: 'user',
+    blocks: [{ kind: 'result', text: 'res', index: 0, raw: {}, path: 'content[0]' }],
+    preview: 'res', input: null, isInput: false,
+  };
+  const stepsB = projectSteps(rowB, read(dB, [userA(2), userA(3), resultMsg, userA(5)],
+    { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'm', name: 'Skill', input: {} }] }));
+  expect(stepsB.filter(s => s.kind === 'user')).toHaveLength(3);
+  expect(resolveSelectedSource(stepsB.find(s => s.kind === 'tool') ?? null)).toMatchObject({
+    side: 'reply', target: 'call', path: 'reply.content[0]', callOrd: 0,
+  });
+  // 工具结果步骤定位在 B 自己的消息块，不跳去下一笔辅助请求。
+  const result = stepsB.find(s => s.kind === 'tool_result');
+  expect(result?.source).toMatchObject({ side: 'request', path: 'request.messages[4].content[0]', messageOrd: 4 });
 });
