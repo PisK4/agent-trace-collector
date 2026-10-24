@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { openStore } from '../src/store';
 import type { Store } from '../src/store';
 import { persistBody, persistBodyTx } from '../src/body';
+import { PURPOSE_VERSION } from '../src/semantics';
 
 export function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'collector-test-'));
@@ -101,7 +102,7 @@ export function seedPurposeRequest(store: Store, input: PurposeSeed = {}): numbe
       purpose_chain=?, purpose_pending=?, purpose_signals=?, req_kind=?, model_title=?,
       title=?, title_source=?, chain_role=?, summary_state=?, summary_algorithm=?
     WHERE req_id=?`, [
-    input.purposeTarget ?? 2,
+    input.purposeTarget ?? PURPOSE_VERSION,
     input.purposeVersion ?? null,
     input.purposeStatus ?? 'missing',
     input.purposeRule ?? null,

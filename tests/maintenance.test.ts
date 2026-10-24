@@ -22,6 +22,7 @@ import { redact } from '../src/privacy';
 import { startCollector } from '../src/main';
 import { persistBody } from '../src/body';
 import { GROUP_ALGORITHM } from '../src/derive-state';
+import { PURPOSE_VERSION } from '../src/semantics';
 
 test('维护重建排空目标会话且不消费其它会话积压', async () => {
   const f = fixture();
@@ -685,7 +686,7 @@ test('重建只升级目标会话的用途目标并排空两类工作', async ()
     }, [number]>(`
       SELECT purpose_target, purpose_pending, purpose_version, req_kind
       FROM request WHERE req_id=?`).get(id)).toMatchObject({
-      purpose_target: 2, purpose_pending: 0, purpose_version: 2, req_kind: 'title',
+      purpose_target: PURPOSE_VERSION, purpose_pending: 0, purpose_version: PURPOSE_VERSION, req_kind: 'title',
     });
     expect(f.store.read.query<{
       purpose_target: number; purpose_pending: number;
@@ -693,4 +694,49 @@ test('重建只升级目标会话的用途目标并排空两类工作', async ()
       SELECT purpose_target, purpose_pending FROM request WHERE req_id=?`).get(other))
       .toEqual({ purpose_target: 1, purpose_pending: 0 });
   } finally { f.close(); }
+});
+
+test('重建把目标会话的 Chat System 分类器改为 exclude，其他会话不动', async () => {
+  const f = fixture();
+  try {
+    const fingerprint = 'You are a security monitor for autonomous AI coding agents.';
+    const classifier = seedPurposeRequest(f.store, {
+      convKey: 're-classifier', agent: 'claude', protocol: 'chat',
+      purposeTarget: PURPOSE_VERSION - 1, purposeVersion: PURPOSE_VERSION - 1,
+      purposeStatus: 'unrecognized', purposePending: 0, cleanGroup: true,
+      messages: [{ role: 'system', content: fingerprint }, { role: 'user', content: 'synthetic input' }],
+      stop: ['</block>'],
+      reply: { choices: [{ message: { role: 'assistant', content: '<block>no' } }] },
+    });
+    const other = seedPurposeRequest(f.store, {
+      convKey: 're-other', purposeTarget: 1, purposeVersion: 1,
+      purposeStatus: 'unrecognized', purposePending: 0, cleanGroup: true,
+    });
+    const lines: string[] = [];
+    const code = await runMaintenance(['rebuild', '--db', join(f.dir, 'trace.db'),
+      '--session', 're-classifier'], { out: line => lines.push(line), err: () => {} });
+    expect(code).toBe(0);
+    const report = JSON.parse(lines[0]!);
+    expect(report).toMatchObject({
+      ok: true, session: 're-classifier', queue_remaining: 0, purpose_remaining: 0,
+    });
+    // 升级到当前目标版本后重判：Chat System 指纹得到与 Anthropic 相同的 exclude。
+    expect(f.store.read.query<{
+      purpose_target: number; purpose_pending: number; purpose_version: number | null;
+      req_kind: string; purpose_chain: string;
+    }, [number]>(`
+      SELECT purpose_target, purpose_pending, purpose_version, req_kind, purpose_chain
+      FROM request WHERE req_id=?`).get(classifier)).toMatchObject({
+      purpose_target: PURPOSE_VERSION, purpose_pending: 0, purpose_version: PURPOSE_VERSION,
+      req_kind: 'auto-mode-classifier', purpose_chain: 'exclude',
+    });
+    // 其他会话保持旧值。
+    expect(f.store.read.query<{
+      purpose_target: number; purpose_pending: number; purpose_version: number | null;
+    }, [number]>(`
+      SELECT purpose_target, purpose_pending, purpose_version FROM request WHERE req_id=?`)
+      .get(other)).toEqual({ purpose_target: 1, purpose_pending: 0, purpose_version: 1 });
+  } finally {
+    f.close();
+  }
 });

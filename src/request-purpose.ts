@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { zstdDecompressSync } from 'node:zlib';
 import { readBodyMetaTx } from './body';
 import { markGroupDirtyTx } from './derive-state';
 import { parseProtocol } from './protocols';
@@ -155,8 +156,33 @@ function emptyView(identity: PurposeIdentity, parse: PurposeParse, reply: unknow
 }
 
 /**
- * 一笔请求的用途视图。只解骨架与引用索引，不解压消息块：
- * 分类器需要的 system、stop 与回复都在骨架里，正文条数来自 request 行。
+ * 用途取数只解骨架与 role=2 的 System/developer 消息块。
+ *
+ * 顶层 system 已在骨架里；消息级 System（Chat 的 system、developer 与 Anthropic
+ * 的 system 消息）按引用解压读取。损坏的 System 块向上抛错，交给用途失败路径，
+ * 不静默宣称没有 System——分类器指纹缺失会把分类器请求算进主链。普通
+ * User/Assistant 块不解压，取数成本不随正文体积增长。
+ */
+function purposeSystemTextsTx(db: Database, reqId: number, request: unknown): string[] {
+  const rows = db.query<{ z: Uint8Array }, [number]>(`
+    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? AND rb.role=2 ORDER BY rb.ord`).all(reqId);
+  const systemMessages = rows.map(row => {
+    try {
+      return JSON.parse(zstdDecompressSync(row.z).toString('utf8')) as unknown;
+    } catch (error) {
+      throw new Error('purpose_system_block_unreadable', { cause: error });
+    }
+  });
+  return [
+    ...systemTextsOf(request),
+    ...systemTextsOf({ messages: systemMessages }),
+  ];
+}
+
+/**
+ * 一笔请求的用途视图。只解骨架、引用索引与 System 消息块，不解压普通消息块：
+ * 分类器需要的 system、stop 与回复都在骨架或 System 块里，正文条数来自 request 行。
  */
 export function readPurposeViewTx(db: Database, identity: PurposeIdentity): PurposeView {
   const body = readBodyMetaTx(db, identity.reqId);
@@ -168,7 +194,7 @@ export function readPurposeViewTx(db: Database, identity: PurposeIdentity): Purp
   return {
     parse,
     agent: identity.agent,
-    systemTexts: systemTextsOf(body.request),
+    systemTexts: purposeSystemTextsTx(db, identity.reqId, body.request),
     stopSequences: stopSequencesOf(body.request),
     messageCount: body.messageCount,
     toolCount: toolCountOf(body.request),
