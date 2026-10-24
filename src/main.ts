@@ -10,7 +10,7 @@ import { ingestLedger, resumePausedLedger } from './reconcile';
 import {
   ingestDecodedRouteFile, observeSourceOffset, readFileCursor, readRouteCursors,
 } from './reconcile';
-import { probeMagpie, syncCosts } from './sources/magpie';
+import { probeMagpie, saveProbe, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
 import { reconcilePending } from './hook';
 import { createDeriveUnit } from './derive-unit';
@@ -162,10 +162,7 @@ export async function startCollector(
   const probeTick = guard('probe', async () => {
     const versionFile = join(dirname(config.ledgerPath), 'last-version');
     const result = await probeMagpie(config.magpieUrl, versionFile);
-    store.write(db => db.run(
-      'INSERT INTO collector_state(key,value_json) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
-      [JSON.stringify(['magpie', 'probe']), JSON.stringify({ ...result, at: Date.now() })],
-    ));
+    saveProbe(store, result, Date.now());
   });
 
   const pendingTick = guard('pending', () => {

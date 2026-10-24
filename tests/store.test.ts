@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { fixture } from './fixtures';
-import { openStore } from '../src/store';
+import { commitUnit, openStore } from '../src/store';
 
 test('事务失败不留下证据或游标', () => {
   const f = fixture();
@@ -270,14 +270,18 @@ test('写事务统计覆盖成功与回滚', () => {
   const f = fixture();
   try {
     const before = f.store.writeStats.count;
-    f.store.write(db => db.run("INSERT INTO collector_state(key,value_json) VALUES ('a','1')"));
+    expect(commitUnit(f.store, 'idle', () => null)).toBeNull();
+    expect(f.store.writeStats.count).toBe(before);
+    f.store.write(db => db.run("INSERT INTO collector_state(key,value_json) VALUES ('a','1')"), 'synthetic');
     expect(f.store.writeStats.count).toBe(before + 1);
     expect(f.store.writeStats.max_ms).toBeGreaterThanOrEqual(0);
     expect(() => f.store.write(db => {
       db.run("INSERT INTO collector_state(key,value_json) VALUES ('b','1')");
       throw new Error('synthetic_rollback');
-    })).toThrow('synthetic_rollback');
+    }, 'synthetic')).toThrow('synthetic_rollback');
     expect(f.store.writeStats.count).toBe(before + 2);
+    expect(f.store.writeStats.by_name.synthetic?.count).toBe(2);
+    expect(f.store.writeStats.by_name.idle).toBeUndefined();
     expect(f.store.read.query("SELECT COUNT(*) AS n FROM collector_state WHERE key='b'").get())
       .toEqual({ n: 0 });
   } finally { f.close(); }

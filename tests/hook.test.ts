@@ -222,9 +222,41 @@ test('同一response_id多个候选时标ambiguous不猜', () => {
     expect(stats.merged).toBe(0);
     const row = f.store.read.query<{ candidates: string }, []>('SELECT candidates FROM pending_hook').get();
     expect(JSON.parse(row!.candidates)).toEqual([20, 21]);
+    const before = f.store.writeStats.count;
+    expect(reconcilePending(f.store, 3)).toEqual({ merged: 0, pending: 0, ambiguous: 1 });
+    expect(f.store.writeStats.count).toBe(before);
+    f.store.write(db => db.run(`INSERT INTO request(req_id,route_id,response_id_norm,
+      started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
+      VALUES (22,403,'synthetic_1',1700000000000,'2026-10-20','through','pending',0,2,1,1)`));
+    reconcilePending(f.store, 4);
+    expect(f.store.read.query('SELECT candidates FROM pending_hook').get())
+      .toEqual({ candidates: '[20,21,22]' });
+    expect(f.store.writeStats.by_name.pending?.count).toBe(2);
   } finally {
     f.close();
   }
+});
+
+test('pending合并每轮最多十个，剩余候选下轮继续', () => {
+  const f = fixture();
+  try {
+    for (let index = 0; index < 12; index++) {
+      acceptHook(f.store, envelope({ hook_id: `batch-${index}`,
+        reply: { id: `msg_batch-${index}`, content: [] } }), 1, salt);
+    }
+    f.store.write(db => {
+      for (let index = 0; index < 12; index++) {
+        db.run(`INSERT INTO request(route_id,response_id_norm,started_ms,day,via,
+          body_state,derive_version,have,created_at,updated_at)
+          VALUES (?,?,1700000000000,'2026-10-20','through','pending',0,2,1,1)`,
+        [index + 1, `batch-${index}`]);
+      }
+    });
+    expect(reconcilePending(f.store, 2)).toEqual({ merged: 10, pending: 2, ambiguous: 0 });
+    expect(reconcilePending(f.store, 3)).toEqual({ merged: 2, pending: 0, ambiguous: 0 });
+    expect(f.store.writeStats.by_name.pending?.count).toBe(2);
+    expect(f.store.read.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  } finally { f.close(); }
 });
 
 test('无response ID的hook长期pending不强行关联', () => {

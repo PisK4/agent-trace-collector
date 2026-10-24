@@ -32,7 +32,7 @@ const store: Store = {
     return db.transaction(() => fn(db)).immediate();
   },
   // 一次性脚本不做容量观测；字段只为满足 Store 的现行契约。
-  writeStats: { count: 0, total_ms: 0, max_ms: 0 },
+  writeStats: { count: 0, total_ms: 0, max_ms: 0, by_name: {} },
   close(): void { db.close(); },
 };
 

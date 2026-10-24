@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
+import { commitUnit } from './store';
 import { persistBodyTx } from './body';
 import type { BodyInput } from './body';
 import { redact } from './privacy';
@@ -378,28 +379,35 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
  * 只处理候选唯一的情况；仍无候选或多候选保持 pending。
  */
 export function reconcilePending(store: Store, now: number): { merged: number; pending: number; ambiguous: number } {
-  return store.write(db => {
-    const rows = db.query<{ hook_id: string; response_id_norm: string | null }, []>(
-      'SELECT hook_id, response_id_norm FROM pending_hook ORDER BY first_seen').all();
-    let merged = 0;
-    let pending = 0;
-    let ambiguous = 0;
+  const result = { merged: 0, pending: 0, ambiguous: 0 };
+  commitUnit(store, 'pending', read => {
+    const rows = read.query<{ hook_id: string; response_id_norm: string | null;
+      candidates: string | null }, []>(
+      'SELECT hook_id,response_id_norm,candidates FROM pending_hook ORDER BY first_seen').all();
+    const actions: { hookId: string; candidates: number[] }[] = [];
     for (const row of rows) {
-      const candidates = findCandidates(db, row.response_id_norm);
-      if (candidates.length === 0) {
-        pending += 1;
-        continue;
-      }
+      const candidates = findCandidates(read, row.response_id_norm);
+      if (candidates.length === 0) { result.pending += 1; continue; }
       if (candidates.length > 1) {
-        db.run('UPDATE pending_hook SET last_tried=?, candidates=? WHERE hook_id=?', [
-          now, JSON.stringify(candidates), row.hook_id,
-        ]);
-        ambiguous += 1;
-        continue;
+        result.ambiguous += 1;
+        if (row.candidates === JSON.stringify(candidates)) continue;
       }
-      mergeHookInto(db, row.hook_id, candidates[0]!, now);
-      merged += 1;
+      if (actions.length < 10) actions.push({ hookId: row.hook_id, candidates });
+      else if (candidates.length === 1) result.pending += 1;
     }
-    return { merged, pending, ambiguous };
+    if (actions.length === 0) return null;
+    return db => {
+      for (const action of actions) {
+        if (action.candidates.length > 1) {
+          db.run('UPDATE pending_hook SET last_tried=?, candidates=? WHERE hook_id=?', [
+            now, JSON.stringify(action.candidates), action.hookId,
+          ]);
+        } else {
+          mergeHookInto(db, action.hookId, action.candidates[0]!, now);
+          result.merged += 1;
+        }
+      }
+    };
   });
+  return result;
 }

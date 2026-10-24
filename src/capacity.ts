@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type { Config } from './config';
-import type { Store, WriteStats } from './store';
+import type { Store } from './store';
 import { measureStorage } from './retention';
 import type { StorageUsage } from './retention';
 import { queuePendingSql } from './derive-state';
@@ -294,7 +294,10 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
         ingest: ingest.snapshot(),
         route: { ...route },
         jobs: Object.fromEntries(jobs),
-        writer: { ...target.writeStats } satisfies WriteStats,
+        writer: { ...target.writeStats,
+          by_name: Object.fromEntries(Object.entries(target.writeStats.by_name)
+            .map(([name, stats]) => [name, { ...stats }])),
+        } satisfies Store['writeStats'],
         event_loop: eventLoop(),
         rss_bytes: process.memoryUsage().rss,
         storage,

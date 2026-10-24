@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Database } from 'bun:sqlite';
 import type { Store } from '../store';
+import { commitUnit } from '../store';
 import { redact } from '../privacy';
 
 export type ProbeResult = { version: string | null; verified: boolean; reason: string | null };
@@ -447,6 +448,22 @@ export async function probeMagpie(
   return { version, verified, reason: httpOk ? null : 'http_unavailable' };
 }
 
+/** 探针只持久化结果变化，at 表示该结果开始被观测到的时间。 */
+export function saveProbe(store: Store, result: ProbeResult, now: number): void {
+  const key = JSON.stringify(['magpie', 'probe']);
+  commitUnit(store, 'probe', read => {
+    const previous = read.query<{ value_json: string }, [string]>(
+      'SELECT value_json FROM collector_state WHERE key=?').get(key);
+    let value: unknown = null;
+    try { value = previous === null ? null : JSON.parse(previous.value_json); } catch { /* 重写损坏状态 */ }
+    if (isRecord(value) && value.version === result.version
+      && value.verified === result.verified && value.reason === result.reason) return null;
+    return db => db.run(`INSERT INTO collector_state(key,value_json) VALUES (?,?)
+      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`,
+    [key, JSON.stringify({ ...result, at: now })]);
+  });
+}
+
 type CostWindowState = { run_id: string; next_offset: number; done: boolean };
 
 /** 费用时钟冲突的健康状态：计数与最新阻塞时点，读出来就知道扫描停在哪儿。 */
@@ -481,7 +498,7 @@ function recordCostConflict(
     [COST_HEALTH_KEY, JSON.stringify({
       count: (previous?.count ?? 0) + 1, blocked_at: blockedAt, ref_key: refKey, period, at: now,
     })],
-  ));
+  ), 'cost');
 }
 
 function readCostWindow(store: Store, period: string): CostWindowState | null {
@@ -617,7 +634,6 @@ export async function syncCosts(
   let state = readCostWindow(store, period);
   if (state === null) state = { run_id: randomUUID(), next_offset: 0, done: false };
   else if (state.done) state = { run_id: state.run_id, next_offset: 0, done: false };
-  store.write(db => saveCostWindow(db, period, state!));
 
   const base = baseUrl.replace(/\/$/, '');
   const result: CostSyncResult = { pages: 0, observations: 0, matched: 0, ambiguous: 0 };
@@ -638,6 +654,11 @@ export async function syncCosts(
     }
     if (page.offset !== offset) throw new Error('cost_api_offset_mismatch');
     const rows = page.rows;
+    const saved = readCostWindow(store, period);
+    if (rows.length === 0 && offset === 0 && saved?.done === true) {
+      result.pages += 1;
+      break;
+    }
     const observedAt = Date.now();
     const pricingVersion = optionalString(page, 'pricing_version');
     const pageCounts = new Map<number, number>();
@@ -699,7 +720,7 @@ export async function syncCosts(
           done,
         });
         return { observations, matched, ambiguous, done };
-      });
+      }, 'cost');
     } catch (error) {
       if (error instanceof Error && error.message === 'cost_observation_conflict') {
         // 整页已回滚，进度没动；把冲突记下来再抛出，采集侧据此显示费用停滞。

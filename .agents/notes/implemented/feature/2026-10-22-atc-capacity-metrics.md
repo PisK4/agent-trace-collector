@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-观测集中在 `src/capacity.ts` 的进程内对象：分位数用最近秩、空样本返回 null；拒绝只按固定 `REJECT_REASONS` 计数；事件循环是 50 ms 定时器的有界环形缓冲（8192 个样本）；队列与存储快照从只读连接现算，不写表。`Store.write` 在包装层计时，成功、失败与回滚都计数，统计随进程重启归零并在报告里注明起点。
+观测集中在 `src/capacity.ts` 的进程内对象：分位数用最近秩、空样本返回 null；拒绝只按固定 `REJECT_REASONS` 计数；事件循环是 50 ms 定时器的有界环形缓冲（8192 个样本）；队列与存储快照从只读连接现算，不写表。`Store.write` 在包装层计时，成功、失败与回滚都计数，并按[具名提交](../architecture/2026-10-24-named-commit-units.md)归属任务；统计随进程重启归零并在报告里注明起点。
 
 元数据增长只按逻辑载荷计：clean 组队列行、`source_facts_json`、`projection_meta_json` 与已发布代结果字段；同时给 per-clean-group 与 per-request 两个比值，避免只数 dirty 组或只数结果表。
 

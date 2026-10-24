@@ -33,7 +33,7 @@ function drain(store: Store, limit: number, scope: DeriveScope | undefined,
   };
   let remaining = remainingWork(store, scope);
   while (remaining.purposes > 0 && performance.now() - started < budgetMs) {
-    const batch = store.write(db => drainRequestPurposesTx(db, PURPOSE_BATCH, scope));
+    const batch = store.write(db => drainRequestPurposesTx(db, PURPOSE_BATCH, scope), 'derive');
     result.purpose_processed += batch.processed;
     remaining.purposes = batch.remaining;
     if (batch.processed === 0) break;
@@ -49,7 +49,7 @@ function drain(store: Store, limit: number, scope: DeriveScope | undefined,
         ORDER BY q.conv_key,q.actor LIMIT 1`).get(scope?.convKey ?? null, scope?.convKey ?? null);
       if (candidate === null) break;
       // shortcut: 同步单组不可中断，单大组的硬上限需要 C1.5 读侧迁移后启用切片。
-      const group = store.write(db => drainDeriveGroupTx(db, candidate.conv_key, candidate.actor));
+      const group = store.write(db => drainDeriveGroupTx(db, candidate.conv_key, candidate.actor), 'derive');
       if (group === null) break;
       result.processed += group.processed;
       result.recomputed += group.recomputed;
@@ -97,7 +97,7 @@ export function createDeriveUnit(store: Store): {
   const unfinished = store.read.query(`SELECT 1 FROM derive_queue q
     JOIN derive_generation g ON g.generation=q.compute_generation
     WHERE g.state IN ('building','ready') LIMIT 1`).get();
-  if (unfinished !== null) store.write(db => recoverSlice(db, Date.now()));
+  if (unfinished !== null) store.write(db => recoverSlice(db, Date.now()), 'derive');
   return {
     run({ budgetMs }) {
       if (!Number.isFinite(budgetMs) || budgetMs <= 0) throw new Error('invalid_derive_budget');
