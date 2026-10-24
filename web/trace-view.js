@@ -53,10 +53,11 @@ const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls'
 
 /* ---------- 工具行摘要：按工具分派，路径折算成 basename，行区间是显示锚点不是事实 ---------- */
 
-const SUMMARY_MAX = 140;
+/** 悬停 title 属性的超长护栏：预览文本不按字符截断，属性仍要防大参数撑爆。 */
+const TITLE_MAX = 2000;
 
 /** @param {string} text @param {number} [max] */
-const clipChars = (text, max = SUMMARY_MAX) => {
+const clipChars = (text, max = TITLE_MAX) => {
   const chars = [...text];
   return chars.length <= max ? text : `${chars.slice(0, max).join('')}…`;
 };
@@ -199,7 +200,7 @@ function fallbackSummary(args, inputText) {
 
 /**
  * 摘要拆成身份与参数段：chip 用工具名，预览用参数段，悬停给完整参数。
- * 截断只作用于参数段，工具名与 basename 不截。
+ * 参数段不做字符数预截断：超长由中栏列宽的省略号处理，工具名与 basename 不受影响。
  * @param {string} name @param {string} inputText @returns {{label: string, args: string}}
  */
 function summaryParts(name, inputText) {
@@ -210,7 +211,7 @@ function summaryParts(name, inputText) {
     ? dispatchSummary(name, /** @type {Record<string, unknown>} */ (args))
     : null;
   const raw = dispatched ?? fallbackSummary(args, inputText);
-  return { label, args: clipChars(String(raw ?? '')) };
+  return { label, args: String(raw ?? '') };
 }
 
 /** 工具行动作摘要 `工具名 · 参数段`；结果正文不当结论，原文进悬停与右栏。 @param {string} name @param {string} inputText @returns {string} */
@@ -417,38 +418,37 @@ const KIND_LABEL = { user: 'User', assistant: 'Assistant', tool: 'Assistant', to
 const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'reply', tool_result: 'tool', system: 'system', record: 'aux', aux: 'aux' };
 
 /**
- * 工具行身份 chip 的三种内容：调用行是工具名；结果行在调用方正文于窗口缓存内时
- * 给与调用行同款的 `工具名 · 参数段` 摘要，配对确认但缓存外只给工具名，
- * 未配对保持中性 `Tool result`，不猜归属。
+ * 工具行的身份 chip 与调用侧参数段。色类只包工具名：参数摘要以普通文本跟随，
+ * 不进色类。结果行在调用方可知时给 `参数摘要 → 结果正文`；配对确认但调用方
+ * 不在缓存时只给 `→ 结果正文`；未配对保持中性 `Tool result`，不猜归属。
  * @param {TraceStep} step
  * @param {((ownerReq: number, callOrd: number) => {name: string, inputText: string} | null) | null} callOf
- * @returns {{chip: string, arrow: boolean}}
+ * @returns {{chip: string, args: string, arrow: boolean}}
  */
-function toolChipOf(step, callOf) {
+function toolRowParts(step, callOf) {
   if (step.kind === 'tool') {
     const name = step.toolName ?? '';
     const label = name !== '' ? name : '未命名工具';
-    return { chip: `<span class="row-tint ${toolTint(name)}">${esc(label)}</span>`, arrow: false };
+    return { chip: `<span class="row-tint ${toolTint(name)}">${esc(label)}</span>`, args: step.toolArgs ?? '', arrow: false };
   }
   if (step.kind === 'tool_result') {
     const owner = step.pairOwner;
     const call = owner !== null && callOf !== null ? callOf(owner.reqId, owner.callOrd) : null;
-    if (call !== null) {
-      const parts = summaryParts(call.name, call.inputText);
-      const summary = `${parts.label} · ${parts.args}`;
-      return { chip: `<span class="row-tint ${toolTint(call.name)}">${esc(summary)}</span>`, arrow: true };
+    if (call === null && (step.toolName ?? '') === '') {
+      return { chip: '<span class="row-tint tint-other">Tool result</span>', args: '', arrow: false };
     }
-    const name = step.toolName ?? '';
-    if (name !== '') {
-      return { chip: `<span class="row-tint ${toolTint(name)}">${esc(name)}</span>`, arrow: false };
-    }
-    return { chip: '<span class="row-tint tint-other">Tool result</span>', arrow: false };
+    const name = call !== null ? call.name : /** @type {string} */ (step.toolName);
+    const label = name !== '' ? name : '未命名工具';
+    const args = call !== null ? summaryParts(call.name, call.inputText).args : '';
+    return { chip: `<span class="row-tint ${toolTint(name)}">${esc(label)}</span>`, args, arrow: true };
   }
-  return { chip: '', arrow: false };
+  return { chip: '', args: '', arrow: false };
 }
 
 /**
  * 单行轨迹只显示请求序号、角色、工具身份 chip 与内容，点击行在右栏阅读详情。
+ * 工具行的预览不做字符截断：参数摘要与结果正文完整进 DOM，超长由中栏列宽的
+ * 省略号处理；其余行仍按 140 字符截断。
  * @param {import('../src/queries').RequestRow} row
  * @param {TraceStep[]} steps
  * @param {number} ordinal 当前窗口展示号（仅显示，身份用 req_id）
@@ -464,25 +464,28 @@ export function renderTraceRows(row, steps, ordinal, selected, callOf = null) {
     : `${[...String(text)].slice(0, max).join('')}…`;
   for (const step of steps) {
     const label = KIND_LABEL[step.kind] ?? 'Event';
-    const { chip, arrow } = toolChipOf(step, callOf);
-    // 悬停给完整信息：调用行放完整参数 JSON，结果行放完整结果正文；超长截断避免撑爆属性。
+    const { chip, args, arrow } = toolRowParts(step, callOf);
+    const isTool = step.kind === 'tool' || step.kind === 'tool_result';
+    // 悬停给完整信息：调用行放完整参数 JSON，结果行放调用摘要与完整结果正文；属性按 TITLE_MAX 截断。
     let title = '';
-    let preview = step.text;
     if (step.kind === 'tool') {
-      preview = step.toolArgs ?? '';
-      title = clipChars(step.toolInput ?? '', 2000);
+      title = clipChars(step.toolInput ?? '');
     } else if (step.kind === 'tool_result') {
-      title = clipChars(step.text, 2000);
+      title = clipChars(args !== '' ? `${args} → ${step.text}` : step.text);
     }
     const titleAttr = title !== '' ? ` title="${esc(title)}"` : '';
-    const isCode = step.kind === 'tool' || step.kind === 'tool_result';
+    const previewHtml = isTool
+      ? `${args !== '' ? `<code>${esc(args)}</code>` : ''}${
+        arrow ? '<span class="row-arrow" aria-hidden="true">→</span>' : ''}${
+        step.kind === 'tool_result' ? `<code>${esc(step.text)}</code>` : ''}`
+      : esc(clip(step.text));
     pieces.push(`<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
 <div class="compact-row${step.isError === true ? ' step-error' : ''}">
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${step.key === selected}">
     <span class="compact-meta" title="请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
-    ${chip}${arrow ? '<span class="row-arrow" aria-hidden="true">→</span>' : ''}
-    <span class="compact-preview"${titleAttr}>${isCode ? `<code>${esc(clip(preview))}</code>` : esc(clip(preview))}</span>
+    ${chip}
+    <span class="compact-preview"${titleAttr}>${previewHtml}</span>
   </button>
 </div>
 </div>`);
