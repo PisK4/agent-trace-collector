@@ -221,13 +221,19 @@ export function toolSummary(name, inputText) {
 }
 
 /**
+ * read 为 null 时装配层补充的缺口原因：409 作废或详情读取失败，缺省按仍在读取处理。
+ * @typedef {{reason: 'invalidated'} | {reason: 'failed', error: string} | null} ReadGap
+ */
+
+/**
  * @param {import('../src/queries').RequestRow} row
  * @param {import('./reader-store.js').RequestRead | null} read
  * @param {SystemContext} [systemContext] 顶层 System 的当前值与比较结果；由装配层按
  * 同 actor 已确认前驱计算，投影不做时间推断，也不持久化比较结果。
+ * @param {ReadGap} [readGap] read 为 null 时的记录行文案来源
  * @returns {TraceStep[]}
  */
-export function projectSteps(row, read, systemContext = null) {
+export function projectSteps(row, read, systemContext = null, readGap = null) {
   /** @type {TraceStep[]} */
   const steps = [];
   const detail = read?.detail ?? null;
@@ -262,10 +268,13 @@ export function projectSteps(row, read, systemContext = null) {
     record('branch', null, '分支链请求 · 归属来自派生记录，不按时间推断父子');
   }
   // 读取未完成时是加载/状态记录，不能把请求级 input_preview 拆成确定用户步骤。
+  // 作废与失败不是读取中：文案如实区分，点击行都走普通读取重建。
   if (read === null || detail === null) {
+    const gapText = readGap?.reason === 'invalidated' ? '阅读版本已变化 · 点击重读'
+      : readGap?.reason === 'failed' ? `详情读取失败 · ${readGap.error}` : null;
     record('loading', row.status !== null && row.status >= 400 ? 'failed'
       : row.body_state !== 'available' && row.body_state !== 'partial' ? 'missing_body' : null,
-    read === null ? '读取中' : '请求详情不可用');
+    read === null ? gapText ?? '读取中' : '请求详情不可用');
     return steps;
   }
   // 可信新增：输入解释、System 消息与工具结果都只认 delta；dirty/unknown/branch 不升级。

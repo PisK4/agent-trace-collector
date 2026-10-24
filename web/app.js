@@ -306,6 +306,13 @@ if (typeof document !== 'undefined') {
     return '';
   }
 
+  /** read 为 null 时组记录行的原因：409 作废、详情读取失败，其余仍在读取。 @param {number} id @returns {import('./trace-view.js').ReadGap} */
+  function readGapOf(id) {
+    if (state.readingChanged.has(id)) return { reason: 'invalidated' };
+    const error = store.peekDetailError(id);
+    return error !== null ? { reason: 'failed', error } : null;
+  }
+
   function sessionHead() {
     const row = state.session === null ? null : sessionRow(state.session);
     const rows = currentRows();
@@ -455,7 +462,8 @@ if (typeof document !== 'undefined') {
     html += '<span class="history-range">序号表示当前窗口内的请求 · 时间从上往下 · 点击行查看详情</span></div>';
     for (const r of rows) {
       const read = store.peekRequest(r.req_id);
-      const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)));
+      const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
+        read === null ? readGapOf(r.req_id) : null);
       const ordinal = ordinalOf(r.req_id);
       html += `<section class="trace-group" data-req="${r.req_id}" data-status="${r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success'}" aria-current="${r.req_id === state.reqId}">`;
       html += renderTraceRows(r, steps, ordinal, state.selectedStep, callOf);
@@ -910,14 +918,20 @@ if (typeof document !== 'undefined') {
 
   /** 确保某请求的读取与右栏数据在手；重读成功后取得新 detail/meta 并按当前选中来源补读所需块。 @param {number} id */
   async function ensureRead(id) {
+    let read;
     try {
-      await store.readRequest(id);
+      read = await store.readRequest(id);
       state.readingChanged.delete(id);
     } catch {
       /* reading_changed 的副本清理由 store 作废通知负责 */
       renderMain();
       renderRail();
       return;
+    }
+    // 重读与初始装载同深：详情到手后补最多两片可信增量，
+    // 409 作废塌掉的组一次点击就恢复原行组成，不必再点续读。
+    if (!read.delta.done) {
+      try { read = await store.loadDelta(id, 2); } catch { /* 失败保留增量事件行，可再次续读 */ }
     }
     const selected = state.selectedStep;
     // 结果步骤键是 message:N:result:M，序号取 message: 后的第一段，不能用最后一段。
