@@ -1,5 +1,5 @@
 // @ts-check
-import { deltaOrdinals, messageBlocks, replyView } from './body-view.js';
+import { deltaOrdinals, messageBlocks, replyView, toolTint } from './body-view.js';
 
 /**
  * 步骤投影：把可信输入与实际回复变成单行轨迹步骤。纯函数、无 DOM、无网络；
@@ -31,6 +31,10 @@ import { deltaOrdinals, messageBlocks, replyView } from './body-view.js';
  * @property {'failed'|'missing_body'|'missing_reply'|'unknown'|'truncated'|null} status
  * @property {{state: 'resolved'|'pending'|'ambiguous'|'unpaired', reqId: number|null} | null} result
  * @property {{reqId: number, callOrd: number} | null} pairOwner 结果步骤的反向配对：承载本结果的调用方与调用序号；未确认时为 null
+ * @property {string | null} [toolName] 调用步是工具名，结果步是配对索引的 tool_name（缓存外仍可知）；其余步骤缺省
+ * @property {string | null} [toolArgs] 调用步的参数段摘要（已按预算截断，不含工具名）；其余步骤缺省
+ * @property {string | null} [toolInput] 调用步的完整参数 JSON，供悬停展示；其余步骤缺省
+ * @property {boolean | null} [isError] 结果内容块的 is_error：true/false，未报告为 null；其余步骤缺省
  */
 
 /**
@@ -47,17 +51,172 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (/** @param {stri
 const LENGTH_FINISH = new Set(['length', 'max_tokens']);
 const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use']);
 
-/** 工具行动作对象：命令、路径或查询优先，结果正文不当结论。 @param {string} name @param {string} inputText @returns {string} */
-export function toolSummary(name, inputText) {
+/* ---------- 工具行摘要：按工具分派，路径折算成 basename，行区间是显示锚点不是事实 ---------- */
+
+const SUMMARY_MAX = 140;
+
+/** @param {string} text @param {number} [max] */
+const clipChars = (text, max = SUMMARY_MAX) => {
+  const chars = [...text];
+  return chars.length <= max ? text : `${chars.slice(0, max).join('')}…`;
+};
+
+/** 路径最后一段：扫读锚点是文件名，完整路径进悬停与右栏。 @param {string} p */
+const baseName = (p) => {
+  const trimmed = p.replace(/\/+$/, '');
+  const cut = trimmed.lastIndexOf('/');
+  return cut >= 0 ? trimmed.slice(cut + 1) : trimmed;
+};
+
+/** @param {unknown} v @returns {string | null} 非空字符串原样返回，其余 null。 */
+const nonEmpty = (v) => (typeof v === 'string' && v !== '' ? v : null);
+
+/** 文件类参数取 basename。 @param {unknown} v */
+const fileBase = (v) => {
+  const s = nonEmpty(v);
+  return s === null ? null : baseName(s);
+};
+
+/** @param {unknown} v @returns {number | null} */
+const asNum = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** 行数按换行计；缺失或空串为 0 行。 @param {string | null} s */
+const lineCount = (s) => (s === null || s === '' ? 0 : s.split('\n').length);
+
+/** 第一个非空行（trim 后）。 @param {string} text */
+const firstNonEmptyLine = (text) => {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed !== '') return trimmed;
+  }
+  return '';
+};
+
+/** content 字节数读数：不足 1KB 显示 B，满 1MB 换 MB，其余 KB 一位小数。 @param {string} text */
+const byteSize = (text) => {
+  const bytes = new TextEncoder().encode(text).length;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+};
+
+/**
+ * 逐工具参数段：核心键齐才分派，缺核心键返回 null 走通用回退链。
+ * 区间折算与字节读数只服务扫读，原始键值始终在悬停与右栏。
+ * @param {string} name @param {Record<string, unknown>} args @returns {string | null}
+ */
+function dispatchSummary(name, args) {
+  switch (name) {
+    case 'Read': {
+      const file = fileBase(args.file_path);
+      if (file === null) return null;
+      const offset = asNum(args.offset);
+      const limit = asNum(args.limit);
+      const range = offset !== null && limit !== null ? `${offset}–${offset + limit} 行`
+        : limit !== null ? `前 ${limit} 行`
+          : offset !== null ? `${offset} 行起` : '';
+      return range === '' ? file : `${file} · ${range}`;
+    }
+    case 'Edit': {
+      const file = fileBase(args.file_path);
+      if (file === null) return null;
+      const oldS = typeof args.old_string === 'string' ? args.old_string : null;
+      const newS = typeof args.new_string === 'string' ? args.new_string : null;
+      const parts = [file];
+      if (oldS !== null || newS !== null) parts.push(`${lineCount(oldS)}→${lineCount(newS)} 行`);
+      if (args.replace_all === true) parts.push('全部替换');
+      return parts.join(' · ');
+    }
+    case 'Write': {
+      const file = fileBase(args.file_path);
+      if (file === null) return null;
+      const content = typeof args.content === 'string' ? args.content : null;
+      return content !== null ? `${file} · ${byteSize(content)}` : file;
+    }
+    case 'Bash':
+    case 'bash': {
+      const desc = typeof args.description === 'string' && args.description.trim() !== ''
+        ? args.description.trim() : null;
+      if (desc !== null) return desc;
+      const command = typeof args.command === 'string' ? firstNonEmptyLine(args.command) : '';
+      return command !== '' ? command : null;
+    }
+    case 'Skill': {
+      const skill = nonEmpty(args.skill);
+      if (skill === null) return null;
+      const extra = typeof args.args === 'string' && args.args.trim() !== '' ? ` · ${args.args.trim()}` : '';
+      return `${skill}${extra}`;
+    }
+    case 'Agent': {
+      const type = nonEmpty(args.subagent_type);
+      if (type === null) return null;
+      const desc = typeof args.description === 'string' && args.description.trim() !== ''
+        ? ` · ${args.description.trim()}` : '';
+      return `${type}${desc}`;
+    }
+    case 'SendMessage': {
+      const summary = typeof args.summary === 'string' && args.summary.trim() !== '' ? args.summary.trim() : null;
+      const to = nonEmpty(args.to);
+      if (summary === null && to === null) return null;
+      const target = to !== null ? `→ ${[...to].slice(0, 8).join('')}` : null;
+      return [summary, target].filter(Boolean).join(' ');
+    }
+    case 'SubagentHandback': {
+      const message = typeof args.message === 'string' ? firstNonEmptyLine(args.message) : '';
+      return message !== '' ? message : null;
+    }
+    case 'WebFetch': {
+      const url = nonEmpty(args.url);
+      return url === null ? null : url.replace(/^https?:\/\//, '');
+    }
+    case 'ToolSearch': {
+      return typeof args.query === 'string' && args.query.trim() !== '' ? args.query.trim() : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * 未知工具的回退链：command→cmd→file_path→path→pattern→原文；file_path 与 path 同样 basename 化。
+ * @param {unknown} args @param {string} inputText
+ */
+function fallbackSummary(args, inputText) {
+  if (args !== null && typeof args === 'object' && !Array.isArray(args)) {
+    const record = /** @type {Record<string, unknown>} */ (args);
+    for (const key of ['command', 'cmd', 'file_path', 'path', 'pattern']) {
+      const value = record[key];
+      if (value === undefined || value === null || value === '') continue;
+      if (typeof value === 'string') {
+        return key === 'file_path' || key === 'path' ? baseName(value) : value;
+      }
+      const serialized = JSON.stringify(value);
+      if (serialized !== undefined) return serialized;
+    }
+  }
+  return inputText;
+}
+
+/**
+ * 摘要拆成身份与参数段：chip 用工具名，预览用参数段，悬停给完整参数。
+ * 截断只作用于参数段，工具名与 basename 不截。
+ * @param {string} name @param {string} inputText @returns {{label: string, args: string}}
+ */
+function summaryParts(name, inputText) {
+  const label = name !== '' ? name : '未命名工具';
   let args = null;
   try { args = JSON.parse(inputText); } catch { /* 非 JSON 参数按原文展示 */ }
-  const value = args !== null && typeof args === 'object'
-    ? args.command ?? args.cmd ?? args.file_path ?? args.path ?? args.pattern ?? inputText
-    : inputText;
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
-  // 摘要只用于显示：超长动作对象截断，原文进详情。
-  const clipped = [...text].length <= 140 ? text : `${[...text].slice(0, 140).join('')}…`;
-  return `${name || '未命名工具'} · ${clipped}`;
+  const dispatched = args !== null && typeof args === 'object' && !Array.isArray(args)
+    ? dispatchSummary(name, /** @type {Record<string, unknown>} */ (args))
+    : null;
+  const raw = dispatched ?? fallbackSummary(args, inputText);
+  return { label, args: clipChars(String(raw ?? '')) };
+}
+
+/** 工具行动作摘要 `工具名 · 参数段`；结果正文不当结论，原文进悬停与右栏。 @param {string} name @param {string} inputText @returns {string} */
+export function toolSummary(name, inputText) {
+  const parts = summaryParts(name, inputText);
+  return `${parts.label} · ${parts.args}`;
 }
 
 /**
@@ -131,6 +290,8 @@ export function projectSteps(row, read, systemContext = null) {
           key: `${row.req_id}:message:${entry.ord}:result:${block.index}`, reqId: row.req_id,
           kind: 'tool_result',
           text: block.text.length > 0 ? block.text : '（空工具结果）',
+          toolName: indexed !== null ? indexed.tool_name : null,
+          isError: block.failed === true ? true : block.failed === false ? false : null,
           messageOrd: entry.ord, callOrd: null,
           source: { side: 'request', path, messageOrd: entry.ord, blockIndex: block.index },
           raw: block.raw, unrecognized: false, status: null, result: null,
@@ -203,8 +364,10 @@ export function projectSteps(row, read, systemContext = null) {
         } else if (block.kind === 'call') {
           const call = view.calls.find(item => item.ord === index) ?? null;
           const pair = detail.tool_calls?.find(item => item.ord === index) ?? null;
+          const parts = summaryParts(call?.name ?? '', call?.inputText ?? '');
           steps.push({ key: `${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
-            text: toolSummary(call?.name ?? '', call?.inputText ?? ''),
+            text: `${parts.label} · ${parts.args}`,
+            toolName: call?.name ?? null, toolArgs: parts.args, toolInput: call?.inputText ?? '',
             messageOrd: null, callOrd: index,
             source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
             raw: block.raw,
@@ -248,34 +411,78 @@ export function projectSteps(row, read, systemContext = null) {
 }
 
 // 参与角色英文标签 + 内容类型：调用由 Assistant 发出、结果显示在 Tool 上，
-// 辅助与记录表达请求用途和事件，不伪装成模型消息。
+// 辅助与记录表达请求用途和事件，不伪装成模型消息。工具身份改由着色 chip 承载，
+// 不再使用 Tool call / Tool result 文字小标。
 const KIND_LABEL = { user: 'User', assistant: 'Assistant', tool: 'Assistant', tool_result: 'Tool', system: 'System', record: 'Event', aux: 'Aux' };
 const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'reply', tool_result: 'tool', system: 'system', record: 'aux', aux: 'aux' };
-const KIND_CONTENT = /** @type {Partial<Record<TraceStep['kind'], string>>} */ ({ tool: 'Tool call', tool_result: 'Tool result' });
 
 /**
- * 单行轨迹只显示请求序号、角色、内容类型与内容，点击行在右栏阅读详情。
+ * 工具行身份 chip 的三种内容：调用行是工具名；结果行在调用方正文于窗口缓存内时
+ * 给与调用行同款的 `工具名 · 参数段` 摘要，配对确认但缓存外只给工具名，
+ * 未配对保持中性 `Tool result`，不猜归属。
+ * @param {TraceStep} step
+ * @param {((ownerReq: number, callOrd: number) => {name: string, inputText: string} | null) | null} callOf
+ * @returns {{chip: string, arrow: boolean}}
+ */
+function toolChipOf(step, callOf) {
+  if (step.kind === 'tool') {
+    const name = step.toolName ?? '';
+    const label = name !== '' ? name : '未命名工具';
+    return { chip: `<span class="row-tint ${toolTint(name)}">${esc(label)}</span>`, arrow: false };
+  }
+  if (step.kind === 'tool_result') {
+    const owner = step.pairOwner;
+    const call = owner !== null && callOf !== null ? callOf(owner.reqId, owner.callOrd) : null;
+    if (call !== null) {
+      const parts = summaryParts(call.name, call.inputText);
+      const summary = `${parts.label} · ${parts.args}`;
+      return { chip: `<span class="row-tint ${toolTint(call.name)}">${esc(summary)}</span>`, arrow: true };
+    }
+    const name = step.toolName ?? '';
+    if (name !== '') {
+      return { chip: `<span class="row-tint ${toolTint(name)}">${esc(name)}</span>`, arrow: false };
+    }
+    return { chip: '<span class="row-tint tint-other">Tool result</span>', arrow: false };
+  }
+  return { chip: '', arrow: false };
+}
+
+/**
+ * 单行轨迹只显示请求序号、角色、工具身份 chip 与内容，点击行在右栏阅读详情。
  * @param {import('../src/queries').RequestRow} row
  * @param {TraceStep[]} steps
  * @param {number} ordinal 当前窗口展示号（仅显示，身份用 req_id）
  * @param {string|null} selected 当前选中的步骤键
+ * @param {((ownerReq: number, callOrd: number) => {name: string, inputText: string} | null) | null} [callOf]
+ *   调用方正文在窗口缓存内时由装配层提供；查不到或未传时结果行降级为只工具名。
  * @returns {string}
  */
-export function renderTraceRows(row, steps, ordinal, selected) {
+export function renderTraceRows(row, steps, ordinal, selected, callOf = null) {
   const pieces = [];
   /** @param {string} text @param {number} [max] */
   const clip = (text, max = 140) => [...String(text)].length <= max ? String(text)
     : `${[...String(text)].slice(0, max).join('')}…`;
   for (const step of steps) {
     const label = KIND_LABEL[step.kind] ?? 'Event';
-    const content = KIND_CONTENT[step.kind] ?? '';
+    const { chip, arrow } = toolChipOf(step, callOf);
+    // 悬停给完整信息：调用行放完整参数 JSON，结果行放完整结果正文；超长截断避免撑爆属性。
+    let title = '';
+    let preview = step.text;
+    if (step.kind === 'tool') {
+      preview = step.toolArgs ?? '';
+      title = clipChars(step.toolInput ?? '', 2000);
+    } else if (step.kind === 'tool_result') {
+      title = clipChars(step.text, 2000);
+    }
+    const titleAttr = title !== '' ? ` title="${esc(title)}"` : '';
+    const isCode = step.kind === 'tool' || step.kind === 'tool_result';
     pieces.push(`<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
-<div class="compact-row">
+<div class="compact-row${step.isError === true ? ' step-error' : ''}">
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${step.key === selected}">
     <span class="compact-meta" title="请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
-    ${content !== '' ? `<span class="row-kind">${content}</span>` : ''}
-    <span class="compact-preview">${step.kind === 'tool' || step.kind === 'tool_result' ? `<code>${esc(clip(step.text))}</code>` : esc(clip(step.text))}</span>
+    ${chip}${arrow ? '<span class="row-arrow" aria-hidden="true">→</span>' : ''}
+    <span class="compact-preview"${titleAttr}>${isCode ? `<code>${esc(clip(preview))}</code>` : esc(clip(preview))}</span>
   </button>
 </div>
 </div>`);

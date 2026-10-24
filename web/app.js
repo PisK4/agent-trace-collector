@@ -439,6 +439,13 @@ if (typeof document !== 'undefined') {
     // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载更早
     // 记录后 rows.length 累计，重绘时重算，不按首次加载上限截断。
     const ordDigits = Math.max(1, String(rows.length).length);
+    // 结果行的调用方前缀：调用方正文在窗口缓存内时给同款摘要，缓存外降级只工具名。
+    const callOf = (/** @type {number} */ ownerReq, /** @type {number} */ callOrd) => {
+      const ownerRead = store.peekRequest(ownerReq);
+      if (ownerRead === null || ownerRead.meta === null) return null;
+      const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
+      return call === null ? null : { name: call.name, inputText: call.inputText };
+    };
     let html = `<div class="step-list" style="--ord-digits:${ordDigits}"><div class="history-loader">`;
     if (window.loading) {
       html += '<span class="history-start">正在读取更早记录…</span>';
@@ -451,7 +458,7 @@ if (typeof document !== 'undefined') {
       const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)));
       const ordinal = ordinalOf(r.req_id);
       html += `<section class="trace-group" data-req="${r.req_id}" data-status="${r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success'}" aria-current="${r.req_id === state.reqId}">`;
-      html += renderTraceRows(r, steps, ordinal, state.selectedStep);
+      html += renderTraceRows(r, steps, ordinal, state.selectedStep, callOf);
       html += '</section>';
     }
     if (rows.length === 0) {
