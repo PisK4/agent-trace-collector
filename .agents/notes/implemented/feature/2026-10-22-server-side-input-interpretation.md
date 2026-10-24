@@ -16,6 +16,8 @@ Status: implemented
 
 与[标题生成与主链](2026-10-21-title-generator-and-main-chain.md)的分工不变：用途阶段仍决定请求类别与链归属，本决策只统一"这段输入是什么"的展示解释。请求类别的注册表仍由[请求类别注册表](../../proposed/architecture/2026-10-22-agent-request-kind-registry.md)推进；本文不改变 `SESSION_TITLE_SQL`。
 
+[阅读角色与步骤定位提案](../../proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)记录未适配协议被解释为零技能的缺口；服务端输入解释与能力归属继续有效。
+
 ## Alternatives considered
 
 **继续维护两份正则。** 前后端规则会继续漂移，同一条消息在标题、摘要与对话视图里可能得到不同文本；回归只能分别写两份，无法固定同一契约。

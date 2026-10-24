@@ -14,6 +14,8 @@ Status: implemented
 
 右栏在 Task 7 完整改版前保留读数四节与路由（路由改经 store 按需读取），正文页签用结构的连续读取，未确认关系与工具状态沿投影口径显示。
 
+[阅读角色与步骤定位提案](../../proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)拟调整选中高亮、来源定位与稀疏消息展示；请求身份、最近窗口和有界读取的决定继续有效。
+
 ## Alternatives considered
 
 **保留双视图入口。** 两套渲染与两套缓存路径会继续分叉；单一轨迹是原型验证过的阅读方式，账本特有的读数全部进右栏。

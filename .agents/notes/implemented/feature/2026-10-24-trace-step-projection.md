@@ -12,6 +12,8 @@ Status: implemented
 
 `body-view.js` 的 `toolEntries` 保留调用者 `owner` 与 `result_path`；`renderTools` 按钮改为 `data-tool-owner` + `data-call-ord` 调用者身份，不再按结果位置反查——两个调用指向同一目标消息的不同内容块时按钮仍各有自己的调用序号。
 
+[阅读角色与步骤定位提案](../../proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)拟扩展 System 与工具结果的投影并统一英文角色；稳定键、调用身份与纯投影的决定继续有效，提案尚未实施。
+
 ## Alternatives considered
 
 **把投影写进 app.js。** 无法脱离 DOM 测试顺序、键与 XSS；投影必须是纯函数。
