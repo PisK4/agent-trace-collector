@@ -22,4 +22,4 @@ Status: implemented
 
 ## Consequences
 
-Task 6 的页面接入只需消费 store 的返回形状（`RequestRead` 的 detail/meta/messages/structure/delta 与 JSDoc typedef）；页面侧的失效展示统一走清副本加显式重读入口，不自动重建。验证：`bun test tests/reader-store.test.ts tests/web.test.ts` 全过（fetch 序列与元信息、并发去重与精确 URL、结构 40+5 与定点读不推进、503 与空页保留旧态、409 作废后普通读取重建、token 变化重取元信息、迟到 409 不清新缓存、invalidate 后旧详情拒绝、validate 串行重拉、迟到详情不写入新会话、工具按 owner+ord 缓存与失败重试、resolved 不自动读、81 条增量两片后显式续读、增量缺口不推进位置且重试走网络、delta 分片与未确认、并发 ≤ 4、失效说明重读入口、静态模块白名单），`bun run typecheck` 通过（2026-10-24）。
+页面接入只消费 store 的返回形状（`RequestRead` 的 detail/meta/messages/structure/delta 与 JSDoc typedef）；页面侧的失效展示统一走清副本加显式重读入口，不自动重建。验证：`bun test tests/reader-store.test.ts tests/web.test.ts` 全过（fetch 序列与元信息、并发去重与精确 URL、结构 40+5 与定点读不推进、503 与空页保留旧态、409 作废后普通读取重建、token 变化重取元信息、迟到 409 不清新缓存、invalidate 后旧详情拒绝、validate 串行重拉、迟到详情不写入新会话、工具按 owner+ord 缓存与失败重试、resolved 不自动读、81 条增量两片后显式续读、增量缺口不推进位置且重试走网络、delta 分片与未确认、并发 ≤ 4、失效说明重读入口、静态模块白名单），`bun run typecheck` 通过（2026-10-24）。

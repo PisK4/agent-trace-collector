@@ -2,7 +2,7 @@
 
 Status: implemented
 
-> 请求用途的版本 1 解释已由[请求用途按版本 2 解释，主链身份只由已存用途决定](2026-10-22-request-purpose-and-chain.md)取代；两阶段入口、组内 pending 跳过与读模型状态仍以本记录为准。
+> 用途解释的版本与规则已由[请求用途按版本解释，主链身份只由已存用途决定](2026-10-22-request-purpose-and-chain.md)持有；两阶段入口、组内 pending 跳过与读模型状态仍以本记录为准。
 
 ## Problem
 
@@ -14,7 +14,7 @@ Status: implemented
 
 请求用途先于所属组结果完成，组内有 pending 成员时保持 dirty。在线编排与事务粒度由[派生预算工作单元](2026-10-24-budgeted-derive-unit.md)负责；`drainDeriveTx(db, {limit, scope?, purposeLimit?})` 与 `drainDerive(store, ...)` 保留离线批事务入口。
 
-请求阶段（`drainLegacyPurposeTx`）把现有 title/chat 行为固化成可重放的结论：`purpose_status` 写 `recognized`/`unrecognized`/`retained`/`missing`，`purpose_rule` 写 `legacy.title`/`legacy.default`，`purpose_version` 写 `LEGACY_PURPOSE_VERSION=1`，同时定下 `purpose_chain`、`req_kind` 与 `model_title`，清 `purpose_pending` 并让 `purpose_revision` 追上 `input_revision`。正文不可读时有旧版本就保留原值标 `retained`，从未判过标 `missing`。
+请求阶段（`drainRequestPurposesTx`）消费当前用途解释器的结论并写回：`purpose_status` 写 `recognized`/`unrecognized`/`retained`/`missing`/`unsupported`/`error`，`purpose_rule` 与 `purpose_version` 记下是哪条规则、哪一版解释得出的，同时定下 `purpose_chain`、`req_kind` 与 `model_title`，清 `purpose_pending` 并让 `purpose_revision` 追上 `input_revision`。写回用 CAS 绑定 `req_id + input_epoch + input_revision + purpose_target + purpose_pending`：读到视图之后输入又变了，旧结论作废并保留 pending，等下一轮重来。正文不可读时有旧解释就保留原值标 `retained`，从未判过标 `missing`。规则清单与优先级归[请求用途版本化解释](2026-10-22-request-purpose-and-chain.md)，本记录只负责阶段顺序。
 
 这个阶段**不推进自己请求的输入修订**：它消费输入，不改变输入。只有用途、链归属或正式标题真的变了，才标所属组重算。组阶段因此只读 `purpose_chain`，不再自己识别标题请求；组内还有 `purpose_pending=1` 的成员时整组跳过并保持 dirty。
 
@@ -39,8 +39,8 @@ Status: implemented
 - `drainDeriveTx` 在调用方事务里排空用途再处理组，`purposeLimit` 是每批大小；在线工作单元按预算分次推进用途，结算完该组全部用途后再提交组结果。
 - 未知归属的请求也会被判定用途，但不产生组；读模型里它没有组可加入，因此恒为 `dirty`，关系为 `unknown`。
 - 读模型多一次 `LEFT JOIN derive_queue`，以及每次调用一个只读事务。列表不带摘要算法列，详情带。
-- 非当前行的工具调用保留调用身份，`result_req`/`result_ord`/`result_path` 清空、`state` 退回 `pending`：不显示可能是旧的位置，正常态也不挂提示（「结果位置未确认」chip 后经[读数条与「无则不显」收敛](../../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)删除）。
-- 请求阶段按版本 2 解释，不能与版本 1 并行运行；历史 v1 行只有显式 `rebuild --session` 才升级。
+- 非当前行的工具调用保留调用身份，`result_req`/`result_ord`/`result_path` 清空、`state` 退回 `pending`：不显示可能是旧的位置，正常态也不挂提示（「结果位置未确认」chip 后经[读数条与「无则不显」收敛](../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)删除）。
+- 请求阶段只按当前 `PURPOSE_VERSION` 解释，不与旧版本并行运行：版本提升后，历史行要靠显式会话重建才会重判，在此之前它们保留旧版本的结论与依据。
 - 会话标题只取已完成组且用途已结算的行，与会话的 `derived_state='current'` 同条件。
 
 ## Testing

@@ -13,7 +13,7 @@ Status: implemented
 
 ## Decision
 
-**摘要阶段逐条转录同步的展示分支。** 它接在[工具配对之后](2026-10-22-atc-sliced-tool-pairing.md)：轮次关联只有本代确定下来才能当依据。读的是**当前** `request` 行的用途、旧标题与旧摘录（那些是事实，不是这一代物化那一刻的快照），写的是本代 `derive_request_result`。取值本身全部复用同步导出的那份实现（`previewOf`、`deriveTitle`、`toolResultPreview`、`replyInfoOf`、`firstUserPreview`、`tailUserPreview`、`messageAt`）：判据一份实现、两处调用，抄一份出来就迟早走样。可读性只看 `fingerprintsOf` 读不读得出正文，不读 `body_state`——骨架损坏时正文同样读不出来，那时旧标题必须原样保留。
+**摘要阶段消费[判定内核](../../implemented/architecture/2026-10-23-derive-decision-kernel.md)的展示判定。** 它接在[工具配对之后](2026-10-22-atc-sliced-tool-pairing.md)：轮次关联只有本代确定下来才能当依据。读的是**当前** `request` 行的用途、旧标题与旧摘录（那些是事实，不是这一代物化那一刻的快照），写的是本代 `derive_request_result`。取值与分支顺序由内核的 `presentationDecision` 与 `previewOf`/`deriveTitle`/`toolResultPreviewOf` 给出，切片与同步两条路径都调这一份：判据一处实现、两处调用，抄一份出来就迟早走样。可读性只看 `fingerprintsOf` 读不读得出正文，不读 `body_state`——骨架损坏时正文同样读不出来，那时旧标题必须原样保留。
 
 **关联按结果所属请求取，不按调用侧取。** 摘录要回答的是"这一笔的输入里回传了哪些工具结果"，所以页查询取的是 `result_req IN (本页请求)` 的行。按调用侧筛（`req_id IN (...)`）在页边界切在调用与回传之间时会漏掉关联，同一份结果就会随批大小给出不同的摘录。
 

@@ -24,4 +24,4 @@ Status: implemented
 
 ## Consequences
 
-Task 6 的中栏只需消费 `projectSteps` + `renderTraceRows`，行 CSS 类名与原型验证过的 compact-* 命名一致。验证：`bun test tests/trace-view.test.ts tests/body-view.test.ts tests/web.test.ts` 全过（顺序与稳定键、unrecognized、注入转义、dirty/branch/unknown、aux、同 call_id 键不冲突、截断/未知/未收到、纯工具回复、多 choice、失败与缺正文并存、摘要只含动作、System 顶层与消息级来源键、System 上下文三态、混合消息按块出步骤、两类协议回复来源路径、英文标签与内容类型、systemContextOf 前驱比较），`bun run typecheck` 通过（2026-10-24）。
+生产中栏消费 `projectSteps` + `renderTraceRows`，行 CSS 类名沿用原型验证过的 compact-* 命名。验证：`bun test tests/trace-view.test.ts tests/body-view.test.ts tests/web.test.ts` 全过（顺序与稳定键、unrecognized、注入转义、dirty/branch/unknown、aux、同 call_id 键不冲突、截断/未知/未收到、纯工具回复、多 choice、失败与缺正文并存、摘要只含动作、System 顶层与消息级来源键、System 上下文三态、混合消息按块出步骤、两类协议回复来源路径、英文标签与内容类型、systemContextOf 前驱比较），`bun run typecheck` 通过（2026-10-24）。

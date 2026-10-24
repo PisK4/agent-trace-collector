@@ -6,7 +6,7 @@
 
 > **迁移部分已作废（用户决定，2026-10-23）。** `V5_DELTA`、`initializeV5`、可续跑迁移状态机、守恒摘要与恢复侧的迁移标记校验都不再实施，相应源码按[旧库删除重建](../../../.agents/notes/implemented/architecture/2026-10-23-destructive-schema-replacement.md)删除。现行契约是：普通启动只接受空目录或当前版本（现在 v6），低版本报 `schema_rebuild_required`，由运维删除旧数据目录后重建，见[运维手册的 schema 版本](../../operations.md#schema-版本)。本文件里 Task 1 的 v5 初始化与后文的分阶段迁移步骤因此不再执行。
 >
-> **仍然生效的是长期事实本身**：请求与组的修订、有界来源事实、盐绑定与恢复包、同快照读模型。这些已交付，定义见[长期输入与显式重建](../../../.agents/notes/implemented/architecture/2026-10-22-durable-input-and-explicit-migration.md)、[有界来源事实与结果依据](../../../.agents/notes/implemented/architecture/2026-10-22-bounded-source-facts-and-provenance.md)与 [v6 派生代际结构](../../../.agents/notes/implemented/architecture/2026-10-22-atc-schema-v6-generations.md)。
+> **仍然生效的是长期事实本身**：请求与组的修订、有界来源事实、盐绑定与恢复包、同快照读模型。这些已交付，定义见[持久组状态与输入修订](../../../.agents/notes/implemented/architecture/2026-10-22-durable-group-state-and-input-revision.md)、[有界来源事实与结果依据](../../../.agents/notes/implemented/architecture/2026-10-22-bounded-source-facts-and-provenance.md)与 [v6 派生代际结构](../../../.agents/notes/implemented/architecture/2026-10-22-atc-schema-v6-generations.md)。
 
 **Goal:** 用一次显式 v4→v5 迁移保存来源依据、请求与组修订和实际结果版本，使历史修复、恢复与持续摄入使用同一规则。
 
@@ -32,7 +32,7 @@
 
 文档基准 `00e20a2`，实施先完成 A、B 并重新定位函数。本批新增 `src/derive-state.ts` 管理修订和来源短集合、`src/migrate-v5.ts` 管理显式迁移；不建立通用迁移框架。新增 `scripts/migrate-v5.ts` 只解析显式参数并调用迁移；新增 `tests/migration-v5.test.ts`、`tests/derive-state.test.ts`。`src/store.ts`、`src/schema.sql` 持有结构与启动拒绝，`src/config.ts` 持有盐绑定，`src/maintenance.ts` 持有备份/恢复和报告。B 的 `src/sources/projection.ts` 继续持有字段选择，公共入口为 `projectRequestTx(db: Database, reqId: number, input: { now: number; mappingVersion: number }): RequestProjection`；`collectOwnerEvidenceTx(db: Database, reqId: number): OwnerEvidence` 统一收集 owner 证据。C 在该入口内保存新增长期信息，在线与离线不增加第二个投影包装。hook/body/retention/reconcile 在现有写事务标记输入变化，queries 负责同快照状态投影。
 
-实施 note 新建 `.agents/notes/implemented/architecture/2026-10-22-durable-input-and-explicit-migration.md`，先搜索现有 schema、隐私、保留和来源记录；只部分取代的记录保持活跃并交叉链接。旧 schema note 中与代码一致的路径事实随交付更新，反转理由由新 note 持有。
+实施 note 新建 `.agents/notes/implemented/architecture/2026-10-22-durable-group-state-and-input-revision.md`，先搜索现有 schema、隐私、保留和来源记录；只部分取代的记录保持活跃并交叉链接。旧 schema note 中与代码一致的路径事实随交付更新，反转理由由新 note 持有。
 
 ## 冻结的 v5 存储契约
 
