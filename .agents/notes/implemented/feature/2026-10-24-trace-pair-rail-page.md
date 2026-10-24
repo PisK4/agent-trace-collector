@@ -8,11 +8,11 @@ Status: implemented
 
 ## Decision
 
-工具四页第三页由「结果」升级为「配对」：Call 面板在上、Result 面板在下，默认同时展开，复用正文详情的 `body-panel`/`pre.raw` 组件语言，不新增样式体系、不分左右栏；调用参数与结果正文同一套缩进 JSON 样式。渲染与状态文案（关联/加载/is_error）收敛在 `web/trace-pair.js` 纯函数里，app 装配层只做读取协调。
+工具四页第三页由「结果」升级为「配对」：Call 面板在上、Result 面板在下，默认同时展开，复用正文详情的 `body-panel`/`pre.raw` 组件语言，不新增样式体系、不分左右栏。调用参数与结果正文用同一套缩进 JSON 样式。渲染与状态文案（关联/加载/is_error）集中在 `web/trace-pair.js` 纯函数里，app 装配层只做读取协调。
 
-入口统一：调用步骤、已配对的结果步骤（反向身份来自[读模型反向配对索引](../../implemented/feature/2026-10-24-trace-pair-reverse-index.md)）、工具列表行与工具往返行都直达配对页；进入后自动发起一次结果读取（`toolReadings` 有键即跳过），失败保留显式重试。配对页描述的调用属于 owner 请求，可能与当前请求不同：`toolOwner` 状态携带身份，窗口外调用方按需 `ensureRead`，四页（概览/参数/配对/Schema）都按 owner 的读取渲染。
+入口统一：调用步骤、已配对的结果步骤（反向身份来自[读模型反向配对索引](../../implemented/feature/2026-10-24-trace-pair-reverse-index.md)）、工具列表行与工具往返行都直达配对页。进入后自动发起一次结果读取（`toolReadings` 有键即跳过），失败保留显式重试。配对页描述的调用属于 owner 请求，可能与当前请求不同。`toolOwner` 状态携带身份，窗口外调用方按需 `ensureRead`，四页（概览/参数/配对/Schema）都按 owner 的读取渲染。
 
-交互原则：阅读类信息在右栏就地展示，不提供「点击后跳到别处阅读」的按钮。承载请求、调用方与协议路径只以文本标注；`data-result-owner`→`locateRequest` 跳转流程与无发射点的 `data-locate` 处理器已删除，工具往返行的按钮改为右栏内打开配对页。配对未确认（pending/ambiguous/unpaired）不显示结果正文也不给读取入口；`resolved` 不当成功，`is_error` 三态照旧。
+交互原则：阅读类信息在右栏就地展示，不提供「点击后跳到别处阅读」的按钮。承载请求、调用方与协议路径只以文本标注。`data-result-owner`→`locateRequest` 跳转流程与无发射点的 `data-locate` 处理器已删除，工具往返行的按钮改为右栏内打开配对页。配对未确认（pending/ambiguous/unpaired）时不显示结果正文，也不给读取入口。`resolved` 不当作成功，`is_error` 三态照旧。
 
 投影配套修正：Chat 的 `role=tool` 结果步骤按整条协议消息投影，路径与后端 `result_path`（`request.messages[N]` 为止）一致；Anthropic 结果块按内容块路径配对。`ensureRead` 的消息序号解析改为前缀正则，不再用 `split(':').pop()`（结果步骤键以块序号结尾，旧解析取错 ord）。
 
@@ -20,9 +20,9 @@ Status: implemented
 
 本轮只交付 Tool pair，其余候选逐条判定如下，防止后续被当成欠账重提：
 
-- **工具声明 / 实际调用（Schema 对照）**：不做。两端已在工具四页（Schema 页读能力视图、参数页读 inputText），数据在手、加进配对页是纯渲染，但会把「一次调用的两端」稀释成「三份材料」，且 Schema 页同名多定义、partial、missing 的边界逻辑会分叉。出现真实的「参数对不上 Schema」阅读痛点时，复用 `toolSchemaSection` 做配对页尾部默认收起的折叠段即可。
-- **模型请求 / 模型回复**：不做请求级对照进配对页。输入含全部历史、System 与工具定义，正文 40 条一片分页；读数页已是「本次回复 + 请求结构 + 能力清单 + 用量」，窄口径的「本次新增输入 vs 本次回复」就是时间线同一请求组内的 User/Assistant 步骤。单条 User 与单块 Assistant 也不是一对一问答。
-- **Subagent 派发 / 完成**：暂缓。`subagent`/`parent_agent`/`subagent_id` 只是身份与路由字段（reconcile 与 sources 链路），没有派发调用 ID、父 `tool_use_id` 或 spawn/finish 关联；可靠关联缺的是采集侧证据，前端补不了。按「不按时间猜配」的立场，时间窗加 parent_agent 的启发式配对也不做。Task/Agent 类派发工具本身就是普通工具调用，派发 prompt 与最终 summary 随 Tool pair 自动获得两端展示。
+- **工具声明 / 实际调用（Schema 对照）**：不做。两端已在工具四页（Schema 页读能力视图、参数页读 inputText），数据已经在手，加进配对页是纯渲染，但会把「一次调用的两端」稀释成「三份材料」，且 Schema 页同名多定义、partial、missing 的边界逻辑会分叉。出现真实的「参数对不上 Schema」阅读痛点时，复用 `toolSchemaSection` 做配对页尾部默认收起的折叠段即可。
+- **模型请求 / 模型回复**：不做请求级对照进配对页。输入含全部历史、System 与工具定义，正文 40 条一片分页。读数页已是「本次回复 + 请求结构 + 能力清单 + 用量」，窄口径的「本次新增输入 vs 本次回复」就是时间线同一请求组内的 User/Assistant 步骤。单条 User 与单块 Assistant 也不是一对一问答。
+- **Subagent 派发 / 完成**：暂缓。`subagent`/`parent_agent`/`subagent_id` 只是身份与路由字段（reconcile 与 sources 链路），没有派发调用 ID、父 `tool_use_id` 或 spawn/finish 关联。可靠关联缺的是采集侧证据，前端补不了。按「不按时间猜配」的立场，时间窗加 parent_agent 的启发式配对也不做。Task/Agent 类派发工具本身就是普通工具调用，派发 prompt 与最终 summary 随 Tool pair 自动获得两端展示。
 - **System 前驱对比**：不另做。时间线的变更标注（`systemContextOf`，前驱不可读时只声明当前上下文）已覆盖，再做一个配对页属于重复。
 
 ## Alternatives considered
@@ -37,4 +37,4 @@ Status: implemented
 
 ## Consequences
 
-从任一端进入都能一屏读完意图与返回；点混合消息里的结果不再显示别的块。代价：想看承载请求的上下文要多一次手动定位（身份行给了请求号）。验证（2026-10-24）：全量 580 例与 typecheck 通过；生产实例 kickstart 重启时发现 `/trace-pair.js` 未登记静态白名单会令页面整块加载失败，已补登记并把白名单回归扩展到全部五个模块文件；重启后对真实库只读核验：详情带反向条目（owner_req 加工具行），用 owner 的阅读 token 走结果端点返回 available 与完整 `raw` 块（tool_use_id/type/is_error/content）。浏览器点击链路仍留显式验收。窗口外调用方会多一次详情读取，走既有 4 并发队列与 409 整笔作废。
+从任一端进入都能一屏读完意图与返回，点混合消息里的结果不再显示别的块。代价：想看承载请求的上下文要多一次手动定位（身份行给了请求号）。验证（2026-10-24）：全量 580 例与 typecheck 通过。生产实例 kickstart 重启时发现 `/trace-pair.js` 未登记静态白名单，会令页面整块加载失败，已补登记并把白名单回归扩展到全部五个模块文件。重启后对真实库只读核验：详情带反向条目（owner_req 加工具行），用 owner 的阅读 token 走结果端点返回 available 与完整 `raw` 块（tool_use_id/type/is_error/content）。浏览器点击链路仍留显式验收。窗口外调用方会多一次详情读取，走既有的 4 并发队列，409 时整笔作废。

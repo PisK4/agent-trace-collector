@@ -4,11 +4,11 @@ Status: implemented
 
 ## Problem
 
-列表分页只有 forward：从最早页向后追加，生产阅读需要默认打开最近窗口并向更早方向翻页。已有会话时间索引 (conv_key, started_ms DESC, req_id DESC) 本可反向扫描，但接口没有方向参数。
+列表分页只有 forward，从最早页向后追加。生产阅读需要默认打开最近窗口，并向更早方向翻页。已有会话时间索引 (conv_key, started_ms DESC, req_id DESC) 本可反向扫描，但接口没有方向参数。
 
 ## Decision
 
-`listRequests` 增加 `direction` 参数，默认 `forward` 保持旧行为。`older` 无游标取最近一页，之后向更早翻；两方向的返回 items 都按 (started_ms, req_id) 升序，older 内部先 DESC 取页再反转。older 游标编码四元组 `[tag, conv_key, started_ms, req_id]`，解码时校验方向标记与会话一致，forward 旧二元游标不能混用；未知 direction 在查询层抛 `invalid_direction`、HTTP 层返回 400，不静默忽略。比较符与排序只在两个固定分支间选择，值仍全部参数化。
+`listRequests` 增加 `direction` 参数，默认 `forward` 保持旧行为。`older` 无游标时取最近一页，之后向更早方向翻页。两个方向的返回 items 都按 (started_ms, req_id) 升序，older 内部先 DESC 取页再反转。older 游标编码四元组 `[tag, conv_key, started_ms, req_id]`，解码时校验方向标记与会话一致，forward 旧二元游标不能混用。未知 direction 在查询层抛 `invalid_direction`，HTTP 层返回 400，不静默忽略。比较符与排序只在两个固定分支间选择，值仍全部参数化。
 
 ## Alternatives considered
 

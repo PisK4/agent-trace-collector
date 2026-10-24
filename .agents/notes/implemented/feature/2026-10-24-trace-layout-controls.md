@@ -4,15 +4,15 @@ Status: implemented
 
 ## Problem
 
-单一轨迹页面（[2026-10-23-single-timeline-production-reader.md](../architecture/2026-10-23-single-timeline-production-reader.md)）交付时布局是固定三栏：会话栏与详情栏不可折叠，详情栏宽度不可调；会话身份没有复制入口；左栏还留着笼统的「待确认」标记，中栏有通用缺正文整行；README 的阅读验收仍是双视图口径。
+单一轨迹页面（[2026-10-23-single-timeline-production-reader.md](../architecture/2026-10-23-single-timeline-production-reader.md)）交付时布局是固定三栏，会话栏与详情栏不可折叠，详情栏宽度不可调。会话身份没有复制入口。左栏还留着笼统的「待确认」标记，中栏有通用缺正文整行。README 的阅读验收仍是双视图口径。
 
 ## Decision
 
-布局控制复用原型验证过的机制，只迁有效样式：三栏网格使用 CSS 变量，分隔线占独立网格列。折叠用 body 类 + `visibility:hidden`（分隔线与可聚焦后代一并退出可访问树，不用 opacity 假装隐藏），按钮带 `aria-controls`/`aria-expanded` 并同步标题；窄屏堆叠布局移除分隔线、折叠改 `display:none`。详情栏调宽使用 `role=separator`、方向键、双击恢复默认与指针捕获；宽度和折叠状态只存内存，不进 localStorage（主题读写继续 try/catch）。现行尺寸与默认值见[轨迹阅读布局](../../../../docs/architecture-design.md#轨迹阅读布局)，默认宽度的取舍见[中栏内容与右栏详情](../simplification/2026-10-24-trace-content-only-and-wide-rail.md)。
+布局控制复用原型验证过的机制，只迁移有效样式：三栏网格使用 CSS 变量，分隔线占独立网格列。折叠用 body 类 + `visibility:hidden`（分隔线与可聚焦后代一并退出可访问树，不用 opacity 假装隐藏），按钮带 `aria-controls`/`aria-expanded` 并同步标题。窄屏堆叠布局移除分隔线，折叠改 `display:none`。详情栏宽度调整使用 `role=separator`、方向键、双击恢复默认与指针捕获。宽度和折叠状态只存内存，不进 localStorage（主题读写继续 try/catch）。现行尺寸与默认值见[轨迹阅读布局](../../../../docs/architecture-design.md#轨迹阅读布局)，默认宽度的取舍见[中栏内容与右栏详情](../simplification/2026-10-24-trace-content-only-and-wide-rail.md)。
 
-Session ID 复制：JSON 数组 `["session", id]` 复制第二项原始 ID，conv 身份标「会话键」并复制完整 conv_key，不把 JSON 数组误称 UUID；剪贴板拒绝或不可用时给出可选中文本与手工复制提示（toast + 临时 textarea），成功才显示「已复制」。左栏去掉未知派生的「待确认」标记（具体状态留在选中请求），中栏删除通用缺正文整行；失败、具体异常与历史未读范围仍就地显示。
+Session ID 复制：JSON 数组 `["session", id]` 复制第二项原始 ID；conv 身份标「会话键」并复制完整 conv_key，不把 JSON 数组误称 UUID。剪贴板拒绝或不可用时给出可选中文本与手工复制提示（toast + 临时 textarea），成功才显示「已复制」。左栏去掉未知派生的「待确认」标记（具体状态留在选中请求），中栏删除通用缺正文整行；失败、具体异常与历史未读范围仍就地显示。
 
-文档同步：README 新增「阅读界面（当前：单一轨迹）」一节并记录本轮合成验收，A5/B5/中栏版式标注为历史记录；生产阅读提案迁入 implemented（Proposal→Decision，Acceptance/Risks 折入 Consequences/Testing 并引用实测），固定账本行与读数裁剪两篇旧 note 交叉链接，实施计划复选框全部勾选，docs/README 入口描述更新。
+文档同步：README 新增「阅读界面（当前：单一轨迹）」一节并记录本轮合成验收，A5/B5/中栏版式标注为历史记录。生产阅读提案迁入 implemented（Proposal→Decision，Acceptance/Risks 折入 Consequences/Testing 并引用实测），固定账本行与读数裁剪两篇旧 note 交叉链接，实施计划复选框全部勾选，docs/README 入口描述更新。
 
 ## Alternatives considered
 

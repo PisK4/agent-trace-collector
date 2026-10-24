@@ -2,14 +2,14 @@
 
 Status: implemented
 
-显示层决策，不涉后端、schema 与派生。承接三篇既有记录：[单行步骤投影 trace-view](2026-10-24-trace-step-projection.md) 拥有 `toolSummary` 与行内标签的现状（本文改写其显示事实，两记录保持交叉链接），[Trace Pair 配对页与右栏就地阅读](2026-10-24-trace-pair-rail-page.md) 拥有配对页布局，[中栏只呈现内容，详情集中右栏](../simplification/2026-10-24-trace-content-only-and-wide-rail.md) 定了行内取舍边界。行内表达遵守[前端降噪常备规则](../process/2026-10-24-frontend-denoise-standing-rule.md)：chip 取代 `Tool call`/`Tool result` 文字小标，正常态不新增装饰元素，异常才着色。四项格式决策已与用户对齐（2026-10-24）。
+本篇是显示层决策，不涉及后端、schema 与派生。承接三篇既有记录：[单行步骤投影 trace-view](2026-10-24-trace-step-projection.md) 拥有 `toolSummary` 与行内标签的现状，本文改写其显示事实，两记录保持交叉链接；[Trace Pair 配对页与右栏就地阅读](2026-10-24-trace-pair-rail-page.md) 拥有配对页布局；[中栏只呈现内容，详情集中右栏](../simplification/2026-10-24-trace-content-only-and-wide-rail.md) 定了行内取舍边界。行内表达遵守[前端降噪常备规则](../process/2026-10-24-frontend-denoise-standing-rule.md)：chip 取代 `Tool call`/`Tool result` 文字小标，正常态不新增装饰元素，异常才着色。四项格式决策已与用户对齐（2026-10-24）。
 
 ## Problem
 
 中栏工具行的信息密度与可扫读性有三个短板，量级依据来自本机库实测（`tool_call` 表 2026-10-24 快照，共 2,780 次调用；参数形状按工具各抽最新 400 条）：
 
 1. **路径吃掉摘要预算。** `toolSummary` 取 `command ?? cmd ?? file_path ?? path ?? pattern` 的首个命中直接展示：Read 行显示完整绝对路径，140 字符截断预算大半耗在 `/Users/…` 前缀上，而扫读锚点其实是文件名。参数（offset/limit、replace_all、skill 名）完全不出现。
-2. **工具身份没有视觉锚点。** 所有调用行共用 `Assistant` 角色标加 `Tool call` 内容小标，所有结果行共用 `Tool` 加 `Tool result`；扫一眼分不清这行是 Read 还是 Bash，也看不出结果行对应哪次调用。
+2. **工具身份没有视觉锚点。** 所有调用行共用 `Assistant` 角色标加 `Tool call` 内容小标，所有结果行共用 `Tool` 加 `Tool result`。扫一眼分不清这行是 Read 还是 Bash，也看不出结果行对应哪次调用。
 3. **失败不可见。** 结果块的 `is_error=true` 只在右栏正文页有一个小 chip，中栏行与配对页没有异常表示。
 
 工具分布与参数形状（抽样实测）：
@@ -34,7 +34,7 @@ Status: implemented
 
 ### 一行摘要：toolSummary 按工具分派
 
-`toolSummary(name, inputText)` 仍是 `web/trace-view.js` 的纯函数，签名不变；内部拆成 `summaryParts`（身份 + 参数段），chip 与预览各取一段。文件类参数一律 basename（取路径最后一段），完整路径与参数进悬停 title 与右栏。逐工具格式：
+`toolSummary(name, inputText)` 仍是 `web/trace-view.js` 的纯函数，签名不变。内部拆成 `summaryParts`（身份 + 参数段），chip 与预览各取一段。文件类参数一律 basename（取路径最后一段），完整路径与参数进悬停 title 与右栏。逐工具格式：
 
 | 工具 | 行内格式 | 规则 |
 | --- | --- | --- |
@@ -50,11 +50,11 @@ Status: implemented
 | ToolSearch | `ToolSearch · select:SendMessage` | query 原样 |
 | 其他 / 未识别 / MCP | 回退链保留 | command→cmd→file_path→path→pattern→原文；file_path 与 path 同样 basename 化 |
 
-核心键缺失的已知工具（如 Read 无 file_path）回落回退链，不冒充文件摘要。摘要不在字符数上预截断：Bash description 一类自述要读到中栏列宽为止，预览文本完整进 DOM，超长由 CSS 省略号收在列宽内（2026-10-25 用户修订，取代原 140 字符预算）；悬停 title 放完整参数 JSON（超 2000 字符截断，避免大参数撑爆属性）。行区间是显示折算不是事实断言：offset 的基数语义因客户端而异，区间只作扫读锚点，悬停与右栏仍给原始键值。
+核心键缺失的已知工具（如 Read 无 file_path）回落到回退链，不冒充文件摘要。摘要不在字符数上预截断。Bash description 一类自述显示到中栏列宽为止，预览文本完整进 DOM，超长由 CSS 省略号收在列宽内（2026-10-25 用户修订，取代原 140 字符预算）。悬停 title 放完整参数 JSON（超 2000 字符截断，避免大参数撑爆属性）。行区间是显示折算，不是事实断言。offset 的基数语义因客户端而异，区间只作扫读锚点；悬停与右栏仍给原始键值。
 
 ### 结果行带调用方前缀
 
-后端零改动：`RequestDetail.tool_results` 本身携带 `tool_name`，结果步骤把配对索引里的 `tool_name` 带上（`TraceStep.toolName`），缓存外仍可知工具名。前缀分三级：
+后端零改动。`RequestDetail.tool_results` 本身携带 `tool_name`，结果步骤把配对索引里的 `tool_name` 带上（`TraceStep.toolName`），缓存外仍可知工具名。前缀分三级：
 
 1. **配对确认且调用方在窗口缓存**（装配层以 `store.peekRequest` 提供调用方摘要查询）：chip 只包工具名（与调用行同色类），参数摘要以普通文本跟随，其后 muted 的 `→` 接结果正文。
 2. **配对确认但调用方不在缓存**：chip 只显示工具名，`→` 后直接接结果正文。
@@ -63,11 +63,11 @@ Status: implemented
 ### 工具强调色
 
 - `web/body-view.js` 新增 `toolTint(name)`：与 `partColor` 同属共享显示原语。映射 `tint-read / -edit / -write / -bash / -skill / -agent / -other` 七个色类；`index.html` 对应 `--tool-*` 七个色对（前景加背景，亮暗两套），背景沿用 `--k-*` 的 0.11–0.14 透明度模式。色相：Read 蓝、Edit 橙、Write 紫、Bash 玫红（红色保留给失败语义，2026-10-25 用户修订）、Skill 黄、Agent 绿、其他青灰。
-- 不复用 `--p1..p6`：那是上下文组成条的固定槽位，两套语义不混。
-- 色类只包工具名（2026-10-25 用户修订）：参数摘要与结果正文以普通文本渲染，不进色类；着色元素只承担「这是哪个工具」一个识别任务。
+- 不复用 `--p1..p6`，那是上下文组成条的固定槽位，两套语义不混。
+- 色类只包工具名（2026-10-25 用户修订），参数摘要与结果正文以普通文本渲染，不进色类；着色元素只承担「这是哪个工具」一个识别任务。
 - 中栏应用位：调用行 chip 显示工具名、结果行按三级前缀，取代 `Tool call` / `Tool result` 文字小标（`row-kind` 类删除）。配对 result 沿用 call 的颜色，未配对用 `--tool-other`。
-- 右栏应用位：配对页 Call 与 Result 面板头（`bp-kind`）与正文页 `tool-chip.call`（工具往返折叠行、工具页列表）换用同款色类，配对页 Call 面板头的工具名不再在 `bp-meta` 重复；Result 面板头配对确认后显示工具名并沿用 call 色类，未确认保持中性 `Tool result`。
-- 角色标签 `User` / `Assistant` / `Tool` / `System` 的文案与配色不动。颜色只承载工具身份一个语义：正常态无装饰，异常才着色。
+- 右栏应用位：配对页 Call 与 Result 面板头（`bp-kind`）与正文页 `tool-chip.call`（工具往返折叠行、工具页列表）换用同款色类，配对页 Call 面板头的工具名不再在 `bp-meta` 重复。Result 面板头配对确认后显示工具名并沿用 call 色类，未确认保持中性 `Tool result`。
+- 角色标签 `User` / `Assistant` / `Tool` / `System` 的文案与配色不动。颜色只承载工具身份一个语义，正常态无装饰，异常才着色。
 
 ### 失败异常态、Edit 对照与悬停
 
@@ -77,23 +77,23 @@ Status: implemented
 
 ## Alternatives considered
 
-**Read 参数键值对原样显示（`offset 1400 · limit 130`）。** 用户选了行区间：键名是协议细节，扫读要的是范围；精确键值已在悬停与右栏。
+**Read 参数键值对原样显示（`offset 1400 · limit 130`）。** 用户选了行区间。键名是协议细节，扫读要的是范围。精确键值已在悬停与右栏。
 
-**Bash 显示命令首行。** 更客观，但命令常带管道与转义，一行装不下；description 是 agent 自述意图且 ZCode 侧 100% 携带。omp 的 bash 无 description，回落路径保留命令首行。
+**Bash 显示命令首行。** 更客观，但命令常带管道与转义，一行装不下。description 是 agent 自述意图且 ZCode 侧 100% 携带。omp 的 bash 无 description，回落路径保留命令首行。
 
-**结果行只带工具名。** 后端零成本，但看不出是哪个文件的结果；调用方在缓存内时摘要成本同样为零，降级路径明确，收益大于复杂度。
+**结果行只带工具名。** 后端零成本，但看不出是哪个文件的结果。调用方在缓存内时摘要成本同样为零，降级路径明确，收益大于复杂度。
 
 **文件类同色系（Read/Edit/Write 共用色相不同明度）。** 更克制，但读、改、建恰是扫读时最需要区分的三类动作；六色独立是用户选择。
 
-**摘要进派生层（tool_call 持久化 input_summary 列）。** 否决：显示字符串入库会把展示格式绑进派生版本；「解释只影响显示」是既定边界（正文分页的 interpretations 同一立场），前端按窗口现算，成本可忽略。
+**摘要进派生层（tool_call 持久化 input_summary 列）。** 否决：显示字符串入库会把展示格式绑进派生版本。「解释只影响显示」是既定边界（正文分页的 interpretations 同一立场），前端按窗口现算，成本可忽略。
 
-**相对 cwd 显示路径。** 读模型未暴露 cwd（`raw_hook` 有列但不在 request 详情），且 cwd 覆盖不完整（zcode 侧实测全空，见[zcode 支持提案](../../proposed/feature/2026-10-24-zcode-agent-support.md)边界外）；basename 加悬停全路径不依赖它。
+**相对 cwd 显示路径。** 读模型未暴露 cwd（`raw_hook` 有列但不在 request 详情），且 cwd 覆盖不完整（zcode 侧实测全空，见[zcode 支持提案](../../proposed/feature/2026-10-24-zcode-agent-support.md)边界外）。basename 加悬停全路径不依赖它。
 
-**MCP 工具逐个配色。** 否决：开放式集合逐个配色永远追不完；统一中性色即可辨识为「其他工具」。
+**MCP 工具逐个配色。** 否决：开放式集合逐个配色永远追不完。统一中性色即可辨识为「其他工具」。
 
 ## Consequences
 
-中栏扫读时 Read/Edit/Bash 行一眼可辨，连续 call 与 result 行按摘要成对；代价：跨窗口或正文已回收时结果行只有工具名，与同屏其他行观感不同（显示层降级不影响配对事实）；行内同时有角色标签与工具 chip 两个着色元素，chip 沿用 row-label 的尺寸与低饱和背景、不加图标来压制风险。description 是显示优先级不是事实来源，命令全文始终在悬停与右栏。区间折算若发现客户端间基数不一致，回落为只显示起点不含终点。核心工具清单是开放决定：新工具（尤其 MCP）落入「其他」无需改代码，增删色相是后续 note 的事。
+中栏扫读时 Read/Edit/Bash 行一眼可辨，连续 call 与 result 行按摘要成对。代价：跨窗口或正文已回收时，结果行只有工具名，与同屏其他行观感不同（显示层降级不影响配对事实）。行内同时有角色标签与工具 chip 两个着色元素，chip 沿用 row-label 的尺寸与低饱和背景，不加图标来压制风险。description 是显示优先级不是事实来源，命令全文始终在悬停与右栏。区间折算若发现客户端间基数不一致，回落为只显示起点不含终点。核心工具清单是开放决定，新工具（尤其 MCP）落入「其他」无需改代码，增删色相是后续 note 的事。
 
 ## Testing
 
