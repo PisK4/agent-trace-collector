@@ -616,6 +616,51 @@ test('409 只在真正作废当前记录时通知页面', async () => {
   expect(invalidated).toEqual([1, 1]);
 });
 
+test('peek 同步读取入口：不发网、无快照为 null、失败占位与作废可见', async () => {
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1));
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    if (url.includes('/tools/0/result')) return respond({ owner_req: 1, call_ord: 0, state: 'available', target: null, content: 'ok', is_error: null, reason: null, reading_token: TOKEN });
+    if (url.includes('/tools/1/result')) return respond({ error: 'unavailable' }, 503);
+    if (url.includes('/route')) return respond({ state: 'absent', summary: null });
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  // 未读：同步读取都是 null。
+  expect(store.peekRequest(1)).toBeNull();
+  expect(store.peekToolResult(1, 0)).toBeNull();
+  expect(store.peekRoute(1)).toBeNull();
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  const peeked = store.peekRequest(1);
+  expect(peeked?.detail?.req_id).toBe(1);
+  // 路由没读仍是 null；读到后同步可见。
+  expect(store.peekRoute(1)).toBeNull();
+  await store.readRoute(1);
+  expect(store.peekRoute(1)).toEqual({ state: 'absent', summary: null });
+  await store.readToolResult(1, 0);
+  expect(store.peekToolResult(1, 0)?.content).toBe('ok');
+  // 失败登记不可读占位：同步可见，重试仍显式发起。
+  await expect(store.readToolResult(1, 1)).rejects.toThrow();
+  expect(store.peekToolResult(1, 1)?.state).toBe('unavailable');
+  // peek 不发网络。
+  const urlsAtPeek = h.urls.length;
+  store.peekRequest(1);
+  store.peekToolResult(1, 0);
+  store.peekRoute(1);
+  expect(h.urls.length).toBe(urlsAtPeek);
+  // 作废后同步读取回到未读；换会话同样清空。
+  store.invalidate(1);
+  expect(store.peekRequest(1)).toBeNull();
+  expect(store.peekToolResult(1, 0)).toBeNull();
+  expect(store.peekRoute(1)).toBeNull();
+  await store.readRequest(1);
+  await store.readRoute(1);
+  await store.selectSession('k2', 30);
+  expect(store.peekRoute(1)).toBeNull();
+});
+
 test('共享网络队列并发不超过 4', async () => {
   const h = harness(async url => {
     await delay(15);

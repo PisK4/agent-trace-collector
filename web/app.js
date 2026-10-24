@@ -146,22 +146,24 @@ export function railFactsHtml(parts) {
  *   row: { body_state: string, miss_reason?: string | null },
  *   meta: { total: number | null } | null,
  *   entries: import('./body-view.js').Entry[],
- *   structure: { open: boolean, next: number, total: number | null, ords: number[], selected: number | null, loading: boolean, error: string | null },
+ *   structure: { next: number, total: number | null, ords: number[], loading: boolean, error: string | null },
  *   delta: Set<number> | null,
  *   deltaState?: { next: number, done: boolean, loading: boolean, error: string | null } | null,
  *   parseState?: string | null,
  *   relation: string,
+ *   open?: boolean,
+ *   selected?: number | null,
  * }} input
  * @returns {string}
  */
 export function structureFoldHtml(input) {
-  const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation } = input;
+  const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation, open = false, selected = null } = input;
   const total = structure.total ?? (meta ? meta.total : null);
   const count = total === null || total === undefined ? '消息总数未读取' : `${total} 条消息`;
   const canLoad = row.body_state === 'available' || row.body_state === 'partial';
   const unread = total !== null && total !== undefined && structure.next < total;
-  const chosen = structure.selected === null
-    ? null : entries.find(entry => entry.ord === structure.selected) ?? null;
+  const chosen = selected === null
+    ? null : entries.find(entry => entry.ord === selected) ?? null;
   let body;
   if (chosen !== null) {
     body = `${renderMessageDetail(chosen)}
@@ -191,13 +193,13 @@ export function structureFoldHtml(input) {
       if (entry.ord > prev + 1) gaps.push({ from: prev + 1, to: entry.ord - 1 });
       prev = entry.ord;
     }
-    body = `${deltaNote}${renderMessages(listEntries, { delta, limit: listEntries.length, selectedOrd: structure.selected, gaps })}`;
+    body = `${deltaNote}${renderMessages(listEntries, { delta, limit: listEntries.length, selectedOrd: selected, gaps })}`;
   }
   const more = unread && canLoad
     ? `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${structure.error ? '重试读取' : `加载下一片（已读 ${structure.next} / ${total}）`}</button>`
     : '';
   const errorNote = structure.error ? `<p class="note warn">结构读取失败：${esc(structure.error)}</p>` : '';
-  return `<details class="rail-fold" data-structure-fold="${reqId}" data-fold="structure:${reqId}"${structure.open ? ' open' : ''}>
+  return `<details class="rail-fold" data-structure-fold="${reqId}" data-fold="structure:${reqId}"${open ? ' open' : ''}>
     <summary>请求结构<span class="fold-count">${esc(count)}</span></summary>
     <div class="fold-body">${errorNote}${body}${more}</div>
   </details>`;
@@ -498,16 +500,14 @@ if (typeof document !== 'undefined') {
     return key;
   }
 
+  // store 是唯一的读取缓存：页面同步渲染经 peek* 消费，副本不作第二份真相。
   const store = createReaderStore((/** @type {string} */ url) => fetch(url),
-    id => handleReadingChanged(id));
-  /** @type {Map<number, RequestRead>} 窗口内请求的已读取内容；随会话切换清空。 */
-  const reads = new Map();
-  /** @type {Map<string, ToolResultReading>} 工具结果按 `${owner}:${ord}` 缓存展示层副本。 */
-  const toolReadings = new Map();
-  /** @type {Map<number, {state: string, summary: unknown}>} 路由只在展开时读取。 */
-  const routes = new Map();
+    // store 真正作废当前记录时只标待重读；迟到响应与旧回调不进来。
+    id => { state.readingChanged.add(id); });
   /** @type {Map<string, boolean>} 折叠开合按稳定键保存（键含 req id），重绘后恢复。 */
   const folds = new Map();
+  /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
+  const structureSelected = new Map();
 
   const qp = new URLSearchParams(location.search);
   const state = {
@@ -539,6 +539,8 @@ if (typeof document !== 'undefined') {
   };
   /** 载入窗口详情的轮次：换会话或刷新时自增，作废在跑的批次。 */
   let loadEpoch = 0;
+  /** 导航代次：换会话或显式刷新时自增，旧导航的 await 后续不再覆盖当前选择。 */
+  let navEpoch = 0;
   let themePref = 'system';
   try { themePref = localStorage.getItem('tc.theme') || 'system'; } catch { /* storage may be blocked */ }
 
@@ -573,7 +575,7 @@ if (typeof document !== 'undefined') {
     return currentRows().find(row => row.req_id === state.reqId) ?? null;
   }
   function currentRead() {
-    return state.reqId === null ? null : reads.get(state.reqId) ?? null;
+    return state.reqId === null ? null : store.peekRequest(state.reqId);
   }
   function currentDetail() {
     return currentRead()?.detail ?? null;
@@ -606,15 +608,14 @@ if (typeof document !== 'undefined') {
   /** 批量载入窗口内请求的详情、元信息与最多两片可信增量；每批完成重绘一次。 */
   async function loadWindowReads() {
     const epoch = ++loadEpoch;
-    const wanted = currentRows().filter(row => !reads.has(row.req_id));
+    const wanted = currentRows().filter(row => store.peekRequest(row.req_id) === null);
     for (let index = 0; index < wanted.length; index += 4) {
       if (epoch !== loadEpoch) return;
       const chunk = wanted.slice(index, index + 4);
       await Promise.all(chunk.map(async row => {
         try {
           const read = await store.readRequest(row.req_id);
-          reads.set(row.req_id, read);
-          if (!read.delta.done) await store.loadDelta(row.req_id, 2).then(next => reads.set(row.req_id, next));
+          if (!read.delta.done) await store.loadDelta(row.req_id, 2);
         } catch {
           /* reading_changed 的副本清理由 store 作废通知负责；其余单笔失败保留占位记录，刷新可重试 */
         }
@@ -733,7 +734,7 @@ if (typeof document !== 'undefined') {
   }
   /** @param {number|null} reqId */
   function relationTextOf(reqId) {
-    const detail = reqId === null ? null : reads.get(reqId)?.detail ?? null;
+    const detail = reqId === null ? null : store.peekRequest(reqId)?.detail ?? null;
     if (detail === null) return '';
     if (detail.derivation === undefined || detail.derivation.chain_state !== 'current') {
       return '关系待重建或为旧结果，不标记新增';
@@ -795,39 +796,32 @@ if (typeof document !== 'undefined') {
   }
 
   /**
-   * 按调用位置读取结果。force 用于重试：先丢掉页面侧的失败快照再发起。
-   * 409 的作废与副本清理由 store 通知负责；迟到 409 保留现有副本，这里只刷新展示。
+   * 按调用位置读取结果。force 用于重试：store 的失败任务已释放，重发走网络。
+   * 409 的作废与副本清理由 store 通知负责；迟到 409 保留现有快照，这里只刷新展示。
    * @param {number} ownerId @param {number} callOrd @param {boolean} [force]
    */
   async function readToolResult(ownerId, callOrd, force = false) {
-    const key = `${ownerId}:${callOrd}`;
-    if (!force && toolReadings.has(key)) return toolReadings.get(key) ?? null;
+    const cached = store.peekToolResult(ownerId, callOrd);
+    if (!force && cached !== null) return cached;
     try {
-      const reading = await store.readToolResult(ownerId, callOrd);
-      toolReadings.set(key, reading);
+      await store.readToolResult(ownerId, callOrd);
     } catch (error) {
       if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
         renderMain();
         renderRail();
         return null;
       }
-      toolReadings.set(key, /** @type {ToolResultReading} */ ({
-        owner_req: ownerId, call_ord: callOrd, reading_token: '',
-        state: 'unavailable', target: null, content: null, is_error: null,
-        reason: error instanceof Error ? error.message : 'read_failed',
-      }));
     }
     renderMain();
     renderRail();
-    return toolReadings.get(key) ?? null;
+    return store.peekToolResult(ownerId, callOrd);
   }
 
   /** 展开路由折叠区或切到路由页签时才读取；失败保持未读，重新展开可重试。 @param {number} id */
   async function ensureRoute(id) {
-    if (routes.has(id)) return;
+    if (store.peekRoute(id) !== null) return;
     try {
-      const loaded = await store.readRoute(id);
-      routes.set(id, /** @type {{state: string, summary: unknown}} */ (loaded));
+      await store.readRoute(id);
     } catch { return; }
     renderMain();
     renderRail();
@@ -894,8 +888,8 @@ if (typeof document !== 'undefined') {
     }
     html += '<span class="history-range">序号表示当前窗口内的请求 · 时间从上往下 · 点击行查看详情</span></div>';
     for (const r of rows) {
-      const read = reads.get(r.req_id) ?? null;
-      const steps = projectSteps(r, read, systemContextOf(r, id => reads.get(id) ?? null));
+      const read = store.peekRequest(r.req_id);
+      const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)));
       const ordinal = ordinalOf(r.req_id);
       html += `<section class="trace-group" data-req="${r.req_id}" data-status="${r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success'}" aria-current="${r.req_id === state.reqId}">`;
       html += renderTraceRows(r, steps, ordinal, state.selectedStep);
@@ -1030,7 +1024,9 @@ if (typeof document !== 'undefined') {
     const structureHtml = structureFoldHtml({
       reqId: r.req_id, row: r, meta,
       entries: read?.entries ?? [],
-      structure: read?.structure ?? { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null },
+      structure: read?.structure ?? { next: 0, total: null, ords: [], loading: false, error: null },
+      open: folds.get(`structure:${r.req_id}`) === true,
+      selected: structureSelected.get(r.req_id) ?? null,
       delta: detail === null ? null : deltaOrdinals(detail),
       deltaState: read?.delta ?? null,
       parseState: meta?.parse_state ?? null,
@@ -1090,7 +1086,7 @@ if (typeof document !== 'undefined') {
       return `<section class="rail-section"><h3>工具调用<span class="grow"></span><span class="hint">${tools.length} 次调用 · 点开在右栏同屏配对阅读</span></h3>${rows.join('')}</section>`;
     }
     const owner = state.toolOwner ?? r.req_id;
-    const ownerRead = owner === r.req_id ? read : reads.get(owner) ?? null;
+    const ownerRead = owner === r.req_id ? read : store.peekRequest(owner);
     if (ownerRead === null || ownerRead.meta === null) {
       // 调用方读取未就绪：配对需要它的回复与配对状态；409 作废时给显式重读入口。
       return `<div class="rail-empty"><b>正在读取调用方请求…</b>配对需要调用方的回复与配对状态，读取完成后自动展示两端。</div>
@@ -1106,7 +1102,7 @@ if (typeof document !== 'undefined') {
       return railTools();
     }
     const pair = ownerDetail === null ? null : ownerDetail.tool_calls.find(item => item.ord === tool.ord) ?? null;
-    const reading = toolReadings.get(`${owner}:${tool.ord}`) ?? null;
+    const reading = store.peekToolResult(owner, tool.ord);
     const pages = [['overview', '概览'], ['params', '参数'], ['pair', '配对'], ['schema', 'Schema']];
     const pageBody = state.toolPage === 'params'
       ? `<pre class="raw" tabindex="0">${esc(tool.inputText)}</pre>
@@ -1133,8 +1129,8 @@ if (typeof document !== 'undefined') {
   /** 当前请求的选中步骤对象；无选择或选中的是别的请求时返回 null。 @param {RequestRow} r */
   function currentSelectedStep(r) {
     if (state.selectedStep === null || !state.selectedStep.startsWith(`${r.req_id}:`)) return null;
-    const read = reads.get(r.req_id) ?? null;
-    return projectSteps(r, read, systemContextOf(r, id => reads.get(id) ?? null))
+    const read = store.peekRequest(r.req_id);
+    return projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)))
       .find(item => item.key === state.selectedStep) ?? null;
   }
 
@@ -1142,7 +1138,7 @@ if (typeof document !== 'undefined') {
     const r = currentRow();
     if (r === null) {
       if (state.offPageReqId !== null) {
-        const read = reads.get(state.offPageReqId) ?? null;
+        const read = store.peekRequest(state.offPageReqId);
         return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口（可能在更早的历史里）。这里只读了它的详情；需要完整轨迹请从顶部加载更早记录，不自动扫描全部历史。</p></section>${read?.detail ? ledgerRowsHtml(read.detail, read.detail) : ''}`;
       }
       return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
@@ -1150,10 +1146,10 @@ if (typeof document !== 'undefined') {
     if (state.railTab === 'tools') return railTools();
     if (state.railTab === 'facts') return railFacts();
     if (state.railTab === 'route') {
-      const route = routes.get(r.req_id) ?? null;
+      const route = store.peekRoute(r.req_id);
       return `<section class="rail-section"><h3>路由与尝试</h3>${routeBlock(r, route)}</section>`;
     }
-    const read = reads.get(r.req_id) ?? null;
+    const read = store.peekRequest(r.req_id);
     if (read === null || read.meta === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
@@ -1275,20 +1271,18 @@ if (typeof document !== 'undefined') {
     void loadWindowReads().then(() => compensateAnchor(before));
   }
 
-  /** 显式刷新：重建最近窗口、清掉旧展开与旧阅读版本，记录读取时间。 */
+  /** 显式刷新：重建最近窗口、清掉旧展开与待重读标记，记录读取时间。 */
   async function refreshWindow() {
     if (state.session === null) return;
+    const myNav = ++navEpoch;
     state.requestOpen = new Set();
-    reads.clear();
-    toolReadings.clear();
-    // 路由副本随阅读版本一起清：导航完成处的自动读取才不会命中旧窗口缓存。
-    routes.clear();
     state.readingChanged.clear();
     state.refreshedAt = Date.now();
     state.revealed = false;
     state.missingReqId = null;
     state.offPageReqId = null;
     await store.selectSession(state.session, windowLimit());
+    if (myNav !== navEpoch) return;
     const rows = currentRows();
     state.reqId = rows[rows.length - 1]?.req_id ?? null;
     state.selectedStep = null;
@@ -1339,37 +1333,19 @@ if (typeof document !== 'undefined') {
     });
   }
 
-  /**
-   * store 真正作废当前记录时的统一处理：作废该请求的全部展示副本（已读快照、
-   * 该 owner 的全部工具结果与路由），标记待重读；迟到响应与会话切换后的旧回调
-   * 不作废、不进入本函数，页面不按 reading_changed 错误自行清理。渲染说明与
-   * 显式重读入口由调用方负责。
-   * @param {number} id
-   */
-  function handleReadingChanged(id) {
-    reads.delete(id);
-    for (const key of [...toolReadings.keys()]) {
-      if (key.startsWith(`${id}:`)) toolReadings.delete(key);
-    }
-    routes.delete(id);
-    state.readingChanged.add(id);
-  }
-
   /** 选中的输入消息未在缓存里时定点补读一条，保留当前选择。 @param {number} id @param {number} ord */
   async function ensureMessageOrd(id, ord) {
-    const read = reads.get(id);
-    if (read === undefined || read.entries.some((/** @type {{ord: number}} */ e) => e.ord === ord)) return;
+    const read = store.peekRequest(id);
+    if (read === null || read.entries.some((/** @type {{ord: number}} */ e) => e.ord === ord)) return;
     try {
       await store.readRange(id, ord, ord + 1);
-      reads.set(id, await store.readRequest(id));
     } catch { /* 补读失败保留现有内容，可再次触发 */ }
   }
 
   /** 确保某请求的读取与右栏数据在手；重读成功后取得新 detail/meta 并按当前选中来源补读所需块。 @param {number} id */
   async function ensureRead(id) {
     try {
-      const read = await store.readRequest(id);
-      reads.set(id, read);
+      await store.readRequest(id);
       state.readingChanged.delete(id);
     } catch {
       /* reading_changed 的副本清理由 store 作废通知负责 */
@@ -1390,14 +1366,14 @@ if (typeof document !== 'undefined') {
 
   /**
    * 配对页两端就绪：调用方读取完成后，按配对状态自动发起一次结果读取；
-   * 重复进入不重复读取（toolReadings 有键即跳过），失败保留显式重试。
+   * 重复进入不重复读取（store 已登记该工具结果即跳过），失败保留显式重试。
    * @param {number} ownerId @param {number} callOrd
    */
   async function ensurePair(ownerId, callOrd) {
     await ensureRead(ownerId);
-    const pair = reads.get(ownerId)?.detail?.tool_calls.find(call => call.ord === callOrd) ?? null;
+    const pair = store.peekRequest(ownerId)?.detail?.tool_calls.find(call => call.ord === callOrd) ?? null;
     if (pair !== null && pair.state === 'resolved' && pair.result_req !== null
-      && !toolReadings.has(`${ownerId}:${callOrd}`)) {
+      && store.peekToolResult(ownerId, callOrd) === null) {
       void readToolResult(ownerId, callOrd);
     }
   }
@@ -1425,7 +1401,7 @@ if (typeof document !== 'undefined') {
       void resumeDelta(id);
       return;
     }
-    const step = projectSteps(row, reads.get(id) ?? null, systemContextOf(row, x => reads.get(x) ?? null))
+    const step = projectSteps(row, store.peekRequest(id), systemContextOf(row, x => store.peekRequest(x)))
       .find(item => item.key === key) ?? null;
     const source = resolveSelectedSource(step);
     // 调用步骤与已配对的结果步骤都进入配对页，右栏同屏阅读两端；
@@ -1459,8 +1435,7 @@ if (typeof document !== 'undefined') {
   /** @param {number} id */
   async function loadStructure(id) {
     try {
-      const read = await store.loadStructure(id);
-      reads.set(id, read);
+      await store.loadStructure(id);
     } catch {
       /* reading_changed 的副本清理由 store 作废通知负责；其余结构失败保留 error 状态 */
     }
@@ -1471,8 +1446,7 @@ if (typeof document !== 'undefined') {
   /** 显式续读可信增量：每轮两片，经原 4 并发队列；失败保留未消费位置可重试。 @param {number} id */
   async function resumeDelta(id) {
     try {
-      const read = await store.loadDelta(id, 2);
-      reads.set(id, read);
+      await store.loadDelta(id, 2);
     } catch {
       /* reading_changed 的副本清理由 store 作废通知负责；其余失败保留未消费位置可重试 */
     }
@@ -1500,7 +1474,6 @@ if (typeof document !== 'undefined') {
     let detail = null;
     try {
       const read = await store.readRequest(state.reqId);
-      reads.set(state.reqId, read);
       detail = read.detail;
     } catch { /* 读取失败按未找到处理 */ }
     const target = resolveTraceTarget(rows, state.reqId, detail);
@@ -1520,6 +1493,7 @@ if (typeof document !== 'undefined') {
    * @param {number | null} [wantedTrace] URL 指定的 trace；会话内重选时为空
    */
   async function selectSession(key, wantedTrace = null) {
+    const myNav = ++navEpoch;
     state.session = key;
     state.reqId = wantedTrace;
     state.missingReqId = null;
@@ -1533,14 +1507,13 @@ if (typeof document !== 'undefined') {
     state.pendingSession = key;
     state.userScrolled = false;
     state.revealed = false;
-    reads.clear();
-    toolReadings.clear();
-    routes.clear();
     state.readingChanged.clear();
     renderMain();
     await store.selectSession(key, windowLimit());
+    if (myNav !== navEpoch) return;
     state.pendingSession = null;
     await resolveInitialTrace();
+    if (myNav !== navEpoch) return;
     if (state.reqId === null && state.offPageReqId === null) {
       // 默认选最新一笔；窗口外 trace 保留其语义，不用最新顶替。
       const rows = currentRows();
@@ -1579,8 +1552,7 @@ if (typeof document !== 'undefined') {
     if (deltaMore !== null) { void resumeDelta(Number(deltaMore.dataset.deltaMore)); return; }
     const structureBack = /** @type {HTMLElement | null} */ (t.closest('[data-structure-back]'));
     if (structureBack !== null) {
-      const read = reads.get(Number(structureBack.dataset.structureBack));
-      if (read !== undefined) { read.structure.selected = null; renderRail(); }
+      if (structureSelected.delete(Number(structureBack.dataset.structureBack))) renderRail();
       return;
     }
     const bodyLoad = /** @type {HTMLElement | null} */ (t.closest('[data-body-load]'));
@@ -1626,17 +1598,14 @@ if (typeof document !== 'undefined') {
     if (toolRead !== null) { void readToolResult(Number(toolRead.dataset.toolRead), Number(toolRead.dataset.callOrd)); return; }
     const toolRetry = /** @type {HTMLElement | null} */ (t.closest('[data-tool-retry]'));
     if (toolRetry !== null) {
-      const owner = Number(toolRetry.dataset.toolRetry);
-      const ord = Number(toolRetry.dataset.callOrd);
-      toolReadings.delete(`${owner}:${ord}`);
-      void readToolResult(owner, ord, true);
+      void readToolResult(Number(toolRetry.dataset.toolRetry), Number(toolRetry.dataset.callOrd), true);
       return;
     }
     const copyTool = /** @type {HTMLElement | null} */ (t.closest('[data-copy-tool]'));
     if (copyTool !== null) {
       // 参数页可能与配对页一样描述窗口外 owner 的调用：复制走 owner 的读取。
       const ownerOfTool = state.toolOwner ?? state.reqId;
-      const read = ownerOfTool !== null ? reads.get(ownerOfTool) ?? null : null;
+      const read = ownerOfTool !== null ? store.peekRequest(ownerOfTool) : null;
       const tool = read !== null && read.meta !== null
         ? toolEntries(read.detail, read.meta).find(item => item.ord === Number(copyTool.dataset.copyTool)) ?? null
         : null;
@@ -1653,7 +1622,7 @@ if (typeof document !== 'undefined') {
     const copyMsg = /** @type {HTMLElement | null} */ (t.closest('[data-copy-msg]'));
     if (copyMsg !== null) {
       const ord = Number(copyMsg.dataset.copyMsg);
-      const read = state.reqId === null ? null : reads.get(state.reqId) ?? null;
+      const read = state.reqId === null ? null : store.peekRequest(state.reqId);
       const entry = read === null ? null : read.entries.find((/** @type {{ord: number}} */ item) => item.ord === ord) ?? null;
       if (entry !== null && navigator.clipboard !== undefined) {
         void navigator.clipboard.writeText(messageCopyText(entry)).then(() => {
@@ -1662,16 +1631,15 @@ if (typeof document !== 'undefined') {
       }
       return;
     }
-    // 消息行有两个语境：右栏结构折叠里只改该请求的 structure.selected；
+    // 消息行有两个语境：右栏结构折叠里只改该请求的选中消息（structureSelected）；
     // 主栏内联清单里选中消息并在右栏正文页打开。
     const msg = /** @type {HTMLElement | null} */ (t.closest('[data-msg]'));
     if (msg !== null) {
       const fold = msg.closest('[data-structure-fold]');
       if (fold !== null) {
         const reqId = Number(/** @type {HTMLElement} */ (fold).dataset.structureFold);
-        const read = reads.get(reqId);
-        if (read !== undefined) {
-          read.structure.selected = Number(msg.dataset.msg);
+        if (store.peekRequest(reqId) !== null) {
+          structureSelected.set(reqId, Number(msg.dataset.msg));
           // 结构内再选消息同步当前选择；中栏高亮与右栏正文一致。
           state.reqId = reqId;
           state.selectedStep = `${reqId}:message:${msg.dataset.msg}`;
@@ -1754,13 +1722,9 @@ if (typeof document !== 'undefined') {
     if (!t.open) return;
     if (t.dataset.structureFold !== undefined) {
       const id = Number(t.dataset.structureFold);
-      const read = reads.get(id);
-      if (read !== undefined) {
-        // 开合状态存该请求的结构状态上，重绘后由 open 属性恢复。
-        read.structure.open = true;
-        // 首次展开才读取结构；已读或不完整读取中不重复发起。
-        if (read.structure.total === null && !read.structure.loading) void loadStructure(id);
-      }
+      const read = store.peekRequest(id);
+      // 首次展开才读取结构；已读或不完整读取中不重复发起。
+      if (read !== null && read.structure.total === null && !read.structure.loading) void loadStructure(id);
     }
     if (key !== undefined && key.startsWith('route:')) void ensureRoute(Number(key.slice(6)));
   }, true);

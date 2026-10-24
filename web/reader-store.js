@@ -19,7 +19,7 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * @property {import('../src/protocols').BodyPage | null} meta
  * @property {Map<number, ReturnType<typeof messageEntries>[number]>} messages
  * @property {ReturnType<typeof messageEntries>} entries
- * @property {{open: boolean, next: number, total: number | null, ords: number[], selected: number | null, loading: boolean, error: string | null}} structure
+ * @property {{next: number, total: number | null, ords: number[], loading: boolean, error: string | null}} structure
  * @property {{next: number, done: boolean, loading: boolean, error: string | null, unconfirmed: boolean}} delta
  * @property {string | null} token
  */
@@ -37,6 +37,9 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * @property {(id: number, pages?: number) => Promise<RequestRead>} loadDelta
  * @property {(id: number, ord: number) => Promise<import('../src/reading').ToolResultReading>} readToolResult
  * @property {(id: number) => Promise<unknown>} readRoute
+ * @property {(id: number) => RequestRead | null} peekRequest 同步读取当前缓存态，不发网络；无可用快照返回 null。
+ * @property {(id: number, ord: number) => import('../src/reading').ToolResultReading | null} peekToolResult 同步读取工具结果缓存，失败占位也算可用。
+ * @property {(id: number) => {state: string, summary: unknown} | null} peekRoute 同步读取路由缓存；未读到或读取失败返回 null。
  * @property {(id: number) => void} invalidate
  */
 
@@ -96,6 +99,8 @@ export function createReaderStore(fetcher, onInvalidated) {
   const reads = new Map();
   /** @type {Map<number, Promise<unknown>>} 路由只在用户展开时读取，单独缓存。 */
   const routes = new Map();
+  /** @type {Map<number, {state: string, summary: unknown}>} 路由完成值，供同步读取。 */
+  const routeValues = new Map();
 
   /** @param {number} id */
   function recordOf(id) {
@@ -107,9 +112,11 @@ export function createReaderStore(fetcher, onInvalidated) {
         meta: null,
         pages: new Map(),
         messages: new Map(),
-        structure: { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null },
+        structure: { next: 0, total: null, ords: [], loading: false, error: null },
         delta: { next: 0, done: false, loading: false, error: null, unconfirmed: false },
         tools: new Map(),
+        /** @type {Map<string, import('../src/reading').ToolResultReading>} 成功值与失败占位，键同 tools。 */
+        toolValues: new Map(),
       };
       reads.set(id, rec);
     }
@@ -162,6 +169,7 @@ export function createReaderStore(fetcher, onInvalidated) {
     windowError = null;
     reads.clear();
     routes.clear();
+    routeValues.clear();
     try {
       const page = await getJson(`/api/sessions/${encodeURIComponent(key)}/requests?direction=older&limit=${limit}`);
       if (myEpoch !== epoch) return;
@@ -243,10 +251,12 @@ export function createReaderStore(fetcher, onInvalidated) {
         rec.pages = new Map();
         rec.messages = new Map();
         rec.meta = null;
-        rec.structure = { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null };
+        rec.structure = { next: 0, total: null, ords: [], loading: false, error: null };
         rec.delta = { next: 0, done: false, loading: false, error: null, unconfirmed: false };
         rec.tools = new Map();
+        rec.toolValues = new Map();
         routes.delete(rec.id);
+        routeValues.delete(rec.id);
         onInvalidated?.(rec.id);
       }
       rec.detail = detail;
@@ -430,11 +440,19 @@ export function createReaderStore(fetcher, onInvalidated) {
           const reading = /** @type {import('../src/reading').ToolResultReading} */ (await getJson(`/api/requests/${id}/tools/${ord}/result?if_reading=${myToken}`));
           // 迟到响应：会话已切换、记录已作废重建，或版本已换（validate 原地重置）。
           if (myEpoch !== epoch || reads.get(id) !== rec || rec.token !== myToken) throwReadingChanged();
+          rec.toolValues.set(key, reading);
           return reading;
         } catch (error) {
           if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
             invalidateIfCurrent(rec, id, myEpoch, myToken);
+            throw error;
           }
+          // 普通失败登记不可读占位：同步渲染显示失败态，重试仍由调用方显式发起。
+          rec.toolValues.set(key, {
+            owner_req: id, call_ord: ord, reading_token: '',
+            state: 'unavailable', target: null, content: null, is_error: null,
+            reason: error instanceof Error ? error.message : 'read_failed',
+          });
           throw error;
         }
       })();
@@ -453,6 +471,7 @@ export function createReaderStore(fetcher, onInvalidated) {
         const route = await getJson(`/api/requests/${id}/route`);
         // 迟到响应：会话已切换，或本任务已作废被新读取取代；成功路径同样核对身份。
         if (myEpoch !== epoch || routes.get(id) !== pending) throwReadingChanged();
+        routeValues.set(id, /** @type {{state: string, summary: unknown}} */ (route));
         return route;
       })();
       routes.set(id, pending);
@@ -461,10 +480,30 @@ export function createReaderStore(fetcher, onInvalidated) {
     return pending;
   }
 
+  /** @param {number} id @returns {RequestRead | null} 同步读取当前快照；详情未到手不返回半成品。 */
+  function peekRequest(id) {
+    const rec = reads.get(id);
+    if (rec === undefined || rec.detail === null) return null;
+    return assemble(rec);
+  }
+
+  /** @param {number} id @param {number} ord @returns {import('../src/reading').ToolResultReading | null} */
+  function peekToolResult(id, ord) {
+    const rec = reads.get(id);
+    if (rec === undefined || rec.detail === null) return null;
+    return rec.toolValues.get(JSON.stringify([id, rec.token, ord])) ?? null;
+  }
+
+  /** @param {number} id @returns {{state: string, summary: unknown} | null} */
+  function peekRoute(id) {
+    return routeValues.get(id) ?? null;
+  }
+
   /** @param {number} id */
   function invalidate(id) {
     reads.delete(id);
     routes.delete(id);
+    routeValues.delete(id);
   }
 
   return {
@@ -479,6 +518,9 @@ export function createReaderStore(fetcher, onInvalidated) {
     loadDelta,
     readToolResult,
     readRoute,
+    peekRequest,
+    peekToolResult,
+    peekRoute,
     invalidate,
   };
 }

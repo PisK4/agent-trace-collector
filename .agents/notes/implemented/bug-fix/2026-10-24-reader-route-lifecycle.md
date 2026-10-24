@@ -22,7 +22,7 @@ Status: implemented
 
 ## Consequences
 
-同会话作废后的旧路由响应不再可用，旧失败不再删新缓存；迟到 409 不再清页面副本，真作废经通知统一清理。token 变化的 validate 重建计作一次作废通知，页面的工具结果与路由副本随之失效。路由竞态的守卫在 store 内，页面副本清理（两处 `routes.clear()`）仍在 DOM 闭包里，无自动化覆盖。
+同会话作废后的旧路由响应不再可用，旧失败不再删新缓存；迟到 409 不再清页面副本，真作废经通知统一清理。token 变化的 validate 重建计作一次作废通知，页面的工具结果与路由副本随之失效。路由任务身份守卫在 store 内、有测试覆盖；页面副本随后已整体删除（见[页面读取缓存收拢进 reader-store](../../implemented/architecture/2026-10-24-page-cache-single-home.md)），路由展示改经 `peekRoute` 消费。
 
 ## Testing
 

@@ -47,7 +47,7 @@ test('滚动恢复夹在可滚动范围内', () => {
 
 /** @type {Record<string, unknown>} 可读正文的最小行数据 */
 const factsRow = { body_state: 'available', miss_reason: null };
-const emptyStructure = { open: false, next: 0, total: 45, ords: [], selected: null, loading: false, error: null };
+const emptyStructure = { next: 0, total: 45, ords: [], loading: false, error: null };
 /** @param {{state: string, items: {name: string, description?: string, schema: unknown, source?: string}[], reason: string | null}} tools */
 const capsOf = (tools: { state: string; items: { name: string; description?: string; schema: unknown; source?: string }[]; reason: string | null }) => ({
   tools, skills: { state: 'present', items: [], reason: null },
@@ -103,10 +103,10 @@ test('结构折叠：total=45、ords=[] 时有数量没有消息；正文回收�
   expect(closed).toContain('data-structure-more="1"');
   // 未读取也给出说明，不给空消息列表冒充。
   expect(closed).toContain('尚未读取');
-  // open 状态来自 structure.open，由重绘保持。
+  // open 状态由调用方传入（页面来自 folds 表），由重绘保持。
   const open = structureFoldHtml({
     reqId: 1, row: factsRow, meta: { total: 45 }, entries: [],
-    structure: { ...emptyStructure, open: true }, delta: new Set<number>(), relation: '',
+    structure: emptyStructure, open: true, delta: new Set<number>(), relation: '',
   });
   expect(open).toContain(' open>');
   const evicted = structureFoldHtml({
@@ -133,17 +133,16 @@ test('delta=null 给关系说明不标新增，delta=[] 显示新增 0', () => {
 
 test('结构内点开消息详情可返回，消息总数不变', () => {
   const entries = [entryOf(0, '问'), entryOf(1, '答')];
-  const structure = { ...emptyStructure, total: 45, next: 2, ords: [0, 1], selected: 1 };
+  const structure = { ...emptyStructure, total: 45, next: 2, ords: [0, 1] };
   const detail = structureFoldHtml({
-    reqId: 1, row: factsRow, meta: { total: 45 }, entries, structure, delta: null, relation: '',
+    reqId: 1, row: factsRow, meta: { total: 45 }, entries, structure, selected: 1, delta: null, relation: '',
   });
   expect(detail).toContain('45 条消息');
   expect(detail).toContain('data-structure-back="1"');
   expect(detail).toContain('messages[1]');
   expect(detail).not.toContain('data-msg=');
   const back = structureFoldHtml({
-    reqId: 1, row: factsRow, meta: { total: 45 }, entries,
-    structure: { ...structure, selected: null }, delta: null, relation: '',
+    reqId: 1, row: factsRow, meta: { total: 45 }, entries, structure, delta: null, relation: '',
   });
   expect(back).toContain('data-msg="1"');
   expect(back).toContain('45 条消息');
@@ -227,9 +226,10 @@ test('结构并集：稀疏已读的 99 可见，40–98 标未读，游标仍�
     reqId: 1, row: factsRow, meta: { total: 100 },
     entries,
     structure: {
-      open: true, next: 40, total: 100,
-      ords: Array.from({ length: 40 }, (_, i) => i), selected: null, loading: false, error: null,
+      next: 40, total: 100,
+      ords: Array.from({ length: 40 }, (_, i) => i), loading: false, error: null,
     },
+    open: true,
     delta: new Set([99]),
     deltaState: { next: 1, done: true, loading: false, error: null },
     relation: '',
