@@ -11,7 +11,7 @@ import {
   listRequests,
   listSessions,
 } from './queries';
-import { PAGE_MAX, getBodyPage } from './protocols';
+import { PAGE_MAX, bodyRangeError, getBodyPage } from './protocols';
 import {
   getReadingBody, getReadingDetail, getToolResultReading,
   isValidReadingToken, ReadingConflictError,
@@ -68,24 +68,35 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 type Verdict = 'ok' | 'host' | 'origin' | 'unauthorized';
 
-function checkAccess(req: Request, port: number, readToken: string, isNavigation: boolean): Verdict {
+/**
+ * Host 与 Origin 的共享边界段：host 不合法返回 'host'；Origin 存在且不是
+ * 本机同源（含 'null'）时返回 'origin'。Origin 缺失或同源时返回 null，
+ * 由调用方走各自的分支：读路径允许 same-site 与导航放行，hook 仍必须 Bearer。
+ */
+function checkHostOrigin(req: Request, port: number): 'host' | 'origin' | null {
   const host = req.headers.get('host');
   if (host === null || !allowedHosts(port).has(host)) return 'host';
   const origin = req.headers.get('origin');
-  const site = req.headers.get('sec-fetch-site');
+  if (origin !== null && (origin === 'null' || origin !== `http://${host}`)) return 'origin';
+  return null;
+}
+
+function checkAccess(req: Request, port: number, readToken: string, isNavigation: boolean): Verdict {
+  const hostOrigin = checkHostOrigin(req, port);
+  if (hostOrigin !== null) return hostOrigin;
+  const origin = req.headers.get('origin');
   if (origin === null) {
     const authorization = req.headers.get('authorization');
     if (authorization !== null && authorization.startsWith('Bearer ') &&
         timingSafeEqual(authorization.slice(7), readToken)) {
       return 'ok';
     }
+    const site = req.headers.get('sec-fetch-site');
     if (site === 'same-origin') return 'ok';
     // 正常顶层导航与直接打开书签不带 Origin，只信任浏览器的导航元数据。
     if (isNavigation && site === 'none' && req.headers.get('sec-fetch-mode') === 'navigate') return 'ok';
     return 'unauthorized';
   }
-  const expected = `http://${host}`;
-  if (origin === 'null' || origin !== expected) return 'origin';
   return 'ok';
 }
 
@@ -141,16 +152,12 @@ async function handleHookIngest(
     metrics.reject('hook_unavailable');
     return json({ error: 'hook_unavailable' }, 404);
   }
-  const host = req.headers.get('host');
-  if (host === null || !allowedHosts(config.port).has(host)) {
-    metrics.reject('host');
-    return json({ error: 'host' }, 403);
-  }
-  // 插件从本机发起，不应带浏览器 Origin；带了就必须是同源，否则视为跨站。
-  const origin = req.headers.get('origin');
-  if (origin !== null && origin !== `http://${host}`) {
-    metrics.reject('origin');
-    return json({ error: 'origin' }, 403);
+  // 与读路径共用 Host/Origin 边界段；Origin 通过后 hook 仍必须 Bearer，
+  // 不继承读路径的 same-site 与导航放行。
+  const hostOrigin = checkHostOrigin(req, config.port);
+  if (hostOrigin !== null) {
+    metrics.reject(hostOrigin);
+    return json({ error: hostOrigin }, 403);
   }
   const authorization = req.headers.get('authorization');
   if (authorization === null || !authorization.startsWith('Bearer ') ||
@@ -328,7 +335,9 @@ export function createHandler(
         if (canonical === null) return json({ error: 'not_found' }, 404);
         const from = parseIndex(url, 'from', 0);
         const to = parseIndex(url, 'to', from + PAGE_MAX);
-        if (to < from || to - from > PAGE_MAX) return json({ error: 'invalid_body_range' }, 400);
+        // 区间规则与 protocols.getBodyPage 的防御共用同一条（bodyRangeError）。
+        const rangeError = bodyRangeError(from, to);
+        if (rangeError !== null) return json({ error: rangeError }, 400);
         const expected = url.searchParams.get('if_reading');
         if (expected !== null && !isValidReadingToken(expected)) {
           return json({ error: 'invalid_reading_token' }, 400);

@@ -2,7 +2,8 @@ import { zstdDecompressSync } from 'node:zlib';
 import type { Store } from './store';
 import type { BodyState } from './store';
 import { interpretMessage, messageText, type MessageView, type UserInputView } from './input-interpretation';
-import { capabilityView, type CapabilityCoverage, type CapabilityView } from './capabilities';
+import { CAPABLE_PROTOCOLS, capabilityView, type CapabilityCoverage, type CapabilityView } from './capabilities';
+import { skeletonLike } from './skeleton';
 
 /**
  * 协议适配层：把已保存的脱敏对象解释成阅读用的辅助视图。
@@ -60,8 +61,21 @@ export type BodyPage = {
 
 /** 适配器版本写进 request 的长期列；语义变化时升版。 */
 export const ADAPTER_VERSION = 1;
-export const SUPPORTED_PROTOCOLS = ['anthropic', 'chat'] as const;
+/** 支持消息解析的协议名单：能力提取的同一份名单（capabilities.protocolSupported）。 */
+export const SUPPORTED_PROTOCOLS = CAPABLE_PROTOCOLS;
 const PAGE_MAX = 40;
+
+/**
+ * 纯区间规则：返回错误原因或 null。HTTP 层用它映射 400，
+ * getBodyPage 的 parseRange 用它做直接防御，两层共用同一条规则。
+ */
+export function bodyRangeError(from: number, to: number): string | null {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) {
+    return 'invalid_body_range';
+  }
+  if (to - from > PAGE_MAX) return 'invalid_body_range';
+  return null;
+}
 
 type Message = { role: string; content: unknown };
 
@@ -225,10 +239,7 @@ function decompressBlock(store: Store, id: number, cache: Map<number, unknown>):
 }
 
 function parseRange(from: number, to: number): void {
-  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) {
-    throw new Error('invalid_body_range');
-  }
-  if (to - from > PAGE_MAX) throw new Error('invalid_body_range');
+  if (bodyRangeError(from, to) !== null) throw new Error('invalid_body_range');
 }
 
 /**
@@ -281,9 +292,9 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
   if (!readable) return page;
   if (stateRow.skeleton_z == null) return page;
 
-  const skeleton = JSON.parse(zstdDecompressSync(stateRow.skeleton_z).toString('utf8')) as {
-    protocol?: unknown; request_without_messages?: unknown; reply?: unknown; has_messages?: boolean;
-  };
+  // 宽松读取：损坏骨架展示为未知协议与空字段，分页不因结构损坏而拒绝整页。
+  const skeleton = skeletonLike(JSON.parse(zstdDecompressSync(stateRow.skeleton_z).toString('utf8')));
+  if (skeleton === null) return page;
   const fields = isRecord(skeleton.request_without_messages) ? skeleton.request_without_messages : null;
   const protocol = typeof skeleton.protocol === 'string' && skeleton.protocol.length > 0
     ? skeleton.protocol : 'unknown';
