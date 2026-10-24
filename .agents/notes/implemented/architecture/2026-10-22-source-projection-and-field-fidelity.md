@@ -45,7 +45,7 @@ Status: implemented
 
 ## Decision：在线写入只经过同一个投影入口
 
-`src/reconcile.ts` 的账本与路由写入不再各自拼聚合 SQL。`src/sources/raw.ts` 只负责把已准备字段写进 raw 层（`insertPreparedLedgerTx`、`upsertPreparedRouteTx`、只改既有行的 `writePreparedLedgerTx`、`writePreparedRouteTx`），行级事实一律由 `projectRequestTx` 决定。
+`src/reconcile.ts` 的账本与路由写入不再各自拼聚合 SQL。`src/sources/raw.ts` 只负责把已准备字段写进 raw 层（`insertPreparedLedgerTx`、`upsertPreparedRouteTx`），行级事实一律由 `projectRequestTx` 决定。
 
 **脱敏先于映射。** `ingestLedger` 与 `ingestRoute` 先 `redact` 再 `mapLedgerRow` / `mapRouteRow`，raw 列、`payload_json` 与投影读到的字段都来自同一个已脱敏对象。否则列与 payload 各说一套，而 payload 会留着未脱敏副本。
 

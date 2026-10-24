@@ -284,7 +284,7 @@ export function acceptHook(
     // metadata-only 分支虽然没写正文，但证据与 miss_reason 变了，同样不能复用旧结论。
     markRequestInputTx(db, reqId);
     return { req_id: reqId, duplicate: false };
-  });
+  }, 'hook');
 }
 
 /**

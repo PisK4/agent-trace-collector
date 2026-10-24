@@ -145,6 +145,18 @@ test('有账本时hook并入账本请求并迁移正文', () => {
   }
 });
 
+test('hook写事务具名：写统计按 by_name.hook 归属而非 other', () => {
+  const f = fixture();
+  try {
+    acceptHook(f.store, envelope(), 1, salt);
+    const named = f.store.writeStats.by_name.hook;
+    expect(named).toBeDefined();
+    expect(named?.count).toBeGreaterThanOrEqual(1);
+  } finally {
+    f.close();
+  }
+});
+
 test('hook先到时账本后到，pending重试完成合并', () => {
   const f = fixture();
   try {
