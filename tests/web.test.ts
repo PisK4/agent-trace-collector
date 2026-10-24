@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
-  auxSummary, isErrorText, isAuxRow, purposeLabel, railFactsHtml, replyCompleteness, resolveTraceTarget,
-  restoreScroll, structureFoldHtml, toolOverviewHtml, toolResultPanel, toolSchemaSection,
+  auxSummary, isErrorText, isAuxRow, purposeLabel, railFactsHtml, readingChangedNote, replyCompleteness,
+  resolveTraceTarget, restoreScroll, structureFoldHtml, toolOverviewHtml, toolResultPanel, toolSchemaSection,
 } from '../web/app.js';
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {
@@ -226,6 +226,14 @@ test('is_error 三态分开，resolved 不写成成功', () => {
   expect(toolResultPanel(7, 1, pairOf('resolved'), readingOf('available', { content: 'x', is_error: null }),  { target: null }))
     .toContain('未报告');
   expect(isErrorText(null)).toContain('未报告');
+});
+
+test('阅读版本变化说明只给显式重读入口，不自动重建', () => {
+  const note = readingChangedNote(7);
+  expect(note).toContain('data-body-load="7"');
+  expect(note).toContain('阅读版本已变化');
+  // 不挂自动重读的隐藏行为：说明里没有静默重建的脚本入口。
+  expect(note).not.toContain('script');
 });
 
 test('工具概览显示配对与正文加载两种状态，时长归属说明保留', () => {

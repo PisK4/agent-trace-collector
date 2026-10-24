@@ -319,6 +319,15 @@ export function toolSchemaSection(capabilities, toolName) {
   return `<p class="note warn">工具定义缺失（${esc(tools.reason ?? '原因未记录')}），无法取得 ${esc(toolName)} 的定义。</p>`;
 }
 
+/**
+ * 阅读版本变化的统一说明：缓存已作废，给出显式重读入口；不自动重读。
+ * @param {number} reqId
+ */
+export function readingChangedNote(reqId) {
+  return `<p class="note warn">阅读版本已变化：这一笔的详情与正文缓存已作废。</p>
+    <div class="conv-tools"><button class="chip-btn" data-body-load="${reqId}">重新读取</button></div>`;
+}
+
 if (typeof document !== 'undefined') {
   /** @param {number | null | undefined} v */
   const n = (v) => (v == null ? '—' : v.toLocaleString('en-US'));
@@ -375,6 +384,8 @@ if (typeof document !== 'undefined') {
     pendingSession: /** @type {string | null} */ (null),
     /** 最近一次显式刷新时间；刷新会重建最近窗口并清掉旧阅读版本。 */
     refreshedAt: /** @type {number | null} */ (null),
+    /** 阅读版本已作废、等待显式重读的请求；重读成功后移除。 */
+    readingChanged: new Set(/** @type {number[]} */ ([])),
     /** 用户主动滚动后不再强制补偿过期锚点。 */
     userScrolled: false,
     /** 首载批次是否已把选中组带入可见区；加载更早不再重复居中。 */
@@ -458,7 +469,12 @@ if (typeof document !== 'undefined') {
           const read = await store.readRequest(row.req_id);
           reads.set(row.req_id, read);
           if (!read.delta.done) await store.loadDelta(row.req_id, 2).then(next => reads.set(row.req_id, next));
-        } catch { /* 单笔失败保留占位记录；刷新可重试 */ }
+        } catch (error) {
+          if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
+            handleReadingChanged(row.req_id);
+          }
+          /* 其余单笔失败保留占位记录；刷新可重试 */
+        }
       }));
       if (epoch !== loadEpoch) return;
       renderMain();
@@ -648,10 +664,8 @@ if (typeof document !== 'undefined') {
       toolReadings.set(key, reading);
     } catch (error) {
       if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
-        toolReadings.delete(key);
-        reads.delete(ownerId);
-        store.invalidate(ownerId);
-        void ensureRead(ownerId);
+        // 409 整笔作废：清展示副本并显示重读入口，不自动重建。
+        handleReadingChanged(ownerId);
         renderMain();
         renderRail();
         return null;
@@ -957,6 +971,7 @@ if (typeof document !== 'undefined') {
       replyHtml = `<details class="rail-fold" data-fold="reply:${r.req_id}">
         <summary>本次回复<span class="fold-count">${esc(canLoad ? '正文未读取' : bodyStateText(r))}</span></summary>
         <div class="fold-body"><p class="note">${esc(bodyLabelText(r))}</p>
+          ${state.readingChanged.has(r.req_id) ? readingChangedNote(r.req_id) : ''}
           ${canLoad ? `<div class="conv-tools"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>
       </details>`;
     } else {
@@ -1011,6 +1026,7 @@ if (typeof document !== 'undefined') {
     if (read === null || read.meta === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
+        ${state.readingChanged.has(r.req_id) ? readingChangedNote(r.req_id) : ''}
         ${canLoad ? `<div style="margin-top:10px"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>`;
     }
     const detail = read.detail;
@@ -1077,6 +1093,7 @@ if (typeof document !== 'undefined') {
     if (read === null || read.meta === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
+        ${state.readingChanged.has(r.req_id) ? readingChangedNote(r.req_id) : ''}
         ${canLoad ? `<div style="margin-top:10px"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>`;
     }
     const page = read.meta;
@@ -1193,6 +1210,7 @@ if (typeof document !== 'undefined') {
     state.requestOpen = new Set();
     reads.clear();
     toolReadings.clear();
+    state.readingChanged.clear();
     state.refreshedAt = Date.now();
     state.revealed = false;
     state.missingReqId = null;
@@ -1240,12 +1258,47 @@ if (typeof document !== 'undefined') {
     });
   }
 
-  /** 确保某请求的读取与右栏数据在手。 @param {number} id */
+  /**
+   * 阅读版本变化的统一处理：作废该请求的全部展示副本（已读快照、该 owner 的
+   * 全部工具结果与路由），标记待重读；渲染说明与显式重读入口由调用方负责。
+   * @param {number} id
+   */
+  function handleReadingChanged(id) {
+    reads.delete(id);
+    for (const key of [...toolReadings.keys()]) {
+      if (key.startsWith(`${id}:`)) toolReadings.delete(key);
+    }
+    routes.delete(id);
+    state.readingChanged.add(id);
+  }
+
+  /** 选中的输入消息未在缓存里时定点补读一条，保留当前选择。 @param {number} id @param {number} ord */
+  async function ensureMessageOrd(id, ord) {
+    const read = reads.get(id);
+    if (read === undefined || read.entries.some((/** @type {{ord: number}} */ e) => e.ord === ord)) return;
+    try {
+      await store.readRange(id, ord, ord + 1);
+      reads.set(id, await store.readRequest(id));
+    } catch { /* 补读失败保留现有内容，可再次触发 */ }
+  }
+
+  /** 确保某请求的读取与右栏数据在手；重读成功后取得新 detail/meta 并按当前选中来源补读所需块。 @param {number} id */
   async function ensureRead(id) {
     try {
       const read = await store.readRequest(id);
       reads.set(id, read);
-    } catch { /* 失败保留记录行 */ }
+      state.readingChanged.delete(id);
+    } catch (error) {
+      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') handleReadingChanged(id);
+      renderMain();
+      renderRail();
+      return;
+    }
+    const selected = state.selectedStep;
+    if (selected !== null && selected.startsWith(`${id}:message:`)) {
+      const ord = Number(selected.split(':').pop());
+      if (Number.isFinite(ord)) await ensureMessageOrd(id, ord);
+    }
     renderMain();
     renderRail();
   }
@@ -1277,7 +1330,10 @@ if (typeof document !== 'undefined') {
     try {
       const read = await store.loadStructure(id);
       reads.set(id, read);
-    } catch { /* 结构失败保留 error 状态 */ }
+    } catch (error) {
+      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') handleReadingChanged(id);
+      /* 其余结构失败保留 error 状态 */
+    }
     renderMain();
     renderRail();
   }
@@ -1334,6 +1390,7 @@ if (typeof document !== 'undefined') {
     state.revealed = false;
     reads.clear();
     toolReadings.clear();
+    state.readingChanged.clear();
     renderMain();
     await store.selectSession(key, windowLimit());
     state.pendingSession = null;

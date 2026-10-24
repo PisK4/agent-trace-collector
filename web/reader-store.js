@@ -3,8 +3,10 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
 
 /**
  * 生产阅读的读取协调：网络、区间缓存、inflight 去重、失效与异步代次都在这里，
- * 不进 DOM 闭包。正文与工具结果带阅读版本；409 整笔作废，下一次显式读取重建。
- * 迟到响应必须同时匹配会话代次与当前请求 token 才可写入缓存。
+ * 不进 DOM 闭包。正文与工具结果带阅读版本；409 整笔作废（详情、meta、消息、
+ * 区间、结构、增量、工具与路由一起），下一次普通读取重建。token 变化的 validate
+ * 读取同样重置整笔快照。迟到响应必须同时匹配会话代次、当前记录归属与捕获的
+ * token 才可写入缓存；作废记录不再作为可用快照返回。
  *
  * 缓存边界：只保留当前会话已加载窗口的请求，外加显式读取过的窗口外请求。
  */
@@ -189,17 +191,46 @@ export function createReaderStore(fetcher) {
     }
   }
 
+  /**
+   * 一次请求的读取快照必须归属当前记录：异步读取在回写前同时校验会话代次、
+   * reads 归属与捕获的 token，任一不符抛 reading_changed，不写入旧对象。
+   * @returns {never}
+   */
+  function throwReadingChanged() {
+    const error = /** @type {Error & {code?: string}} */ (new Error('reading_changed'));
+    error.code = 'reading_changed';
+    throw error;
+  }
+
+  /**
+   * 409 只在失败读取仍是当前记录的当前版本时整笔作废；迟到 409 不能清掉已重建的新缓存。
+   * @param {any} rec @param {number} id @param {number} myEpoch @param {string | null} myToken
+   */
+  function invalidateIfCurrent(rec, id, myEpoch, myToken) {
+    if (myEpoch === epoch && reads.get(id) === rec && rec.token === myToken) invalidate(id);
+  }
+
   /** @param {any} rec @param {boolean} validate */
   async function fetchDetail(rec, validate) {
     if (rec.detail !== null && !validate) return;
+    // 普通读取合并进在跑的详情读取；validate 必须等它结束再拉一次，不把旧读取当成验证完成。
+    while (rec.detailInflight !== undefined) {
+      const pending = rec.detailInflight;
+      try { await pending; } catch { /* 旧读取失败：合并方在下面重新发起，不继承失败为成功 */ }
+      if (rec.detail !== null && !validate) return;
+      if (rec.detailInflight === pending) break;
+    }
+    if (rec.detail !== null && !validate) return;
     const myEpoch = epoch;
-    try {
+    /** @type {Promise<void>} */
+    const task = (async () => {
       const detail = await getJson(`/api/requests/${rec.id}`);
-      if (myEpoch !== epoch) return;
-      // validate 时 token 变化先清掉旧内容，避免新旧混拼。
+      if (myEpoch !== epoch || reads.get(rec.id) !== rec) throwReadingChanged();
       if (validate && rec.token !== null && detail.reading_token !== rec.token) {
+        // token 变化：消息、区间、结构、增量、工具、元信息与路由全部作废，避免新旧混拼。
         rec.pages = new Map();
         rec.messages = new Map();
+        rec.meta = null;
         rec.structure = { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null };
         rec.delta = { next: 0, done: false, loading: false, error: null, unconfirmed: false };
         rec.tools = new Map();
@@ -208,14 +239,19 @@ export function createReaderStore(fetcher) {
       rec.detail = detail;
       rec.token = detail.reading_token;
       rec.detailError = null;
+    })();
+    rec.detailInflight = task;
+    try {
+      await task;
     } catch (error) {
-      if (myEpoch !== epoch) return;
       if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
-        reads.delete(rec.id);
+        if (reads.get(rec.id) === rec) reads.delete(rec.id);
         throw error;
       }
       rec.detailError = error instanceof Error ? error.message : 'detail_failed';
       throw error;
+    } finally {
+      if (rec.detailInflight === task) rec.detailInflight = undefined;
     }
   }
 
@@ -236,9 +272,11 @@ export function createReaderStore(fetcher) {
   async function readRequest(id, validate = false) {
     const rec = recordOf(id);
     await fetchDetail(rec, validate);
+    if (reads.get(id) !== rec) throwReadingChanged();
     if (rec.meta === null && rec.detail !== null) {
       // 首次 detail 后读 body 0/0 元信息；后续区间读取不覆盖 meta。
       const meta = await readRange(id, 0, 0);
+      if (reads.get(id) !== rec) throwReadingChanged();
       if (meta !== null) rec.meta = meta;
     }
     return assemble(rec);
@@ -255,17 +293,19 @@ export function createReaderStore(fetcher) {
       const myEpoch = epoch;
       const myToken = rec.token;
       pending = (async () => {
-        const page = await getJson(`/api/requests/${id}/body?from=${from}&to=${to}&if_reading=${myToken}`);
-        // 迟到响应：会话已切换，或请求已换版本（409 重建后 token 变了）。
-        const current = reads.get(id);
-        if (myEpoch !== epoch || current?.token !== myToken) {
-          const error = /** @type {Error & {code?: string}} */ (new Error('reading_changed'));
-          error.code = 'reading_changed';
+        try {
+          const page = await getJson(`/api/requests/${id}/body?from=${from}&to=${to}&if_reading=${myToken}`);
+          // 迟到响应：会话已切换、记录已作废重建，或版本已换（validate 原地重置）。
+          if (myEpoch !== epoch || reads.get(id) !== rec || rec.token !== myToken) throwReadingChanged();
+          mergeMessages(rec, page);
+          if (from === 0 && to === 0 && rec.meta === null) rec.meta = page;
+          return page;
+        } catch (error) {
+          if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
+            invalidateIfCurrent(rec, id, myEpoch, myToken);
+          }
           throw error;
         }
-        mergeMessages(current ?? rec, page);
-        if (from === 0 && to === 0 && rec.meta === null) rec.meta = page;
-        return page;
       })();
       rec.pages.set(key, pending);
       pending.catch(() => { rec.pages.delete(key); });
@@ -296,8 +336,9 @@ export function createReaderStore(fetcher) {
         state.next = Math.min(page.to, page.total ?? page.to);
       }
     } catch (error) {
-      state.error = /** @type {Error & {code?: string}} */ (error).code === 'reading_changed' ? 'reading_changed'
-        : error instanceof Error ? error.message : 'structure_failed';
+      // 整笔已作废（409 路径）：结构失败不落在孤立记录上，交给调用方统一处理。
+      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') throw error;
+      state.error = error instanceof Error ? error.message : 'structure_failed';
     } finally {
       state.loading = false;
     }
@@ -336,8 +377,9 @@ export function createReaderStore(fetcher) {
       state.next += consumed;
       if (state.next >= trusted.size) state.done = true;
     } catch (error) {
-      state.error = /** @type {Error & {code?: string}} */ (error).code === 'reading_changed' ? 'reading_changed'
-        : error instanceof Error ? error.message : 'delta_failed';
+      // 整笔已作废（409 路径）：增量失败不落在孤立记录上，交给调用方统一处理。
+      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') throw error;
+      state.error = error instanceof Error ? error.message : 'delta_failed';
     } finally {
       state.loading = false;
     }
@@ -355,14 +397,17 @@ export function createReaderStore(fetcher) {
       const myEpoch = epoch;
       const myToken = rec.token;
       pending = (async () => {
-        const reading = /** @type {import('../src/reading').ToolResultReading} */ (await getJson(`/api/requests/${id}/tools/${ord}/result?if_reading=${myToken}`));
-        const current = reads.get(id);
-        if (myEpoch !== epoch || current?.token !== myToken) {
-          const error = /** @type {Error & {code?: string}} */ (new Error('reading_changed'));
-          error.code = 'reading_changed';
+        try {
+          const reading = /** @type {import('../src/reading').ToolResultReading} */ (await getJson(`/api/requests/${id}/tools/${ord}/result?if_reading=${myToken}`));
+          // 迟到响应：会话已切换、记录已作废重建，或版本已换（validate 原地重置）。
+          if (myEpoch !== epoch || reads.get(id) !== rec || rec.token !== myToken) throwReadingChanged();
+          return reading;
+        } catch (error) {
+          if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
+            invalidateIfCurrent(rec, id, myEpoch, myToken);
+          }
           throw error;
         }
-        return reading;
       })();
       rec.tools.set(key, pending);
       pending.catch(() => { rec.tools.delete(key); });

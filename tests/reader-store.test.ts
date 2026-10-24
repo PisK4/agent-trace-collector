@@ -140,7 +140,7 @@ test('503 与空页时旧窗口、游标与已读内容保留', async () => {
   expect(store.getWindow().error).toBeNull();
 });
 
-test('409 整笔作废后重新读取走网络，迟到响应不写入新会话', async () => {
+test('409 整笔作废后普通读取走网络重建，并重取回复元信息', async () => {
   let bodyStatus = 200;
   let detailToken = TOKEN;
   const h = harness(url => {
@@ -159,10 +159,116 @@ test('409 整笔作废后重新读取走网络，迟到响应不写入新会话'
   await store.readRequest(1);
   bodyStatus = 409;
   await expect(store.readRange(1, 1, 2)).rejects.toThrow('reading_changed');
-  // 作废后重读：详情再次走网络并重建。
+  // 整笔已作废：普通读取（不带 validate）也要重新走详情，并重取 0/0 元信息。
   bodyStatus = 200;
   detailToken = TOKEN2;
+  const rebuilt = await store.readRequest(1);
+  expect(rebuilt.token).toBe(TOKEN2);
+  expect(h.urls.filter(u => u.endsWith('/api/requests/1')).length).toBe(2);
+  expect(h.count('/body?from=0&to=0')).toBe(2);
+});
+
+test('token变化重新读取回复元信息', async () => {
+  let token = TOKEN;
+  const h = harness(url => {
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
+    return respond(bodyPage(0, 0, 0, {
+      request_fields: { system: token === TOKEN ? 'old-system' : 'new-system' },
+      reply: { content: [{ type: 'text', text: token === TOKEN ? 'old' : 'new' }] },
+    }));
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.readRequest(1);
+  token = TOKEN2;
+  const next = await store.readRequest(1, true);
+  expect(next.meta?.request_fields).toEqual({ system: 'new-system' });
+  expect(next.meta?.reply).toEqual({ content: [{ type: 'text', text: 'new' }] });
+  expect(h.count('/body?from=0&to=0')).toBe(2);
+});
+
+test('旧请求的迟到409不能清除已重建的新缓存', async () => {
+  let token = TOKEN;
+  let rangeCalls = 0;
+  let release409: (value: Response) => void = () => {};
+  const gated409 = new Promise<Response>(resolve => { release409 = resolve; });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
+    if (url.includes('/body?from=1&to=2')) {
+      rangeCalls += 1;
+      return rangeCalls === 1 ? gated409 : respond(bodyPage(1, 2, 3));
+    }
+    if (url.includes('/body?from=0&to=0')) {
+      return respond(bodyPage(0, 0, 3, { request_fields: { system: token === TOKEN ? 'old' : 'new' } }));
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  const stale = store.readRange(1, 1, 2);
+  await delay(5);
+  // 旧请求还挂着时版本重建：新缓存来自 validate 读取。
+  token = TOKEN2;
   await store.readRequest(1, true);
+  release409(respond({ error: 'reading_changed' }, 409));
+  await expect(stale).rejects.toThrow('reading_changed');
+  // 旧 409 已迟到：新缓存原样保留，普通读取不再走网络。
+  const kept = await store.readRequest(1);
+  expect(kept.meta?.request_fields).toEqual({ system: 'new' });
+  expect(h.urls.filter(u => u.endsWith('/api/requests/1')).length).toBe(2);
+});
+
+test('invalidate 后迟到的详情响应不作为可用快照返回', async () => {
+  let detailCalls = 0;
+  let release: (value: Response) => void = () => {};
+  const gated = new Promise<Response>(resolve => { release = resolve; });
+  const h = harness(url => {
+    if (url.endsWith('/api/requests/1')) {
+      detailCalls += 1;
+      return detailCalls === 1 ? gated : respond(detail(1));
+    }
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  const pending = store.readRequest(1);
+  await delay(5);
+  store.invalidate(1);
+  release(respond(detail(1)));
+  await expect(pending).rejects.toThrow('reading_changed');
+  // 之后普通读取重新走网络并成功。
+  const next = await store.readRequest(1);
+  expect(next.detail?.req_id).toBe(1);
+  expect(h.urls.filter(u => u.endsWith('/api/requests/1')).length).toBe(2);
+});
+
+test('validate 等待在跑的详情读取完成后再拉一次', async () => {
+  let detailCalls = 0;
+  let release: (value: Response) => void = () => {};
+  const gated = new Promise<Response>(resolve => { release = resolve; });
+  let token = TOKEN;
+  const h = harness(url => {
+    if (url.endsWith('/api/requests/1')) {
+      detailCalls += 1;
+      if (detailCalls === 1) return gated;
+      return respond(detail(1, { reading_token: token }));
+    }
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  const first = store.readRequest(1);
+  await delay(5);
+  const second = store.readRequest(1, true);
+  await delay(5);
+  release(respond(detail(1, { reading_token: TOKEN })));
+  // 第二次详情请求在旧读取结束后立刻发出：换版本要在释放前生效。
+  token = TOKEN2;
+  // 旧 plain 读取的元信息响应晚于版本切换：回写校验拒绝，不把旧片写进新版本。
+  await expect(first).rejects.toThrow('reading_changed');
+  const validated = await second;
+  expect(validated.token).toBe(TOKEN2);
   expect(h.urls.filter(u => u.endsWith('/api/requests/1')).length).toBe(2);
 });
 
@@ -246,10 +352,10 @@ test('工具结果 409 后整笔作废，重建读取换新 token 重取', async
   await store.readRequest(1);
   toolStatus = 409;
   await expect(store.readToolResult(1, 0)).rejects.toThrow('reading_changed');
-  // 409 后缓存已作废：重建阅读版本（token 变化）再读，走网络且带新 token。
+  // 409 已整笔作废：普通读取重建详情并换新 token，再读工具结果走网络。
   toolStatus = 200;
   token = TOKEN2;
-  await store.readRequest(1, true);
+  await store.readRequest(1);
   const again = await store.readToolResult(1, 0);
   expect(again.content).toBe('ok');
   expect(h.count('/tools/0/result')).toBe(2);
