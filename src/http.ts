@@ -33,6 +33,7 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/body-view.js': { file: 'body-view.js', type: 'text/javascript; charset=utf-8' },
   '/reader-store.js': { file: 'reader-store.js', type: 'text/javascript; charset=utf-8' },
+  '/trace-pair.js': { file: 'trace-pair.js', type: 'text/javascript; charset=utf-8' },
   '/trace-view.js': { file: 'trace-view.js', type: 'text/javascript; charset=utf-8' },
 };
 
