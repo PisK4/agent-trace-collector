@@ -138,6 +138,8 @@ export function railFactsHtml(parts) {
 /**
  * 请求结构折叠区。默认 closed，开合与选中消息按 req 稳定保存（重绘后由
  * data-fold 恢复）；total 在结构未读时取自元信息页，未读取也显示数量而不是空列表。
+ * 列表展示已缓存消息的有序并集：连续历史、定点读与增量读到的消息都在，
+ * 相邻序号之间的空洞标明未读取；连续历史上界仍由结构游标表达。
  * @param {{
  *   reqId: number,
  *   row: { body_state: string, miss_reason?: string | null },
@@ -145,12 +147,13 @@ export function railFactsHtml(parts) {
  *   entries: import('./body-view.js').Entry[],
  *   structure: { open: boolean, next: number, total: number | null, ords: number[], selected: number | null, loading: boolean, error: string | null },
  *   delta: Set<number> | null,
+ *   deltaState?: { next: number, done: boolean, loading: boolean, error: string | null } | null,
  *   relation: string,
  * }} input
  * @returns {string}
  */
 export function structureFoldHtml(input) {
-  const { reqId, row, meta, entries, structure, delta, relation } = input;
+  const { reqId, row, meta, entries, structure, delta, deltaState = null, relation } = input;
   const total = structure.total ?? (meta ? meta.total : null);
   const count = total === null || total === undefined ? '消息总数未读取' : `${total} 条消息`;
   const canLoad = row.body_state === 'available' || row.body_state === 'partial';
@@ -166,13 +169,24 @@ export function structureFoldHtml(input) {
   } else if (entries.length === 0) {
     body = `<p class="note">${structure.loading ? '正在读取消息结构…' : '尚未读取消息正文；展开后从开头读取前 40 条。'}</p>`;
   } else {
-    const deltaNote = delta !== null
-      ? `<p class="note">新增 ${delta.size} 条消息。</p>`
-      : relation ? `<p class="note">${esc(relation)}：不标记新增消息，按原顺序列出。</p>` : '';
-    // 结构列表只列连续已读区间（structure.ords），delta 定点读到的消息不混进历史。
-    const ordSet = new Set(structure.ords);
-    const listEntries = ordSet.size > 0 ? entries.filter(entry => ordSet.has(entry.ord)) : entries;
-    body = `${deltaNote}${renderMessages(listEntries, { delta, limit: listEntries.length, selectedOrd: structure.selected })}`;
+    const consumed = deltaState === null ? delta?.size ?? 0 : Math.min(deltaState.next, delta?.size ?? 0);
+    const deltaNote = delta === null
+      ? relation ? `<p class="note">${esc(relation)}：不标记新增消息，按原顺序列出。</p>` : ''
+      : deltaState !== null && deltaState.error !== null
+        ? `<p class="note warn">新增读取失败（${esc(deltaState.error)}）：已消费 ${consumed} / ${delta.size}，未读位置保留，不吞掉剩余输入。<button class="chip-btn" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''}>重试续读</button></p>`
+        : deltaState !== null && !deltaState.done
+          ? `<p class="note">新增 ${delta.size} 条消息 · 已消费 ${consumed} / ${delta.size}。<button class="chip-btn" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''}>继续读取</button></p>`
+          : `<p class="note">新增 ${delta.size} 条消息。</p>`;
+    // 已缓存消息的有序并集；相邻序号的空洞是未读区间，不用连续游标删掉缓存尾部。
+    const listEntries = [...entries].sort((a, b) => a.ord - b.ord);
+    /** @type {{from: number, to: number}[]} */
+    const gaps = [];
+    let prev = -1;
+    for (const entry of listEntries) {
+      if (entry.ord > prev + 1) gaps.push({ from: prev + 1, to: entry.ord - 1 });
+      prev = entry.ord;
+    }
+    body = `${deltaNote}${renderMessages(listEntries, { delta, limit: listEntries.length, selectedOrd: structure.selected, gaps })}`;
   }
   const more = unread && canLoad
     ? `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${structure.error ? '重试读取' : `加载下一片（已读 ${structure.next} / ${total}）`}</button>`
@@ -1045,6 +1059,7 @@ if (typeof document !== 'undefined') {
       entries: read?.entries ?? [],
       structure: read?.structure ?? { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null },
       delta: detail === null ? null : deltaOrdinals(detail),
+      deltaState: read?.delta ?? null,
       relation: relationTextOf(r.req_id),
     });
     return railFactsHtml({
@@ -1375,6 +1390,24 @@ if (typeof document !== 'undefined') {
   async function selectRequest(id, key) {
     const row = currentRows().find(row => row.req_id === id);
     if (row === undefined) return;
+    // 增量事件行是续读入口：打开读数页并再消费两片，不当作步骤选择。
+    if (key === `${id}:delta`) {
+      state.reqId = id;
+      state.selectedStep = null;
+      state.toolOrd = null;
+      state.toolPage = 'overview';
+      state.railTab = 'facts';
+      state.missingReqId = null;
+      state.offPageReqId = null;
+      document.body.classList.remove('rail-collapsed');
+      syncPanelButtons();
+      renderMain();
+      renderRail();
+      renderCrumb();
+      updateURL();
+      void resumeDelta(id);
+      return;
+    }
     const step = projectSteps(row, reads.get(id) ?? null, systemContextOf(row, x => reads.get(x) ?? null))
       .find(item => item.key === key) ?? null;
     const source = resolveSelectedSource(step);
@@ -1408,6 +1441,18 @@ if (typeof document !== 'undefined') {
     } catch (error) {
       if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') handleReadingChanged(id);
       /* 其余结构失败保留 error 状态 */
+    }
+    renderMain();
+    renderRail();
+  }
+
+  /** 显式续读可信增量：每轮两片，经原 4 并发队列；失败保留未消费位置可重试。 @param {number} id */
+  async function resumeDelta(id) {
+    try {
+      const read = await store.loadDelta(id, 2);
+      reads.set(id, read);
+    } catch (error) {
+      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') handleReadingChanged(id);
     }
     renderMain();
     renderRail();
@@ -1501,6 +1546,8 @@ if (typeof document !== 'undefined') {
     if (t.closest('#jump-latest')) { void jumpLatest(); return; }
     const structureMore = /** @type {HTMLElement | null} */ (t.closest('[data-structure-more]'));
     if (structureMore !== null) { void loadStructure(Number(structureMore.dataset.structureMore)); return; }
+    const deltaMore = /** @type {HTMLElement | null} */ (t.closest('[data-delta-more]'));
+    if (deltaMore !== null) { void resumeDelta(Number(deltaMore.dataset.deltaMore)); return; }
     const structureBack = /** @type {HTMLElement | null} */ (t.closest('[data-structure-back]'));
     if (structureBack !== null) {
       const read = reads.get(Number(structureBack.dataset.structureBack));

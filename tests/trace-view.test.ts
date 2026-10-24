@@ -37,7 +37,7 @@ function read(detailJson: unknown, entries: unknown[], reply: unknown): Projecta
     detail: detailJson, meta: reply === null ? null : { reply, capabilities: null },
     messages: new Map(), entries,
     structure: { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null },
-    delta: { next: 0, done: false, loading: false, error: null, unconfirmed: false },
+    delta: { next: 0, done: true, loading: false, error: null, unconfirmed: false },
     token: TOKEN,
   } as unknown as ProjectableRead;
 }
@@ -365,4 +365,19 @@ test('截图形状：Skill 调用定位本笔回复，结果步骤不按时间�
   // 工具结果步骤定位在 B 自己的消息块，不跳去下一笔辅助请求。
   const result = stepsB.find(s => s.kind === 'tool_result');
   expect(result?.source).toMatchObject({ side: 'request', path: 'request.messages[4].content[0]', messageOrd: 4 });
+});
+
+test('增量未完成或失败出现事件记录，完成时不出现', () => {
+  const base = read(detail({ delta_ordinals: [0, 1, 2] }), [], { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] });
+  const pending = { ...base, delta: { next: 2, done: false, loading: false, error: null, unconfirmed: false } };
+  const pendingSteps = projectSteps(row(), pending as ProjectableRead);
+  const event = pendingSteps.find(s => s.key === '7:delta');
+  expect(event?.kind).toBe('record');
+  expect(event?.text).toContain('还有 1 条新增未读取');
+  expect(event?.source).toBeNull();
+  const failed = { ...base, delta: { next: 0, done: false, loading: false, error: 'delta_gap', unconfirmed: false } };
+  expect(projectSteps(row(), failed as ProjectableRead).find(s => s.key === '7:delta')?.text).toContain('新增读取失败');
+  expect(projectSteps(row(), failed as ProjectableRead).find(s => s.key === '7:delta')?.status).toBe('unknown');
+  const done = { ...base, delta: { next: 3, done: true, loading: false, error: null, unconfirmed: false } };
+  expect(projectSteps(row(), done as ProjectableRead).some(s => s.key === '7:delta')).toBe(false);
 });

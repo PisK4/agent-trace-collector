@@ -369,7 +369,19 @@ export function createReaderStore(fetcher) {
         const start = ords[consumed] ?? 0;
         let end = consumed;
         while (end < ords.length && (ords[end] ?? 0) < start + 40) end += 1;
-        await readRange(id, start, (ords[end - 1] ?? start) + 1);
+        const pieceEnd = (ords[end - 1] ?? start) + 1;
+        const page = await readRange(id, start, pieceEnd);
+        // 每片返回后验证所需 ord 都实际拿到：缺口不推进消费位置，不吞掉剩余输入。
+        const gotOrds = new Set((page.messages ?? []).map((/** @type {{ord: number}} */ m) => m.ord));
+        for (let o = start; o < pieceEnd; o += 1) {
+          if (!gotOrds.has(o)) {
+            // 缺口页不留在缓存：重试必须重新走网络，不能永远命中同一片坏页。
+            rec.pages.delete(JSON.stringify([id, rec.token, start, pieceEnd]));
+            const error = /** @type {Error & {code?: string}} */ (new Error('delta_gap'));
+            error.code = 'delta_gap';
+            throw error;
+          }
+        }
         // 只消费 delta 集合内的消息；额外读到的历史不推进消费。
         consumed = end;
         piece += 1;
@@ -379,7 +391,8 @@ export function createReaderStore(fetcher) {
     } catch (error) {
       // 整笔已作废（409 路径）：增量失败不落在孤立记录上，交给调用方统一处理。
       if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') throw error;
-      state.error = error instanceof Error ? error.message : 'delta_failed';
+      state.error = /** @type {Error & {code?: string}} */ (error).code === 'delta_gap' ? 'delta_gap'
+        : error instanceof Error ? error.message : 'delta_failed';
     } finally {
       state.loading = false;
     }
