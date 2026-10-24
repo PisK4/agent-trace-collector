@@ -12,7 +12,7 @@ Status: implemented
 
 `.gz` 路由文件先读一次字节、算 SHA-256，再决定要不要解压。游标里的 `fingerprint` 命中就返回 `state: 'unchanged'`，不解压、不切行、`lines` 为空；`SourceRead.state` 因此有三态：`decoded`、`unchanged`、`error`。
 
-替换检测以同一次读取的字节哈希为准，不看 mtime、不看大小。指纹命中已提交值时调用方不推进 cursor，`unchanged` 与 `error` 都不进 `ingestSource`。这条替换检测只覆盖 `.gz`；当日 `.jsonl` 的追加读取改为按游标增量消费，见 [路由当日文件按游标增量读取](2026-10-24-atc-route-jsonl-tail-cursor.md)。
+替换检测以同一次读取的字节哈希为准，不看 mtime、不看大小。指纹命中已提交值时调用方不推进 cursor，`unchanged` 与 `error` 都不进 `ingestSource`。这条替换检测只覆盖 `.gz`；当日 `.jsonl` 的追加读取改为按游标增量消费，见 [路由当日文件按游标增量读取](../bug-fix/2026-10-24-atc-route-jsonl-tail-cursor.md)。
 
 读取失败与解压失败分成两个码：文件消失、非普通文件、读取失败记 `route_file_unreadable`；读取成功但 gunzip 失败记 `route_gzip_invalid`（输出超过 512 MiB 记 `route_gzip_limit`）。三种 `error` 都保留已经算出的指纹，都只写 stderr 与指标、不推进 cursor，下一轮同指纹重试。`routeTick` 每轮只查一次 `source_cursor` 里的路由游标，做成 `Map` 交给 `readRouteFiles`，不再每个文件查一次库。
 
@@ -42,6 +42,6 @@ Status: implemented
 
 ## Related
 
-当日 `.jsonl` 的追加不再走整份指纹，改由 [路由当日文件按游标增量读取](2026-10-24-atc-route-jsonl-tail-cursor.md) 持有；本 note 保留 `.gz` 的哈希先行与三态记账。
+当日 `.jsonl` 的追加不再走整份指纹，改由 [路由当日文件按游标增量读取](../bug-fix/2026-10-24-atc-route-jsonl-tail-cursor.md) 持有；本 note 保留 `.gz` 的哈希先行与三态记账。
 
 优化前后的路由三态对照数字在 [baseline record](../../../../docs/superpowers/capacity/2026-10-22-atc-capacity-baseline.md) 的「路由解码对照」一节。

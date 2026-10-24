@@ -49,4 +49,4 @@ Status: implemented
 
 ## Related
 
-[路由文件先按字节哈希，未变就不解压](2026-10-22-atc-route-hash-before-decode.md) 持有 `.gz` 的哈希先行与三态记账；本 note 取代其中“当日 `.jsonl` 追加后整份重解”的部分。
+[路由文件先按字节哈希，未变就不解压](../feature/2026-10-22-atc-route-hash-before-decode.md) 持有 `.gz` 的哈希先行与三态记账；本 note 取代其中“当日 `.jsonl` 追加后整份重解”的部分。

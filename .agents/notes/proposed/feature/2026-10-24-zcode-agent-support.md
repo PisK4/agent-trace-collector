@@ -8,7 +8,7 @@ Status: proposed
 
 zcode 是本机实际在用的客户端之一，但它在 ATC 里几乎不可见，而可见的那一部分又被解释错。
 
-覆盖的差距是数量级的（实测，2026-10-24）：magpie 侧 30 天内 `agent=zcode` 有 6,365 次调用，ATC 的 `raw_ledger` 里 zcode 只有 56 笔。差在入口：用量同步写死 `via=through`（`src/sources/magpie.ts:644`），而 zcode 的请求大部分不经网关。这条 trace 的两条会话最能说明差距：`session_b26f1fe1…` 走 magpie，56 笔全部入库；与它并列的 `session_5b33aaf8…` 由 provider `account:zai-start-plan` 直连，ATC 三路证据各 0 行，同一会话在 magpie 侧可见 67 笔。入口决定属于上文的对标提案，本文只记一个结论：**先接入口，再谈语义**，否则本文的规则只覆盖不到百分之一的 zcode 流量。
+覆盖的差距是数量级的（实测，2026-10-24）：magpie 侧 30 天内 `agent=zcode` 有 6,365 次调用，ATC 的 `raw_ledger` 里 zcode 只有 56 笔。差在入口：用量同步写死 `via=through`（`src/sources/magpie.ts` 的用量同步 URL 构造），而 zcode 的请求大部分不经网关。这条 trace 的两条会话最能说明差距：`session_b26f1fe1…` 走 magpie，56 笔全部入库；与它并列的 `session_5b33aaf8…` 由 provider `account:zai-start-plan` 直连，ATC 三路证据各 0 行，同一会话在 magpie 侧可见 67 笔。入口决定属于上文的对标提案，本文只记一个结论：**先接入口，再谈语义**，否则本文的规则只覆盖不到百分之一的 zcode 流量。
 
 已入库的那 56 笔里，通用解释层大部分是对的：会话键取自 `x-session-id`（在 magpie `sessionOf` 的取值列表内），三路证据齐（每笔 `have=7`）；注入提醒与用户正文拼在同一条 user 消息的多个文本块里，逐块清洗能正确取出用户的话；标题请求的回复是单键 JSON，命中既有的回复形状规则。所以本文不主张给 zcode 建语义 Profile。
 
@@ -16,10 +16,10 @@ zcode 是本机实际在用的客户端之一，但它在 ATC 里几乎不可见
 
 - 两笔请求（`req_id` 2274、2520）的最后一条 user 消息是 `You are now acting as the memory extraction subagent.` 开头的整段指令，由 zcode 的 harness 追加，用户没有说过这句话。
 - ATC 把它当成主链上的新增用户输入（`input_preview_kind='delta'`），并让该笔请求的折叠行标题变成这串提示（`title_source='user_delta'`）。
-- 同一轮还有两笔续写（消息尾是工具结果，`responseId` 形如 `as-8iu5ewwssr`，且**不在 zcode 自己的 rollout 文件里**），三轮连续把这条链重建到 ord 21；用户在 15:16 之后的 45 笔真实对话接不上链上最新节点，`prev_req_id=null`、`prev_relation='branch'`；按主链判定（`src/derive.ts:325-352`，第一个根是主链），这 45 笔全部 `chain_role='branch'`，而 14:54 的 11 笔——中止的一轮加记忆维护——占着主链。
+- 同一轮还有两笔续写（消息尾是工具结果，`responseId` 形如 `as-8iu5ewwssr`，且**不在 zcode 自己的 rollout 文件里**），三轮连续把这条链重建到 ord 21；用户在 15:16 之后的 45 笔真实对话接不上链上最新节点，`prev_req_id=null`、`prev_relation='branch'`；按主链判定（`src/derive.ts` 的 `assignChainRoles`，第一个根是主链），这 45 笔全部 `chain_role='branch'`，而 14:54 的 11 笔——中止的一轮加记忆维护——占着主链。
 - 对照 Claude Code：全库 `input_preview like '%memory extraction%'` 只有上述 zcode 2 笔，Claude Code 侧没有这种注入；它的子代理靠 `x-claude-code-agent-id` 分成独立 actor（333 笔 subagent 各自主链）。zcode 的等价信号不吃 header，所以这类请求落在父会话里。
 
-zcode 的语义信号全部走 header，而 header 不在任何证据通道里（`raw_hook` 没有 header 列、账本没有、`raw_route.payload_json` 里 `x-zcode` 命中 0 行）。这些 header 里有两个名字会误导：`x-zcode-agent: glm` 是后端名不是子代理标识，`x-title: Z Code@electron` 是窗口标题不是会话标题。还有第二处缺的是标签：`web/app.js:346` 的 `AGENT_LABELS` 只有 `claude` 与 `omp`，zcode 在筛选条上显示成裸 id，而 magpie 自己的 Agent 注册表里是 `{id: zcode, name: ZCode, icon: zcode}`。
+zcode 的语义信号全部走 header，而 header 不在任何证据通道里（`raw_hook` 没有 header 列、账本没有、`raw_route.payload_json` 里 `x-zcode` 命中 0 行）。这些 header 里有两个名字会误导：`x-zcode-agent: glm` 是后端名不是子代理标识，`x-title: Z Code@electron` 是窗口标题不是会话标题。还有第二处缺的是标签：`web/app.js` 的 `AGENT_LABELS` 只有 `claude` 与 `omp`，zcode 在筛选条上显示成裸 id，而 magpie 自己的 Agent 注册表里是 `{id: zcode, name: ZCode, icon: zcode}`。
 
 ## Proposal
 
@@ -34,11 +34,11 @@ zcode 的语义信号全部走 header，而 header 不在任何证据通道里�
 | 请求用途 | `src/semantics.ts` 的 `classifyPurpose`，插在强指纹档（分类器之后、来源 kind 之前） | `req_kind='memory-maintenance'`、`chain='exclude'`，`modelTitle=null` |
 | 输入解释 | `src/input-interpretation.ts` 的内容规则（与 `SKILL_INJECTION`、`STEPPED_AWAY` 同档） | 该段文本 `state='injected'`、`kind='system_notice'`，不进用户气泡、不进标题候选 |
 
-用途层给出 `exclude` 之后，其余事实由既有机制自动落定，不需要新代码（版本锁定）：组阶段把 `purpose_chain='exclude'` 的行写成 `prev_relation='aux'`、`delta=null`、`chain_role='aux'`，并把它排除在祖先比较之外（`src/derive.ts:488-522`）；非标题的 aux 行不取用户增量当标题，只留模型标题或时间兜底（`src/derive-decision.ts:469-475`）。阅读端也已通用：`web/app.js:48-52` 与 `web/trace-view.js:83-85` 已按 `purpose_chain`/`chain_role` 渲染成一笔辅助记录，只需补一句中文标签。
+用途层给出 `exclude` 之后，其余事实由既有机制自动落定，不需要新代码（版本锁定）：组阶段把 `purpose_chain='exclude'` 的行写成 `prev_relation='aux'`、`delta=null`、`chain_role='aux'`，并把它排除在祖先比较之外（`src/derive.ts` 的 `assignChainRoles` 与派生循环）；非标题的 aux 行不取用户增量当标题，只留模型标题或时间兜底（`src/derive-decision.ts` 的 `presentationDecision` 中 `facts.isAux` 分支）。阅读端也已通用：`web/app.js` 的 `isAuxRow` 与 `web/trace-view.js` 的 aux 步骤分支已按 `purpose_chain`/`chain_role` 渲染成一笔辅助记录，只需补一句中文标签。
 
-输入层的规则要一并做，因为**只靠用途层不够**：指纹只命中记忆轮的第一笔，后两笔的末条消息是工具结果。若第一笔被排除、后两笔仍参与链，它们会以 2270 为父节点接上（最长完整前缀祖先，`src/derive-decision.ts:145-172`），增量里 15 号位仍是那串提示，于是 `deriveTitle` 会把假标题挪到后两笔上。输入层认成注入后，`deriveTitle` 的 `state !== 'text'` 判断跳过它（`src/derive-decision.ts:276-283`），三轮都不再提供用户标题。
+输入层的规则要一并做，因为**只靠用途层不够**：指纹只命中记忆轮的第一笔，后两笔的末条消息是工具结果。若第一笔被排除、后两笔仍参与链，它们会以 2270 为父节点接上（最长完整前缀祖先，`src/derive-decision.ts` 的 `matchPredecessor`），增量里 15 号位仍是那串提示，于是 `deriveTitle` 会把假标题挪到后两笔上。输入层认成注入后，`deriveTitle` 的 `state !== 'text'` 判断跳过它（同一文件的 `deriveTitle`），三轮都不再提供用户标题。
 
-用途层的取数契约需要一处扩展：`readPurposeViewTx` 目前只解 role=2 的 System 块（`src/request-purpose.ts:158-175`），而指纹落在 user 文本块上。扩展内容是读取 `request_block` 里 role=0 且 ord 最大的那一行（一次单行查询、一个块解压），不随正文体积增长。这与[联合评审](../../../../docs/agent-request-kind-review.md)的成本契约一致：先复用实际派生上下文，需要新能力时再扩大 Interface。
+用途层的取数契约需要一处扩展：`readPurposeViewTx` 目前只解 role=2 的 System 块（`src/request-purpose.ts`），而指纹落在 user 文本块上。扩展内容是读取 `request_block` 里 role=0 且 ord 最大的那一行（一次单行查询、一个块解压），不随正文体积增长。这与[联合评审](../../../../docs/agent-request-kind-review.md)的成本契约一致：先复用实际派生上下文，需要新能力时再扩大 Interface。
 
 `PURPOSE_VERSION` 由 3 升到 4，按既有重算路径处理：正文可读的行按新规则重算，正文已回收的行保留旧结论与旧版本号（`retained`），不把旧值冒充成本次结果。
 

@@ -69,7 +69,7 @@ Status: proposed
 
 折叠行的上下文组成用 `web/app.js:175-176` 的 `PART_NAME`/`PARTS_ORDER`（system/tools/history/user/files/other）给颜色，magpie 报的是 system/tools/memory/files/results/chat（`internal/gateway/prompt.go:31-40`）。`partColor` 对不认识的键算出 `var(--p0)`，而调色板只有 `--p1…--p6`（`web/index.html:25`）——条带拿到未定义的变量，图例退回原始英文键名。本机 parts token 分布：files 44.8M、results 39.1M、system 35.1M、chat 34.6M、tools 14.0M、memory 1.15M，占比最大的三类恰好都在映射之外。
 
-分页方向与文案相反：`src/queries.ts:194-207` 是 `ORDER BY started_ms ASC` 加 `(started_ms, req_id) > (?, ?)` 游标，按钮写「加载更早请求」（`web/index.html:613`），注释也写反（`web/app.js:234-235`、`:548`）。现有测试只验不漏不重，不验方向。
+分页方向与文案相反（**已由[最近请求窗口与向前分页](../../implemented/feature/2026-10-24-older-window-pagination.md)解决**，本文保留当时的观察）：`src/queries.ts` 是 `ORDER BY started_ms ASC` 加 `(started_ms, req_id) > (?, ?)` 游标，按钮写「加载更早请求」，注释也写反。现在接口按 `direction` 分成两个固定分支，`older` 反向走同一索引。
 
 `docs/project-overview.md` 关于 direct 行的来源与存放位置与 magpie 源码不符。
 
@@ -121,9 +121,9 @@ direct 只能经 API 拿，且要以 `native_session` 作为软身份键才不�
 
 ## 待决问题
 
-1. **请求分页的方向**。代码是 `ASC` 加 `>` 游标（追加更晚的请求），文案写「加载更早」。若首屏应是最近若干笔，应改成 `DESC` 加 `<`；若确实从最早读起，则文案与注释改「更晚」。这是产品意图，本文不代定。
+1. **请求分页的方向**（已定）。生产改由 `direction=older` 建最近窗口、向上加载更早，见[最近请求窗口与向前分页](../../implemented/feature/2026-10-24-older-window-pagination.md)；`forward` 保留给按时间正序读整段历史的调用方。本文原「ASC 加 `>` 游标却写加载更早」的口径不一致随该篇落地消失。
 2. **direct 做不做**。批 3 的价值取决于是否要回答「Agent 直连 vs 经网关」，也取决于 magpie 是否长期保留 `via` 查询。
-3. **加列的升版范围**：一次加完（本文倾向）还是按族分批；`route_summary` 侧是否同步加，取决于第 1 批的字节估算。
+3. **加列的升版范围**：一次加完（本文倾向）还是按族分批；`route_summary` 侧是否同步加，取决于第 1 批的字节估算。这一项已不再按加列推进，见「交付现状」。
 4. **证据表的归属**（已定）：真实库的形状普查、键名与未采用的读数在[真实库格式研究](../../../../docs/atc-real-format-research.md)，本文留决策与代价。
 
 ## Alternatives considered
@@ -148,7 +148,7 @@ direct 只能经 API 拿，且要以 `native_session` 作为软身份键才不�
 - 合成库上六个 part kind 都有颜色与中文名，渲染结果里不出现 `var(--p0)`。
 - 页面：切换 rail 分区与选中请求后，右栏滚动位置不回到顶部；请求 ID 与正文可一键复制。
 - 尝试链显示失败原因、间隔与 vendor 原话；不再出现把尝试数组当 JSON 打印。
-- 合成库：`stop`/`via`/`subagent` 在列表视图可得；`flags` 至少一种状态能点亮。
+- 合成库：`stop`/`via`/`subagent` 在列表视图可得；`flags` 至少一种状态能点亮。会话列表的 `flags` 已按 `has_failed`/`has_unknown`/`has_missing` 交付，见 `src/queries.ts` 的 `listSessions`；请求列表的 `stop`/`via` 仍未加入 `REQUEST_COLUMNS`。
 - 批 1 的重算只在库副本上验证，核对「`model_requested` ≠ `model_served`」的比例从 0 变为合理值后再决定是否对真实库执行；报告里区分合成验收与真实流量验收。
 - direct 在批 3 落地前，库里不得出现任何伪造的 direct 行；`docs/project-overview.md` 里与 magpie 源码不符的表述被修正。
 - `bun test`、`bun run typecheck`、`bun run verify:notes` 通过；本提案的每个批次各自带 note 更新。
