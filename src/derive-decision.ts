@@ -202,6 +202,22 @@ export function settleRelation(input: {
   return { parent: null, relation: input.unreadableEarlier ? 'unknown' : 'branch', delta: null };
 }
 
+/**
+ * 「哪些结果位置落在本轮确定新增的增量里」的唯一判据。
+ *
+ * `first` 整笔都是新增；`confirmed` 只看增量的 ord；关系未知、分支与排除用途
+ * 都不构成"本轮新增"。同步路径在配对待选结果时逐条问，切片路径在结算时逐行
+ * 写 `confirmed` 位，两条路径共用这一份。
+ */
+export function confirmedDeltaOf(
+  relation: SequenceRelation | string | null,
+  delta: readonly number[] | null,
+): { all: boolean; ords: readonly number[] } {
+  if (relation === 'first') return { all: true, ords: [] };
+  if (relation === 'confirmed' && delta !== null) return { all: false, ords: delta };
+  return { all: false, ords: [] };
+}
+
 // ---------------------------------------------------------------------------
 // 主链 trunk：哪个根是主线，主线覆盖哪些请求。
 // ---------------------------------------------------------------------------

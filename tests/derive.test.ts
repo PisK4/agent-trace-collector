@@ -6,7 +6,7 @@ import { fixture, seedPurposeRequest } from './fixtures';
 import { openStore } from '../src/store';
 import { runMaintenance } from '../src/maintenance';
 import type { Store } from '../src/store';
-import { deriveTitle, matchPredecessor } from '../src/derive-decision';
+import { confirmedDeltaOf, deriveTitle, matchPredecessor } from '../src/derive-decision';
 import { drainDerive, drainDeriveTx, enqueueDerive } from '../src/derive';
 import { PURPOSE_VERSION } from '../src/semantics';
 import { readBodyTx } from '../src/body';
@@ -22,6 +22,19 @@ test('重复消息仍按位置计新增', () => {
   // 集合差会吞掉真正新增的那条；序列比较按位置计增量，判据在 matchPredecessor。
   expect(matchPredecessor([], ['u:hello', 'u:hello'], false))
     .toEqual({ parent: null, relation: 'first', delta: [0, 1], near: null });
+});
+
+test('确定增量判据五分支：首笔全确认，confirmed 只看增量，其余不确认', () => {
+  expect(confirmedDeltaOf('first', [0, 1])).toEqual({ all: true, ords: [] });
+  // first 没有增量记录也仍是整笔新增：它本来就不需要增量来证明。
+  expect(confirmedDeltaOf('first', null)).toEqual({ all: true, ords: [] });
+  expect(confirmedDeltaOf('confirmed', [2, 3])).toEqual({ all: false, ords: [2, 3] });
+  // 关系说 confirmed 但没有增量记录时不能替它补一个空增量当全部确认。
+  expect(confirmedDeltaOf('confirmed', null)).toEqual({ all: false, ords: [] });
+  expect(confirmedDeltaOf('unknown', [1])).toEqual({ all: false, ords: [] });
+  expect(confirmedDeltaOf('branch', [1])).toEqual({ all: false, ords: [] });
+  expect(confirmedDeltaOf('aux', [1])).toEqual({ all: false, ords: [] });
+  expect(confirmedDeltaOf(null, null)).toEqual({ all: false, ords: [] });
 });
 
 test('前驱在链上任意祖先里找，不只看上一笔', () => {

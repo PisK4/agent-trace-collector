@@ -16,7 +16,7 @@ Status: implemented
 
 请求阶段（`drainRequestPurposesTx`）消费当前用途解释器的结论并写回：`purpose_status` 写 `recognized`/`unrecognized`/`retained`/`missing`/`unsupported`/`error`，`purpose_rule` 与 `purpose_version` 记下是哪条规则、哪一版解释得出的，同时定下 `purpose_chain`、`req_kind` 与 `model_title`，清 `purpose_pending` 并让 `purpose_revision` 追上 `input_revision`。写回用 CAS 绑定 `req_id + input_epoch + input_revision + purpose_target + purpose_pending`：读到视图之后输入又变了，旧结论作废并保留 pending，等下一轮重来。正文不可读时有旧解释就保留原值标 `retained`，从未判过标 `missing`。规则清单与优先级归[请求用途版本化解释](2026-10-22-request-purpose-and-chain.md)，本记录只负责阶段顺序。
 
-这个阶段**不推进自己请求的输入修订**：它消费输入，不改变输入。只有用途、链归属或正式标题真的变了，才标所属组重算。组阶段因此只读 `purpose_chain`，不再自己识别标题请求；组内还有 `purpose_pending=1` 的成员时整组跳过并保持 dirty。
+这个阶段**不推进自己请求的输入修订**：它消费输入，不改变输入。只有用途、链归属或正式标题真的变了，才标所属组重算。组阶段因此只读 `purpose_chain`，不再自己识别标题请求；组内还有 `purpose_pending=1` 的成员时整组跳过并保持 dirty。门控谓词已收成 `derive-state` 的 `purposePendingSql`，切片选组的外层过滤与同步认领后的 TOCTOU 复查共用同一段，见[派生层四片共享逻辑各归其位](2026-10-24-derive-layer-consolidation.md)。
 
 `DrainResult` 增加 `purpose_processed` 与 `purpose_remaining`。维护的排空循环要求 `remaining` 与 `purpose_remaining` 同时为 0，任一阶段零进展即报 `derive_no_progress`。
 

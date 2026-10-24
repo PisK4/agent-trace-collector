@@ -39,6 +39,33 @@ export function groupIsCurrent(row: {
 }
 
 /**
+ * 组内还有未判定用途的成员：`request` 行应满足的谓词片段。
+ *
+ * 两条派生路径共用一个判据：切片选组时用它做外层过滤（NOT EXISTS），
+ * 同步路径认领后再查一次（TOCTOU 复查，选组之后可能有新请求挂进来）。
+ * 片段相同、查询角色各自保留。
+ */
+export function purposePendingSql(alias = ''): string {
+  const q = alias === '' ? '' : `${alias}.`;
+  return `${q}actor_state='known' AND ${q}purpose_pending=1`;
+}
+
+/**
+ * 认领前把队列行的目标算法归一到本模式的算法号：组变脏时旧行保留旧号，
+ * 直接完成等于宣称产物是新算法算的。算法号是参数——同步的 `GROUP_ALGORITHM`
+ * 与切片的 `DERIVE_ALGORITHM` 各自保留，产物不能互相复用。
+ *
+ * 只改未完成的行：clean 行有已发布产物，改号等于伪造它的出处。
+ */
+export function normalizeTargetAlgorithmTx(
+  db: Database, convKey: string, actor: string, algorithm: number,
+): void {
+  db.run(`UPDATE derive_queue SET target_algorithm=? WHERE conv_key=? AND actor=?
+    AND ${queuePendingSql()} AND target_algorithm<>?`,
+  [algorithm, convKey, actor, algorithm]);
+}
+
+/**
  * 把一组标成待派生。
  *
  * `group_epoch` 标识组的世代：组被删除后重建会拿到新 epoch，旧完成记录因此
