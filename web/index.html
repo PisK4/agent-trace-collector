@@ -213,7 +213,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .history-range{font-size:10px;color:var(--muted)}
 .history-start{font-size:11px;color:var(--muted)}
 .trace-group{scroll-margin-top:155px}
-.trace-group[aria-current="true"]{background:var(--accent-soft)}
+/* 选中高亮只落在当前步骤；请求组只留轻微边界，不再与步骤共用底色。 */
+.trace-group[aria-current="true"]{box-shadow:inset 2px 0 0 var(--line-strong)}
 .trace-group[data-status="failed"]{box-shadow:inset 2px 0 0 var(--bad)}
 .compact-step{border-bottom:1px solid var(--line)}
 .compact-row{display:flex;align-items:center;gap:10px;height:36px;min-width:0;padding-inline:5px}

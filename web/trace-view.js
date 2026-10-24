@@ -195,9 +195,10 @@ export function projectSteps(row, read, systemContext = null) {
             unrecognized: false, status: null,
             result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req } });
         } else if (block.kind !== 'thinking') {
-          // 未知块给记录入口，不做语义推测。
+          // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
           steps.push({ key:`${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
-            text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null, source: null,
+            text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
+            source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
             raw: block.raw, unrecognized: true, status: null, result: null });
         }
       }

@@ -12,7 +12,8 @@
 import {
   bodyNotice, deltaOrdinals, esc, messageCopyText, partColor, partLabel, roleTag,
   renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderReply,
-  renderReplyDetail, replyView, toolEntries, topSystemText,
+  renderReplyBlockDetail, renderReplyDetail, renderSystemDetail, renderUnknownBlockDetail,
+  replyView, toolEntries, topSystemText,
 } from './body-view.js';
 import { createReaderStore } from './reader-store.js';
 import { projectSteps, renderTraceRows } from './trace-view.js';
@@ -348,6 +349,36 @@ export function systemContextOf(row, readOf) {
   const prevText = topSystemText(/** @type {import('../src/protocols').BodyPage | null} */ (readOf(prevId)?.meta ?? null));
   if (prevText === null) return { text, changed: null };
   return { text, changed: prevText !== text };
+}
+
+/**
+ * 选中来源解析：把当前选中的步骤解析成右栏的阅读目标。
+ * `state.selectedStep` 是唯一选择；右栏来源只从这一步解析，不按时间跳别的请求。
+ * tool 调用继续走工具四页；System 与结果步骤打开正文来源；其余记录打开请求读数。
+ * @param {import('./trace-view.js').TraceStep | null} step
+ * @returns {{side:'none'}
+ *   | {side:'request', target:'system', path:'request.system', text:string}
+ *   | {side:'request', target:'message', path:string, messageOrd:number}
+ *   | {side:'reply', target:'text', path:string, blockIndex:number, text:string}
+ *   | {side:'reply', target:'block', path:string, blockIndex:number, raw:unknown}
+ *   | {side:'reply', target:'call', path:string, callOrd:number}}
+ */
+export function resolveSelectedSource(step) {
+  if (step === null || step.source === null) return { side: 'none' };
+  const s = step.source;
+  if (s.side === 'request') {
+    if (typeof s.messageOrd === 'number') {
+      return { side: 'request', target: 'message', path: s.path, messageOrd: s.messageOrd };
+    }
+    return { side: 'request', target: 'system', path: 'request.system', text: String(step.raw ?? '') };
+  }
+  if (step.kind === 'tool' && step.callOrd !== null) {
+    return { side: 'reply', target: 'call', path: s.path, callOrd: step.callOrd };
+  }
+  if (step.kind === 'assistant') {
+    return { side: 'reply', target: 'text', path: s.path, blockIndex: s.blockIndex ?? 0, text: String(step.raw ?? '') };
+  }
+  return { side: 'reply', target: 'block', path: s.path, blockIndex: s.blockIndex ?? 0, raw: step.raw };
 }
 
 if (typeof document !== 'undefined') {
@@ -1096,6 +1127,14 @@ if (typeof document !== 'undefined') {
     </section>`;
   }
 
+  /** 当前请求的选中步骤对象；无选择或选中的是别的请求时返回 null。 @param {RequestRow} r */
+  function currentSelectedStep(r) {
+    if (state.selectedStep === null || !state.selectedStep.startsWith(`${r.req_id}:`)) return null;
+    const read = reads.get(r.req_id) ?? null;
+    return projectSteps(r, read, systemContextOf(r, id => reads.get(id) ?? null))
+      .find(item => item.key === state.selectedStep) ?? null;
+  }
+
   function railBody() {
     const r = currentRow();
     if (r === null) {
@@ -1131,18 +1170,25 @@ if (typeof document !== 'undefined') {
     const completeness = replyCompleteness(r, view);
     const truncNote = completeness.key === 'truncated'
       ? `<p class="rail-note">回复在长度上限被截断（finish=${esc(view.finish ?? '')}）；请求本身仍是成功状态。</p>` : '';
-    const selected = state.selectedStep !== null && state.toolOrd === null
-      && state.selectedStep.startsWith(`${r.req_id}:message:`)
-      ? Number(state.selectedStep.split(':').pop() ?? NaN)
-      : NaN;
-    const chosen = Number.isFinite(selected)
-      ? read.entries.find((/** @type {{ord: number}} */ entry) => entry.ord === selected) ?? null
-      : null;
-    const body = chosen !== null
-      ? renderMessageDetail(chosen)
-      : view.state === 'ok'
-        ? `${truncNote}${renderReplyDetail(view, tools, String(r.req_id))}`
-        : `<div class="rail-empty"><b>没有可读的回复</b>${esc(bodyNotice(page) || '这一笔只有请求。')}</div>`;
+    // 选中来源是右栏的唯一导航依据：System、输入消息、回复块各自定位，不回退整份回复。
+    const source = resolveSelectedSource(currentSelectedStep(r));
+    /** @type {string} */
+    let body;
+    if (source.side === 'request' && source.target === 'system') {
+      body = renderSystemDetail(source.text);
+    } else if (source.side === 'request') {
+      const chosen = read.entries.find((/** @type {{ord: number}} */ entry) => entry.ord === source.messageOrd) ?? null;
+      body = chosen !== null ? renderMessageDetail(chosen)
+        : `<div class="rail-empty"><b>消息未读取</b>messages[${source.messageOrd}] 不在已加载的分片里；读取完成后回到这一步。</div>`;
+    } else if (source.side === 'reply' && source.target === 'text') {
+      body = `${truncNote}${renderReplyBlockDetail(source.path, source.text)}`;
+    } else if (source.side === 'reply' && source.target === 'block') {
+      body = renderUnknownBlockDetail(source.path, source.raw);
+    } else if (view.state === 'ok') {
+      body = `${truncNote}${renderReplyDetail(view, tools, String(r.req_id))}`;
+    } else {
+      body = `<div class="rail-empty"><b>没有可读的回复</b>${esc(bodyNotice(page) || '这一笔只有请求。')}</div>`;
+    }
     const structure = read.structure;
     // 结构总数未读时用元信息页的 total 判断：正文页签也能发起首次结构读取。
     const knownTotal = structure.total ?? (page.total ?? null);
@@ -1151,10 +1197,10 @@ if (typeof document !== 'undefined') {
       ${body}
       <div class="conv-tools" style="padding:10px 0 0">
         <span class="label">请求消息</span>
-        <button class="chip-btn" data-rail-reply="1" aria-pressed="${chosen === null}">本次回复</button>
+        <button class="chip-btn" data-rail-reply="1" aria-pressed="${source.side === 'none'}">本次回复</button>
         ${read.entries.length > 0
         ? `<select class="mini-search" data-rail-msg="${r.req_id}" aria-label="选择消息">
-              ${read.entries.slice(0, 300).map((/** @type {{ord: number, role: 'user'|'assistant'|'system'|'tool'|'unknown', preview: string}} */ entry) => `<option value="${entry.ord}" ${chosen !== null && chosen.ord === entry.ord ? 'selected' : ''}>#${entry.ord} ${roleTag(entry.role)} · ${esc(clipText(entry.preview, 40))}</option>`).join('')}
+              ${read.entries.slice(0, 300).map((/** @type {{ord: number, role: 'user'|'assistant'|'system'|'tool'|'unknown', preview: string}} */ entry) => `<option value="${entry.ord}" ${source.side === 'request' && source.target === 'message' && source.messageOrd === entry.ord ? 'selected' : ''}>#${entry.ord} ${roleTag(entry.role)} · ${esc(clipText(entry.preview, 40))}</option>`).join('')}
             </select>`
         : '<span class="muted" style="font-size:10.5px">这一笔没有消息正文</span>'}
       </div>
@@ -1329,13 +1375,15 @@ if (typeof document !== 'undefined') {
   async function selectRequest(id, key) {
     const row = currentRows().find(row => row.req_id === id);
     if (row === undefined) return;
-    const step = projectSteps(row, reads.get(id) ?? null).find(item => item.key === key);
+    const step = projectSteps(row, reads.get(id) ?? null, systemContextOf(row, x => reads.get(x) ?? null))
+      .find(item => item.key === key) ?? null;
+    const source = resolveSelectedSource(step);
     state.reqId = id;
     state.selectedStep = key;
-    state.toolOrd = step?.callOrd ?? null;
+    state.toolOrd = source.side === 'reply' && source.target === 'call' ? source.callOrd : null;
     state.toolPage = 'overview';
-    state.railTab = step?.kind === 'tool' ? 'tools'
-      : step?.kind === 'user' || step?.kind === 'assistant' || step?.kind === 'system' || step?.kind === 'tool_result' ? 'body' : 'facts';
+    state.railTab = source.side === 'reply' && source.target === 'call' ? 'tools'
+      : source.side === 'request' || source.side === 'reply' ? 'body' : 'facts';
     state.missingReqId = null;
     state.offPageReqId = null;
     document.body.classList.remove('rail-collapsed');
@@ -1344,6 +1392,11 @@ if (typeof document !== 'undefined') {
     renderRail();
     renderCrumb();
     updateURL();
+    // 重绘会替换 DOM：把焦点放回当前步骤，键盘导航不中断。
+    requestAnimationFrame(() => {
+      const current = /** @type {HTMLElement | null} */ (document.querySelector('.compact-select[aria-current="true"]'));
+      if (current !== null && document.activeElement === document.body) current.focus();
+    });
     await ensureRead(id);
   }
 
@@ -1456,11 +1509,13 @@ if (typeof document !== 'undefined') {
     }
     const bodyLoad = /** @type {HTMLElement | null} */ (t.closest('[data-body-load]'));
     if (bodyLoad !== null) { void ensureRead(Number(bodyLoad.dataset.bodyLoad)); return; }
-    // 工具四页导航：所有身份都只用 owner/callOrd。
+    // 工具四页导航：所有身份都只用 owner/callOrd；选中同步到调用步骤，中栏高亮一致。
     const toolSelect = /** @type {HTMLElement | null} */ (t.closest('[data-tool-select]'));
     if (toolSelect !== null) {
       state.toolOrd = Number(toolSelect.dataset.toolSelect);
       state.toolPage = 'overview';
+      if (state.reqId !== null) state.selectedStep = `${state.reqId}:call:${state.toolOrd}`;
+      renderMain();
       renderRail();
       updateURL();
       return;
@@ -1470,9 +1525,12 @@ if (typeof document !== 'undefined') {
     if (toolPageBtn !== null) { state.toolPage = toolPageBtn.dataset.toolPage ?? 'overview'; renderRail(); return; }
     const toolOwnerBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-owner]'));
     if (toolOwnerBtn !== null) {
+      const owner = Number(toolOwnerBtn.dataset.toolOwner);
       state.toolOrd = Number(toolOwnerBtn.dataset.callOrd);
       state.toolPage = 'result';
       state.railTab = 'tools';
+      state.selectedStep = `${owner}:call:${state.toolOrd}`;
+      renderMain();
       renderRail();
       updateURL();
       return;
@@ -1535,10 +1593,17 @@ if (typeof document !== 'undefined') {
     if (msg !== null) {
       const fold = msg.closest('[data-structure-fold]');
       if (fold !== null) {
-        const read = reads.get(Number(/** @type {HTMLElement} */ (fold).dataset.structureFold));
+        const reqId = Number(/** @type {HTMLElement} */ (fold).dataset.structureFold);
+        const read = reads.get(reqId);
         if (read !== undefined) {
           read.structure.selected = Number(msg.dataset.msg);
+          // 结构内再选消息同步当前选择；中栏高亮与右栏正文一致。
+          state.reqId = reqId;
+          state.selectedStep = `${reqId}:message:${msg.dataset.msg}`;
+          state.toolOrd = null;
+          renderMain();
           renderRail();
+          updateURL();
         }
         return;
       }

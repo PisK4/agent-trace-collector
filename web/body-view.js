@@ -492,6 +492,52 @@ export function renderMessageDetail(entry) {
 }
 
 /**
+ * 顶层 System 的右栏详情：全文转义展示，路径固定 request.system。
+ * @param {string} text
+ */
+export function renderSystemDetail(text) {
+  return `<div class="body-panel">
+    <div class="bp-head">
+      <span class="kind system bp-kind">System</span>
+      <span class="bp-path">request.system</span>
+    </div>
+    <div class="bp-text bp-plain">${esc(text)}</div>
+    <p class="rail-note">System 是请求顶层字段，不属于 messages；内容按脱敏后的原文保存，这里转义展示。</p>
+  </div>`;
+}
+
+/**
+ * 选中回复文本块的独立详情：只渲染这一块，不回退整份回复。
+ * @param {string} path 实际协议路径，如 reply.content[2]
+ * @param {string} text 块文本
+ */
+export function renderReplyBlockDetail(path, text) {
+  return `<div class="body-panel">
+    <div class="bp-head">
+      <span class="kind assistant bp-kind">Assistant</span>
+      <span class="bp-path">${esc(path)}</span>
+    </div>
+    <div class="bp-text">${mdToHtml(text)}</div>
+  </div>`;
+}
+
+/**
+ * 未知回复块的右栏详情：转义 JSON，不做语义推测。
+ * @param {string} path 实际协议路径
+ * @param {unknown} raw 原始块
+ */
+export function renderUnknownBlockDetail(path, raw) {
+  return `<div class="body-panel">
+    <div class="bp-head">
+      <span class="kind unknown bp-kind">Unknown</span>
+      <span class="bp-path">${esc(path)}</span>
+    </div>
+    <pre class="raw" tabindex="0">${esc(JSON.stringify(raw, null, 2))}</pre>
+    <p class="rail-note">这一块没有已适配的协议解释；原对象按脱敏后的 JSON 展示。</p>
+  </div>`;
+}
+
+/**
  * 工具往返折叠行。已配对给出结果跳转；没有配对信息就不显示状态，只有异常（多候选）才提示。
  * @param {ToolEntry[]} tools
  * @param {string} [foldKey] 折叠持久化键前缀（req id）；空串不持久化
