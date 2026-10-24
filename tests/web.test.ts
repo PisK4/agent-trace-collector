@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
-  auxSummary, isErrorText, isAuxRow, purposeLabel, railFactsHtml, readingChangedNote, replyCompleteness,
-  resolveTraceTarget, restoreScroll, structureFoldHtml, systemContextOf, toolOverviewHtml, toolResultPanel, toolSchemaSection,
+  auxSummary, isAuxRow, purposeLabel, railFactsHtml, readingChangedNote, replyCompleteness,
+  resolveTraceTarget, restoreScroll, structureFoldHtml, systemContextOf, toolOverviewHtml, toolSchemaSection,
 } from '../web/app.js';
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {
@@ -59,7 +59,7 @@ const pairOf = (state: string, extra: Record<string, unknown> = {}) => ({
 /** @param {'available' | 'pending' | 'ambiguous' | 'unpaired' | 'unavailable' | 'invalid_location'} state @param {Record<string, unknown>} extra */
 const readingOf = (state: 'available' | 'pending' | 'ambiguous' | 'unpaired' | 'unavailable' | 'invalid_location', extra: Record<string, unknown> = {}) => ({
   owner_req: 7, call_ord: 1, reading_token: 'r1-' + 'a'.repeat(64),
-  state, target: null, content: null, is_error: null, reason: null, ...extra,
+  state, target: null, content: null, is_error: null, raw: null, reason: null, ...extra,
 });
 /** @param {number} ord @param {string} text */
 const entryOf = (ord: number, text: string) => ({
@@ -183,49 +183,6 @@ test('同名工具逐项列出，不任选第一项', () => {
   expect(html).toContain('同名');
   expect(html).toContain('&quot;v&quot;: 1');
   expect(html).toContain('&quot;v&quot;: 2');
-});
-
-test('同消息两个结果按调用序号取到各自正文，调用方请求不变', () => {
-  const first = toolResultPanel(7, 0,
-    pairOf('resolved', { result_req: 9, result_ord: 2, result_path: 'request.messages[2].content[0]' }),
-    readingOf('available', { content: 'first result', target: { req_id: 9, ord: 2, path: 'request.messages[2].content[0]' } }),
-     { target: '09' });
-  expect(first).toContain('first result');
-  const second = toolResultPanel(7, 1,
-    pairOf('resolved', { result_req: 9, result_ord: 2, result_path: 'request.messages[2].content[1]' }),
-    readingOf('available', { content: 'second result', target: { req_id: 9, ord: 2, path: 'request.messages[2].content[1]' } }),
-     { target: '09' });
-  expect(second).toContain('second result');
-  expect(second).not.toContain('first result');
-  expect(second).toContain('请求 7');
-});
-
-test('关联与正文加载分开：未读取给待读取与入口，失败可重试，未确认不显示正文', () => {
-  const unloaded = toolResultPanel(7, 1, pairOf('resolved', { result_req: 9, result_ord: 2 }), null,  { target: '09' });
-  expect(unloaded).toContain('待读取');
-  expect(unloaded).toContain('data-tool-read="7"');
-  expect(unloaded).toContain('data-result-owner="7"');
-  const failed = toolResultPanel(7, 1, pairOf('resolved', { result_req: 9, result_ord: 2 }),
-    readingOf('unavailable', { reason: 'body_evicted' }),  { target: '09' });
-  expect(failed).toContain('重试');
-  expect(failed).toContain('data-tool-retry="7"');
-  // 加载失败不改写关联状态。
-  expect(failed).toContain('已确认配对');
-  for (const state of ['pending', 'ambiguous', 'unpaired']) {
-    const html = toolResultPanel(7, 1, pairOf(state), null,  { target: null });
-    expect(html).not.toContain('data-tool-read');
-    expect(html).not.toContain('<pre');
-  }
-});
-
-test('is_error 三态分开，resolved 不写成成功', () => {
-  expect(toolResultPanel(7, 1, pairOf('resolved'), readingOf('available', { content: 'x', is_error: false }),  { target: null }))
-    .toContain('上游未标记错误');
-  expect(toolResultPanel(7, 1, pairOf('resolved'), readingOf('available', { content: 'x', is_error: true }),  { target: null }))
-    .toContain('工具执行失败');
-  expect(toolResultPanel(7, 1, pairOf('resolved'), readingOf('available', { content: 'x', is_error: null }),  { target: null }))
-    .toContain('未报告');
-  expect(isErrorText(null)).toContain('未报告');
 });
 
 test('阅读版本变化说明只给显式重读入口，不自动重建', () => {

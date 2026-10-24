@@ -14,7 +14,7 @@ System 的显示不完整：投影类型没有 system，输入循环只保留可
 
 角色标签统一使用英文参与角色：`System`、`User`、`Assistant`、`Tool`，辅助请求和事件记录用 `Aux`、`Event`；正文说明继续用中文。工具调用由 Assistant 发出，行内显示 Assistant 加内容类型 `Tool call`；工具结果显示 Tool 加 `Tool result`。消息级列表对纯结果消息显示 Tool 并在预览前标明内容类型；混合 user 消息保留 User，按内容块解释，不把整条消息改成 Tool。`roleTag` 只管显示文本，CSS 类名走稳定的 `roleClass`；`Entry` 保留 `rawRole`，详情单列原始协议角色（如 `role=developer`），未知 role 显示 Unknown。
 
-每个可读步骤携带 `source`：输入消息指向 `request.messages[N]`，顶层 System 指向 `request.system`，回复文本与未知块指向各自内容块（`reply.content[i]`、`reply.choices[0].message.tool_calls[i]`），消息内的工具结果按内容块拆键（`request.messages[N].content[M]`）。`reqId + stepKey` 是选中身份；`state.selectedStep` 是唯一选择，右栏正文按 `resolveSelectedSource` 的解析结果定位，不按时间跳相邻请求。点击调用步骤进入工具四页，输入与 System 步骤打开正文，记录或辅助步骤打开请求读数。请求组只保留轻微边界，选中高亮只落在当前步骤；输入选择的目标 ord 未缓存时定点补读一条并保留选择。
+每个可读步骤携带 `source`：输入消息指向 `request.messages[N]`，顶层 System 指向 `request.system`，回复文本与未知块指向各自内容块（`reply.content[i]`、`reply.choices[0].message.tool_calls[i]`），消息内的工具结果按内容块拆键（`request.messages[N].content[M]`）。`reqId + stepKey` 是选中身份；`state.selectedStep` 是唯一选择，右栏正文按 `resolveSelectedSource` 的解析结果定位，不按时间跳相邻请求。点击调用步骤进入工具四页，输入与 System 步骤打开正文，记录或辅助步骤打开请求读数。调用步骤与已配对的结果步骤自配对页起直达工具配对页（两端同屏、就地阅读），未配对的结果步骤仍打开正文，见[Trace Pair 配对页与右栏就地阅读](../../implemented/feature/2026-10-24-trace-pair-rail-page.md)。请求组只保留轻微边界，选中高亮只落在当前步骤；输入选择的目标 ord 未缓存时定点补读一条并保留选择。
 
 System 分两条路径：顶层 `request_fields.system` 由装配层按同 actor 的已确认前驱比较后作为 `systemContext` 传给投影——首个已加载主请求提供当前上下文，前驱可读且同值不重复，变化才标明；前驱不在窗口、未读或不可读时只声明当前上下文。可信 delta 内的 system/developer 消息按真实消息位置出 System 步骤。比较只在阅读层发生，不改变消息 ord、指纹或前驱关系；不按相邻时间跨 actor、跨分支比较。
 

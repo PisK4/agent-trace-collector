@@ -157,6 +157,52 @@ test('混合消息按块出步骤：结果带内容块路径，用户文本只�
   expect(users[0]?.source).toEqual({ side: 'request', path: 'request.messages[2]', messageOrd: 2, blockIndex: null });
 });
 
+test('结果步骤反向配对：Anthropic 按内容块路径，Chat 按整条消息', () => {
+  const indexed = [{ call_id: 'c1', ord: 1, tool_name: 'read', owner_req: 3, result_req: 7,
+    result_ord: 2, result_path: 'request.messages[2].content[0]', state: 'resolved' }];
+  const anthropicEntry = {
+    ord: 2, role: 'user', rawRole: 'user',
+    blocks: [{ kind: 'result', text: 'file body', index: 0, raw: { type: 'tool_result' }, path: 'content[0]' }],
+    preview: 'file body', input: null, isInput: false,
+  };
+  const steps = projectSteps(row(), read(detail({ delta_ordinals: [2], tool_results: indexed }), [anthropicEntry],
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
+  const result = steps.find(s => s.kind === 'tool_result');
+  expect(result?.source).toEqual({ side: 'request', path: 'request.messages[2].content[0]', messageOrd: 2, blockIndex: 0 });
+  expect(result?.pairOwner).toEqual({ reqId: 3, callOrd: 1 });
+  // Chat 的 role=tool 结果配对到整条消息，与后端 result_path 一致。
+  const chatEntry = {
+    ord: 2, role: 'tool', rawRole: 'tool',
+    blocks: [{ kind: 'result', text: 'chat output', index: 0, raw: 'chat output', path: 'content' }],
+    preview: 'chat output', input: null, isInput: false,
+  };
+  const chatIndexed = [{ call_id: 'c2', ord: 0, tool_name: 'bash', owner_req: 4, result_req: 7,
+    result_ord: 2, result_path: 'request.messages[2]', state: 'resolved' }];
+  const chat = projectSteps(row(), read(detail({ delta_ordinals: [2], tool_results: chatIndexed }), [chatEntry],
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
+  expect(chat.find(s => s.kind === 'tool_result')?.source).toEqual({
+    side: 'request', path: 'request.messages[2]', messageOrd: 2, blockIndex: 0,
+  });
+  expect(chat.find(s => s.kind === 'tool_result')?.pairOwner).toEqual({ reqId: 4, callOrd: 0 });
+  // 路径或状态不匹配（dirty 清空、同消息另一块）：pairOwner 为 null，点击回正文定位。
+  const mismatched = projectSteps(row(), read(detail({ delta_ordinals: [2], tool_results: [] }), [anthropicEntry],
+    { stop_reason: 'end_turn', content: [] }));
+  expect(mismatched.find(s => s.kind === 'tool_result')?.pairOwner).toBeNull();
+});
+
+test('选中来源解析：调用与已配对结果都解析成配对目标', () => {
+  const callStep = { kind: 'tool', source: { side: 'reply', path: 'reply.content[1]', messageOrd: null, blockIndex: 1 }, callOrd: 1, reqId: 7, pairOwner: null };
+  expect(resolveSelectedSource(callStep as never)).toEqual({
+    side: 'reply', target: 'call', path: 'reply.content[1]', callOrd: 1, ownerReq: 7,
+  });
+  const pairedResult = { kind: 'tool_result', source: { side: 'request', path: 'request.messages[2].content[0]', messageOrd: 2, blockIndex: 0 }, pairOwner: { reqId: 3, callOrd: 1 }, reqId: 7 };
+  expect(resolveSelectedSource(pairedResult as never)).toEqual({ side: 'pair', ownerReq: 3, callOrd: 1 });
+  const plainResult = { kind: 'tool_result', source: { side: 'request', path: 'request.messages[2].content[0]', messageOrd: 2, blockIndex: 0 }, pairOwner: null, reqId: 7 };
+  expect(resolveSelectedSource(plainResult as never)).toEqual({
+    side: 'request', target: 'message', path: 'request.messages[2].content[0]', messageOrd: 2,
+  });
+});
+
 test('回复来源是实际协议路径：Anthropic content[i]，Chat tool_calls[i]', () => {
   const anthropic = projectSteps(row(), read(detail(), [], { stop_reason: 'tool_use', content: [
     { type: 'text', text: '先看' },
@@ -295,7 +341,7 @@ test('选中来源解析：回复四块各自定位，两个文本不再共享�
     side: 'reply', target: 'text', path: 'reply.content[0]', blockIndex: 0, text: 't0',
   });
   expect(resolveSelectedSource(steps[1] ?? null)).toEqual({
-    side: 'reply', target: 'call', path: 'reply.content[1]', callOrd: 1,
+    side: 'reply', target: 'call', path: 'reply.content[1]', callOrd: 1, ownerReq: 7,
   });
   expect(resolveSelectedSource(steps[2] ?? null)).toMatchObject({ path: 'reply.content[2]', blockIndex: 2, text: 't2' });
   expect(resolveSelectedSource(steps[3] ?? null)).toMatchObject({ path: 'reply.content[3]', callOrd: 3 });

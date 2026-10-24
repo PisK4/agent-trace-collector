@@ -30,6 +30,7 @@ import { deltaOrdinals, messageBlocks, replyView } from './body-view.js';
  * @property {boolean} unrecognized
  * @property {'failed'|'missing_body'|'missing_reply'|'unknown'|'truncated'|null} status
  * @property {{state: 'resolved'|'pending'|'ambiguous'|'unpaired', reqId: number|null} | null} result
+ * @property {{reqId: number, callOrd: number} | null} pairOwner 结果步骤的反向配对：承载本结果的调用方与调用序号；未确认时为 null
  */
 
 /**
@@ -75,7 +76,7 @@ export function projectSteps(row, read, systemContext = null) {
     steps.push(/** @type {TraceStep} */ ({
       key: `${row.req_id}:${key}`, reqId: row.req_id, kind: 'record', text,
       messageOrd: null, callOrd: null, source: null, raw: null, unrecognized: false,
-      status, result: null, ...extra,
+      status, result: null, pairOwner: null, ...extra,
     }));
   };
   // 辅助请求一笔一条辅助记录：分类器输入不画成用户消息。
@@ -83,7 +84,7 @@ export function projectSteps(row, read, systemContext = null) {
     steps.push({ key:`${row.req_id}:aux`, reqId: row.req_id, kind: 'aux',
       text: `辅助请求 · ${row.req_kind === 'title' ? '标题生成' : row.req_kind}`,
       messageOrd: null, callOrd: null, source: null, raw: null, unrecognized: false,
-      status: null, result: null });
+      status: null, result: null, pairOwner: null });
     return steps;
   }
   // 顶层 System：与已确认前驱同值不重复，变化标明；不可比较时只声明当前上下文。
@@ -94,7 +95,7 @@ export function projectSteps(row, read, systemContext = null) {
         ? `System 与已确认前驱不同 · ${systemContext.text}` : systemContext.text,
       messageOrd: null, callOrd: null,
       source: { side: 'request', path: 'request.system', messageOrd: null, blockIndex: null },
-      raw: systemContext.text, unrecognized: false, status: null, result: null,
+      raw: systemContext.text, unrecognized: false, status: null, result: null, pairOwner: null,
     });
   }
   if (row.chain_role === 'branch') {
@@ -120,13 +121,20 @@ export function projectSteps(row, read, systemContext = null) {
       // 工具结果块按内容块出独立步骤；混合消息的真实用户文本只产生一次。
       const resultBlocks = entry.blocks.filter(block => block.kind === 'result');
       for (const block of resultBlocks) {
+        // Chat 的 role=tool 结果按整条协议消息配对（后端 result_path 到 messages[N] 为止）；
+        // Anthropic 的结果块配对到内容块路径。反向配对只认已确认的精确位置。
+        const wholeMessage = entry.rawRole === 'tool';
+        const path = wholeMessage ? msgBase : `${msgBase}.${block.path}`;
+        const indexed = (detail.tool_results ?? []).find(item => item.state === 'resolved'
+          && item.result_ord === entry.ord && item.result_path === path) ?? null;
         steps.push({
           key: `${row.req_id}:message:${entry.ord}:result:${block.index}`, reqId: row.req_id,
           kind: 'tool_result',
           text: block.text.length > 0 ? block.text : '（空工具结果）',
           messageOrd: entry.ord, callOrd: null,
-          source: { side: 'request', path: `${msgBase}.${block.path}`, messageOrd: entry.ord, blockIndex: block.index },
+          source: { side: 'request', path, messageOrd: entry.ord, blockIndex: block.index },
           raw: block.raw, unrecognized: false, status: null, result: null,
+          pairOwner: indexed === null ? null : { reqId: indexed.owner_req, callOrd: indexed.ord },
         });
       }
       if (entry.role === 'system') {
@@ -135,7 +143,7 @@ export function projectSteps(row, read, systemContext = null) {
           text: entry.preview, messageOrd: entry.ord, callOrd: null,
           source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
           raw: entry.blocks.map(block => block.text).join('\n\n'), unrecognized: false,
-          status: null, result: null,
+          status: null, result: null, pairOwner: null,
         });
         continue;
       }
@@ -145,14 +153,14 @@ export function projectSteps(row, read, systemContext = null) {
           text: entry.input.text, messageOrd: entry.ord, callOrd: null,
           source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
           raw: entry.input.original ?? entry.input.text, unrecognized: false,
-          status: null, result: null });
+          status: null, result: null, pairOwner: null });
       } else {
         // unrecognized 输入也是新增事实：占一行，原文进详情。
         steps.push({ key:`${row.req_id}:message:${entry.ord}`, reqId: row.req_id, kind: 'user',
           text: entry.input?.text ?? '未识别的用户输入', messageOrd: entry.ord, callOrd: null,
           source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
           raw: entry.input?.original ?? null, unrecognized: true,
-          status: null, result: null });
+          status: null, result: null, pairOwner: null });
       }
     }
   }
@@ -191,31 +199,32 @@ export function projectSteps(row, read, systemContext = null) {
           steps.push({ key:`${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
             text: block.text, messageOrd: null, callOrd: null,
             source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
-            raw: block.text, unrecognized: false, status: null, result: null });
+            raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null });
         } else if (block.kind === 'call') {
           const call = view.calls.find(item => item.ord === index) ?? null;
           const pair = detail.tool_calls?.find(item => item.ord === index) ?? null;
-          steps.push({ key:`${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
+          steps.push({ key: `${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
             text: toolSummary(call?.name ?? '', call?.inputText ?? ''),
             messageOrd: null, callOrd: index,
             source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
             raw: block.raw,
             unrecognized: false, status: null,
-            result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req } });
+            result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
+            pairOwner: null });
         } else if (block.kind !== 'thinking') {
           // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
-          steps.push({ key:`${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
+          steps.push({ key: `${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
             text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
             source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
-            raw: block.raw, unrecognized: true, status: null, result: null });
+            raw: block.raw, unrecognized: true, status: null, result: null, pairOwner: null });
         }
       }
       if (blocks.length === 0 && view.text.length > 0) {
-        steps.push({ key:`${row.req_id}:reply:text:0`, reqId: row.req_id, kind: 'assistant',
+        steps.push({ key: `${row.req_id}:reply:text:0`, reqId: row.req_id, kind: 'assistant',
           text: view.text, messageOrd: null, callOrd: null,
           source: { side: 'reply', path: `${replyBase}.content`, messageOrd: null, blockIndex: null },
           raw: view.text,
-          unrecognized: false, status: null, result: null });
+          unrecognized: false, status: null, result: null, pairOwner: null });
       }
     }
   }

@@ -16,6 +16,7 @@ import {
   replyView, toolEntries, topSystemText,
 } from './body-view.js';
 import { createReaderStore } from './reader-store.js';
+import { isErrorText, loadStateText, pairStateText, renderTracePair } from './trace-pair.js';
 import { projectSteps, renderTraceRows } from './trace-view.js';
 
 /**
@@ -203,37 +204,9 @@ export function structureFoldHtml(input) {
 }
 
 /**
- * 关联状态的固定文案。
- * @param {string} state
+ * 关联与加载状态的固定文案已迁入 trace-pair.js，与配对页共用同一套口径。
+ * resolved 不当成功：is_error 三态表达工具是否报告失败。
  */
-function pairStateText(state) {
-  if (state === 'resolved') return '已确认配对';
-  if (state === 'pending') return '结果位置待定';
-  if (state === 'ambiguous') return '结果有多个候选，未配对';
-  return '还没有见到结果';
-}
-
-/**
- * 正文加载状态的固定文案。
- * @param {string} state
- */
-function loadStateText(state) {
-  if (state === 'not_loaded') return '待读取（打开结果页才发起）';
-  if (state === 'loading' || state === 'loaded') return state === 'loaded' ? '已读取' : '正在读取';
-  if (state === 'invalid_location') return '结果位置无效，不回退猜测';
-  if (state === 'available') return '已读取';
-  return '读取失败，可重试';
-}
-
-/**
- * is_error 三态：true 为失败、false 为上游未标错、null 为未报告；resolved 不当成功。
- * @param {boolean | null | undefined} isError
- */
-export function isErrorText(isError) {
-  if (isError === true) return '工具执行失败（is_error=true）';
-  if (isError === false) return '上游未标记错误（is_error=false）';
-  return '上游未报告错误标记（is_error 缺失，不等于成功）';
-}
 
 /**
  * 工具概览：配对状态与正文加载状态分立。模型响应时长归属请求，工具执行时长未采集。
@@ -256,52 +229,7 @@ export function toolOverviewHtml(ownerReq, pair, reading) {
     ${row('正文加载', esc(loadStateText(loadState)))}
     ${reading !== null && reading.state === 'available' ? row('错误标记', esc(isErrorText(reading.is_error))) : ''}
   </div>
-  <p class="rail-note">配对已确认只说明关联成立，不代表工具执行成功。模型响应时长归属承载它的请求；工具执行时长未采集。</p>`;
-}
-
-/**
- * 工具结果页。关联与正文加载分立；未读取不写未记录，读取失败保留重试，
- * 未确认的三种关联不显示结果正文，也不提供读取入口。
- * @param {number} ownerReq
- * @param {number} callOrd
- * @param {{state: string, result_req: number | null, result_ord: number | null} | null} pair
- * @param {import('../src/reading').ToolResultReading | null} reading
- * @param {{target?: string | null}} [labels] 目标请求的窗口展示号；缺省回退 req id
- * @returns {string}
- */
-export function toolResultPanel(ownerReq, callOrd, pair, reading, labels = {}) {
-  const pairState = pair === null || pair === undefined ? 'unpaired' : pair.state;
-  const loadState = reading === null ? 'not_loaded'
-    : reading.state === 'available' ? 'loaded' : reading.state;
-  const head = `<div class="detail-label">关联 ${esc(pairStateText(pairState))} · 正文加载 ${esc(loadStateText(loadState))}</div>
-    <div class="detail-label">调用方 · 请求 ${ownerReq} · 调用 #${callOrd}</div>`;
-  const targetButton = (/** @type {number} */ targetReq) => {
-    const label = labels.target ?? String(targetReq);
-    return `<button class="chip-btn" data-result-owner="${ownerReq}" data-call-ord="${callOrd}">查看承载结果的请求 ${esc(label)} →</button>`;
-  };
-  if (reading === null) {
-    if (pair !== null && pair.state === 'resolved' && pair.result_req !== null) {
-      return `${head}<p class="note">结果已确认配对，正文待读取；点「读取结果正文」才发起这一次读取。</p>
-        <div class="conv-tools">
-          <button class="chip-btn" data-tool-read="${ownerReq}" data-call-ord="${callOrd}">读取结果正文</button>
-          ${targetButton(pair.result_req)}
-        </div>`;
-    }
-    return `${head}<p class="note">${esc(pairStateText(pairState))}；没有可读取的结果正文。</p>`;
-  }
-  if (reading.state === 'available') {
-    return `${head}<pre class="raw" tabindex="0">${esc(typeof reading.content === 'string' ? reading.content : JSON.stringify(reading.content, null, 2) ?? '')}</pre>
-      <p class="note">${esc(isErrorText(reading.is_error))}</p>
-      ${reading.target !== null ? targetButton(reading.target.req_id) : ''}`;
-  }
-  if (reading.state === 'pending') return `${head}<p class="note">结果位置待定：派生还没算完，不猜配对。</p>`;
-  if (reading.state === 'ambiguous') return `${head}<p class="note">结果有多个候选，未配对；不显示任何候选正文。</p>`;
-  if (reading.state === 'unpaired') return `${head}<p class="note">还没有见到这一调用的结果。</p>`;
-  if (reading.state === 'invalid_location') {
-    return `${head}<p class="note warn">结果位置无效（${esc(reading.reason ?? '')}），不跨请求搜索或回退第一块。</p>`;
-  }
-  return `${head}<p class="note warn">结果正文不可读（${esc(reading.reason ?? '')}）。</p>
-    <button class="chip-btn" data-tool-retry="${ownerReq}" data-call-ord="${callOrd}">重试读取</button>`;
+  <p class="rail-note">配对已确认只说明关联成立，不代表工具执行成功。模型响应时长归属承载它的请求；工具执行时长未采集。配对页在同一屏阅读两端。</p>`;
 }
 
 /**
@@ -372,18 +300,24 @@ export function systemContextOf(row, readOf) {
 /**
  * 选中来源解析：把当前选中的步骤解析成右栏的阅读目标。
  * `state.selectedStep` 是唯一选择；右栏来源只从这一步解析，不按时间跳别的请求。
- * tool 调用继续走工具四页；System 与结果步骤打开正文来源；其余记录打开请求读数。
+ * 调用与已配对的结果步骤都解析成配对目标（owner + 调用序号），右栏就地同屏阅读；
+ * 未配对的结果、System 与其余输入步骤打开正文来源；记录步骤打开请求读数。
  * @param {import('./trace-view.js').TraceStep | null} step
  * @returns {{side:'none'}
  *   | {side:'request', target:'system', path:'request.system', text:string}
  *   | {side:'request', target:'message', path:string, messageOrd:number}
  *   | {side:'reply', target:'text', path:string, blockIndex:number, text:string}
  *   | {side:'reply', target:'block', path:string, blockIndex:number, raw:unknown}
- *   | {side:'reply', target:'call', path:string, callOrd:number}}
+ *   | {side:'reply', target:'call', path:string, callOrd:number, ownerReq:number}
+ *   | {side:'pair', ownerReq:number, callOrd:number}}
  */
 export function resolveSelectedSource(step) {
   if (step === null || step.source === null) return { side: 'none' };
   const s = step.source;
+  // 已配对的结果步骤优先解析成配对目标：它虽然落在 request 侧，阅读入口是两端同屏。
+  if (step.kind === 'tool_result' && step.pairOwner !== null) {
+    return { side: 'pair', ownerReq: step.pairOwner.reqId, callOrd: step.pairOwner.callOrd };
+  }
   if (s.side === 'request') {
     if (typeof s.messageOrd === 'number') {
       return { side: 'request', target: 'message', path: s.path, messageOrd: s.messageOrd };
@@ -391,7 +325,7 @@ export function resolveSelectedSource(step) {
     return { side: 'request', target: 'system', path: 'request.system', text: String(step.raw ?? '') };
   }
   if (step.kind === 'tool' && step.callOrd !== null) {
-    return { side: 'reply', target: 'call', path: s.path, callOrd: step.callOrd };
+    return { side: 'reply', target: 'call', path: s.path, callOrd: step.callOrd, ownerReq: step.reqId };
   }
   if (step.kind === 'assistant') {
     return { side: 'reply', target: 'text', path: s.path, blockIndex: s.blockIndex ?? 0, text: String(step.raw ?? '') };
@@ -446,8 +380,10 @@ if (typeof document !== 'undefined') {
     offPageReqId: /** @type {number | null} */ (null),
     selectedStep: /** @type {string | null} */ (null),
     toolOrd: /** @type {number | null} */ (null),
-    /** 工具详情四页的当前页：overview / params / result / schema。 */
-    toolPage: 'overview',
+    /** 配对页描述的调用属于哪笔请求：从结果步骤进入时可能与当前请求不同；null 表示当前请求。 */
+    toolOwner: /** @type {number | null} */ (null),
+    /** 工具详情四页的当前页：overview / params / pair / schema。 */
+    toolPage: 'pair',
     requestOpen: new Set(/** @type {number[]} */ ([])),
     railTab: ['body', 'tools', 'route'].includes(qp.get('tab') ?? '') ? qp.get('tab') : 'facts',
     query: '',
@@ -1090,7 +1026,8 @@ if (typeof document !== 'undefined') {
 
   /**
    * 工具页：未选中调用时列出全部调用（配对与正文加载分立）；
-   * 选中后是概览/参数/结果/Schema 四页，返回按钮回到调用列表。
+   * 选中后描述的是 owner 请求的那次调用（可能与当前请求不同），四页共用 owner 的读取，
+   * 第三页「配对」同屏阅读两端，其余三页沿用既有四页口径。
    */
   function railTools() {
     const r = currentRow();
@@ -1103,9 +1040,8 @@ if (typeof document !== 'undefined') {
         ${canLoad ? `<div style="margin-top:10px"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>`;
     }
     const detail = read.detail;
-    const page = read.meta;
-    const tools = toolEntries(detail, page);
     if (state.toolOrd === null) {
+      const tools = toolEntries(detail, read.meta);
       if (tools.length === 0) {
         return '<div class="rail-empty"><b>没有工具调用</b>这一笔已读回复里没有工具调用；更早分片读取后可再查。</div>';
       }
@@ -1118,25 +1054,39 @@ if (typeof document !== 'undefined') {
           ${warn}
         </button>`;
       });
-      return `<section class="rail-section"><h3>工具调用<span class="grow"></span><span class="hint">${tools.length} 次调用 · 点开看四页详情</span></h3>${rows.join('')}</section>`;
+      return `<section class="rail-section"><h3>工具调用<span class="grow"></span><span class="hint">${tools.length} 次调用 · 点开在右栏同屏配对阅读</span></h3>${rows.join('')}</section>`;
     }
+    const owner = state.toolOwner ?? r.req_id;
+    const ownerRead = owner === r.req_id ? read : reads.get(owner) ?? null;
+    if (ownerRead === null || ownerRead.meta === null) {
+      // 调用方读取未就绪：配对需要它的回复与配对状态；409 作废时给显式重读入口。
+      return `<div class="rail-empty"><b>正在读取调用方请求…</b>配对需要调用方的回复与配对状态，读取完成后自动展示两端。</div>
+        ${state.readingChanged.has(owner) ? readingChangedNote(owner) : ''}`;
+    }
+    const ownerDetail = ownerRead.detail;
+    const ownerPage = ownerRead.meta;
+    const tools = toolEntries(ownerDetail, ownerPage);
     const tool = tools.find(item => item.ord === state.toolOrd) ?? null;
     if (tool === null) {
       state.toolOrd = null;
+      state.toolOwner = null;
       return railTools();
     }
-    const pair = detail === null ? null : detail.tool_calls.find(item => item.ord === tool.ord) ?? null;
-    const reading = toolReadings.get(`${r.req_id}:${tool.ord}`) ?? null;
-    const targetId = pair !== null && pair.state === 'resolved' && pair.result_req !== null ? pair.result_req : null;
-    const pages = [['overview', '概览'], ['params', '参数'], ['result', '结果'], ['schema', 'Schema']];
+    const pair = ownerDetail === null ? null : ownerDetail.tool_calls.find(item => item.ord === tool.ord) ?? null;
+    const reading = toolReadings.get(`${owner}:${tool.ord}`) ?? null;
+    const pages = [['overview', '概览'], ['params', '参数'], ['pair', '配对'], ['schema', 'Schema']];
     const pageBody = state.toolPage === 'params'
       ? `<pre class="raw" tabindex="0">${esc(tool.inputText)}</pre>
         <div class="conv-tools"><button class="chip-btn" data-copy-tool="${tool.ord}">复制参数原文</button></div>`
-      : state.toolPage === 'result'
-        ? toolResultPanel(r.req_id, tool.ord, pair, reading, { target: targetId === null ? null : windowLabel(targetId) })
+      : state.toolPage === 'pair'
+        ? renderTracePair({
+          owner, ownerLabel: windowLabel(owner), call: tool, pair, reading,
+          carrierLabel: pair !== null && pair.state === 'resolved' && pair.result_req !== null
+            ? windowLabel(pair.result_req) : null,
+        })
         : state.toolPage === 'schema'
-          ? toolSchemaSection(page.capabilities, tool.name)
-          : toolOverviewHtml(r.req_id, pair, reading);
+          ? toolSchemaSection(ownerPage.capabilities, tool.name)
+          : toolOverviewHtml(owner, pair, reading);
     return `<section class="rail-section">
       <div class="tool-page-head">
         <button class="chip-btn" data-tool-back="1">← 返回请求</button>
@@ -1308,6 +1258,7 @@ if (typeof document !== 'undefined') {
     state.reqId = rows[rows.length - 1]?.req_id ?? null;
     state.selectedStep = null;
     state.toolOrd = null;
+    state.toolOwner = null;
     renderAll();
     void loadWindowReads();
     void ensureSelectedVisible();
@@ -1325,6 +1276,7 @@ if (typeof document !== 'undefined') {
     state.reqId = id;
     state.selectedStep = null;
     state.toolOrd = null;
+    state.toolOwner = null;
     state.missingReqId = null;
     state.offPageReqId = null;
     renderMain();
@@ -1383,12 +1335,28 @@ if (typeof document !== 'undefined') {
       return;
     }
     const selected = state.selectedStep;
-    if (selected !== null && selected.startsWith(`${id}:message:`)) {
-      const ord = Number(selected.split(':').pop());
+    // 结果步骤键是 message:N:result:M，序号取 message: 后的第一段，不能用最后一段。
+    const ordMatch = selected !== null ? new RegExp(`^${id}:message:(\\d+)`).exec(selected) : null;
+    if (ordMatch !== null) {
+      const ord = Number(ordMatch[1]);
       if (Number.isFinite(ord)) await ensureMessageOrd(id, ord);
     }
     renderMain();
     renderRail();
+  }
+
+  /**
+   * 配对页两端就绪：调用方读取完成后，按配对状态自动发起一次结果读取；
+   * 重复进入不重复读取（toolReadings 有键即跳过），失败保留显式重试。
+   * @param {number} ownerId @param {number} callOrd
+   */
+  async function ensurePair(ownerId, callOrd) {
+    await ensureRead(ownerId);
+    const pair = reads.get(ownerId)?.detail?.tool_calls.find(call => call.ord === callOrd) ?? null;
+    if (pair !== null && pair.state === 'resolved' && pair.result_req !== null
+      && !toolReadings.has(`${ownerId}:${callOrd}`)) {
+      void readToolResult(ownerId, callOrd);
+    }
   }
 
   /** @param {number} id @param {string|null} key */
@@ -1400,7 +1368,8 @@ if (typeof document !== 'undefined') {
       state.reqId = id;
       state.selectedStep = null;
       state.toolOrd = null;
-      state.toolPage = 'overview';
+      state.toolOwner = null;
+      state.toolPage = 'pair';
       state.railTab = 'facts';
       state.missingReqId = null;
       state.offPageReqId = null;
@@ -1416,11 +1385,16 @@ if (typeof document !== 'undefined') {
     const step = projectSteps(row, reads.get(id) ?? null, systemContextOf(row, x => reads.get(x) ?? null))
       .find(item => item.key === key) ?? null;
     const source = resolveSelectedSource(step);
+    // 调用步骤与已配对的结果步骤都进入配对页，右栏同屏阅读两端；
+    // 未配对的结果步骤保留正文定位，记录步骤打开请求读数。
+    const pairSource = source.side === 'pair' ? source
+      : source.side === 'reply' && source.target === 'call' ? source : null;
     state.reqId = id;
     state.selectedStep = key;
-    state.toolOrd = source.side === 'reply' && source.target === 'call' ? source.callOrd : null;
-    state.toolPage = 'overview';
-    state.railTab = source.side === 'reply' && source.target === 'call' ? 'tools'
+    state.toolOrd = pairSource !== null ? pairSource.callOrd : null;
+    state.toolOwner = pairSource !== null ? pairSource.ownerReq : null;
+    state.toolPage = 'pair';
+    state.railTab = pairSource !== null ? 'tools'
       : source.side === 'request' || source.side === 'reply' ? 'body' : 'facts';
     state.missingReqId = null;
     state.offPageReqId = null;
@@ -1436,6 +1410,7 @@ if (typeof document !== 'undefined') {
       if (current !== null && document.activeElement === document.body) current.focus();
     });
     await ensureRead(id);
+    if (pairSource !== null) await ensurePair(pairSource.ownerReq, pairSource.callOrd);
   }
 
   /** @param {number} id */
@@ -1508,6 +1483,7 @@ if (typeof document !== 'undefined') {
     state.offPageReqId = null;
     state.selectedStep = null;
     state.toolOrd = null;
+    state.toolOwner = null;
     state.requestOpen = new Set();
     state.railTab = 'facts';
     state.pendingSession = key;
@@ -1565,26 +1541,37 @@ if (typeof document !== 'undefined') {
     const toolSelect = /** @type {HTMLElement | null} */ (t.closest('[data-tool-select]'));
     if (toolSelect !== null) {
       state.toolOrd = Number(toolSelect.dataset.toolSelect);
-      state.toolPage = 'overview';
+      state.toolOwner = state.reqId;
+      state.toolPage = 'pair';
       if (state.reqId !== null) state.selectedStep = `${state.reqId}:call:${state.toolOrd}`;
       renderMain();
       renderRail();
       updateURL();
+      if (state.reqId !== null) void ensurePair(state.reqId, state.toolOrd);
       return;
     }
-    if (t.closest('[data-tool-back]') !== null) { state.toolOrd = null; renderRail(); updateURL(); return; }
+    if (t.closest('[data-tool-back]') !== null) {
+      state.toolOrd = null;
+      state.toolOwner = null;
+      renderRail();
+      updateURL();
+      return;
+    }
     const toolPageBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-page]'));
     if (toolPageBtn !== null) { state.toolPage = toolPageBtn.dataset.toolPage ?? 'overview'; renderRail(); return; }
+    // 工具往返行的配对入口：在右栏打开配对页就地阅读，不跳转中栏选择。
     const toolOwnerBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-owner]'));
     if (toolOwnerBtn !== null) {
       const owner = Number(toolOwnerBtn.dataset.toolOwner);
       state.toolOrd = Number(toolOwnerBtn.dataset.callOrd);
-      state.toolPage = 'result';
+      state.toolOwner = owner;
+      state.toolPage = 'pair';
       state.railTab = 'tools';
       state.selectedStep = `${owner}:call:${state.toolOrd}`;
       renderMain();
       renderRail();
       updateURL();
+      void ensurePair(owner, state.toolOrd);
       return;
     }
     const toolRead = /** @type {HTMLElement | null} */ (t.closest('[data-tool-read]'));
@@ -1599,7 +1586,9 @@ if (typeof document !== 'undefined') {
     }
     const copyTool = /** @type {HTMLElement | null} */ (t.closest('[data-copy-tool]'));
     if (copyTool !== null) {
-      const read = currentRead();
+      // 参数页可能与配对页一样描述窗口外 owner 的调用：复制走 owner 的读取。
+      const ownerOfTool = state.toolOwner ?? state.reqId;
+      const read = ownerOfTool !== null ? reads.get(ownerOfTool) ?? null : null;
       const tool = read !== null && read.meta !== null
         ? toolEntries(read.detail, read.meta).find(item => item.ord === Number(copyTool.dataset.copyTool)) ?? null
         : null;
@@ -1613,20 +1602,6 @@ if (typeof document !== 'undefined') {
     }
     const railReply = t.closest('[data-rail-reply]');
     if (railReply !== null) { state.selectedStep = null; renderRail(); return; }
-    // 工具详情里的结果入口：先读取，再定位承载请求。
-    const resultEntry = /** @type {HTMLElement | null} */ (t.closest('[data-result-owner]'));
-    if (resultEntry !== null) {
-      const owner = Number(resultEntry.dataset.resultOwner);
-      const ord = Number(resultEntry.dataset.callOrd);
-      void (async () => {
-        await readToolResult(owner, ord);
-        const target = toolReadings.get(`${owner}:${ord}`)?.target?.req_id ?? null;
-        if (target !== null && currentRows().some(row => row.req_id === target)) locateRequest(target);
-      })();
-      return;
-    }
-    const locate = /** @type {HTMLElement | null} */ (t.closest('[data-locate]'));
-    if (locate !== null) { locateRequest(Number(locate.dataset.locate)); return; }
     const copyMsg = /** @type {HTMLElement | null} */ (t.closest('[data-copy-msg]'));
     if (copyMsg !== null) {
       const ord = Number(copyMsg.dataset.copyMsg);
@@ -1653,6 +1628,7 @@ if (typeof document !== 'undefined') {
           state.reqId = reqId;
           state.selectedStep = `${reqId}:message:${msg.dataset.msg}`;
           state.toolOrd = null;
+          state.toolOwner = null;
           renderMain();
           renderRail();
           updateURL();
@@ -1665,6 +1641,7 @@ if (typeof document !== 'undefined') {
         state.reqId = id;
         state.selectedStep = `${id}:message:${msg.dataset.msg}`;
         state.toolOrd = null;
+        state.toolOwner = null;
         state.railTab = 'body';
         renderMain();
         renderRail();
@@ -1706,6 +1683,7 @@ if (typeof document !== 'undefined') {
     state.reqId = reqId;
     state.selectedStep = `${reqId}:message:${target.value}`;
     state.toolOrd = null;
+    state.toolOwner = null;
     renderRail();
     updateURL();
   });
@@ -1745,7 +1723,7 @@ if (typeof document !== 'undefined') {
   document.addEventListener('keydown', (e) => {
     const target = /** @type {HTMLElement} */ (e.target);
     if (target.matches('input, textarea, summary')) return;
-    if (e.key === 'Escape') { state.railTab = 'facts'; state.toolOrd = null; renderRail(); updateURL(); }
+    if (e.key === 'Escape') { state.railTab = 'facts'; state.toolOrd = null; state.toolOwner = null; renderRail(); updateURL(); }
   });
 
   el('theme-toggle').addEventListener('click', () => {
@@ -1879,6 +1857,7 @@ if (typeof document !== 'undefined') {
     state.offPageReqId = null;
     state.railTab = ['body', 'tools', 'route'].includes(p.get('tab') ?? '') ? p.get('tab') : 'facts';
     state.toolOrd = null;
+    state.toolOwner = null;
     if (state.session !== null) {
       const trace = p.get('trace');
       void selectSession(state.session, trace === null ? null : Number(trace));
