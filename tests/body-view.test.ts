@@ -566,3 +566,32 @@ test('能力折叠区带稳定键，重绘后按名字恢复开合', () => {
   expect(html).toContain('data-fold="cap:tool:Bash"');
   expect(html).not.toContain('<details open');
 });
+
+test('协议未适配的能力行说明解释边界，不显示零技能', () => {
+  const html = renderCapabilities(page({
+    state: 'available', parse_state: 'unsupported',
+    capabilities: {
+      tools: { state: 'missing', items: [], reason: 'protocol_unsupported' },
+      skills: { state: 'missing', items: [], reason: 'protocol_unsupported' },
+      coverage: { complete: true, reason: 'available', from: 0, to: 0, total: null },
+      agent: null,
+    },
+  }));
+  expect(html).toContain('协议未适配');
+  expect(html).not.toContain('零');
+  // 保存覆盖与协议解释分开：原文完整但未适配时给出明确说明。
+  expect(bodyNotice(page({
+    state: 'available', parse_state: 'unsupported',
+    reply: { id: 'resp_1', output: [] },
+  }))).toContain('协议未适配');
+  // 支持协议的 missing 保持原有文案。
+  const missing = renderCapabilities(page({
+    capabilities: {
+      tools: { state: 'missing', items: [], reason: 'body_unavailable' },
+      skills: { state: 'missing', items: [], reason: 'body_unavailable' },
+      coverage: { complete: false, reason: 'body_unavailable', from: 0, to: 0, total: null },
+      agent: null,
+    },
+  }));
+  expect(missing).toContain('工具定义缺失');
+});

@@ -414,6 +414,8 @@ export function toolEntries(detail, page) {
 
 /**
  * 正文状态说明。已回收、未到、不支持都带原因，界面上不显示成空对话。
+ * 保存覆盖（state）与协议解释（parse_state）分开：原文完整但协议未适配时
+ * 保留原对象阅读，不显示成空消息或零技能。
  * @param {BodyPage | null} page
  */
 export function bodyNotice(page) {
@@ -422,6 +424,7 @@ export function bodyNotice(page) {
   if (page.state === 'pending') return page.reason === null ? '正文未到；回调可能稍后到达。' : `正文未到：${page.reason}`;
   if (page.state === 'unsupported') return '原对象已保存，暂不支持结构化解析';
   if (page.state === 'partial') return page.reason === null ? '正文不完整：只有部分内容可用。' : `正文不完整：${page.reason}`;
+  if (page.parse_state === 'unsupported') return '协议未适配：原对象已保存，可按原文阅读请求字段与回复，消息结构不按已知协议解释。';
   if (page.reply_state === 'absent') return '已保存请求，上游未提供可用回复。';
   return '';
 }
@@ -741,7 +744,7 @@ export function renderCapabilities(page) {
   const view = page === null || page === undefined ? null : page.capabilities;
   if (view === null || view === undefined) return '';
   /**
-   * @param {{state: string, items: {name: string}[]}} result
+   * @param {{state: string, items: {name: string}[], reason: string | null}} result
    * @param {string} label @param {string} key @param {string} listHtml @param {Record<string, string>} text
    */
   const row = (result, label, key, listHtml, text) => {
@@ -752,9 +755,14 @@ export function renderCapabilities(page) {
       </details>`;
     }
     if (result.state === 'present' || result.state === 'empty') return '';
+    // 协议未适配是解释边界，不是数据缺失：完整保存也不能推导出零技能。
+    const note = result.reason === 'protocol_unsupported'
+      ? '协议未适配：保存的原文可读，但无法按已知协议判定这一笔携带的工具与技能。'
+      : text[result.state] ?? result.state;
+    const chip = result.reason === 'protocol_unsupported' ? '协议未适配' : text[result.state] ?? result.state;
     return `<details class="rail-fold" data-fold="${key}">
-      <summary>${label}<span class="fold-count warn">${esc(text[result.state] ?? result.state)}</span></summary>
-      <div class="fold-body"><p class="note">${esc(text[result.state] ?? result.state)}</p></div>
+      <summary>${label}<span class="fold-count warn">${esc(chip)}</span></summary>
+      <div class="fold-body"><p class="note">${esc(note)}</p></div>
     </details>`;
   };
   return row(view.tools, '工具清单', 'cap:tools',

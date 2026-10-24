@@ -161,6 +161,13 @@ export function extractSkills(
   return { state: 'empty', items: [], reason: 'no_skill_declaration' };
 }
 
+/**
+ * 一笔请求的能力视图。
+ *
+ * 覆盖状态（coverage）描述已保存正文的读取情况，协议能否解释由调用方传入的
+ * parse_state/协议名决定：未适配协议的工具与技能统一报
+ * `missing/protocol_unsupported`——完整保存不证明技能可判定，不以零冒充未知。
+ */
 export function capabilityView(input: {
   protocol: string;
   request: unknown;
@@ -169,9 +176,13 @@ export function capabilityView(input: {
   systemPresent: boolean;
   agent: string | null;
 }): CapabilityView {
+  const supported = input.protocol === 'anthropic' || input.protocol === 'chat';
+  const unsupported: 'protocol_unsupported' = 'protocol_unsupported';
   return {
-    tools: extractTools(input.protocol, input.request),
-    skills: extractSkills(input.systemTexts, input.coverage, input.systemPresent, input.agent),
+    tools: supported ? extractTools(input.protocol, input.request)
+      : { state: 'missing', items: [], reason: unsupported },
+    skills: supported ? extractSkills(input.systemTexts, input.coverage, input.systemPresent, input.agent)
+      : { state: 'missing', items: [], reason: unsupported },
     coverage: input.coverage,
     agent: input.agent,
   };
