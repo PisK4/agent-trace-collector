@@ -68,10 +68,10 @@
 - [x] 统一 cursor upsert，删除 `fileCursorOf` / `routeCursorOf`，保留 gzip 整体指纹和半行不推进。
 - [x] 将在线 ledger/route 调度接入统一摄入入口；暂停与缺口逻辑保持可恢复。账本显式保留 `usage.jsonl` 身份，稳定半行不重复写观察位置。
 - [x] 执行 `bun test tests/files.test.ts tests/reconcile.test.ts`，按调用方影响补跑 hook、retention 与 maintenance 测试；不重复已通过且未再改变的检查。在线接线后 main、reconcile、retention、maintenance 共 81 项测试通过。
-- [x] 更新文档与 note，执行门禁并提交 `refactor(ingest): commit source evidence and cursors atomically`。C3 读取与摄入测试在子任务中 49 项通过，扩展旧调用方后 98 项通过；父线程在线集成后 81 项测试与全库 typecheck 通过，Agent Note 与差异格式检查通过。
+- [x] 更新文档与 note，执行门禁并提交 `refactor(ingest): commit source evidence and cursors atomically`（`40fa2ad`）。C3 读取与摄入测试在子任务中 49 项通过，扩展旧调用方后 98 项通过；父线程在线集成后 81 项测试与全库 typecheck 通过，Agent Note 与差异格式检查通过。
 
 ### 收尾
 
 - [x] 检查 C1.5：查询、会话标题与 reading token 已有发布代读取，`tests/queries.test.ts`、`tests/reading.test.ts`、`tests/http.test.ts` 通过；交接对迁移范围的描述过时。生产开关继续冻结，后续核验实际切片发布后的读侧完整性、算法切换和长组容量，不能仅据读代测试解除启用限制。C4 保持冻结，右栏虽已出现新提交，后续阅读修复仍在进行。
 - [x] 对实现差异进行独立审查；C1/C2 未发现可复现的正确性缺陷。审查方补跑工作单元与存储 20 项回归，并用临时合成探针核验未发布切片的重开恢复与 Bun 嵌套事务行为；C3 由父线程核对记录语义、调用方和最终接线。
-- [ ] 运行剩余必要检查，核对阶段提交与用户 WIP，提供按仓库分类的英文 Git commit message。
+- [x] 运行剩余必要检查，核对阶段提交与用户 WIP，提供按仓库分类的英文 Git commit message。阶段提交为 `3870eea`、`9f36f50`、`40fa2ad`；工作区剩余的阅读角色提案、计划、旧 note 反向链接与页面改动属于另一条工作线，未纳入本任务。生产切片与 C4 的冻结未改变，5 rps 目标仍未重新验收。
