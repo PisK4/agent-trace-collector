@@ -6,6 +6,7 @@ import {
   mapRouteRow,
 } from './magpie';
 import type { LedgerFields, RouteFields } from './magpie';
+import { HAVE_LEDGER } from '../evidence';
 import {
   buildProjectionMeta,
   buildSourceFacts,
@@ -639,7 +640,7 @@ function buildProjection(db: Database, reqId: number, version: number): RequestP
 function writeProjectionTx(db: Database, reqId: number, projection: RequestProjection, now: number): void {
   const sets: string[] = [];
   const params: (string | number | null)[] = [];
-  if (projection.families.attempts.basis.length > 0) sets.push('have=have|2');
+  if (projection.families.attempts.basis.length > 0) sets.push(`have=have|${HAVE_LEDGER}`);
   if (projection.attempts.state === 'complete') {
     const fields = projection.selected?.fields ?? null;
     sets.push(

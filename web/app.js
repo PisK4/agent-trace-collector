@@ -596,6 +596,8 @@ if (typeof document !== 'undefined') {
     const chars = [...flat];
     return chars.length <= max ? flat : `${chars.slice(0, max).join('')}…`;
   }
+  // have 位义与 src/evidence.ts 一致：1 正文回调、2 账本用量、4 路由历史。
+  const HAVE_BODY = 1, HAVE_LEDGER = 2, HAVE_ROUTE = 4;
   /** @param {string} value */
   function shortId(value) {
     return value.length > 12 ? `${value.slice(0, 8)}…` : value;
@@ -711,8 +713,8 @@ if (typeof document !== 'undefined') {
   }
   /** @param {RequestRow} r */
   function viaText(r) {
-    if (!(r.have & 2)) return '仅回调，未关联账本';
-    if (!(r.have & 1)) return '仅账本，没有回调';
+    if (!(r.have & HAVE_LEDGER)) return '仅回调，未关联账本';
+    if (!(r.have & HAVE_BODY)) return '仅账本，没有回调';
     return '账本 + 回调';
   }
   /** @param {RequestRow[]} rows */
@@ -865,9 +867,9 @@ if (typeof document !== 'undefined') {
     const row = (/** @type {string} */ k, /** @type {string} */ v, /** @type {string} */ color) =>
       `<div class="chain-row"><dt>${k}</dt><dd><span style="color:${color}">${v}</span></dd></div>`;
     return `<div class="chain">
-      ${row('正文回调', (r.have & 1) ? '已收到' : '未收到', (r.have & 1) ? 'var(--good)' : 'var(--bad)')}
-      ${row('用量账本', (r.have & 2) ? '已关联' : '待关联', (r.have & 2) ? 'var(--good)' : 'var(--warn)')}
-      ${row('路由历史', (r.have & 4) ? '已关联' : '当前来源不提供', (r.have & 4) ? 'var(--good)' : 'var(--muted)')}
+      ${row('正文回调', (r.have & HAVE_BODY) ? '已收到' : '未收到', (r.have & HAVE_BODY) ? 'var(--good)' : 'var(--bad)')}
+      ${row('用量账本', (r.have & HAVE_LEDGER) ? '已关联' : '待关联', (r.have & HAVE_LEDGER) ? 'var(--good)' : 'var(--warn)')}
+      ${row('路由历史', (r.have & HAVE_ROUTE) ? '已关联' : '当前来源不提供', (r.have & HAVE_ROUTE) ? 'var(--good)' : 'var(--muted)')}
     </div>
     <p class="note" style="margin-top:8px">三条通道各自可能缺失。${detail && detail.prev_relation === 'unknown' ? '本笔与上一笔的增量关系无法确认，未计算新增消息。' : ''}
       ${r.miss_reason ? `缺失原因：${esc(r.miss_reason)}。` : ''}</p>`;
@@ -970,8 +972,8 @@ if (typeof document !== 'undefined') {
    */
   function completenessSection(r) {
     const rows = [
-      !(r.have & 1) ? ['正文回调', '未收到', 'var(--bad)'] : '',
-      !(r.have & 2) ? ['用量账本', '待关联', 'var(--warn)'] : '',
+      !(r.have & HAVE_BODY) ? ['正文回调', '未收到', 'var(--bad)'] : '',
+      !(r.have & HAVE_LEDGER) ? ['用量账本', '待关联', 'var(--warn)'] : '',
     ].filter(Boolean);
     if (rows.length === 0) return '';
     return `<section class="rail-section">

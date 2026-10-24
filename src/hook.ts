@@ -12,6 +12,7 @@ import {
   resetRequestInputEpochTx,
 } from './derive-state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
+import { HAVE_BODY, MATCH_BY_RESPONSE_ID, hookConv, insertEvidenceTx } from './evidence';
 
 /**
  * hook 回调的接收与证据关联。
@@ -82,12 +83,6 @@ export function utf8Bytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value) ?? '', 'utf8');
 }
 
-function convKey(session: string | null, hookId: string): { key: string; source: string } {
-  return session !== null
-    ? { key: JSON.stringify(['session', session]), source: 'session' }
-    : { key: JSON.stringify(['hook', hookId]), source: 'hook' };
-}
-
 function bytesOf(value: unknown): Uint8Array {
   return new Uint8Array(Buffer.from(JSON.stringify(value) ?? '', 'utf8'));
 }
@@ -123,7 +118,7 @@ function insertHookRequest(
   now: number,
   responseIdNorm: string | null,
 ): number {
-  const conv = convKey(envelope.session, envelope.hook_id);
+  const conv = hookConv(envelope.session, envelope.hook_id);
   // hook 阶段只知道会话，不知道 actor；actor_state 留 unknown，等账本或路由确认。
   const actor = envelope.session;
   const started = Number.isFinite(envelope.observed_start_ms) ? envelope.observed_start_ms : now;
@@ -255,10 +250,8 @@ export function acceptHook(
       );
     }
 
-    db.run(
-      'INSERT OR IGNORE INTO request_evidence(req_id,source_kind,ref_key,merge_state,match_rule,added_at) VALUES (?,?,?,?,?,?)',
-      [reqId, 'hook', envelope.hook_id, joined.target === null ? 'pending' : 'merged', 'response_id_norm.v1', now],
-    );
+    insertEvidenceTx(db, reqId, 'hook', envelope.hook_id,
+      joined.target === null ? 'pending' : 'merged', MATCH_BY_RESPONSE_ID, now);
     db.run(
       `INSERT INTO raw_hook(hook_id,received_at,protocol,path,agent,session,cwd,origin,model,stream,success,duration_ms,
          request_z,response_z,request_bytes,response_bytes,parse_state,reply_state,miss_reason,magpie_version)
@@ -278,7 +271,7 @@ export function acceptHook(
     );
 
     savePending(db, envelope, responseIdNorm, joined.candidates, now);
-    db.run('UPDATE request SET have=have|1, updated_at=? WHERE req_id=?', [now, reqId]);
+    db.run(`UPDATE request SET have=have|${HAVE_BODY}, updated_at=? WHERE req_id=?`, [now, reqId]);
     projectRequestTx(db, reqId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
     // 直接命中已有请求与新建请求都要推进修订：hook 证据、正文与降级原因都是派生输入。
     // metadata-only 分支虽然没写正文，但证据与 miss_reason 变了，同样不能复用旧结论。
@@ -346,7 +339,7 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
        response_id_norm=COALESCE(response_id_norm,(SELECT response_id_norm FROM request WHERE req_id=?)),
        conv_key=COALESCE(conv_key,(SELECT conv_key FROM request WHERE req_id=?)),
        conv_source=COALESCE(conv_source,(SELECT conv_source FROM request WHERE req_id=?)),
-       have=have|1, updated_at=?
+       have=have|${HAVE_BODY}, updated_at=?
      WHERE req_id=?`,
     [sourceId, sourceId, sourceId, now, targetId],
   );

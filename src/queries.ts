@@ -3,6 +3,7 @@ import type { BodyState } from './store';
 import { resolveRequestId, type Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
 import { groupCurrentSql, groupIsCurrent } from './derive-state';
+import { HAVE_BODY } from './evidence';
 
 export type Page<T> = { items: T[]; next_cursor: string | null };
 export type CostState = 'priced' | 'zero' | 'unpriced' | 'absent';
@@ -156,7 +157,7 @@ type SessionDbRow = {
 const SESSION_FLAG_COLUMNS = `
   MAX(CASE WHEN status IS NOT NULL AND status >= 400 THEN 1 ELSE 0 END) AS has_failed,
   MAX(CASE WHEN actor_state = 'unknown' OR prev_relation = 'unknown' THEN 1 ELSE 0 END) AS has_unknown,
-  MAX(CASE WHEN body_state <> 'available' OR (have & 1) = 0 THEN 1 ELSE 0 END) AS has_missing`;
+  MAX(CASE WHEN body_state <> 'available' OR (have & ${HAVE_BODY}) = 0 THEN 1 ELSE 0 END) AS has_missing`;
 
 /** 队列与发布代结果行的一对 join；发布代按队列指针取，不跨代。 */
 const DERIVED_JOIN = (g: string, d: string, r: string) => `LEFT JOIN derive_queue ${g} ON ${g}.conv_key=${r}.conv_key AND ${g}.actor=${r}.actor

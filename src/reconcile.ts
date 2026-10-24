@@ -18,6 +18,7 @@ import { SOURCE_PROJECTION_VERSION, projectRequestTx, projectionSignature, readP
 import { markOwnershipChangeTx, markRequestInputTx, requestGroupTx } from './derive-state';
 import type { RequestProjection } from './sources/projection';
 import { closeSourceGapsTx, markStaleGapsTx, recordPausedBatchTx } from './retention';
+import { HAVE_LEDGER, HAVE_ROUTE, insertEvidenceTx, ledgerConv, routeConv, sessionRef } from './evidence';
 
 /** 一次来源摄入的计数。账本与路由共用同一组字段，便于调用方统一记录。 */
 export type SourceIngestResult = {
@@ -289,12 +290,6 @@ function currentRequest(db: Database, reqId: number): CurrentRequest {
   ).get(reqId)!;
 }
 
-function sessionConv(session: string | null, refKey: string): { key: string; source: string } {
-  return session !== null
-    ? { key: JSON.stringify(['session', session]), source: 'session' }
-    : { key: JSON.stringify(['request', refKey]), source: 'request' };
-}
-
 function insertRequest(
   db: Database,
   fields: LedgerFields,
@@ -302,7 +297,7 @@ function insertRequest(
   now: number,
 ): number {
   const via = fields.source === 'rejected' ? 'rejected' : (fields.via ?? 'through');
-  const conv = sessionConv(fields.session, refKey);
+  const conv = ledgerConv(fields.session, refKey);
   const actor = fields.subagent ?? fields.session ?? null;
   const title = modelTimeTitle(fields.model ?? fields.served, fields.tMs);
   // 行级事实列由紧随其后的投影写入：这里传 NULL 而不是先拿这一行冒充最终尝试。
@@ -372,7 +367,7 @@ function applyLedgerOwnershipTx(
   const subagent = identity.state === 'complete' ? identity.subagent : null;
   const actor = subagent ?? session ?? null;
   const conv = session !== null && (current.conv_source === 'request' || current.conv_source === null)
-    ? { key: JSON.stringify(['session', session]), source: 'session' }
+    ? sessionRef(session)
     : null;
   const started = identity.startedMs ?? fields.tMs;
   const clearSort = identity.orderState === 'unprovable';
@@ -390,7 +385,7 @@ function applyLedgerOwnershipTx(
        actor_state=CASE WHEN actor_state='known' THEN actor_state ELSE ? END,
        sort_source=CASE WHEN ?=1 THEN NULL WHEN ?=1 THEN 'ledger' ELSE sort_source END,
        sort_key=CASE WHEN ?=1 THEN NULL WHEN ?=1 THEN ? ELSE sort_key END,
-       title=?, title_source=?, updated_at=?, have=have|2
+       title=?, title_source=?, updated_at=?, have=have|${HAVE_LEDGER}
      WHERE req_id=?`,
     [
       session, identity.agent, subagent, identity.parentAgent,
@@ -407,10 +402,7 @@ function applyLedgerOwnershipTx(
 }
 
 function attachRouteEvidenceTx(db: Database, reqId: number, routeId: number, now: number): void {
-  db.run(
-    'INSERT OR IGNORE INTO request_evidence(req_id,source_kind,ref_key,merge_state,match_rule,added_at) VALUES (?,?,?,?,?,?)',
-    [reqId, 'route', String(routeId), 'merged', null, now],
-  );
+  insertEvidenceTx(db, reqId, 'route', String(routeId), 'merged', null, now);
 }
 
 /**
@@ -420,11 +412,7 @@ function attachRouteEvidenceTx(db: Database, reqId: number, routeId: number, now
  */
 function applyRouteOwnershipTx(db: Database, reqId: number, route: RouteFields, now: number): void {
   const current = currentRequest(db, reqId);
-  const conv = route.session !== null
-    ? { key: JSON.stringify(['session', route.session]), source: 'session' }
-    : route.conv !== null
-      ? { key: JSON.stringify(['conv', route.conv]), source: 'conv' }
-      : null;
+  const conv = routeConv(route.session, route.conv);
   const convUpdate = conv !== null && (
     current.conv_source === 'request' ||
     current.conv_source === null ||
@@ -439,7 +427,7 @@ function applyRouteOwnershipTx(db: Database, reqId: number, route: RouteFields, 
        actor=CASE WHEN actor_state='known' THEN actor ELSE ? END,
        actor_state=CASE WHEN actor_state='known' THEN actor_state ELSE ? END,
        sort_source=COALESCE(sort_source,'route'), sort_key=COALESCE(sort_key,?),
-       title=?, have=have|4, updated_at=?
+       title=?, have=have|${HAVE_ROUTE}, updated_at=?
      WHERE req_id=?`,
     [
       route.session, route.agent,
@@ -506,10 +494,7 @@ function mergeLedgerRow(
   }
   // 基线必须在本次证据写入之前取：写完再读只会读到已含新证据的结果。
   const baseline = projectionBaselineTx(db, reqId);
-  db.run(
-    'INSERT OR IGNORE INTO request_evidence(req_id,source_kind,ref_key,merge_state,match_rule,added_at) VALUES (?,?,?,?,?,?)',
-    [reqId, 'ledger', refKey, 'merged', null, now],
-  );
+  insertEvidenceTx(db, reqId, 'ledger', refKey, 'merged', null, now);
   if (!rejected && fields.routeId !== null) linkRouteIfPresent(db, reqId, fields.routeId, now, baseline);
   // 行级事实只由投影写；投影幂等，route 挂载前后各调一次不改变结果。
   const projection = projectLedgerRequestTx(db, reqId, now, baseline);
