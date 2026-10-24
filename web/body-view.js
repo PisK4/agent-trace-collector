@@ -666,6 +666,26 @@ export function partColor(kind) {
   return index < 0 ? 'var(--p-unknown)' : `var(--p${index + 1})`;
 }
 
+// —— 工具身份强调色：六个核心工具各一色相，其余统一中性 ——
+
+/**
+ * 工具名 → 色类。行内 chip、面板头 bp-kind 与正文 tool-chip 共用这一套类名，
+ * 颜色只承载工具身份一个语义；新工具（含 MCP）落中性色，无需改代码。
+ * @param {string} name
+ */
+export function toolTint(name) {
+  switch (name) {
+    case 'Read': return 'tint-read';
+    case 'Edit': return 'tint-edit';
+    case 'Write': return 'tint-write';
+    case 'Bash':
+    case 'bash': return 'tint-bash';
+    case 'Skill': return 'tint-skill';
+    case 'Agent': return 'tint-agent';
+    default: return 'tint-other';
+  }
+}
+
 // —— 请求能力：工具清单与技能清单 ——
 
 const TOOL_STATE_TEXT = {

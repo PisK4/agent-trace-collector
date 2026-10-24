@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { toolTint } from '../web/body-view.js';
 import { resolveSelectedSource } from '../web/rail-facts.js';
 import { projectSteps, renderTraceRows, toolSummary } from '../web/trace-view.js';
 
@@ -228,7 +229,7 @@ test('回复来源是实际协议路径：Anthropic content[i]，Chat tool_calls
   expect(record[0]?.source).toBeNull();
 });
 
-test('英文角色标签与内容类型上屏：调用 Assistant + Tool call，结果 Tool + Tool result', () => {
+test('工具行上屏：chip 承载工具身份，未配对结果保持中性 Tool result', () => {
   const d = detail({ delta_ordinals: [2] });
   const mixed = {
     ord: 2, role: 'user', rawRole: 'user',
@@ -236,15 +237,85 @@ test('英文角色标签与内容类型上屏：调用 Assistant + Tool call，�
     preview: 'file body', input: null, isInput: false,
   };
   const steps = projectSteps(row(), read(d, [mixed], { stop_reason: 'tool_use', content: [
-    { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } },
+    { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls', description: '列目录' } },
   ] }));
   const html = renderTraceRows(row(), steps, 3, null);
   expect(html).toContain('>Assistant<');
-  expect(html).toContain('Tool call');
   expect(html).toContain('>Tool<');
-  expect(html).toContain('Tool result');
+  // 调用行：工具名 chip 带色类，参数段不再重复工具名。
+  expect(html).toContain('row-tint tint-bash">Bash</span>');
+  expect(html).toContain('<code>列目录</code>');
+  // 未配对结果行：中性 chip 沿用现状文案。
+  expect(html).toContain('row-tint tint-other">Tool result</span>');
+  expect(html).not.toContain('row-kind');
+  expect(html).not.toContain('Tool call');
   expect(html).not.toContain('用户');
   expect(html).not.toContain('工具<');
+});
+
+test('结果行前缀三级：缓存内同款摘要、缓存外只工具名、未配对中性', () => {
+  const d = detail({ delta_ordinals: [2], tool_results: [
+    { call_id: 'c1', ord: 1, tool_name: 'Read', owner_req: 3, result_req: 7,
+      result_ord: 2, result_path: 'request.messages[2].content[0]', state: 'resolved' },
+  ] });
+  const carrier = {
+    ord: 2, role: 'user', rawRole: 'user',
+    blocks: [{ kind: 'result', text: '文件正文', index: 0, raw: {}, path: 'content[0]' }],
+    preview: '文件正文', input: null, isInput: false,
+  };
+  const steps = projectSteps(row(), read(d, [carrier], { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
+  const callOf = (ownerReq: number, callOrd: number) => {
+    expect(ownerReq).toBe(3);
+    expect(callOrd).toBe(1);
+    return { name: 'Read', inputText: JSON.stringify({ file_path: '/u/src/q.ts', offset: 1400, limit: 130 }) };
+  };
+  const cached = renderTraceRows(row(), steps, 1, null, callOf);
+  // 一级：chip 与调用行同款摘要（工具名 · 参数段），正文以 muted 箭头跟随。
+  expect(cached).toContain('row-tint tint-read">Read · q.ts · 1400–1530 行</span>');
+  expect(cached).toContain('row-arrow');
+  expect(cached).toContain('文件正文');
+  // 二级：装配层查不到调用方（返回 null）时只显示工具名，仍带工具色。
+  const outside = renderTraceRows(row(), steps, 1, null,
+    () => null);
+  expect(outside).toContain('row-tint tint-read">Read</span>');
+  expect(outside).not.toContain('row-arrow');
+  // 三级：未配对（pairOwner 为 null）中性 chip，不猜归属。
+  const unpairedSteps = projectSteps(row(), read(detail({ delta_ordinals: [2] }), [carrier],
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
+  const unpaired = renderTraceRows(row(), unpairedSteps, 1, null, callOf);
+  expect(unpaired).toContain('row-tint tint-other">Tool result</span>');
+  // 结果行悬停给完整结果正文。
+  expect(cached).toContain('title="文件正文"');
+});
+
+test('调用行悬停放完整参数 JSON，预览只放参数段', () => {
+  const steps = projectSteps(row(), read(detail(), [], { stop_reason: 'tool_use', content: [
+    { type: 'tool_use', id: 'c1', name: 'Read', input: { file_path: '/u/very/long/path/queries.ts', offset: 1, limit: 5 } },
+  ] }));
+  const html = renderTraceRows(row(), steps, 1, null);
+  expect(html).toContain('title="{&quot;file_path&quot;:&quot;/u/very/long/path/queries.ts&quot;,&quot;offset&quot;:1,&quot;limit&quot;:5}"');
+  expect(html).toContain('<code>queries.ts · 1–6 行</code>');
+});
+
+test('is_error=true 的结果行带异常态，正常行没有', () => {
+  const failedBlock = {
+    ord: 2, role: 'user', rawRole: 'user',
+    blocks: [{ kind: 'result', text: 'boom', index: 0, raw: { is_error: true }, path: 'content[0]', failed: true }],
+    preview: 'boom', input: null, isInput: false,
+  };
+  const okBlock = {
+    ord: 2, role: 'user', rawRole: 'user',
+    blocks: [{ kind: 'result', text: 'fine', index: 0, raw: { is_error: false }, path: 'content[0]', failed: false }],
+    preview: 'fine', input: null, isInput: false,
+  };
+  const failedSteps = projectSteps(row(), read(detail({ delta_ordinals: [2] }), [failedBlock],
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
+  expect(failedSteps.find(s => s.kind === 'tool_result')?.isError).toBe(true);
+  expect(renderTraceRows(row(), failedSteps, 1, null)).toContain('compact-row step-error');
+  const okSteps = projectSteps(row(), read(detail({ delta_ordinals: [2] }), [okBlock],
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
+  expect(okSteps.find(s => s.kind === 'tool_result')?.isError).toBe(false);
+  expect(renderTraceRows(row(), okSteps, 1, null)).not.toContain('step-error');
 });
 
 test('dirty、branch、unknown 没有确定用户步骤', () => {
@@ -309,13 +380,74 @@ test('HTTP 失败、缺正文与已有步骤并存', () => {
   expect(missingBody.some(s => s.status === 'missing_body')).toBe(true);
 });
 
-test('工具摘要只给动作对象，不含结果正文', () => {
-  expect(toolSummary('Bash', '{"command":"bun test x.ts"}')).toBe('Bash · bun test x.ts');
-  expect(toolSummary('read_file', '{"file_path":"src/a.ts"}')).toBe('read_file · src/a.ts');
-  expect(toolSummary('x', 'not json')).toBe('x · not json');
+test('工具摘要按工具分派：Read 行区间四种组合', () => {
+  expect(toolSummary('Read', JSON.stringify({ file_path: '/Users/pis/src/queries.ts', offset: 1400, limit: 130 })))
+    .toBe('Read · queries.ts · 1400–1530 行');
+  expect(toolSummary('Read', JSON.stringify({ file_path: '/a/b.ts', limit: 130 })))
+    .toBe('Read · b.ts · 前 130 行');
+  expect(toolSummary('Read', JSON.stringify({ file_path: '/a/b.ts', offset: 1400 })))
+    .toBe('Read · b.ts · 1400 行起');
+  expect(toolSummary('Read', JSON.stringify({ file_path: '/a/b.ts' })))
+    .toBe('Read · b.ts');
+  // file_path 缺核心键：回退链，不冒充文件摘要。
+  expect(toolSummary('Read', '{"pattern":"x"}')).toBe('Read · x');
+});
+
+test('工具摘要按工具分派：Edit、Write、Bash', () => {
+  expect(toolSummary('Edit', JSON.stringify({ file_path: 'src/derive.ts', old_string: 'a\nb\nc', new_string: 'x' })))
+    .toBe('Edit · derive.ts · 3→1 行');
+  expect(toolSummary('Edit', JSON.stringify({ file_path: 'src/derive.ts', old_string: 'a', new_string: 'b', replace_all: true })))
+    .toBe('Edit · derive.ts · 1→1 行 · 全部替换');
+  expect(toolSummary('Write', JSON.stringify({ file_path: 'docs/memory.md', content: 'x'.repeat(1229) })))
+    .toBe('Write · memory.md · 1.2 KB');
+  expect(toolSummary('Write', JSON.stringify({ file_path: 'a.md', content: '小' })))
+    .toBe('Write · a.md · 3 B');
+  expect(toolSummary('Bash', JSON.stringify({ command: 'bun test', description: '重跑全量测试' })))
+    .toBe('Bash · 重跑全量测试');
+  // 无 description 回落命令首个非空行；omp 的小写 bash 同一格式。
+  expect(toolSummary('bash', JSON.stringify({ command: '\n  bun run maintain \nnext' })))
+    .toBe('bash · bun run maintain');
+});
+
+test('工具摘要按工具分派：Skill、Agent、协作与查询工具', () => {
+  expect(toolSummary('Skill', JSON.stringify({ skill: 'ponytail', args: '打开本地页面截图' })))
+    .toBe('Skill · ponytail · 打开本地页面截图');
+  expect(toolSummary('Skill', '{"skill":"ponytail"}')).toBe('Skill · ponytail');
+  expect(toolSummary('Agent', JSON.stringify({ subagent_type: 'general-purpose', description: '核对派生方案' })))
+    .toBe('Agent · general-purpose · 核对派生方案');
+  expect(toolSummary('SendMessage', JSON.stringify({ summary: '收束结论', to: 'agent_ab12cd34ef56' })))
+    .toBe('SendMessage · 收束结论 → agent_ab');
+  expect(toolSummary('SubagentHandback', JSON.stringify({ message: '首行内容\n第二行' })))
+    .toBe('SubagentHandback · 首行内容');
+  expect(toolSummary('WebFetch', JSON.stringify({ url: 'https://github.com/owner/repo/issues' })))
+    .toBe('WebFetch · github.com/owner/repo/issues');
+  expect(toolSummary('ToolSearch', JSON.stringify({ query: 'select:SendMessage' })))
+    .toBe('ToolSearch · select:SendMessage');
+});
+
+test('工具摘要回退：非 JSON 参数原文、未知工具回退链、截断只作用参数段', () => {
+  expect(toolSummary('mcp__srv__do', 'not json')).toBe('mcp__srv__do · not json');
+  expect(toolSummary('x', '{"command":"ls","cmd":"fallback-cmd"}')).toBe('x · ls');
+  expect(toolSummary('x', '{"file_path":"src/a.ts"}')).toBe('x · a.ts');
+  expect(toolSummary('x', '{"path":"lib/b.py"}')).toBe('x · b.py');
   expect(toolSummary('', '{"path":"p"}')).toBe('未命名工具 · p');
-  const long = toolSummary('Bash', JSON.stringify({ command: 'a'.repeat(500) }));
-  expect(long.length).toBeLessThan(200);
+  const long = toolSummary('Read', JSON.stringify({ file_path: '/a/'.concat('b'.repeat(300), '.ts') }));
+  expect(long.startsWith('Read · ')).toBe(true);
+  expect([...long].length).toBeLessThan(160);
+  expect(long.endsWith('…')).toBe(true);
+});
+
+test('工具身份色类：六个核心工具各一色，其余统一中性', () => {
+  expect(toolTint('Read')).toBe('tint-read');
+  expect(toolTint('Edit')).toBe('tint-edit');
+  expect(toolTint('Write')).toBe('tint-write');
+  expect(toolTint('Bash')).toBe('tint-bash');
+  expect(toolTint('bash')).toBe('tint-bash');
+  expect(toolTint('Skill')).toBe('tint-skill');
+  expect(toolTint('Agent')).toBe('tint-agent');
+  expect(toolTint('SendMessage')).toBe('tint-other');
+  expect(toolTint('mcp__server__method')).toBe('tint-other');
+  expect(toolTint('')).toBe('tint-other');
 });
 
 test('多 choice 回复保留原始对象并说明限制', () => {
