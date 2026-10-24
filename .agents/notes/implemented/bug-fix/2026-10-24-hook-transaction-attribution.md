@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-hook 的主写事务（建行、raw、证据、pending、投影）没有名字，`writeStats` 把它计入 `other`，capacity 快照看不出 hook 通道的写占用。`src/sources/raw.ts` 里 `writePreparedLedgerTx` 与 `writePreparedRouteTx` 是零调用的死导出：列清单接口没有写入方，保留只会让读者误以为存在第二条账本/路由写入路径。`LEDGER_COLUMNS` 与 `ledgerColumns` 两份清单各自重排时参数个数仍然对得上，列序错位静默落错列且没有测试能发现。
+hook 的主写事务（建行、raw、证据、pending、投影）没有名字，`writeStats` 把它计入 `other`，capacity 快照看不出 hook 通道的写占用。`src/sources/raw.ts` 里 `writePreparedLedgerTx` 与 `writePreparedRouteTx` 是零调用的死导出。列清单接口没有写入方，保留只会让读者误以为存在第二条账本/路由写入路径。`LEDGER_COLUMNS` 与 `ledgerColumns` 两份清单各自重排时参数个数仍然对得上，列序错位会让数据静默写进错误的列，且没有测试能发现。
 
 ## Decision
 
