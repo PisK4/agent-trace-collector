@@ -491,7 +491,7 @@ export function renderTraceRows(row, steps, ordinal, selected, callOf = null) {
     pieces.push(`<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
 <div class="compact-row${step.isError === true ? ' step-error' : ''}">
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${step.key === selected}">
-    <span class="compact-meta" title="请求 ${ordinal}"><b>${ordinal}</b></span>
+    <span class="compact-meta" title="序号表示当前窗口内的请求 · 请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
     ${chip}
     <span class="compact-preview"${titleAttr}>${previewHtml}</span>

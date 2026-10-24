@@ -195,10 +195,10 @@ if (typeof document !== 'undefined') {
     const idx = ordinalOf(state.reqId ?? -1);
     const here = state.missingReqId !== null ? `Request ${state.missingReqId} 未找到`
       : state.offPageReqId !== null ? `Request ${state.offPageReqId} 未在当前窗口`
-        : idx > 0 ? `Request ${String(idx).padStart(2, '0')}` : '未选择请求';
-    el('crumb').innerHTML =
-      `<span>${esc(row ? row.title : '未选择会话')}</span><span class="sep">/</span><b>${esc(here)}</b>`;
-    document.title = row ? `${here === '未选择请求' ? row.title : `${here} · ${row.title}`} — Trace Collector`
+        : idx > 0 ? `Request ${String(idx).padStart(2, '0')}` : '';
+    // 会话标题由中栏 sticky h1 常驻可见，crumb 只承担请求定位。
+    el('crumb').innerHTML = here === '' ? '' : `<b>${esc(here)}</b>`;
+    document.title = row ? `${here === '' ? row.title : `${here} · ${row.title}`} — Trace Collector`
       : 'Trace Collector';
   }
 
@@ -227,7 +227,9 @@ if (typeof document !== 'undefined') {
   function renderSessions() {
     const list = /** @type {SessionRow[]} */ (store.getSessions().items.filter(sessionMatches));
     el('load-more-sessions').hidden = store.getSessions().cursor === null;
-    el('sess-count').textContent = `${list.length} / 已加载 ${store.getSessions().items.length}`;
+    // 列表被搜索或筛选收窄时才计数；与已加载数一致时数字不承载信息。
+    el('sess-count').textContent = list.length === store.getSessions().items.length
+      ? '' : `${list.length} / ${store.getSessions().items.length}`;
     const item = (/** @type {SessionRow} */ s) => {
       // 左栏只保留具体事实标记；未知派生不再给笼统「待确认」，状态留在选中请求。
       const flag = s.flags.includes('failed') ? { color: 'var(--bad)', text: '含失败' }
@@ -333,7 +335,6 @@ if (typeof document !== 'undefined') {
     ].filter(Boolean);
     const window = store.getWindow();
     return `<header class="session-head">
-      <div class="eyebrow">${state.session !== null && state.session.startsWith('["session"') ? 'Session' : 'Unassigned'}</div>
       <h1>${esc(row ? row.title || '（无标题）' : unknown ? '这个会话不在已加载列表里' : '未选择会话')}</h1>
       <div class="session-facts">
         ${row && row.agents.length > 0 ? row.agents.map((/** @type {string} */ a) => `<span><b title="${esc(a)}">${esc(agentLabel(a))}</b></span>`).join('') : '<span class="muted">归属未知</span>'}
@@ -347,10 +348,8 @@ if (typeof document !== 'undefined') {
         : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
       </div>
       <div class="view-row">
-        <span class="timeline-tab">步骤轨迹</span>
-        <span class="hint">单行步骤 · 点击行查看详情 · 数字表示当前窗口内的请求</span>
         <span class="grow"></span>
-        ${state.refreshedAt !== null ? `<span class="hint">刷新于 ${esc(clock(state.refreshedAt))}</span>` : ''}
+        ${state.refreshedAt !== null ? `<span class="muted" style="font-size:10.5px">刷新于 ${esc(clock(state.refreshedAt))}</span>` : ''}
         <button class="chip-btn" id="refresh-window" title="重新读取最近窗口；输入变化会换发阅读版本">刷新</button>
         <button class="chip-btn" id="jump-latest">回到最新 ↓</button>
       </div>
@@ -453,13 +452,15 @@ if (typeof document !== 'undefined') {
       const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
       return call === null ? null : { name: call.name, inputText: call.inputText };
     };
-    let html = `<div class="step-list" style="--ord-digits:${ordDigits}"><div class="history-loader">`;
-    if (window.loading) {
-      html += '<span class="history-start">正在读取更早记录…</span>';
-    } else if (window.olderCursor !== null) {
-      html += '<button id="load-earlier" class="history-button">↑ 加载更早记录</button>';
+    let html = `<div class="step-list" style="--ord-digits:${ordDigits}">`;
+    // 历史入口只在有更早记录或正在读取时出现；序号口径在数字本身的悬停说明里。
+    if (window.loading || window.olderCursor !== null) {
+      html += '<div class="history-loader">';
+      html += window.loading
+        ? '<span class="history-start">正在读取更早记录…</span>'
+        : '<button id="load-earlier" class="history-button">↑ 加载更早记录</button>';
+      html += '</div>';
     }
-    html += '<span class="history-range">序号表示当前窗口内的请求 · 时间从上往下 · 点击行查看详情</span></div>';
     for (const r of rows) {
       const read = store.peekRequest(r.req_id);
       const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
