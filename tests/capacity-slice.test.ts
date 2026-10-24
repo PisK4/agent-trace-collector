@@ -12,7 +12,7 @@ import { fixture, seedChain } from './fixtures';
 import type { Store } from '../src/store';
 import { persistBody } from '../src/body';
 import { drainDeriveTx, enqueueDerive } from '../src/derive';
-import { drainDeriveEntry } from '../src/derive-slice';
+import { drainDeriveEntry } from '../src/derive-unit';
 import { DEFAULT_DERIVE_BUDGET } from '../src/config';
 import type { SliceRuntime } from '../src/config';
 

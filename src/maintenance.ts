@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { openStore } from './store';
 import type { Store } from './store';
 import { rebuildDerived } from './derive';
-import { drainDeriveEntry } from './derive-slice';
+import { drainDeriveEntry } from './derive-unit';
 import { upgradePurposeTargetTx } from './request-purpose';
 import { GROUP_ALGORITHM, markGroupDirtyTx, queuePendingSql } from './derive-state';
 import { readLocalSecret, saltId } from './config';

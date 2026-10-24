@@ -52,7 +52,7 @@ Status: implemented
 - `drainDerive` 增加可选 `scope`：维护只排空目标会话，`remaining` 也只统计该会话，其它会话积压不被消费。非法 `limit` 与空 scope 直接抛错，不静默修正。
 - `recomputed` 与 `retained` 描述本次执行范围。正文状态为 `partial` 但无骨架的请求计入 `retained`，与按 `body_state` 统计的 `unavailable` 不是同一个数。
 
-- 一批里的全部组在同一个同步事务内提交。任何一组失败，整批回滚并保留队列；不提供逐组独立提交。
+- 在线事务粒度由[派生预算工作单元](../architecture/2026-10-24-budgeted-derive-unit.md)决定，每组独立提交；`drainDeriveTx` 仍在调用方事务里处理全部组，组内阶段始终原子完成。
 - 失败只回滚到本批开始前的状态：旧派生结果完整保留，重开库后任务仍在，下一次排空即恢复。
 
 ## Testing

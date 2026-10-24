@@ -7,10 +7,11 @@ import { drainDeriveTx, enqueueDerive } from '../src/derive';
 import { GROUP_ALGORITHM } from '../src/derive-state';
 import {
   DERIVE_ALGORITHM, beginGeneration, discardGeneration,
-  drainDeriveEntry, publishGeneration, readEffectiveGroup, recoverSlice, sliceGroupStep,
+  publishGeneration, readEffectiveGroup, recoverSlice, sliceGroupStep,
   sliceRequestsStage, sliceRolesStage, sliceSummaryStage, sliceToolsStage, sliceReadyStage,
 } from '../src/derive-slice';
 import type { SliceStep } from '../src/derive-slice';
+import { drainDeriveEntry } from '../src/derive-unit';
 import { DEFAULT_DERIVE_BUDGET } from '../src/config';
 import type { SliceRuntime } from '../src/config';
 
@@ -312,13 +313,15 @@ function chainOnBothPaths(
     seedChain(synced.store, sessions);
     prepare?.(sliced);
     prepare?.(synced);
-    switchToSliceAlgorithm(sliced);
-    const generation = beginGeneration(
-      sliced.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
-    const budget = { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 1, maxWritesPerBatch: 2 };
-    runStage(sliced, generation, sliceRequestsStage, budget);
-    runStage(sliced, generation, sliceRolesStage, budget);
-    return { slice: sliceChainRows(sliced, generation), sync: syncChainRows(synced) };
+    sliced.store.deriveRuntime = sliceRuntime(sliced,
+      { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 1, maxWritesPerBatch: 2 });
+    for (let index = 0; index < 5000; index++) {
+      if (drainDeriveEntry(sliced.store, 1).remaining === 0) break;
+    }
+    const queue = sliced.store.read.query<{ published_generation: string }, []>(
+      'SELECT published_generation FROM derive_queue').get()!;
+    expect(queue.published_generation).toBeString();
+    return { slice: sliceChainRows(sliced, queue.published_generation), sync: syncChainRows(synced) };
   } finally {
     sliced.close();
     synced.close();

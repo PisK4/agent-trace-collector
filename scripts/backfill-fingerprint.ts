@@ -10,7 +10,7 @@ import { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import { fingerprintHash, messageFingerprint } from '../src/fingerprint';
 import { enqueueDerive } from '../src/derive';
-import { drainDeriveEntry } from '../src/derive-slice';
+import { drainDeriveEntry } from '../src/derive-unit';
 import type { Store } from '../src/store';
 
 const path = process.env.ATC_BACKFILL_DB ?? `${process.env.HOME}/Library/Application Support/agent-trace-collector/trace.db`;
