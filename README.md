@@ -1,6 +1,6 @@
 # agent-trace-collector
 
-本机 magpie 请求记录器。账本、路由与 hook 三路证据进入同一个 SQLite 库，查询走独立只读连接；浏览器页面复用 `prototypes/` 里的三栏布局和原生 JavaScript。
+本机 magpie 请求记录器。账本、路由与 hook 三路证据进入同一个 SQLite 库，查询走独立只读连接；浏览器页面是 `web/` 里的原生 JavaScript 三栏阅读界面，`prototypes/` 只提供数据源，加载同一份页面。
 
 第一版已落地：存储、采集、派生、查询与阅读界面可用，实施记录见[首轮 Collector 实施总入口](docs/superpowers/plans/2026-10-20-collector-implementation.md)。第二轮的代码改造从[ATC 架构演进实施总入口](docs/superpowers/plans/2026-10-22-atc-evolution-implementation.md)进入，已按[容量条件分支](docs/superpowers/plans/2026-10-22-atc-capacity-convergence.md)交付：库结构升到 v6（派生代际与切片流水线，见[架构设计](docs/architecture-design.md#派生代际与发布指针)），两条派生路径在固定种子样本上逐行等价。采集器仍走同步派生：切片模式的容量门槛已实测，10,000 笔单链的排空是 878.7 s，超过 120 s 的提案上限（同步同输入 1.96 s），模式保持关闭；开关与切换步骤见[运维手册](docs/operations.md#派生切片与代际)。C3 的真实并行观察、停 AVA 与回滚演练尚未执行。
 
@@ -33,6 +33,8 @@ bun run typecheck
 ## 阅读界面（当前：单一轨迹）
 
 生产页面是单一轨迹视图（决策与验收记录见 [Agent Note：单一轨迹生产阅读](.agents/notes/implemented/architecture/2026-10-23-single-timeline-production-reader.md)，角色与来源一致性见 [Agent Note：阅读角色、步骤定位与缓存一致性](.agents/notes/implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)）：中栏是紧凑单行步骤（36px 一行，英文参与角色标签加内容类型，如 Assistant + Tool call；System、工具结果各占一行），每个步骤带协议来源，点击后在右栏定位到该来源，选中步骤是唯一高亮；默认选最新并进入可见区，顶部「加载更早」向前分页。右栏默认取当前窗口允许的最大宽度（上限 640px，中栏保留至少 320px），支持拖拽、方向键调节与双击恢复最大宽度。右栏为读数 / 正文 / 工具 / 路由四页签，读数页按本次回复 → 请求结构 → 能力清单 → 用量与上下文 → 身份完整排序，工具详情有概览/参数/结果/Schema 四页；结构列表展示已缓存消息的有序并集并标明未读区间，可信增量提供显式续读；正文与工具结果带阅读版本 token，409 整笔作废并给出显式重读入口。URL 只带 `session` / `trace` / `tab`。
+
+Demo 入口与合成场景见 [`prototypes/README.md`](prototypes/README.md)；两个入口加载同一份生产页面。
 
 本轮合成验收（2026-10-24，合成服务端口 8770，18 笔状态会话 + 42 笔窗口会话 + 45 条消息深样本）：
 

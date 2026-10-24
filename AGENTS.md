@@ -15,7 +15,7 @@ plugins/      magpie 薄 hook 插件
 scripts/      回填、切换核对与 Agent Note 闸门
 tests/        Bun 测试，只用合成数据
 docs/         架构、评审、研究、运维与实施计划
-prototypes/   界面原型与版式比较
+prototypes/   Demo 数据源与合成场景，加载生产页面
 .agents/      Agent Note 规则、决策记录与 kit 版本基线
 ```
 

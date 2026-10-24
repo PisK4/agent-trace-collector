@@ -20,7 +20,7 @@
 | [.agents/notes/](../.agents/notes/README.md) | 活跃决策记录：why、放弃了什么、必需的验证 | 迁移计划、验收清单、spec 腔 |
 | [.agents/notes/archived/](../.agents/notes/archived/AGENTS.md) | 冻结的历史快照 | 现行权威 |
 | [README.md](../README.md) | 当前状态、运行命令、验收记录 | 常备规则、设计 rationale |
-| [../prototypes/README.md](../prototypes/README.md) | 原型目的与版式比较结论 | 生产契约 |
+| [../prototypes/README.md](../prototypes/README.md) | Demo 数据源与合成场景：两个入口加载生产页面，不维护第二套界面 | 生产契约（归 `web/` 与 architecture-design.md） |
 
 放置口诀：bug 进 postmortem；rationale 进 note；流程进 cookbook；包契约进 README；常备规则进根 AGENTS.md 加一行链接。
 
