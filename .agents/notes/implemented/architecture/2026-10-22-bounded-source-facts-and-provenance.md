@@ -15,13 +15,13 @@ Status: implemented
 - `source_facts_json`：按来源分开的用途集合（`ledger`/`route`/`state`/`value`）、hook 的模型与成功集合、`selected` 整对象。单值 256 字节、每来源 8 个值，按字节序去重排序；溢出发 `overflow`，非法值发 `invalid`。
 - `projection_meta_json`：`order` 与 models/attempts/prompt 三个族的 `actualVersion`/`state`/`reason`/`basis`。basis 每条 256 字节、最多 16 条。
 
-集合运算满足交换与幂等，所以同一批观测无论到达顺序与重复次数都得到同一个集合；这正是"排列不影响结果"能被测试锁住的前提。集合只增不减：raw 过期是本次证据缺失，不是从未观测，长期集合不因此撤销。
+集合运算满足交换与幂等，所以同一批观测无论到达顺序与重复次数都得到同一个集合；这正是"排列不影响结果"能被测试锁住的前提。集合只增不减。raw 过期只说明本次证据缺失，不代表从未观测，长期集合不因此撤销。
 
-`selected` 整对象替换，绝不字段级拼接——拼字段会造出一条同时带着两笔不同请求模型与错误的记录。顺序不可证时写 `pending_final` 全 null，不沿用旧值假装知道。
+`selected` 整对象替换，绝不字段级拼接——拼字段会造出一条同时带着两笔不同请求模型与错误的记录。顺序不可证时写 `pending_final` 全 null，不沿用旧值假装已经知道。
 
-三个族的版本语义分开：`recomputed` 的 `actualVersion` 是本次版本；`retained` 保留原实际版本（原值可能是 null，那就是 `legacy_unknown`），不把本次版本冒充成它算出来的；`missing` 表示从未观测过，没有实际版本可继承。basis 超预算时只保存稳定样本并降为 retained。
+三个族的版本语义分开：`recomputed` 的 `actualVersion` 是本次版本；`retained` 保留原实际版本（原值可能是 null，那就是 `legacy_unknown`），不把本次版本冒充成当初算出它的那一版；`missing` 表示从未观测过，没有实际版本可继承。basis 超预算时只保存稳定样本并降为 retained。
 
-序列化守住 16 KiB：超限先去掉只用于展示的 `error`/`errorType`，仍超限抛 `source_facts_budget_exceeded` 让整个投影事务回滚。截断会留下半个对象，清空旧事实等于假装从没观测到，两者都不接受。
+序列化上限是 16 KiB。超限先去掉只用于展示的 `error`/`errorType`；仍超限就抛 `source_facts_budget_exceeded`，让整个投影事务回滚。截断会留下半个对象；清空旧事实等于假装从没观测到。两者都不接受。
 
 原始行同时写 `mapping_version` 与 `privacy_version`（`PRIVACY_TRANSFORM_VERSION`），四个 raw helper 共用同一份列清单。摘要记 `summary_algorithm`/`summary_basis`/`summary_state`，工具行记 `algorithm_version`/`basis_json`/`retention_state`；`derive_version` 不再累加，也不再被读作算法目标。
 
@@ -42,7 +42,7 @@ Status: implemented
 - 每个请求多两列 JSON，单条上限 16 KiB；实际大小由有界集合约束，具体分布交容量测量，不拿 SQL TEXT 无上限当预算。
 - raw 过期后来源集合与选定尝试仍在，`current=false` 与 `expired` 只表示本次证据缺失。
 - 保留行不会因为一次重算被提升版本，报告里能区分"目标算法""实际算法"与"从未重算"。
-- `error`/`errorType` 在超预算时会被丢弃：它们是展示字段，不是判定依据。
+- `error`/`errorType` 在超预算时会被丢弃；它们只是展示字段，不作为判定依据。
 - 事实 JSON 不接受外部写入；投影是唯一写入者，形状校验失败的旧值按缺失处理。
 
 ## Testing

@@ -16,9 +16,9 @@ Status: implemented
 - 展示：`presentationDecision` 加 `PresentationPorts` 端口（标题请求 → 正文不可读 → 增量非空 → 增量为空 → 关系未知的分支顺序）；
 - 连同两条路径共用的协议抽取（`anthropicReplyCalls`、`anthropicRequestResults`、`flattenToolContent`）与文本判定（`deriveTitle`、`previewOf`、`clip`、`replyToolSummary`、`toolResultPreviewOf`）一并归位。
 
-随判定收敛做的两处结构修正：切片角色阶段收尾时按内核结果一次写全组 `in_trunk`（取代逐页从父行继承——继承的等价性靠「父行一定更早」这个隐含前提，现在不需要前提）；同步路径在调用方的 branch→unknown 修补并入 `settleRelation` 的 `unreadableEarlier` 输入。`compareSequence` 删除：它没有生产调用方，行为是 `matchPredecessor` 的特例，其测试同步移除。
+随判定收敛做的两处结构修正：切片角色阶段收尾时按内核结果一次写全组 `in_trunk`（取代逐页从父行继承——继承的等价性靠「父行一定更早」这个隐含前提，现在不需要前提）；同步路径在调用方做的 branch→unknown 修补，并入 `settleRelation` 的 `unreadableEarlier` 输入。`compareSequence` 删除，它没有生产调用方，行为是 `matchPredecessor` 的特例，测试同步移除。
 
-语义与判据本身不变：关系取值、根判据、配对阶梯、展示分支的每条规则与此前逐条一致；[切片等价](../feature/2026-10-22-atc-slice-equivalence.md)的逐行对照测试保留，[切片链角色](../feature/2026-10-22-atc-sliced-chain-roles.md)记录的根判据现在是内核的唯一实现。两个算法号（`GROUP_ALGORITHM` 与 `DERIVE_ALGORITHM`）保持分开：判定共用了，算法号仍区分结果是谁算的、写在哪张表。
+语义与判据本身不变：关系取值、根判据、配对阶梯、展示分支的每条规则与此前逐条一致；[切片等价](../feature/2026-10-22-atc-slice-equivalence.md)的逐行对照测试保留，[切片链角色](../feature/2026-10-22-atc-sliced-chain-roles.md)记录的根判据现在是内核的唯一实现。两个算法号（`GROUP_ALGORITHM` 与 `DERIVE_ALGORITHM`）保持分开。判定共用了，算法号仍区分结果是谁算的、写在哪张表。
 
 「哪些结果位置算本轮确定新增」的判据后续也收进内核（`confirmedDeltaOf`），见[派生层四片共享逻辑各归其位](2026-10-24-derive-layer-consolidation.md)。
 
@@ -33,6 +33,6 @@ Status: implemented
 ## Consequences
 
 - 改判定只动 `derive-decision.ts` 一处；两条路径的一致性由结构保证，parity 测试从「对齐手段」降级为「回归网」。
-- 切片角色阶段的写入形状变化：收尾事务一次写全组 `in_trunk`（每行一列），角色传播每页少一半写；长组的收尾事务与同步路径整组重算同量级，仍在单事务预算内。
+- 切片角色阶段的写入形状有变化。收尾事务一次写全组 `in_trunk`（每行一列），角色传播每页少一半写；长组的收尾事务与同步路径整组重算同量级，仍在单事务预算内。
 - `matchPredecessor` 新增第四参 `unreadableEarlier`；`near` 字段保留，但除测试断言外没有消费方，后续若界面要「最接近的一支」再接。
-- capacity 脚本的两份哈希函数仍是跨模式对照工具：它们比较的是两条路径的**产物**，判定收敛后依然成立，不因内核而删除。
+- capacity 脚本的两份哈希函数仍是跨模式对照工具。它们比较的是两条路径的**产物**，判定收敛后依然成立，不因内核而删除。
