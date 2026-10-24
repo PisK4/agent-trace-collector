@@ -3,7 +3,6 @@ import { statSync } from 'node:fs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type { Store } from './store';
 import { readBodyTx } from './body';
-import { drainRequestPurposesTx } from './request-purpose';
 import { queuePendingSql } from './derive-state';
 import {
   anthropicReplyCalls, anthropicRequestResults, chainTrunk, chainTrunkRoot, commonPrefix,
@@ -12,10 +11,10 @@ import {
 import type { ResolvedTool } from './derive-decision';
 import type { DeriveBudget, SliceRuntime } from './config';
 import {
-  compareLogicalOrder, compareTraversalOrder, drainDeriveTx, fingerprintsOf, presentationPortsOf,
+  compareLogicalOrder, compareTraversalOrder, fingerprintsOf, presentationPortsOf,
   replyInfoOf, uncertainOrderIds,
 } from './derive';
-import type { DeriveScope, DrainResult, LogicalRow } from './derive';
+import type { DeriveScope, LogicalRow } from './derive';
 
 /** 切片派生的算法号。与同步组的 `GROUP_ALGORITHM` 分开：两者算出的结果不能互相复用。 */
 export const DERIVE_ALGORITHM = 5;
@@ -1231,9 +1230,6 @@ function gcRetired(db: Database, convKey: string, actor: string, keep: number): 
 // 调度：一次调用推进一个组的一个阶段批次。
 // ---------------------------------------------------------------------------
 
-/** 一次调用结算多少笔待判定用途。与同步入口的批大小一致。 */
-const PURPOSE_BATCH = 100;
-
 /**
  * 推进一个组的一个阶段批次。
  *
@@ -1293,82 +1289,4 @@ export function sliceGroupStep(store: Store, runtime: SliceRuntime,
     sliceDiscardReason(store, generation, error, now);
     return { status: 'discarded', generation, stage: null, rows: 0, batch_ms: 0 };
   }
-}
-
-/** 发布的一代里两类请求各有多少：结果行自己记着这次是重算还是保留。 */
-function retentionCounts(store: Store, generation: string): { recomputed: number; retained: number } {
-  const rows = store.read.query<{ retention_state: string; n: number }, [string]>(`
-    SELECT retention_state,COUNT(*) AS n FROM derive_request_result
-    WHERE generation=? GROUP BY retention_state`).all(generation);
-  let recomputed = 0;
-  let retained = 0;
-  for (const row of rows) {
-    if (row.retention_state === 'recomputed') recomputed += row.n;
-    else retained += row.n;
-  }
-  return { recomputed, retained };
-}
-
-/**
- * 派生的统一入口：按运行模式把一次排空交给同步或切片路径。
- *
- * 模式不是这里的判断，而是 `store.deriveRuntime` 的存在与否：没有它就是同步库。
- * 同步路径保持"一批一组事务"的语义；切片路径一次调用推进若干步，每步各有自己的
- * 事务与预算，所以 `limit` 在两边都是"本次最多做多少个单位"，只是单位不同
- * （同步是组，切片是阶段步骤）。两个字段语义的差别在积累的处置方式上：同步要么
- * 整批提交要么整批回滚，切片在每一步里提交，失败的那一代另开事务丢弃。
- */
-export function drainDeriveEntry(store: Store, limit = 100, scope?: DeriveScope): DrainResult {
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid_derive_limit');
-  if (scope !== undefined && (typeof scope.convKey !== 'string' || scope.convKey.length === 0)) {
-    throw new Error('invalid_derive_scope');
-  }
-  const runtime = store.deriveRuntime;
-  if (runtime === undefined) return store.write(db => drainDeriveTx(db, { limit, scope }));
-  const started = performance.now();
-  // 用途阶段仍走统一入口：切片只把组阶段拆成多批，不改变用途门控。
-  // 一批一个事务：用途结算与组阶段是两种不同粒度的写，混在一个事务里没有收益。
-  let purposeProcessed = 0;
-  let purposeRemaining = 0;
-  for (;;) {
-    const batch = store.write(db => drainRequestPurposesTx(db, PURPOSE_BATCH, scope));
-    purposeProcessed += batch.processed;
-    purposeRemaining = batch.remaining;
-    if (batch.remaining === 0 || batch.processed === 0) break;
-  }
-  let processed = 0;
-  let discarded = 0;
-  let recomputed = 0;
-  let retained = 0;
-  const groups: { conv_key: string; actor: string }[] = [];
-  for (let index = 0; index < limit; index++) {
-    const step = sliceGroupStep(store, runtime, Date.now(), scope);
-    if (step.status === 'idle' || step.status === 'rotated') break;
-    if (step.status === 'discarded') {
-      discarded += 1;
-      continue;
-    }
-    // `advanced` 也算推进：这一步提交了一个阶段批次，积压就往下走了一步。
-    processed += 1;
-    if (step.generation === null) continue;
-    const group = store.read.query<{ conv_key: string; actor: string }, [string]>(
-      'SELECT conv_key,actor FROM derive_generation WHERE generation=?').get(step.generation);
-    if (group === null) continue;
-    if (step.status === 'published') {
-      const counts = retentionCounts(store, step.generation);
-      recomputed += counts.recomputed;
-      retained += counts.retained;
-    }
-    if (!groups.some(row => row.conv_key === group.conv_key && row.actor === group.actor)) {
-      groups.push(group);
-    }
-  }
-  const remaining = store.read.query<{ n: number }, [string | null, string | null]>(`
-    SELECT COUNT(*) AS n FROM derive_queue WHERE ${queuePendingSql()}
-      AND (? IS NULL OR conv_key=?)`).get(scope?.convKey ?? null, scope?.convKey ?? null)!.n;
-  return {
-    processed, remaining, groups, recomputed, retained, discarded,
-    purpose_processed: purposeProcessed, purpose_remaining: purposeRemaining,
-    batch_ms: performance.now() - started,
-  };
 }

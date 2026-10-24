@@ -419,12 +419,40 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
   let recomputed = 0;
   let retained = 0;
   for (const group of groups) {
+    const result = drainDeriveGroupTx(db, group.conv_key, group.actor);
+    if (result === null) continue;
+    processed += result.processed;
+    recomputed += result.recomputed;
+    retained += result.retained;
+    touched.push({ conv_key: group.conv_key, actor: group.actor });
+  }
+  const remaining = scope === undefined
+    ? db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM derive_queue WHERE ${queuePendingSql()}`).get()!.n
+    : db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM derive_queue
+        WHERE conv_key=? AND ${queuePendingSql()}`).get(scope.convKey)!.n;
+  return {
+    processed, remaining, groups: touched, recomputed, retained,
+    purpose_processed: purposeProcessed, purpose_remaining: purposeRemaining,
+    discarded: 0, batch_ms: performance.now() - started,
+  };
+}
+
+/** 组内全部阶段与 CAS 在调用方的同一个事务内完成；失败回滚当前事务。 */
+export function drainDeriveGroupTx(db: Database, convKey: string, actor: string):
+  { processed: number; recomputed: number; retained: number } | null {
+    const group = db.query<QueuedGroup, [string, string]>(`
+      SELECT conv_key,actor,group_epoch,input_revision,target_algorithm FROM derive_queue
+      WHERE conv_key=? AND actor=? AND ${queuePendingSql()}`).get(convKey, actor);
+    if (group === null) return null;
+    let processed = 0;
+    let recomputed = 0;
+    let retained = 0;
     // 组里还有未判定用途的请求时不能完成：把组算干净等于替它们猜了一个用途。
     const waiting = db.query<{ n: number }, [string, string]>(`
       SELECT COUNT(*) AS n FROM request
       WHERE conv_key=? AND actor=? AND actor_state='known' AND purpose_pending=1`)
       .get(group.conv_key, group.actor)!.n;
-    if (waiting > 0) continue;
+    if (waiting > 0) return null;
     const rows = db.query<ChainRow, [string, string]>(`
       SELECT req_id, actor, agent, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
              title_source, title, model_served, req_kind, model_title, purpose_chain,
@@ -498,8 +526,7 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
     for (const input of presentations) {
       writePresentationTx(db, input, paired.associations, group);
     }
-    // 完成只在消费的修订仍是当前修订时才成立：同一事务里后到的输入变化
-    // 会抬高 input_revision，CAS 失败即整批回滚，旧完成记录不会覆盖新输入。
+    // CAS 失败回滚本组的全部阶段。在线已提交组保留，维护由外层事务决定整批回滚。
     const changed = db.run(
       `UPDATE derive_queue SET state='clean',dirty_since_ms=NULL,
          published_revision=?,published_algorithm=?
@@ -508,19 +535,7 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
         group.group_epoch, group.input_revision, group.target_algorithm],
     ).changes;
     if (changed !== 1) throw new Error('derive_input_changed');
-    touched.push({ conv_key: group.conv_key, actor: group.actor });
-  }
-  // clean 行是持久完成记录，不是积压。
-  const remaining = scope === undefined
-    ? db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM derive_queue WHERE ${queuePendingSql()}`).get()!.n
-    : db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM derive_queue
-        WHERE conv_key=? AND ${queuePendingSql()}`).get(scope.convKey)!.n;
-  return {
-    processed, remaining, groups: touched, recomputed, retained,
-    purpose_processed: purposeProcessed, purpose_remaining: purposeRemaining,
-    // 同步批在一个事务里完成：要么整批提交、要么整批回滚，没有丢弃这一档。
-    discarded: 0, batch_ms: performance.now() - started,
-  };
+    return { processed, recomputed, retained };
 }
 
 /**

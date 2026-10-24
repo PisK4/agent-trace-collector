@@ -12,7 +12,7 @@ Status: implemented
 
 ## Decision
 
-请求阶段与组阶段在同一个事务里、按顺序跑，入口只有一个 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`；`drainDerive(store, ...)` 退化成校验参数后开一个写事务的包装。
+请求用途先于所属组结果完成，组内有 pending 成员时保持 dirty。在线编排与事务粒度由[派生预算工作单元](2026-10-24-budgeted-derive-unit.md)负责；`drainDeriveTx(db, {limit, scope?, purposeLimit?})` 与 `drainDerive(store, ...)` 保留离线批事务入口。
 
 请求阶段（`drainLegacyPurposeTx`）把现有 title/chat 行为固化成可重放的结论：`purpose_status` 写 `recognized`/`unrecognized`/`retained`/`missing`，`purpose_rule` 写 `legacy.title`/`legacy.default`，`purpose_version` 写 `LEGACY_PURPOSE_VERSION=1`，同时定下 `purpose_chain`、`req_kind` 与 `model_title`，清 `purpose_pending` 并让 `purpose_revision` 追上 `input_revision`。正文不可读时有旧版本就保留原值标 `retained`，从未判过标 `missing`。
 
@@ -36,7 +36,7 @@ Status: implemented
 
 ## Consequences
 
-- 同一事务里两个阶段都要排空，一批大组不再因为用途只判了 100 条而卡住；`purposeLimit` 是每批大小，不是总量上限。
+- `drainDeriveTx` 在调用方事务里排空用途再处理组，`purposeLimit` 是每批大小；在线工作单元按预算分次推进用途，结算完该组全部用途后再提交组结果。
 - 未知归属的请求也会被判定用途，但不产生组；读模型里它没有组可加入，因此恒为 `dirty`，关系为 `unknown`。
 - 读模型多一次 `LEFT JOIN derive_queue`，以及每次调用一个只读事务。列表不带摘要算法列，详情带。
 - 非当前行的工具调用保留调用身份，`result_req`/`result_ord`/`result_path` 清空、`state` 退回 `pending`：不显示可能是旧的位置，正常态也不挂提示（「结果位置未确认」chip 后经[读数条与「无则不显」收敛](../../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)删除）。

@@ -18,7 +18,7 @@ import type { CapacityMetrics, DurationSummary } from '../src/capacity';
 import { persistBodyTx } from '../src/body';
 import type { Config } from '../src/config';
 import { drainDeriveTx, enqueueDeriveTx, rebuildDerived } from '../src/derive';
-import { drainDeriveEntry } from '../src/derive-slice';
+import { drainDeriveEntry } from '../src/derive-unit';
 import type { SliceRuntime } from '../src/config';
 import { PAGE_MAX } from '../src/protocols';
 import type { StorageUsage } from '../src/retention';

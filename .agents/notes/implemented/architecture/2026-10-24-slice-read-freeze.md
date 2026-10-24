@@ -18,7 +18,7 @@ Status: implemented
 
 **只写决策 note，不动代码。** 约束力与现状相同：依赖将来读 note 的人恰好记得这条。断言把同一句约束放进启用路径，忘了也过不去。
 
-**断言放进 `drainDeriveEntry`，见到 runtime 就拒绝。** 容量实验台自己也走这个入口（`capacity.ts` 与 `capacity-collector.ts` 都调它），在那里拒绝等于拆掉实验台。拒绝只该拦生产启用，不该拦显式实验。
+**断言放进 `drainDeriveEntry`，见到 runtime 就拒绝。** 容量实验台使用[派生工作单元](../../../../src/derive-unit.ts)的排空入口，容量采集器使用同模块的在线入口；在那里拒绝会阻止实验台工作。拒绝只拦生产启用，显式实验继续验证切片。
 
 ## Consequences
 

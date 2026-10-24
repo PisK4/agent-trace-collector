@@ -13,7 +13,7 @@ import {
 import { probeMagpie, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
 import { reconcilePending } from './hook';
-import { drainDeriveEntry, recoverSlice } from './derive-slice';
+import { createDeriveUnit } from './derive-unit';
 import {
   RAW_TTL_MS,
   createAdmissionGate,
@@ -76,9 +76,7 @@ export async function startCollector(
   }
   const readToken = loadReadToken(config.dataDir);
   const hookToken = Buffer.from(loadLocalSecret(config.dataDir, 'hook.token')).toString('base64url');
-  // 上一轮没发布完的派生代没有读者：在起定时器和 handler 之前丢弃它们，
-  // 否则下一次认领会把半套结果当成可续跑的目标。
-  recoverSlice(store.db, Date.now());
+  const deriveUnit = createDeriveUnit(store);
   // 观测只依赖进程：拒绝计数、写事务与事件循环样本都从启动时刻重新开始。
   const metrics = createCapacityMetrics(store, config.dataDir, Date.now());
   metrics.eventLoop.start();
@@ -90,6 +88,7 @@ export async function startCollector(
   let handler: (req: Request) => Promise<Response> = () => Promise.resolve(new Response('starting', { status: 503 }));
 
   const timers: ReturnType<typeof setInterval>[] = [];
+  let deriveTimer: ReturnType<typeof setTimeout> | undefined;
   const running = new Set<string>();
   let stopped = false;
 
@@ -193,7 +192,13 @@ export async function startCollector(
   });
 
   const deriveTick = guard('derive', () => {
-    drainDeriveEntry(store);
+    let nextDueMs = intervalOf(config, 'derive', DERIVE_INTERVAL_MS);
+    try {
+      const result = deriveUnit.run({ budgetMs: 400 });
+      if (result.nextDueMs === 0) nextDueMs = 0;
+    } finally {
+      if (!stopped) deriveTimer = setTimeout(deriveTick, nextDueMs);
+    }
   });
 
   const server = Bun.serve({
@@ -213,7 +218,6 @@ export async function startCollector(
   timers.push(setInterval(costTick, intervalOf(config, 'cost', COST_INTERVAL_MS)));
   timers.push(setInterval(probeTick, intervalOf(config, 'probe', PROBE_INTERVAL_MS)));
   timers.push(setInterval(pendingTick, intervalOf(config, 'pending', LEDGER_INTERVAL_MS)));
-  timers.push(setInterval(deriveTick, intervalOf(config, 'derive', DERIVE_INTERVAL_MS)));
   timers.push(setInterval(retentionTick, intervalOf(config, 'retention', RETENTION_INTERVAL_MS)));
   timers.push(setInterval(rawPruneTick, intervalOf(config, 'rawPrune', RAW_PRUNE_INTERVAL_MS)));
   timers.push(setInterval(gapTick, intervalOf(config, 'gap', LEDGER_INTERVAL_MS)));
@@ -230,6 +234,7 @@ export async function startCollector(
     if (stopped) return;
     stopped = true;
     for (const timer of timers) clearInterval(timer);
+    clearTimeout(deriveTimer);
     metrics.eventLoop.stop();
     await server.stop(true);
     store.close();

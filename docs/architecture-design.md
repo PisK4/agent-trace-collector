@@ -878,11 +878,11 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 组内请求的 `input_epoch` / `input_revision` 是同一套修订的请求侧。输入指正文、回复、归属与来源证据：正文保存、hook 到达或合并、账本或路由的字段级事实变化、证据过期、正文回收都会推进它；只改费用不推进，因为费用不改变用途判定与派生结果。合并把两笔请求的证据并成一笔时，存活请求换新 `input_epoch`，旧 epoch 下的用途结论不再复用。
 
-完成用比较交换而不是无条件写：drain 读到 `{group_epoch, input_revision, target_algorithm}` 后，全部阶段在同一事务里完成才把状态改成 clean 并记下这两个值；若同事务里后到的输入变化抬高了修订，交换失败即整批回滚，旧完成记录不会覆盖新输入。
+完成用比较交换而不是无条件写：drain 读到 `{group_epoch, input_revision, target_algorithm}` 后，本组全部阶段在同一事务里完成才把状态改成 clean 并记下消费的修订与算法；交换失败回滚本组，旧完成记录不会覆盖新输入。在线已提交组独立保留，重启只需继续未完成组；未发布的切片代由启动恢复丢弃，上一代发布指针保持不动。离线调用 `drainDeriveTx` 时，由调用方外层事务决定整批回滚范围。
 
 #### 两个粒度：请求用途先于组结果
 
-同一事务里先跑请求阶段、再跑组阶段，入口只有一个 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`，在线调度、维护与迁移都走它。
+派生编排归 `src/derive-unit.ts`。在线用 `createDeriveUnit(store).run({budgetMs})` 返回 `{didWork,nextDueMs}`：每轮预算 400 ms、最多十个组或切片步骤，用途按十笔一批独立提交，组间检查剩余预算；空闲先只读判定，不开写事务。有积压时 `nextDueMs=0`，调度用定时器让出事件循环后续跑，空闲等待两秒。同步单组内部不切开，单个大组仍可能超过预算；生产切片启用限制见[派生代际与发布指针](#派生代际与发布指针)。维护与容量实验用同模块的 `drainDeriveEntry(store, limit, scope?)`，保留完整统计；需要把多个组放进外层事务的离线调用使用 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`。
 
 请求阶段按 `req_id` 取 `purpose_pending=1` 的行，按 `PURPOSE_VERSION=2` 解释并写 `purpose_status`（`recognized`/`unrecognized`/`missing`/`retained`/`unsupported`/`error`）、`purpose_version`、`purpose_rule`、`purpose_chain`、`req_kind` 与 `model_title`，把 `purpose_pending` 清 0 并让 `purpose_revision` 追上当前 `input_revision`。规则优先级固定为分类器强指纹 > 来源 kind > 标题兼容 > 兜底：分类器要求 `agent='claude'`、system 文本含 `security monitor for autonomous ai coding agents`、`stop_sequences` 含 `</block>` 三者同时成立，消息数 2 与工具数 0 只写信号，判定取回复里最后一个 `<block>yes|no`；来源 kind 只把精确的 `title` 当标题别名并排除链，其它非空值变成 `source:<value>` 参与链；标题兼容先看严格回复形状（整段 `<title>` 或只含 `title` 键的 JSON），再看已存 `req_kind='title'`；兜底是 `unrecognized` + `chat` + `participate`。
 
