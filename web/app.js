@@ -333,6 +333,34 @@ export function resolveSelectedSource(step) {
   return { side: 'reply', target: 'block', path: s.path, blockIndex: s.blockIndex ?? 0, raw: step.raw };
 }
 
+// —— 页签声明与路由读取目标的纯函数：URL 恢复与导航完成处共用，测试直接断言 ——
+
+/**
+ * URL 的 tab 参数解析成右栏页签：合法内容页签原样采用，无效或缺省回读数；
+ * 无声明进入读数是现有默认，不属于被覆盖的缺陷。
+ * @param {string | null} value
+ * @returns {'facts' | 'body' | 'tools' | 'route'}
+ */
+export function railTabFromParam(value) {
+  return value === 'body' || value === 'tools' || value === 'route' ? value : 'facts';
+}
+
+/** 读数是缺省页签，不落 URL；显式内容页签原样写回。 @param {string} tab @returns {'body' | 'tools' | 'route' | null} */
+export function railTabParam(tab) {
+  return tab === 'body' || tab === 'tools' || tab === 'route' ? tab : null;
+}
+
+/**
+ * 路由读取目标：只在路由页签且请求已定时返回要读取的 req_id。导航完成处
+ * （选会话、刷新、定位）与页签点击共用；渲染函数不发起读取，无当前请求不预取。
+ * @param {string} railTab
+ * @param {number | null} reqId
+ * @returns {number | null}
+ */
+export function routeReadTarget(railTab, reqId) {
+  return railTab === 'route' && reqId !== null ? reqId : null;
+}
+
 // —— 用量读数的纯函数：折叠行与窗口外请求共用，测试直接断言输出 ——
 
 /** @param {number | null | undefined} v */
@@ -495,7 +523,7 @@ if (typeof document !== 'undefined') {
     /** 工具详情四页的当前页：overview / params / pair / schema。 */
     toolPage: 'pair',
     requestOpen: new Set(/** @type {number[]} */ ([])),
-    railTab: ['body', 'tools', 'route'].includes(qp.get('tab') ?? '') ? qp.get('tab') : 'facts',
+    railTab: railTabFromParam(qp.get('tab')),
     query: '',
     agent: 'all',
     pendingSession: /** @type {string | null} */ (null),
@@ -812,7 +840,9 @@ if (typeof document !== 'undefined') {
   /** @param {RequestRow} r @param {{state: string, summary: unknown} | null} route */
   function routeBlock(r, route) {
     if (route === null) {
-      return `<p class="note">${esc(viaText(r))}。展开后按需读取路由信息，不在渲染时预取。</p>`;
+      // 路由页签在导航完成处自动读取：这里只剩读取中或上次失败两种状态，
+      // 不冒充「无路由」；再次进入页签可重试。
+      return `<p class="note">${esc(viaText(r))}。路由信息尚未读到：正在读取或上次读取失败；再次进入路由页签可重试。</p>`;
     }
     if (route.state === 'absent') {
       return '<p class="note">这笔记录没有网关路由：它可能没有经过 magpie 路由器，或尚未与路由文件关联。</p>';
@@ -1267,6 +1297,9 @@ if (typeof document !== 'undefined') {
     state.toolOrd = null;
     state.toolOwner = null;
     renderAll();
+    // 保留路由页的刷新路径：重建窗口后仍自动读取当前请求的路由。
+    const routeTarget = routeReadTarget(state.railTab, state.reqId);
+    if (routeTarget !== null) void ensureRoute(routeTarget);
     void loadWindowReads();
     void ensureSelectedVisible();
   }
@@ -1290,6 +1323,9 @@ if (typeof document !== 'undefined') {
     renderRail();
     renderCrumb();
     updateURL();
+    // 定位（回到最新等）也是导航完成处：保留路由页时随选中请求读取。
+    const routeTarget = routeReadTarget(state.railTab, state.reqId);
+    if (routeTarget !== null) void ensureRoute(routeTarget);
     requestAnimationFrame(() => {
       document.querySelector(`.trace-group[data-req="${CSS.escape(String(id))}"]`)
         ?.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
@@ -1451,8 +1487,9 @@ if (typeof document !== 'undefined') {
     // 保留 URL 里那个"不在当前窗口"的 id，刷新后还能看到同一条说明。
     const trace = state.reqId ?? state.missingReqId ?? state.offPageReqId;
     if (trace !== null) p.set('trace', String(trace));
-    const tab = state.railTab ?? '';
-    if (['body', 'tools', 'route'].includes(tab)) p.set('tab', tab);
+    // 只把显式内容页签写回 URL；读数是缺省，不落参数。
+    const tab = railTabParam(state.railTab);
+    if (tab !== null) p.set('tab', tab);
     history.replaceState(null, '', '?' + p.toString());
   }
 
@@ -1492,7 +1529,8 @@ if (typeof document !== 'undefined') {
     state.toolOrd = null;
     state.toolOwner = null;
     state.requestOpen = new Set();
-    state.railTab = 'facts';
+    // 页签是显式声明或用户偏好：URL 直达、popstate 与手动切会话都保留当前
+    // 顶层页签；请求内的步骤与工具选择仍清除。
     state.pendingSession = key;
     state.userScrolled = false;
     state.revealed = false;
@@ -1510,6 +1548,9 @@ if (typeof document !== 'undefined') {
     }
     renderAll();
     void loadWindowReads();
+    // 导航完成处补路由读取：URL 直达与切会话后路由页不要求再点一次页签。
+    const routeTarget = routeReadTarget(state.railTab, state.reqId);
+    if (routeTarget !== null) void ensureRoute(routeTarget);
     if (state.offPageReqId !== null) {
       // 窗口外 trace：详情已在右栏说明，主列表停在最前面。
       el('main').scrollTop = 0;
@@ -1672,8 +1713,9 @@ if (typeof document !== 'undefined') {
     const rail = /** @type {HTMLElement | null} */ (t.closest('[data-rail]'));
     if (rail) {
       state.railTab = rail.dataset.rail === 'facts' ? 'facts' : rail.dataset.rail === 'route' ? 'route' : rail.dataset.rail === 'tools' ? 'tools' : 'body';
-      // 路由页签是明确的阅读动作：按需读取一次，失败保留未读可重试。
-      if (state.railTab === 'route' && state.reqId !== null) void ensureRoute(state.reqId);
+      // 页签点击是明确的阅读动作：按需读取一次，失败保留未读，再次点击可重试。
+      const routeTarget = routeReadTarget(state.railTab, state.reqId);
+      if (routeTarget !== null) void ensureRoute(routeTarget);
       renderRail();
       updateURL();
       return;
@@ -1862,7 +1904,7 @@ if (typeof document !== 'undefined') {
     state.reqId = p.get('trace') ? Number(p.get('trace')) : null;
     state.missingReqId = null;
     state.offPageReqId = null;
-    state.railTab = ['body', 'tools', 'route'].includes(p.get('tab') ?? '') ? p.get('tab') : 'facts';
+    state.railTab = railTabFromParam(p.get('tab'));
     state.toolOrd = null;
     state.toolOwner = null;
     if (state.session !== null) {
