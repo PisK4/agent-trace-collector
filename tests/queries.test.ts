@@ -162,6 +162,7 @@ test('已完成的组在列表与详情里都是current', () => {
     const caller = getRequest(f.store, 1)!;
     expect(caller.tool_calls[0]?.state).toBe('resolved');
     expect(caller.tool_calls[0]?.result_req).toBe(2);
+    expect(detail.tool_results).toEqual([{ owner_req: 1, ...caller.tool_calls[0] }]);
     // 当前行不需要 historical：当前值已经在顶层。
     expect(detail.historical).toBeNull();
   } finally { f.close(); }
@@ -185,6 +186,7 @@ test('组dirty时关系与增量不作为当前值返回', () => {
     expect(detail.prev_req_id).toBeNull();
     expect(detail.prev_relation).toBeNull();
     expect(detail.delta_ordinals).toBeNull();
+    expect(detail.tool_results).toEqual([]);
     expect(detail.chain_role).toBe('unknown');
     // 工具候选同样是组结果：调用身份保留，结果位置不外露。
     // state 退回 pending——"结果位置未确认"正是组没算完时的实情。
@@ -805,6 +807,7 @@ test('发布代存在时整套读取发布结果，标题列表详情工具同�
     expect(detail.summary_state).toBe('recomputed');
     expect(detail.summary_basis).toBe('{"why":"synthetic"}');
     expect(detail.tool_calls[0]?.result_path).toBe('request.messages[4].content[1]');
+    expect(detail.tool_results).toEqual([{ owner_req: id, ...detail.tool_calls[0] }]);
     expect(listRequests(f.store, 'conv-reading').items[0]?.title).toBe('published title');
     expect(listSessions(f.store).items.find(s => s.conv_key === 'conv-reading')?.title)
       .toBe('published title');
@@ -829,11 +832,13 @@ test('发布代不 current 或保留时屏蔽为旧结论，不冒充当前', ()
     expect(detail.input_preview).toBeNull();
     expect(detail.historical?.title).toBe('retained bait');
     expect(detail.tool_calls[0]?.result_path).toBeNull();
+    expect(detail.tool_results).toEqual([]);
     f.store.write(db => markGroupDirtyTx(db, 'conv-reading', 'actor-reading', ''));
     detail = getRequest(f.store, id)!;
     expect(detail.derived_state).toBe('dirty');
     expect(detail.title).not.toBe('published title');
     expect(detail.tool_calls[0]?.state).toBe('pending');
+    expect(detail.tool_results).toEqual([]);
     // 指针指向没有结果行的代：不回退同步诱饵。
     f.store.write(db => db.run(
       `UPDATE derive_queue SET published_generation='gen-missing' WHERE conv_key='conv-reading'`, []));
