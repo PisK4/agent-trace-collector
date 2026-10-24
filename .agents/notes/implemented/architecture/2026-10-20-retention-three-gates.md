@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-正文按请求增长。10 GB 的正文预算挡不住整个库：`request`、`request_evidence`、`route_summary` 长期保留，按每笔约 2 KB 的读数字段加索引，4000 笔一天一年约 2.9 GB；请求量翻十倍，单靠元数据就会超过 16 GB 的硬上限。容量到线时如果只是抛错或静默丢数据，既丢证据，也没有可恢复的缺口记录。
+正文按请求增长。10 GB 的正文预算挡不住整个库。`request`、`request_evidence`、`route_summary` 长期保留，按每笔约 2 KB 的读数字段加索引，4000 笔一天一年约 2.9 GB；请求量翻十倍时，单靠元数据就会超过 16 GB 的硬上限。容量到线时如果只是抛错或静默丢数据，既丢证据，也没有可恢复的缺口记录。
 
 ## Decision
 
@@ -19,7 +19,7 @@ Status: implemented
 
 回收按 `day`、`started_ms`、`req_id` 从旧到新，单批最多 100 笔、10,000 条块引用；删引用、删孤儿块、清骨架、改状态在同一个事务里，`have` 与历史读数不动，`body_prev_state` 保留原状态。共享块只在最后一个引用消失时删除。每批后执行 `incremental_vacuum(256)`，再执行 `wal_checkpoint(TRUNCATE)`；不做在线全库 `VACUUM`。
 
-账本暂停时 `committed_off` 不动、只推进 `observed_off`，同一来源代际的连续区间合并成一条 `source_gap`，补齐后标 `filled`，文件换代补不回来的标 `unrecoverable` 并一直可见。raw 层保留 7 天，先给对应证据标 `payload_state=expired` 再删原文；仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。
+账本暂停时 `committed_off` 不动、只推进 `observed_off`。同一来源代际的连续区间合并成一条 `source_gap`，补齐后标 `filled`；文件换代补不回来的标 `unrecoverable` 并一直可见。raw 层保留 7 天，先给对应证据标 `payload_state=expired` 再删原文；仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。
 
 常量见 [src/retention.ts](../../../../src/retention.ts)，默认值见 [src/config.ts](../../../../src/config.ts)，完整策略见[架构设计的容量与保留](../../../../docs/architecture-design.md#容量与保留)。
 

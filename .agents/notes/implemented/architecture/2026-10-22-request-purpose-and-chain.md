@@ -16,13 +16,13 @@ Status: implemented
 
 来源 kind 只有精确值 `title` 排除链，其它非空值变成 `source:<value>` 并保持参与；`conflict`、`missing`、`invalid`、`overflow` 不出结论，交给标题兼容兜底。标题兼容先看回复形状（整段 `<title>` 或只含 `title` 键的 JSON），再看已存 `req_kind='title'`；已存 title 在回复不再是标题形状时保留旧 `model_title`。
 
-正文不可读时，有旧解释（`purpose_version` 非空）就整行保留并追加 `purpose.retained`；没有旧解释才落 missing 或 unsupported，并保留旧的 chain/kind。来源 kind 只对没有旧解释的行生效，避免正文回收后一条普通来源覆盖分类器结论。
+正文不可读时，有旧解释（`purpose_version` 非空）就整行保留并追加 `purpose.retained`；没有旧解释才记 missing 或 unsupported，并保留旧的 chain/kind。来源 kind 只对没有旧解释的行生效，避免正文回收后一条普通来源覆盖分类器结论。
 
 解释结果只描述结论与依据：`status`、`version`、`rule`、`signals`、`chain`、`kind`、`modelTitle`。信号代码按判定顺序排列，供报告与排查使用，不参与判定。
 
-用途由 `src/request-purpose.ts` 按单笔结算：读完视图后以请求行上的身份、修订、目标与待处理标记为条件写回；条件不命中说明读视图之后输入又变了，返回 stale 并保留 pending，等下一轮重来。错误最多记三次，终态把状态落成 `error` 并消费当前修订，避免一笔永远读不出来的请求把整组卡在 dirty。只有结论改变链归属或标题时才标脏所属组，单纯重算同一条结论不动队列。
+用途由 `src/request-purpose.ts` 按单笔结算。读完视图后，以请求行上的身份、修订、目标与待处理标记为条件写回；条件不命中说明读视图之后输入又变了，返回 stale 并保留 pending，等下一轮重来。错误最多记三次，终态把状态置为 `error` 并消费当前修订，避免一笔永远读不出来的请求把整组卡在 dirty。只有结论改变链归属或标题时才标脏所属组，单纯重算同一条结论不动队列。
 
-用途读取解骨架、引用索引与 role=2 的 System/developer 消息块，不解压普通消息块：顶层 system 与 stop 在骨架里，消息级 System（Chat 的 system/developer 消息）按引用解压，损坏的 System 块走用途错误路径，不静默宣称没有 System——那会把分类器请求算进主链。正文读取是共享的一条严格路径：骨架字段、请求行上的消息条数、引用数与连续 ord、块存在，任何一项不一致都返回 null；派生因此把正文当成不可读，用途因此走 retained/missing，而不是把部分正文当完整证据。
+用途读取解骨架、引用索引与 role=2 的 System/developer 消息块，不解压普通消息块：顶层 system 与 stop 在骨架里，消息级 System（Chat 的 system/developer 消息）按引用解压，损坏的 System 块走用途错误路径，不能静默宣称没有 System，否则会把分类器请求算进主链。正文读取是共享的一条严格路径，校验骨架字段、请求行上的消息条数、引用数与连续 ord、块存在；任何一项不一致都返回 null。派生因此把正文当成不可读，用途因此走 retained/missing，不会把部分正文当完整证据。
 
 [阅读角色与步骤定位修复](../../implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)补齐了 Chat System 用途取数，并部分取代仅解骨架的读取范围；版本化用途、显式会话升级、严格正文和不可读时保留的决定继续有效。
 
@@ -44,11 +44,11 @@ Status: implemented
 - 分类器形状变化不会让请求掉回 chat，只会少两个 shape 信号。
 - 已存 title 的请求不会因回复改形重新进入主链，代价是上游真正改变用途时需要显式重建。
 - 局部正文损坏一律按不可读处理：宁可 retained/missing，也不把 partial 当完整分类。
-- 未知归属的请求也完成用途：它没有组可标脏，结论只写请求行；读模型里因无组恒为 `dirty`，但"这一笔是分类器还是标题生成"仍然可读。
-- 用途与组共用 `drainDeriveTx` 一个事务：先分批把作用域内的待判请求推到排空，组阶段才发布；`limit` 仍按组计数，`purposeLimit` 只是每批大小。组结果报告同时给出已判与仍待判的请求数。
+- 未知归属的请求也完成用途。它没有组可标脏，结论只写请求行；读模型里因无组恒为 `dirty`，但"这一笔是分类器还是标题生成"仍然可读。
+- 用途与组共用 `drainDeriveTx` 一个事务。先分批把作用域内的待判请求推到排空，组阶段才发布；`limit` 仍按组计数，`purposeLimit` 只是每批大小。组结果报告同时给出已判与仍待判的请求数。
 - 在线 tick 与显式重建走同一个排空入口，没有第二套用途路径。
 - 组阶段只读用途列：`purpose_chain` 决定是否参与链与工具配对，`req_kind` 决定是否走标题字段，回复预览不再解析 `<title>`。派生不写 `req_kind`/`model_title`，避免与用途阶段形成两个标题来源。
-- 查询原样返回未知的 `req_kind` 与 `chain_role`，不折叠成 chat/main；会话标题只取已完成组且用途已结算的行，排除用途提供 `model_title`，参与链提供用户标题。
+- 查询原样返回未知的 `req_kind` 与 `chain_role`，不折叠成 chat/main；会话标题只取已完成组且用途已结算的行。被用途排除的行提供 `model_title`，参与链的行提供用户标题。
 - 历史 v1 行不会在普通 tick 里改写，只有显式 `rebuild --session` 才换代；代价是升级要按会话逐个运维，换来例行调度不重判整库。
 - 页面按 `purpose_chain`/`chain_role` 认辅助请求，按 `req_kind` 给分类器与标题生成贴标签；摘要字符串不再参与类别判断。
 - 只有显式 `rebuild --session` 会把该会话 `purpose_target<PURPOSE_VERSION` 的行置为待判并排空（升级该会话内全部旧目标行，不是只改其中某一类）；普通 tick 不升级 clean 的历史行，避免一次例行调度把整库重判。同一时间只有一个用途写入者。
