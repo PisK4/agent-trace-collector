@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
 import {
-  auxSummary, isAuxRow, ledgerParts, ledgerRowsHtml, purposeLabel, railFactsHtml, readingChangedNote,
-  replyCompleteness, resolveTraceTarget, restoreScroll, structureFoldHtml, systemContextOf,
-  toolOverviewHtml, toolSchemaSection, usageFoldHtml,
+  auxSummary, isAuxRow, ledgerParts, ledgerRowsHtml, purposeLabel, railFactsHtml, railTabFromParam,
+  railTabParam, readingChangedNote, replyCompleteness, resolveTraceTarget, restoreScroll, routeReadTarget,
+  structureFoldHtml, systemContextOf, toolOverviewHtml, toolSchemaSection, usageFoldHtml,
 } from '../web/app.js';
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {
@@ -388,4 +388,28 @@ test('窗口外请求传入详情保留首个文本；fold 图例只列正值类
   const noPrompt = usageFoldHtml(ledgerRow() as never, { ...ledgerRow(), prompt: null } as never);
   expect(noPrompt).toContain('用量与上下文');
   expect(noPrompt).not.toContain('comp-bar');
+});
+
+test('URL 页签声明：合法内容页签原样解析与写回，无效或缺省回读数', () => {
+  expect(railTabFromParam('body')).toBe('body');
+  expect(railTabFromParam('tools')).toBe('tools');
+  expect(railTabFromParam('route')).toBe('route');
+  expect(railTabFromParam(null)).toBe('facts');
+  expect(railTabFromParam('bogus')).toBe('facts');
+  expect(railTabParam('facts')).toBeNull();
+  expect(railTabParam('body')).toBe('body');
+  expect(railTabParam('tools')).toBe('tools');
+  expect(railTabParam('route')).toBe('route');
+  // 往返一致：解析结果写回 URL 后仍解析出同一页签。
+  for (const tab of ['body', 'tools', 'route'] as const) {
+    expect(railTabFromParam(railTabParam(tab))).toBe(tab);
+  }
+});
+
+test('路由读取目标：路由页签且请求已定才读取，其余页签与无请求不触发', () => {
+  expect(routeReadTarget('route', 7)).toBe(7);
+  expect(routeReadTarget('route', null)).toBeNull();
+  expect(routeReadTarget('facts', 7)).toBeNull();
+  expect(routeReadTarget('body', 7)).toBeNull();
+  expect(routeReadTarget('tools', 7)).toBeNull();
 });
