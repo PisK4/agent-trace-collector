@@ -12,7 +12,7 @@ Status: implemented
 
 工具结果按调用位置读取：owner 的调用序号定位一次调用，关系 `resolved` 且组 current 才继续；路径只认 `request.messages[N](.content[M])?`，N 必须等于 `result_ord`，目标 canonical、conv_key 与 actor 必须与调用方一致；Anthropic 目标块必须是配对 `tool_use_id` 的 `tool_result`，Chat 必须是 `tool_call_id` 匹配的 `role=tool` 消息。不跨请求搜索、不回退第一块。状态固定六值，原因用固定词，`is_error` 三态；关联已确认与工具成功、正文已读取是三件事。
 
-[阅读角色与步骤定位提案](../../proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)拟修正前端失效实现，并统一多 choice 的调用位置限制；本决定的条件读取与 owner+ord 结果身份继续有效。
+[阅读角色与步骤定位修复](../../implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)修正了前端失效实现，并统一多 choice 的调用位置限制；本决定的条件读取与 owner+ord 结果身份继续有效。
 
 ## Alternatives considered
 

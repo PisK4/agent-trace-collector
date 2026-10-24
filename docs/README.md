@@ -26,7 +26,7 @@
 | [容量基线与收敛](superpowers/plans/2026-10-22-atc-capacity-convergence.md) | 隔离合成负载、固定原因观测、预算、路由解码优化与条件切片 |
 | [性能工作单元](superpowers/plans/2026-10-24-atc-performance-units.md) | 在线派生预算、具名提交与空闲零事务、文件证据和游标原子摄入；合成验收与切片启用边界 |
 | [单一轨迹生产阅读](superpowers/plans/2026-10-23-single-timeline-production-reader.md) | 已交付（Task 0–8 全部完成）：原型缺陷修复与阅读验证门槛、发布代读取、最近窗口、条件正文与阅读版本、按调用位置的工具结果、reader-store 缓存与单一轨迹界面；决策记录见 implemented Agent Note |
-| [阅读角色与步骤定位修复](superpowers/plans/2026-10-24-reader-role-and-selection-consistency.md) | 待实施：英文角色与 System 阅读、输入/回复定位、缓存失效、稀疏消息与增量续读，以及 Chat System 用途取数、未适配协议能力状态、多 choice 工具身份；评审证据与取舍见[修复提案](../.agents/notes/proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md) |
+| [阅读角色与步骤定位修复](superpowers/plans/2026-10-24-reader-role-and-selection-consistency.md) | 已实施：英文角色与 System 阅读、输入/回复定位、缓存失效、稀疏消息与增量续读，以及 Chat System 用途取数、未适配协议能力状态、多 choice 工具身份；决定与取舍见[修复记录](../.agents/notes/implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md) |
 | [首轮 Collector 实施总入口](superpowers/plans/2026-10-20-collector-implementation.md) | 首轮阶段依赖、共同接口、文件职责与验收；实际切换继续遵守 C3 授权要求 |
 | [持久化与真实页面](superpowers/plans/2026-10-20-collector-foundation.md) | A1–A5：SQLite、文件代际与恢复、账本路由和费用、访问控制、真实分页页面 |
 | [正文与关联派生](superpowers/plans/2026-10-20-collector-body.md) | B1–B5：脱敏内容库、协议适配、薄 hook、证据关联、乱序派生与正文阅读 |

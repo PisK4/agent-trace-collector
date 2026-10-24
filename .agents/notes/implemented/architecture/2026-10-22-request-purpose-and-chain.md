@@ -24,7 +24,7 @@ Status: implemented
 
 用途读取解骨架、引用索引与 role=2 的 System/developer 消息块，不解压普通消息块：顶层 system 与 stop 在骨架里，消息级 System（Chat 的 system/developer 消息）按引用解压，损坏的 System 块走用途错误路径，不静默宣称没有 System——那会把分类器请求算进主链。正文读取是共享的一条严格路径：骨架字段、请求行上的消息条数、引用数与连续 ord、块存在，任何一项不一致都返回 null；派生因此把正文当成不可读，用途因此走 retained/missing，而不是把部分正文当完整证据。
 
-[阅读角色与步骤定位提案](../../proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)补齐了 Chat System 用途取数，并部分取代仅解骨架的读取范围；版本化用途、显式会话升级、严格正文和不可读时保留的决定继续有效。
+[阅读角色与步骤定位修复](../../implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)补齐了 Chat System 用途取数，并部分取代仅解骨架的读取范围；版本化用途、显式会话升级、严格正文和不可读时保留的决定继续有效。
 
 ## Alternatives considered
 

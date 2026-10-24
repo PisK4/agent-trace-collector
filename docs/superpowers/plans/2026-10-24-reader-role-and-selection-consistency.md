@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript、Bun、原生 JavaScript、原生 DOM、`bun:test`，不引第三方依赖。
 
-**Spec:** [阅读角色、步骤定位与缓存一致性提案](../../../.agents/notes/proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)；现行读取与存储依据见[架构设计](../../architecture-design.md#协议适配)。
+**Spec:** [阅读角色、步骤定位与缓存一致性提案](../../../.agents/notes/implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)；现行读取与存储依据见[架构设计](../../architecture-design.md#协议适配)。
 
 ## Global Constraints
 
