@@ -578,7 +578,7 @@ if (typeof document !== 'undefined') {
     if (view === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       replyHtml = `<details class="rail-fold" data-fold="reply:${r.req_id}">
-        <summary>本次回复<span class="fold-count">${esc(canLoad ? '正文未读取' : bodyStateText(r))}</span></summary>
+        <summary>本次回复${canLoad ? '' : `<span class="fold-count">${esc(bodyStateText(r))}</span>`}</summary>
         <div class="fold-body"><p class="note">${esc(bodyLabelText(r))}</p>
           ${state.readingChanged.has(r.req_id) ? readingChangedNote(r.req_id) : ''}
           ${canLoad ? `<div class="conv-tools"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>
@@ -658,7 +658,7 @@ if (typeof document !== 'undefined') {
           ${warn}
         </button>`;
       });
-      return `<section class="rail-section"><h3>工具调用<span class="grow"></span><span class="hint">${tools.length} 次调用 · 点开在右栏同屏配对阅读</span></h3>${rows.join('')}</section>`;
+      return `<section class="rail-section"><h3>工具调用<span class="grow"></span><span class="hint">${tools.length} 次调用</span></h3>${rows.join('')}</section>`;
     }
     const owner = state.toolOwner ?? r.req_id;
     const ownerRead = owner === r.req_id ? read : store.peekRequest(owner);
