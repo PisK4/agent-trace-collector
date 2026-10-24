@@ -12,9 +12,9 @@
  * @typedef {{kind: string, text: string, index: number, raw: unknown, path: string, failed?: boolean}} Block
  * @typedef {import('../src/input-interpretation').UserInputView} UserInputView
  * @typedef {{ord: number, role: Role, rawRole: string | null, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
- * @typedef {{id: string, name: string, inputText: string, ord: number}} ToolCallView
+ * @typedef {{id: string, name: string, inputText: string, ord: number, path: string}} ToolCallView
  * @typedef {{state: 'ok' | 'absent' | 'invalid', text: string, thinking: string[], calls: ToolCallView[], finish: string | null, model: string | null, raw: unknown}} ReplyView
- * @typedef {{call_id: string, name: string, inputText: string, ord: number, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null, result_label?: string | null}} ToolEntry
+ * @typedef {{call_id: string, name: string, inputText: string, ord: number, path: string, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null, result_label?: string | null}} ToolEntry
  * @typedef {{delta: Set<number> | null, limit?: number, selectedOrd?: number | null, gaps?: {from: number, to: number}[]}} MessageOptions
  */
 
@@ -347,8 +347,8 @@ export function replyView(page) {
     return { state: 'invalid', text: '', thinking: [], calls: [], finish: null, model: null, raw: reply };
   }
   const model = textOrNull(reply.model);
-  /** @param {Block[]} blocks @param {string | null} finish @returns {ReplyView} */
-  const fromBlocks = (blocks, finish) => {
+  /** @param {Block[]} blocks @param {string | null} finish @param {string} callBase 调用块的协议前缀 @returns {ReplyView} */
+  const fromBlocks = (blocks, finish, callBase) => {
     const texts = [];
     const thinking = [];
     /** @type {ToolCallView[]} */
@@ -366,6 +366,7 @@ export function replyView(page) {
             : typeof fn.arguments === 'string' ? fn.arguments
               : JSON.stringify(fn.input ?? fn.arguments ?? null) ?? '',
           ord: block.index,
+          path: `${callBase}[${block.index}]`,
         });
       }
     }
@@ -374,13 +375,14 @@ export function replyView(page) {
 
   if (Array.isArray(reply.content)) {
     const blocks = reply.content.map((block, index) => blockView(block, index, `content[${index}]`));
-    return fromBlocks(blocks, textOrNull(reply.stop_reason));
+    return fromBlocks(blocks, textOrNull(reply.stop_reason), 'reply.content');
   }
   const choices = Array.isArray(reply.choices) ? reply.choices : [];
   const first = isRecord(choices[0]) ? choices[0] : null;
   const message = first !== null && isRecord(first.message) ? first.message : null;
   if (message !== null) {
-    return fromBlocks(messageBlocks(message), first !== null ? textOrNull(first.finish_reason) : null);
+    return fromBlocks(messageBlocks(message), first !== null ? textOrNull(first.finish_reason) : null,
+      'reply.choices[0].message.tool_calls');
   }
   return { state: 'invalid', text: '', thinking: [], calls: [], finish: null, model, raw: reply };
 }
@@ -402,6 +404,7 @@ export function toolEntries(detail, page) {
       name: call.name,
       inputText: call.inputText,
       ord: call.ord,
+      path: call.path,
       state: pair === null ? 'unpaired' : pair.state,
       // 按钮身份用调用者 owner + 调用序号；不再按 result_req/result_ord 反查调用。
       owner: detail === null ? null : detail.req_id,
@@ -552,20 +555,20 @@ export function renderUnknownBlockDetail(path, raw) {
 }
 
 /**
- * 工具往返折叠行。已配对给出结果跳转；没有配对信息就不显示状态，只有异常（多候选）才提示。
+ * 工具往返折叠行。每次调用都提供右栏内打开配对页的入口，阅读就地完成；
+ * 没有配对信息就不显示状态，只有异常（多候选）才提示。
  * @param {ToolEntry[]} tools
  * @param {string} [foldKey] 折叠持久化键前缀（req id）；空串不持久化
  */
 export function renderTools(tools, foldKey = '') {
   if (tools.length === 0) return '';
   const rows = tools.map(tool => {
-    const jump = tool.state === 'resolved' && tool.result_req !== null
-      ? `<button class="chip-btn" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}">→ 结果 · ${esc(tool.result_label ?? `请求 ${tool.result_req}`)}</button>`
-      : tool.state === 'ambiguous' ? '<span class="tool-chip miss"><span>结果有多个候选，未配对</span></span>'
-        : '';
+    const open = `<button class="chip-btn" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}">配对两端 ▸</button>`;
+    const warn = tool.state === 'ambiguous'
+      ? '<span class="tool-chip miss"><span>结果有多个候选，未配对</span></span>' : '';
     return `<div class="tool-row">
       <span class="tool-chip call" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clip(tool.inputText, 90))})</span></span>
-      ${jump}
+      ${open}${warn}
     </div>`;
   }).join('');
   const foldAttr = foldKey === '' ? '' : ` data-fold="round:${esc(foldKey)}"`;

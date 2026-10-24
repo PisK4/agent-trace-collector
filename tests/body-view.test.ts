@@ -244,8 +244,9 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
   expect(html).toContain(`data-tool-owner="${detail.req_id}"`);
   expect(html).toContain('data-call-ord="0"');
   expect(html).toContain('data-fold="round:7"');
-  // 已配对显示结果跳转；未确认与无结果按「没有就不显示」不出状态。
-  expect(html).toContain('→ 结果');
+  // 每次调用都提供右栏内配对入口，不跳转；未确认与无结果按「没有就不显示」不出状态。
+  expect(html).toContain('配对两端');
+  expect(html).not.toContain('data-result-owner');
   expect(html).not.toContain('结果位置未确认');
   expect(html).not.toContain('还没有见到结果');
   const twinDetail = { req_id: 42, tool_calls: [
@@ -264,8 +265,8 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
   ]);
   expect((twinHtml.match(/data-call-ord="0"/g) ?? []).length).toBe(1);
   expect((twinHtml.match(/data-call-ord="1"/g) ?? []).length).toBe(1);
-  // 两个调用都指向同一目标：跳转按钮身份仍是各自的调用序号。
-  expect((twinHtml.match(/→ 结果/g) ?? []).length).toBe(2);
+  // 两个调用都指向同一目标：配对入口身份仍是各自的调用序号。
+  expect((twinHtml.match(/配对两端/g) ?? []).length).toBe(2);
   // 没有配对信息的调用不能冒充已配对。
   const orphan = toolEntries(null, page({ reply: { id: 'm', content: [{ type: 'tool_use', id: 'x', name: 'n', input: {} }] } }));
   expect(orphan[0]?.state).toBe('unpaired');
