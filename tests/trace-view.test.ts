@@ -61,16 +61,14 @@ test('投影顺序与稳定键：旧 ord 不进步骤，新增与回复块按协
     '7:message:2', '7:message:3', '7:reply:text:0', '7:call:1', '7:reply:text:2',
   ]);
   expect(steps[3]?.result).toEqual({ state: 'resolved', reqId: 8 });
-  // 渲染：每行带请求序号、计量只出现一次、默认折叠、没有 time 元素。
-  const html = renderTraceRows(r, steps, 4, new Set(), true);
+  // 渲染：每行只有一个选择入口，类型与内容之外不再附加状态、结果链接或箭头。
+  const html = renderTraceRows(r, steps, 4, null);
   expect(html.match(/data-request-ordinal="4"/g)?.length).toBe(5);
-  expect(html.match(/class="compact-metrics"/g)?.length).toBe(1);
-  expect(html).not.toContain('aria-expanded="true"');
+  expect(html.match(/<button /g)?.length).toBe(5);
+  expect(html).not.toMatch(/compact-metrics|step-status|step-result-link|step-expand/);
   expect(html).not.toContain('<time');
-  // 同一请求重渲染，展开的步骤键生效。
-  const open = new Set(['7:call:1']);
-  const htmlOpen = renderTraceRows(r, steps, 4, open, true);
-  expect(htmlOpen).toContain('aria-expanded="true"');
+  const selected = renderTraceRows(r, steps, 4, '7:call:1');
+  expect(selected).toContain('data-step-key="7:call:1" data-kind="tool" data-call-ord="1" aria-current="true"');
 });
 
 test('读取未完成与不可用时不拆 input_preview 为用户步骤', () => {
@@ -92,7 +90,7 @@ test('注入与空 content 不是用户；tool_result 消息不进轨迹', () =>
   const reply = { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] };
   const steps = projectSteps(row(), read(d, entries, reply));
   expect(steps.map(s => s.kind)).toEqual(['user', 'assistant']);
-  const html = renderTraceRows(row(), steps, 1, new Set(), false);
+  const html = renderTraceRows(row(), steps, 1, null);
   expect(html).not.toContain('<img src=x');
   expect(html).toContain('&lt;img src=x');
 });
@@ -152,6 +150,9 @@ test('HTTP 失败、缺正文与已有步骤并存', () => {
   expect(steps.some(s => s.kind === 'user')).toBe(true);
   const failed = steps.find(s => s.status === 'failed');
   expect(failed?.text).toContain('HTTP 500');
+  const html = renderTraceRows(r, steps, 1, null);
+  expect(html.match(/请求失败 · HTTP 500/g)?.length).toBe(1);
+  expect(html).not.toContain('step-status');
   const missingBody = projectSteps(row({ body_state: 'evicted' }), read(detail(), entries, { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
   expect(missingBody.some(s => s.status === 'missing_body')).toBe(true);
 });

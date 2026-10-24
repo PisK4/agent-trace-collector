@@ -69,10 +69,10 @@ const invalidKind: number = steps[0]!.kind;
 void firstKind;
 void invalidKind;
 
-const html: string = renderTraceRows(row, steps, 3, new Set(['k']), true);
+const html: string = renderTraceRows(row, steps, 3, 'k');
 const summary: string = toolSummary('Bash', '{}');
 // @ts-expect-error renderTraceRows返回string；any退化时应报TS2578。
-const invalidHtml: number = renderTraceRows(row, steps, 3, new Set(), false);
+const invalidHtml: number = renderTraceRows(row, steps, 3, null);
 void html;
 void summary;
 void invalidHtml;

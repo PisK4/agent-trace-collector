@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-布局控制复用原型验证过的机制，只迁有效样式：三栏网格改 CSS 变量（侧栏 250px、详情栏 380px，1240px 以下 220/310），分隔线占独立网格列。折叠用 body 类 + `visibility:hidden`（分隔线与可聚焦后代一并退出可访问树，不用 opacity 假装隐藏），按钮带 `aria-controls`/`aria-expanded` 并同步标题；1000px 以下堆叠布局移除分隔线、折叠改 `display:none`。详情栏调宽：`role=separator` + 方向键（±20px）+ 双击恢复 380，pointerdown 捕获、move 只在按住时更新、up/cancel 释放；宽度夹取范围 280..640 且给中栏保底 320（`clampWidth`），窗口 resize 重新夹取；宽度与折叠状态只存内存，不进 localStorage（主题读写继续 try/catch）。
+布局控制复用原型验证过的机制，只迁有效样式：三栏网格使用 CSS 变量，分隔线占独立网格列。折叠用 body 类 + `visibility:hidden`（分隔线与可聚焦后代一并退出可访问树，不用 opacity 假装隐藏），按钮带 `aria-controls`/`aria-expanded` 并同步标题；窄屏堆叠布局移除分隔线、折叠改 `display:none`。详情栏调宽使用 `role=separator`、方向键、双击恢复默认与指针捕获；宽度和折叠状态只存内存，不进 localStorage（主题读写继续 try/catch）。现行尺寸与默认值见[轨迹阅读布局](../../../../docs/architecture-design.md#轨迹阅读布局)，默认宽度的取舍见[中栏内容与右栏详情](../simplification/2026-10-24-trace-content-only-and-wide-rail.md)。
 
 Session ID 复制：JSON 数组 `["session", id]` 复制第二项原始 ID，conv 身份标「会话键」并复制完整 conv_key，不把 JSON 数组误称 UUID；剪贴板拒绝或不可用时给出可选中文本与手工复制提示（toast + 临时 textarea），成功才显示「已复制」。左栏去掉未知派生的「待确认」标记（具体状态留在选中请求），中栏删除通用缺正文整行；失败、具体异常与历史未读范围仍就地显示。
 

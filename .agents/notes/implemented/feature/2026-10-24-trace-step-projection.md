@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-新增 `web/trace-view.js`：`projectSteps`（纯投影）、`toolSummary`（动作对象摘要）、`renderTraceRows`（单行 HTML），无 DOM、无网络。投影语义继承 Task 0 验证过的口径：用户步骤只来自可信 delta 的输入解释（text 与 unrecognized 各自成行）；回复块按协议原始顺序，thinking 不常驻，未知块给记录入口；请求级失败、缺正文、未收到回复、截断、未知停止各占一条记录行，已有内容步骤时不省略；辅助请求一条辅助记录，分支保留归属标记，dirty/unknown/branch 不产出确定用户步骤。`TraceStep.status` 只表达请求级与回复完整性，`result` 只表达工具关联；结果正文是否已读由 reader-store 决定。稳定键形如 `reqId:message:N` / `reqId:reply:text:N` / `reqId:call:N`，同一 `call_id` 出现在两笔请求不冲突。Chat 只对单 choice 结构化，多 choice 保留原始对象并说明限制。行 HTML 每行带窗口展示号（`data-request-ordinal`，仅显示），计量只在最后一步且增量读全时渲染一次，状态放独立元素不被摘要省略号裁剪，`toolSummary` 截断到 140 字符且不含结果正文。
+新增 `web/trace-view.js`：`projectSteps`（纯投影）、`toolSummary`（动作对象摘要）、`renderTraceRows`（单行 HTML），无 DOM、无网络。投影语义继承 Task 0 验证过的口径：用户步骤只来自可信 delta 的输入解释（text 与 unrecognized 各自成行）；回复块按协议原始顺序，thinking 不常驻，未知块给记录入口；请求级失败、缺正文、未收到回复、截断、未知停止各占一条记录行，已有内容步骤时不省略；辅助请求一条辅助记录，分支保留归属标记，dirty/unknown/branch 不产出确定用户步骤。`TraceStep.status` 只表达请求级与回复完整性，`result` 只表达工具关联；结果正文是否已读由 reader-store 决定。稳定键形如 `reqId:message:N` / `reqId:reply:text:N` / `reqId:call:N`，同一 `call_id` 出现在两笔请求不冲突。Chat 只对单 choice 结构化，多 choice 保留原始对象并说明限制。行 HTML 每行带窗口展示号（`data-request-ordinal`，仅显示），只呈现类型与内容，选中用稳定步骤键标识；行内展示取舍见[中栏内容与右栏详情](../simplification/2026-10-24-trace-content-only-and-wide-rail.md)。`toolSummary` 截断到 140 字符且不含结果正文。
 
 `body-view.js` 的 `toolEntries` 保留调用者 `owner` 与 `result_path`；`renderTools` 按钮改为 `data-tool-owner` + `data-call-ord` 调用者身份，不再按结果位置反查——两个调用指向同一目标消息的不同内容块时按钮仍各有自己的调用序号。
 

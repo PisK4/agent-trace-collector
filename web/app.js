@@ -10,12 +10,12 @@
  */
 
 import {
-  bodyNotice, deltaOrdinals, esc, mdToHtml, messageCopyText, partColor, partLabel, roleTag,
-  renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderRaw, renderReply,
+  bodyNotice, deltaOrdinals, esc, messageCopyText, partColor, partLabel, roleTag,
+  renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderReply,
   renderReplyDetail, replyView, toolEntries,
 } from './body-view.js';
 import { createReaderStore } from './reader-store.js';
-import { projectSteps, renderTraceRows, toolSummary } from './trace-view.js';
+import { projectSteps, renderTraceRows } from './trace-view.js';
 
 /**
  * URL 里的 trace 属于哪种情况。合并过的旧 id 会被服务端解析成 canonical：
@@ -355,8 +355,6 @@ if (typeof document !== 'undefined') {
   const routes = new Map();
   /** @type {Map<string, boolean>} 折叠开合按稳定键保存（键含 req id），重绘后恢复。 */
   const folds = new Map();
-  /** @param {string} key */
-  const foldOpen = key => folds.get(key) === true;
 
   const qp = new URLSearchParams(location.search);
   const state = {
@@ -370,7 +368,6 @@ if (typeof document !== 'undefined') {
     toolOrd: /** @type {number | null} */ (null),
     /** 工具详情四页的当前页：overview / params / result / schema。 */
     toolPage: 'overview',
-    stepOpen: new Set(/** @type {string[]} */ ([])),
     requestOpen: new Set(/** @type {number[]} */ ([])),
     railTab: ['body', 'tools', 'route'].includes(qp.get('tab') ?? '') ? qp.get('tab') : 'facts',
     query: '',
@@ -625,7 +622,7 @@ if (typeof document !== 'undefined') {
       </div>
       <div class="view-row">
         <span class="timeline-tab">步骤轨迹</span>
-        <span class="hint">单行步骤 · 详情默认折叠 · 数字表示当前窗口内的请求</span>
+        <span class="hint">单行步骤 · 点击行查看详情 · 数字表示当前窗口内的请求</span>
         <span class="grow"></span>
         ${state.refreshedAt !== null ? `<span class="hint">刷新于 ${esc(clock(state.refreshedAt))}</span>` : ''}
         <button class="chip-btn" id="refresh-window" title="重新读取最近窗口；输入变化会换发阅读版本">刷新</button>
@@ -636,43 +633,6 @@ if (typeof document !== 'undefined') {
       ${state.offPageReqId !== null ? `<div class="session-note"><span>↳</span><span>链接里的 Request ${state.offPageReqId} 存在，但不在当前载入窗口（可能在更早的历史里）；从顶部加载更早记录后可以选到它，右栏已显示它的详情。不自动扫描全部历史。</span></div>` : ''}
       ${window.error !== null ? `<div class="session-note warn"><span>↳</span><span>请求窗口读取失败：${esc(window.error)}。已加载内容保持不变，可重试。</span></div>` : ''}
     </header>`;
-  }
-
-  /**
-   * 步骤详情：按投影种类渲染。工具步骤触发按调用位置的结果读取；
-   * 每个详情附「请求详情」折叠区（结构、路由与原始对象按需读取）。
-   * @param {RequestRow} row
-   * @param {RequestRead|null} read
-   * @param {{key:string, kind:string, text:string, raw:unknown, callOrd:number|null, unrecognized?: boolean}} step
-   */
-  function stepDetailHtml(row, read, step) {
-    let body = '';
-    if (step.kind === 'user') {
-      body = `<div class="detail-label">用户输入${step.unrecognized ? ' · 包装未识别，按原文保留' : ''}</div>
-        <div class="trace-prose">${esc(typeof step.raw === 'string' ? step.raw : step.text)}</div>`;
-    } else if (step.kind === 'assistant') {
-      body = `<div class="detail-label">回复原文</div><div class="trace-prose">${mdToHtml(String(step.raw ?? step.text))}</div>`;
-    } else if (step.kind === 'tool') {
-      const detail = read?.detail ?? null;
-      const pair = detail?.tool_calls.find((/** @type {{ord: number}} */ item) => item.ord === step.callOrd) ?? null;
-      const view = read !== null && read.meta !== null ? replyView(read.meta) : null;
-      const call = view?.calls.find(item => item.ord === step.callOrd) ?? null;
-      const inputText = call?.inputText ?? (pair?.tool_name !== undefined ? JSON.stringify({ name: pair.tool_name }) : '');
-      const reading = toolReadings.get(`${row.req_id}:${step.callOrd}`) ?? null;
-      const targetId = pair !== null && pair.state === 'resolved' && pair.result_req !== null ? pair.result_req : null;
-      body = `<div class="inline-tool">
-        <div><div class="detail-label">调用参数 · ${esc(toolSummary(call?.name ?? pair?.tool_name ?? '', inputText))}</div>
-          <pre class="raw">${esc(inputText)}</pre></div>
-        <div>${toolResultPanel(row.req_id, step.callOrd ?? 0, pair, reading, { target: targetId === null ? null : windowLabel(targetId) })}</div>
-      </div>
-      <div class="conv-tools"><button class="chip-btn" data-tool-open="${step.callOrd ?? 0}">右栏工具详情（概览/参数/结果/Schema）→</button></div>`;
-      // 打开即读取：按调用位置读取当前来源的结果。
-      void readToolResult(row.req_id, step.callOrd ?? 0);
-    } else {
-      body = `<div class="detail-label">记录</div><div class="trace-prose">${esc(step.text)}</div>
-        ${step.raw !== null && step.raw !== undefined ? `<pre class="raw">${esc(raw(step.raw))}</pre>` : ''}`;
-    }
-    return `${body}<details class="trace-context"><summary>请求详情 · 结构、路由与原始对象</summary>${requestDetailSection(row, read)}</details>`;
   }
 
   /**
@@ -705,55 +665,6 @@ if (typeof document !== 'undefined') {
     renderMain();
     renderRail();
     return toolReadings.get(key) ?? null;
-  }
-
-  /**
-   * 原位请求详情：结构按片读取、路由按需、原始对象标明当前已读范围。
-   * @param {RequestRow} row @param {RequestRead|null} read
-   */
-  function requestDetailSection(row, read) {
-    const detail = read?.detail ?? null;
-    const structure = read?.structure ?? null;
-    const route = routes.get(row.req_id) ?? null;
-    const delta = detail === null ? null : deltaOrdinals(detail);
-    const relation = relationTextOf(row.req_id);
-    const entries = read?.entries ?? [];
-    const unread = structure !== null && structure.total !== null && structure.next < structure.total;
-    return `<div class="req-body">
-      <div class="body-top">
-        <span class="id">req ${row.req_id}</span>
-        ${statusDot(row)}${statusChip(row)}
-        <span class="muted">${esc(viaText(row))}</span>
-        ${row.actor ? `<span class="muted" title="会话 / 子代理：${esc(row.actor)}">actor ${esc(shortId(row.actor))}</span>` : '<span class="muted">会话身份未知</span>'}
-        <span class="grow"></span>
-      </div>
-      ${read !== null && read.meta !== null ? renderCapabilities(read.meta) : ''}
-      <section class="section">
-        <div class="section-head">
-          <h3>请求结构</h3>
-          <span class="count">${structure === null || structure.total === null ? `${entries.length} 条消息` : `${structure.next} / ${structure.total} 条消息`}</span>
-          ${delta !== null ? `<span class="count" style="color:var(--accent)">新增 ${delta.size}</span>` : ''}
-        </div>
-        ${read !== null && read.meta !== null && bodyNotice(read.meta) ? `<p class="note">${esc(bodyNotice(read.meta))}</p>` : ''}
-        ${relation && delta === null ? `<p class="note">${esc(relation)}：不标记新增消息，按原顺序列出。</p>` : ''}
-        ${entries.length > 0
-        ? renderMessages(entries, { delta, limit: entries.length, selectedOrd: null })
-        : `<p class="note">${read === null ? '尚未读取这一笔的正文。' : esc(bodyLabelText(row))}</p>`}
-        ${(read !== null && (row.body_state === 'available' || row.body_state === 'partial'))
-        ? `<div class="conv-tools"><button class="chip-btn" data-structure-more="${row.req_id}" ${structure?.loading ? 'disabled' : ''}>${structure?.error ? '重试读取' : `加载下一片（已读 ${structure?.next ?? 0}${structure?.total === null || structure?.total === undefined ? '' : ` / ${structure.total}`}）`}</button></div>`
-        : ''}
-      </section>
-      ${read !== null && read.meta !== null ? `<section class="section"><div class="section-head"><h3>本次回复</h3><span class="count">与请求上下文分开保存</span></div>${renderReply(replyView(read.meta), detail === null ? [] : toolEntries(detail, read.meta))}</section>` : ''}
-      <div class="disclosures">
-        <details data-fold="route:${row.req_id}"${foldOpen(`route:${row.req_id}`) ? ' open' : ''}><summary>路由与尝试</summary><div class="d-body">${routeBlock(row, route)}</div></details>
-        <details data-fold="completeness:${row.req_id}"${foldOpen(`completeness:${row.req_id}`) ? ' open' : ''}><summary>采集完整性与阅读边界</summary><div class="d-body">${completenessRows(row, detail)}</div></details>
-        <details data-fold="raw:${row.req_id}"${foldOpen(`raw:${row.req_id}`) ? ' open' : ''}><summary>原始脱敏对象（当前已读范围）</summary><div class="d-body">${
-          read !== null && read.meta !== null
-            ? renderRaw({ ...read.meta, messages: [], coverage: { ...read.meta.coverage, from: structure?.next ?? 0 } })
-            : '<p class="note">这一片正文还没读取，展开后再看原始对象。</p>'
-        }</div></details>
-      </div>
-    </div>`;
   }
 
   /** 展开路由折叠区或切到路由页签时才读取；失败保持未读，重新展开可重试。 @param {number} id */
@@ -803,7 +714,7 @@ if (typeof document !== 'undefined') {
       ${r.miss_reason ? `缺失原因：${esc(r.miss_reason)}。` : ''}</p>`;
   }
 
-  /** 单一轨迹：每请求一个组，步骤行 + 展开详情；顶部历史入口与状态说明。 */
+  /** 单一轨迹：每请求一个组，点击步骤在右栏阅读；顶部提供历史入口。 */
   function traceHtml() {
     const window = store.getWindow();
     const rows = currentRows();
@@ -815,19 +726,13 @@ if (typeof document !== 'undefined') {
     } else if (rows.length > 0) {
       html += '<span class="history-start">已到会话起点</span>';
     }
-    html += '<span class="history-range">序号表示当前窗口内的请求 · 时间从上往下 · 详情默认折叠</span></div>';
+    html += '<span class="history-range">序号表示当前窗口内的请求 · 时间从上往下 · 点击行查看详情</span></div>';
     for (const r of rows) {
       const read = reads.get(r.req_id) ?? null;
       const steps = projectSteps(r, read);
-      const openKeys = new Set([...state.stepOpen].filter(key => key.startsWith(`${r.req_id}:`)));
       const ordinal = ordinalOf(r.req_id);
       html += `<section class="trace-group" data-req="${r.req_id}" data-status="${r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success'}" aria-current="${r.req_id === state.reqId}">`;
-      html += renderTraceRows(r, steps, ordinal, openKeys, read !== null && read.delta.done);
-      // 展开的步骤由 app 按键填充详情；renderTraceRows 只给折叠行。
-      for (const step of steps) {
-        if (!state.stepOpen.has(step.key)) continue;
-        html += `<div class="trace-step-detail" data-step-detail="${esc(step.key)}">${stepDetailHtml(r, read, step)}</div>`;
-      }
+      html += renderTraceRows(r, steps, ordinal, state.selectedStep);
       html += '</section>';
     }
     if (rows.length === 0) {
@@ -1216,8 +1121,8 @@ if (typeof document !== 'undefined') {
   function anchorSnapshot() {
     const step = /** @type {HTMLElement | null} */ (document.querySelector('.compact-step'));
     if (step === null) return null;
-    const expand = /** @type {HTMLElement | null} */ (step.querySelector('.step-expand'));
-    return { key: expand?.dataset.stepExpand ?? null, top: step.getBoundingClientRect().top };
+    const select = /** @type {HTMLElement | null} */ (step.querySelector('[data-step-key]'));
+    return { key: select?.dataset.stepKey ?? null, top: step.getBoundingClientRect().top };
   }
   /** @param {ReturnType<typeof anchorSnapshot>} before */
   function compensateAnchor(before) {
@@ -1227,8 +1132,8 @@ if (typeof document !== 'undefined') {
     // 两帧各校一次：首帧布局未稳的亚像素漂移在第二帧补齐。
     /** @param {number} pass */
     const adjust = (pass) => {
-      const restored = document.querySelector(`.step-expand[data-step-expand="${CSS.escape(key)}"]`);
-      if (restored === null) return;
+      const restored = document.querySelector(`[data-step-key="${CSS.escape(key)}"]`)?.closest('.compact-step');
+      if (restored == null) return;
       const sc = scroller();
       if (sc !== null) sc.scrollTop += restored.getBoundingClientRect().top - expected;
       if (pass < 1) requestAnimationFrame(() => adjust(pass + 1));
@@ -1251,7 +1156,6 @@ if (typeof document !== 'undefined') {
   /** 显式刷新：重建最近窗口、清掉旧展开与旧阅读版本，记录读取时间。 */
   async function refreshWindow() {
     if (state.session === null) return;
-    state.stepOpen = new Set();
     state.requestOpen = new Set();
     reads.clear();
     toolReadings.clear();
@@ -1312,33 +1216,26 @@ if (typeof document !== 'undefined') {
     renderRail();
   }
 
-  /** @param {number} id */
-  async function selectRequest(id) {
-    const same = state.reqId === id && state.toolOrd === null;
+  /** @param {number} id @param {string|null} key */
+  async function selectRequest(id, key) {
+    const row = currentRows().find(row => row.req_id === id);
+    if (row === undefined) return;
+    const step = projectSteps(row, reads.get(id) ?? null).find(item => item.key === key);
     state.reqId = id;
+    state.selectedStep = key;
+    state.toolOrd = step?.callOrd ?? null;
+    state.toolPage = 'overview';
+    state.railTab = step?.kind === 'tool' ? 'tools'
+      : step?.kind === 'user' || step?.kind === 'assistant' ? 'body' : 'facts';
     state.missingReqId = null;
     state.offPageReqId = null;
-    if (!same) {
-      state.selectedStep = null;
-      state.toolOrd = null;
-      await ensureRead(id);
-      renderCrumb();
-    }
-    updateURL();
-  }
-
-  /** @param {string} key */
-  async function toggleStep(key) {
-    if (state.stepOpen.has(key)) state.stepOpen.delete(key);
-    else state.stepOpen.add(key);
-    // 工具步骤展开即按调用位置读取结果。
-    const callMatch = /^(\d+):call:(\d+)$/.exec(key);
-    if (callMatch !== null && state.stepOpen.has(key)) {
-      await readToolResult(Number(callMatch[1]), Number(callMatch[2]));
-      return;
-    }
+    document.body.classList.remove('rail-collapsed');
+    syncPanelButtons();
     renderMain();
     renderRail();
+    renderCrumb();
+    updateURL();
+    await ensureRead(id);
   }
 
   /** @param {number} id */
@@ -1396,7 +1293,6 @@ if (typeof document !== 'undefined') {
     state.offPageReqId = null;
     state.selectedStep = null;
     state.toolOrd = null;
-    state.stepOpen = new Set();
     state.requestOpen = new Set();
     state.railTab = 'facts';
     state.pendingSession = key;
@@ -1459,15 +1355,6 @@ if (typeof document !== 'undefined') {
     if (t.closest('[data-tool-back]') !== null) { state.toolOrd = null; renderRail(); updateURL(); return; }
     const toolPageBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-page]'));
     if (toolPageBtn !== null) { state.toolPage = toolPageBtn.dataset.toolPage ?? 'overview'; renderRail(); return; }
-    const toolOpen = /** @type {HTMLElement | null} */ (t.closest('[data-tool-open]'));
-    if (toolOpen !== null) {
-      state.toolOrd = Number(toolOpen.dataset.toolOpen);
-      state.toolPage = 'overview';
-      state.railTab = 'tools';
-      renderRail();
-      updateURL();
-      return;
-    }
     const toolOwnerBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-owner]'));
     if (toolOwnerBtn !== null) {
       state.toolOrd = Number(toolOwnerBtn.dataset.callOrd);
@@ -1503,7 +1390,7 @@ if (typeof document !== 'undefined') {
     }
     const railReply = t.closest('[data-rail-reply]');
     if (railReply !== null) { state.selectedStep = null; renderRail(); return; }
-    // 轨迹行里的结果入口：先读取，再定位承载请求。
+    // 工具详情里的结果入口：先读取，再定位承载请求。
     const resultEntry = /** @type {HTMLElement | null} */ (t.closest('[data-result-owner]'));
     if (resultEntry !== null) {
       const owner = Number(resultEntry.dataset.resultOwner);
@@ -1555,8 +1442,6 @@ if (typeof document !== 'undefined') {
       }
       return;
     }
-    const stepExpand = /** @type {HTMLElement | null} */ (t.closest('[data-step-expand]'));
-    if (stepExpand !== null) { void toggleStep(/** @type {HTMLElement} */ (stepExpand).dataset.stepExpand ?? ''); return; }
     const sess = /** @type {HTMLElement | null} */ (t.closest('[data-session]'));
     if (sess) { void selectSession(sess.dataset.session ?? ''); return; }
     const agent = /** @type {HTMLElement | null} */ (t.closest('[data-agent]'));
@@ -1566,8 +1451,7 @@ if (typeof document !== 'undefined') {
       const group = /** @type {HTMLElement | null} */ (select.closest('.trace-group'));
       const id = group !== null ? Number(group.dataset.req) : state.reqId;
       if (id !== null && Number.isFinite(id)) {
-        state.selectedStep = select.dataset.stepKey ?? null;
-        void selectRequest(id);
+        void selectRequest(id, select.dataset.stepKey ?? null);
       }
       return;
     }
@@ -1671,7 +1555,10 @@ if (typeof document !== 'undefined') {
     try { resizer.setPointerCapture(e.pointerId); } catch { /* 合成指针没有 capture；按住标记已生效 */ }
   });
   resizer.addEventListener('pointermove', e => {
-    if (draggingPointer === e.pointerId) resizeRail(window.innerWidth - e.clientX);
+    if (draggingPointer === e.pointerId) {
+      preferredRailWidth = Math.max(RAIL_MIN, Math.min(RAIL_MAX, window.innerWidth - e.clientX));
+      fitRail();
+    }
   });
   /** @param {PointerEvent} e */
   const releasePointer = e => {
@@ -1680,21 +1567,24 @@ if (typeof document !== 'undefined') {
   };
   resizer.addEventListener('pointerup', releasePointer);
   resizer.addEventListener('pointercancel', releasePointer);
+  let preferredRailWidth = RAIL_MAX;
+  function fitRail() {
+    if (window.innerWidth > 1000) resizeRail(preferredRailWidth);
+  }
+  fitRail();
   resizer.addEventListener('dblclick', () => {
-    document.documentElement.style.removeProperty('--rail-width');
-    resizer.setAttribute('aria-valuenow', String(Math.round(document.querySelector('.col-rail')?.getBoundingClientRect().width ?? 380)));
+    preferredRailWidth = RAIL_MAX;
+    fitRail();
   });
   resizer.addEventListener('keydown', e => {
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault();
-      const current = document.querySelector('.col-rail')?.getBoundingClientRect().width ?? 380;
-      resizeRail(current + (e.key === 'ArrowLeft' ? 20 : -20));
+      const current = document.querySelector('.col-rail')?.getBoundingClientRect().width ?? RAIL_MAX;
+      preferredRailWidth = Math.max(RAIL_MIN, Math.min(RAIL_MAX, current + (e.key === 'ArrowLeft' ? 20 : -20)));
+      fitRail();
     }
   });
-  window.addEventListener('resize', () => {
-    const set = document.documentElement.style.getPropertyValue('--rail-width');
-    if (window.innerWidth > 1000 && set !== '') resizeRail(parseFloat(set));
-  });
+  window.addEventListener('resize', fitRail);
   /** 折叠按钮的 aria 状态与 body 类同步。 */
   function syncPanelButtons() {
     for (const [id, cls, name] of [['sidebar-toggle', 'sidebar-collapsed', '会话栏'], ['rail-toggle', 'rail-collapsed', '详情栏']]) {
@@ -1705,7 +1595,7 @@ if (typeof document !== 'undefined') {
       button.title = button.getAttribute('aria-label') ?? '';
     }
   }
-  el('sidebar-toggle').addEventListener('click', () => { document.body.classList.toggle('sidebar-collapsed'); syncPanelButtons(); });
+  el('sidebar-toggle').addEventListener('click', () => { document.body.classList.toggle('sidebar-collapsed'); syncPanelButtons(); fitRail(); });
   el('rail-toggle').addEventListener('click', () => { document.body.classList.toggle('rail-collapsed'); syncPanelButtons(); });
 
   /* ---------------- Session ID 复制 ---------------- */

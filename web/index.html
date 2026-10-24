@@ -105,7 +105,7 @@ code,pre,.mono{font-family:var(--mono)}
 .icon-btn:hover{background:var(--hover)}
 
 /* ---------- 三栏工作台：每栏独立滚动；侧栏与详情栏可折叠，详情栏可调宽 ---------- */
-:root{--sidebar-width:250px;--rail-width:380px}
+:root{--sidebar-width:250px;--rail-width:clamp(280px,calc(100vw - var(--sidebar-width) - 326px),640px)}
 .app{flex:1;min-height:0;display:grid;grid-template-columns:var(--sidebar-width) minmax(0,1fr) 6px var(--rail-width)}
 .col{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain}
 .col-sessions{background:var(--page);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
@@ -219,6 +219,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-row{display:flex;align-items:center;gap:10px;height:36px;min-width:0;padding-inline:5px}
 .compact-select{display:flex;align-items:center;gap:9px;flex:1;min-width:0;text-align:left;height:100%}
 .compact-select:hover{background:var(--hover)}
+.compact-select[aria-current="true"]{background:var(--accent-soft)}
 .compact-meta{display:flex;align-items:center;flex:none;width:86px;font:9px var(--mono);color:var(--muted)}
 .compact-meta b{font-weight:400;color:var(--text-2)}
 .row-label{width:34px;flex:none;padding:2px 3px;border-radius:3px;text-align:center;font:10px var(--ui);color:var(--k-user);background:var(--k-user-bg)}
@@ -227,28 +228,10 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .row-label.aux{color:var(--k-system);background:var(--k-system-bg)}
 .compact-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:11px}
 .compact-preview code{font-size:10px;color:var(--text-2)}
-.compact-metrics{display:flex;justify-content:flex-end;gap:10px;flex:none;width:215px;white-space:nowrap;font:9px var(--mono);color:var(--muted)}
-.step-status{flex:none;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--muted)}
-.step-status.ok{color:var(--good)}
-.step-status.warn{color:var(--warn)}
-.step-status.bad{color:var(--bad)}
-.step-result-link{flex:none;font-size:10px;color:var(--accent);border:1px solid var(--line);border-radius:3px;padding:2px 7px;background:var(--surface);white-space:nowrap}
-.step-result-link:hover{border-color:var(--accent)}
-.step-result-link.bad{color:var(--bad);border-color:var(--bad)}
-.step-expand{width:22px;flex:none;height:30px;color:var(--muted);font-size:16px}
-.step-expand:hover{color:var(--accent);background:var(--hover)}
-.trace-step-detail{margin:5px 27px 10px 100px;padding:12px;background:var(--inset);border:1px solid var(--line);border-radius:4px;min-width:0}
-.trace-prose{font-size:12px;line-height:1.85;max-width:76ch;overflow-wrap:anywhere}
-.inline-tool{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
-.inline-tool>div{min-width:0}
-.inline-tool pre.raw{white-space:pre-wrap;overflow-wrap:anywhere;border:0;padding:0;max-height:240px;font-size:10.5px}
-.trace-context{font-size:10px;color:var(--muted);margin-top:7px}
-.trace-context>summary{cursor:pointer;padding:5px 0}
-.trace-context .req-body{margin:6px 0}
 .timeline-end{display:flex;align-items:center;justify-content:center;gap:6px;padding:22px 0 5px;color:var(--muted);font-size:10px}
 .timeline-end span{width:5px;height:5px;background:var(--line-strong);border-radius:50%}
-@media(max-width:1300px){.compact-metrics{width:163px;gap:7px;font-size:8px}.compact-metrics span:last-child{display:none}.compact-meta{width:76px;font-size:8px;gap:5px}}
-@media(max-width:620px){.compact-row{gap:5px}.compact-meta{width:22px}.compact-select{gap:5px}.compact-metrics{width:69px;font-size:8px}.compact-metrics span:first-child{display:none}.compact-preview{font-size:11px}.trace-step-detail{margin-inline:0}.step-status{display:none}.history-range{width:100%;text-align:center}}
+@media(max-width:1300px){.compact-meta{width:76px;font-size:8px;gap:5px}}
+@media(max-width:620px){.compact-row{gap:5px}.compact-meta{width:22px}.compact-select{gap:5px}.compact-preview{font-size:11px}.history-range{width:100%;text-align:center}}
 
 .msg-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
 .msg{border-bottom:1px solid var(--line)}
@@ -511,7 +494,7 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 
 /* 响应式 */
 @media(max-width:1240px){
-  :root{--sidebar-width:220px;--rail-width:310px}
+  :root{--sidebar-width:220px}
       }
 @media(max-width:1000px){
   html,body{height:auto}
@@ -587,7 +570,7 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 
   <main class="col col-main" id="main"><p class="sess-empty" style="padding:24px">正在读取请求…</p></main>
 
-  <div class="resize-handle" id="rail-resize" role="separator" tabindex="0" aria-label="调整详情栏宽度" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="640" aria-valuenow="380" title="拖动调整宽度；双击恢复默认；方向键微调"></div>
+  <div class="resize-handle" id="rail-resize" role="separator" tabindex="0" aria-label="调整详情栏宽度" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="640" aria-valuenow="640" title="拖动调整宽度；双击恢复默认；方向键微调"></div>
 
   <aside class="col col-rail" id="rail-col" aria-label="请求读数与正文">
     <div class="rail-head" id="rail-head"></div>
