@@ -190,6 +190,11 @@ test('unsupported 协议原对象仍可整份读出', async () => {
     expect(page.parse_state).toBe('unsupported');
     expect(page.request_fields).toEqual({ input: 'hello' });
     expect(page.reply).toEqual({ id: 'resp_1', output: [] });
+    // 原文完整保存不等于协议可解释：消息总数与能力都不从保存覆盖推导。
+    expect(page.total).toBeNull();
+    const caps = page.capabilities as Record<string, { state: string; items: unknown[]; reason: string | null }>;
+    expect(caps.tools).toEqual({ state: 'missing', items: [], reason: 'protocol_unsupported' });
+    expect(caps.skills).toEqual({ state: 'missing', items: [], reason: 'protocol_unsupported' });
   } finally {
     f.close();
   }

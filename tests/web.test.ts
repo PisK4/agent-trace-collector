@@ -318,3 +318,17 @@ test('工具概览显示配对与正文加载两种状态，时长归属说明�
   expect(toolOverviewHtml(7, null, null)).toContain('还没有见到结果');
   expect(toolOverviewHtml(7, pairOf('resolved'), null)).toContain('工具执行时长未采集');
 });
+
+test('协议未适配时结构折叠说明边界，不邀请顺序读取', () => {
+  const html = structureFoldHtml({
+    reqId: 1, row: factsRow, meta: { total: null },
+    entries: [],
+    structure: { ...emptyStructure, total: null },
+    delta: null,
+    parseState: 'unsupported',
+    relation: '',
+  });
+  expect(html).toContain('协议未适配');
+  expect(html).not.toContain('data-structure-more');
+  expect(html).not.toContain('尚未读取');
+});

@@ -148,12 +148,13 @@ export function railFactsHtml(parts) {
  *   structure: { open: boolean, next: number, total: number | null, ords: number[], selected: number | null, loading: boolean, error: string | null },
  *   delta: Set<number> | null,
  *   deltaState?: { next: number, done: boolean, loading: boolean, error: string | null } | null,
+ *   parseState?: string | null,
  *   relation: string,
  * }} input
  * @returns {string}
  */
 export function structureFoldHtml(input) {
-  const { reqId, row, meta, entries, structure, delta, deltaState = null, relation } = input;
+  const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation } = input;
   const total = structure.total ?? (meta ? meta.total : null);
   const count = total === null || total === undefined ? '消息总数未读取' : `${total} 条消息`;
   const canLoad = row.body_state === 'available' || row.body_state === 'partial';
@@ -166,6 +167,9 @@ export function structureFoldHtml(input) {
       <div class="conv-tools"><button class="chip-btn" data-structure-back="${reqId}">返回消息列表</button></div>`;
   } else if (entries.length === 0 && !canLoad) {
     body = `<p class="note">${esc(bodyLabelText(row))}</p>`;
+  } else if (entries.length === 0 && parseState === 'unsupported') {
+    // 协议未适配是解释边界：原文完整也不按已知协议展开消息结构。
+    body = '<p class="note">协议未适配：原对象已保存，但不按已知协议解释消息结构；请求字段与回复按原文阅读。</p>';
   } else if (entries.length === 0) {
     body = `<p class="note">${structure.loading ? '正在读取消息结构…' : '尚未读取消息正文；展开后从开头读取前 40 条。'}</p>`;
   } else {
@@ -1060,6 +1064,7 @@ if (typeof document !== 'undefined') {
       structure: read?.structure ?? { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null },
       delta: detail === null ? null : deltaOrdinals(detail),
       deltaState: read?.delta ?? null,
+      parseState: meta?.parse_state ?? null,
       relation: relationTextOf(r.req_id),
     });
     return railFactsHtml({

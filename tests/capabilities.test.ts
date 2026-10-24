@@ -83,3 +83,15 @@ test('能力数据保留原文，不执行也不转义为 HTML', () => {
   expect(view.tools.items[0]?.name).toBe(payload);
   expect(view.skills.items[0]?.name).toBe(payload);
 });
+
+test('未适配协议不把未知技能显示为零', () => {
+  const view = capabilityView({
+    protocol: 'responses', request: { input: 'synthetic input' },
+    systemTexts: [], coverage: complete, systemPresent: false, agent: null,
+  });
+  expect(view.tools).toEqual({ state: 'missing', items: [], reason: 'protocol_unsupported' });
+  expect(view.skills).toEqual({ state: 'missing', items: [], reason: 'protocol_unsupported' });
+  // 保存覆盖与 agent 原样保留：完整保存不证明协议可解释。
+  expect(view.coverage).toEqual(complete);
+  expect(view.agent).toBeNull();
+});
