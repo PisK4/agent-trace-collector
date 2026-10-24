@@ -36,6 +36,7 @@ bun run verify-cutover
 - 每个行为变更只跑能对该回归失败的最窄测试；全量套件与平台矩阵留给显式动作。
 - 提交前不重复已经通过的检查。
 - 提交前跑 `bun run verify:notes`，它同时检查活跃 note 的格式、归档封印，以及本次改动是否带 note。
+- 纯机械或局部改动要豁免变更检查时，提交信息带 `Agent-Note: none — <reason>`；暂存阶段还没有提交信息，用 `ATC_NOTE_EXEMPT=<reason>` 放行并把同一理由写进提交信息。触发路径与判定见 [scripts/verify-change-notes.mjs](scripts/verify-change-notes.mjs)，规则来由见[变更闸门](.agents/notes/implemented/process/2026-10-21-change-note-gate.md)。
 
 ## 常规约定
 
@@ -46,10 +47,13 @@ bun run verify-cutover
 - **文档写现状，不写变更史**：previously、now、no longer 这类叙述进 commit 或 note，不进常备文档。文档分层见 [docs/AGENTS.md](docs/AGENTS.md)。
 - **一个事实一个家**：架构与存储形状以 [docs/architecture-design.md](docs/architecture-design.md) 为准，运维步骤以 [docs/operations.md](docs/operations.md) 为准。note 只写为什么这样定、否决了什么、代价是什么，链接过去，不复述字段与默认值。
 - **报告忠实**：不把重试、跳过、未执行描述为通过；合成数据验收与真实流量验收分开写。
+- **不装本地 git hook**：闸门是 `.agents/KIT-VERSION` 基线下显式执行的 `verify:notes`，kit 升级也是显式动作。来由见[接入 agent-kit 的 Agent Notes 体系](.agents/notes/implemented/process/2026-10-21-adopt-agent-kit-notes.md)。
 
 ## 栈特有约定
 
 - TypeScript + Bun 单进程；不引第三方依赖，SQLite 用 `bun:sqlite`，压缩用 `node:zlib`。
+- 依赖方向单向：`config`（叶子，不 import 仓库内其他模块）← `store` ← 引擎与读模型。详见[五个放错层的符号归位](.agents/notes/implemented/architecture/2026-10-23-symbol-relocations.md)。
+- `main.ts` 只做 wiring（timer、防重入锁、配置装配、进程日志），任务体归持有对应概念的 module。详见[main.ts 的定时任务体归位](.agents/notes/implemented/architecture/2026-10-23-main-orchestration-delegation.md)。
 - 监听地址写死 `127.0.0.1`，不读环境变量覆盖；数据目录在仓库外，文件权限 0600、目录 0700。
 - 测试只用合成数据；真实请求正文、账号、令牌和用户配置不进 fixture、日志或提交。
 - 正文与路由内容在页面一律转义，不直接插 HTML。
