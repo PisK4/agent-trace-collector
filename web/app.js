@@ -425,19 +425,6 @@ if (typeof document !== 'undefined') {
     <p class="note" style="margin-top:8px">只显示已记录的决策与尝试。窗口过滤不保证完整留痕；用量条目数量也不等于尝试次数。</p>`;
   }
 
-  /** @param {RequestRow} r @param {RequestDetail | null} detail */
-  function completenessRows(r, detail) {
-    const row = (/** @type {string} */ k, /** @type {string} */ v, /** @type {string} */ color) =>
-      `<div class="chain-row"><dt>${k}</dt><dd><span style="color:${color}">${v}</span></dd></div>`;
-    return `<div class="chain">
-      ${row('正文回调', (r.have & HAVE_BODY) ? '已收到' : '未收到', (r.have & HAVE_BODY) ? 'var(--good)' : 'var(--bad)')}
-      ${row('用量账本', (r.have & HAVE_LEDGER) ? '已关联' : '待关联', (r.have & HAVE_LEDGER) ? 'var(--good)' : 'var(--warn)')}
-      ${row('路由历史', (r.have & HAVE_ROUTE) ? '已关联' : '当前来源不提供', (r.have & HAVE_ROUTE) ? 'var(--good)' : 'var(--muted)')}
-    </div>
-    <p class="note" style="margin-top:8px">三条通道各自可能缺失。${detail && detail.prev_relation === 'unknown' ? '本笔与上一笔的增量关系无法确认，未计算新增消息。' : ''}
-      ${r.miss_reason ? `缺失原因：${esc(r.miss_reason)}。` : ''}</p>`;
-  }
-
   /** 单一轨迹：每请求一个组，点击步骤在右栏阅读；顶部提供历史入口。 */
   function traceHtml() {
     const window = store.getWindow();

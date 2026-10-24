@@ -502,9 +502,8 @@ export function renderMessageDetail(entry) {
       <span class="bp-path">messages[${entry.ord}]</span>
       <button class="chip-btn" data-copy-msg="${entry.ord}">复制原文</button>
     </div>
-    <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${entry.blocks.length} 个内容块</span><span>·</span><span>按协议字段顺序展示</span></div>
+    <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${entry.blocks.length} 个内容块</span></div>
     ${blocks.length > 0 ? blocks : '<p class="note">这条消息没有内容块。</p>'}
-    <p class="rail-note">内容按脱敏后的原文保存；未知块以转义 JSON 展示，不做语义推测。</p>
   </div>`;
 }
 
@@ -519,7 +518,6 @@ export function renderSystemDetail(text) {
       <span class="bp-path">request.system</span>
     </div>
     <div class="bp-text bp-plain">${esc(text)}</div>
-    <p class="rail-note">System 是请求顶层字段，不属于 messages；内容按脱敏后的原文保存，这里转义展示。</p>
   </div>`;
 }
 
@@ -597,7 +595,7 @@ export function renderReply(view, tools = [], foldKey = '') {
   }
   if (view.state === 'invalid') {
     return `<div class="reply-empty"><b>回复对象无法结构化</b>
-      <span>原对象仍保存在库里，可在「原始脱敏对象」里查看。</span></div>`;
+      <span>原对象仍保存在库里。</span></div>`;
   }
   const thinking = view.thinking.length === 0 ? '' : subFold('think',
     `<summary>推理块<span class="fold-count">${view.thinking.length} 段</span></summary>
@@ -625,7 +623,7 @@ export function renderReplyDetail(view, tools = [], foldKey = '') {
       ${view.finish !== null ? `<span>finish: ${esc(view.finish)}</span>` : ''}
     </div>
     ${renderReply(view, tools, foldKey)}
-    <p class="rail-note">回复与请求上下文分开保存。工具结果不在本回复里，按 call id 指向后续请求的消息。</p>
+    <p class="rail-note">工具结果不在本回复里，按 call id 指向后续请求的消息。</p>
   </div>`;
 }
 
