@@ -179,10 +179,14 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
     },
   }));
   expect(tools.map(tool => tool.state)).toEqual(['resolved', 'pending']);
-  const html = renderTools(tools);
+  const html = renderTools(tools, '7');
   expect(html).toContain(`data-tool-owner="${detail.req_id}"`);
   expect(html).toContain('data-call-ord="0"');
-  // 两个调用指向同一目标消息的不同内容块：按钮身份仍是各自的调用序号。
+  expect(html).toContain('data-fold="round:7"');
+  // 已配对显示结果跳转；未确认与无结果按「没有就不显示」不出状态。
+  expect(html).toContain('→ 结果');
+  expect(html).not.toContain('结果位置未确认');
+  expect(html).not.toContain('还没有见到结果');
   const twinDetail = { req_id: 42, tool_calls: [
     { call_id: 'a', ord: 0, tool_name: 'read', result_req: 9, result_ord: 2, result_path: 'request.messages[2].content[0]', state: 'resolved' },
     { call_id: 'b', ord: 1, tool_name: 'read', result_req: 9, result_ord: 2, result_path: 'request.messages[2].content[1]', state: 'resolved' },
@@ -193,13 +197,14 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
       { type: 'tool_use', id: 'b', name: 'read', input: { path: 'b' } },
     ] },
   }));
-  const twinHtml = renderTools(twin);
+  const twinHtml = renderTools(twin, '42');
   expect(twin.filter(t => t.result_path !== null).map(t => t.result_path)).toEqual([
     'request.messages[2].content[0]', 'request.messages[2].content[1]',
   ]);
   expect((twinHtml.match(/data-call-ord="0"/g) ?? []).length).toBe(1);
   expect((twinHtml.match(/data-call-ord="1"/g) ?? []).length).toBe(1);
-  expect(html).toContain('结果位置未确认');
+  // 两个调用都指向同一目标：跳转按钮身份仍是各自的调用序号。
+  expect((twinHtml.match(/→ 结果/g) ?? []).length).toBe(2);
   // 没有配对信息的调用不能冒充已配对。
   const orphan = toolEntries(null, page({ reply: { id: 'm', content: [{ type: 'tool_use', id: 'x', name: 'n', input: {} }] } }));
   expect(orphan[0]?.state).toBe('unpaired');
@@ -302,7 +307,7 @@ const presentView: CapabilityView = {
   agent: 'claude',
 };
 
-test('能力区块消费服务端状态，partial 不显示零技能', () => {
+test('能力区块消费服务端状态，empty 整行不渲染，partial 显示原因', () => {
   const partialView: CapabilityView = {
     tools: { state: 'empty', items: [], reason: 'no_tools_field' },
     skills: { state: 'partial', items: [], reason: 'body_partial' },
@@ -312,7 +317,8 @@ test('能力区块消费服务端状态，partial 不显示零技能', () => {
   const html = renderCapabilities(page({ capabilities: partialView }));
   expect(html).toContain('技能清单未读完');
   expect(html).not.toContain('0 技能');
-  expect(html).toContain('0 工具');
+  // empty = 请求没带工具定义，按「没有就不显示」整行不渲染。
+  expect(html).not.toContain('工具清单');
 });
 
 test('能力区块区分 missing 与 empty', () => {
@@ -331,7 +337,8 @@ test('能力区块区分 missing 与 empty', () => {
       coverage: { complete: true, reason: 'available', from: 0, to: 2, total: 2 },
     },
   }));
-  expect(empty).toContain('没有可解析的技能清单');
+  expect(empty).toContain('工具清单');
+  expect(empty).not.toContain('技能清单');
 });
 
 test('能力区块渲染服务端条目并压平描述', () => {
@@ -346,7 +353,8 @@ test('能力区块渲染服务端条目并压平描述', () => {
       },
     },
   }));
-  expect(html).toContain('1 工具 · 1 技能');
+  expect(html).toContain('data-fold="cap:tools"');
+  expect(html).toContain('data-fold="cap:skills"');
   expect(html).toContain('<code class="cap-name">T</code>');
   expect(html).toContain(`${'x'.repeat(120)}…`);
   expect(html).not.toContain('\n第二行');
@@ -354,11 +362,12 @@ test('能力区块渲染服务端条目并压平描述', () => {
   expect(html).not.toContain('<pre class="raw"');
 });
 
-test('能力区块没有视图时说明原因', () => {
+test('能力区块没有视图时返回空，missing 显示原因', () => {
   const html = renderCapabilities(page({ capabilities: missingCapabilities }));
   expect(html).toContain('工具定义缺失');
   expect(html).toContain('技能声明缺失');
-  expect(renderCapabilities(null)).toContain('这一片没有能力视图');
+  expect(renderCapabilities(null)).toBe('');
+  expect(renderCapabilities(undefined)).toBe('');
 });
 
 test('能力区块的动态内容只作为文本转义', () => {
@@ -483,9 +492,10 @@ test('右栏回复详情的推理块默认折叠', () => {
     reply: { id: 'm', content: [{ type: 'thinking', thinking: '先查一下' }, { type: 'text', text: '答案' }] },
   }));
   const html = renderReplyDetail(view);
-  expect(html).toContain('<details class="msg-thinking">');
-  expect(html).not.toContain('<details class="msg-thinking" open>');
-  // 展开后的详情（消息级）可以带 open，这里只锁定回复卡片默认收起。
+  expect(html).toContain('<details class="rail-fold sub">');
+  expect(html).toContain('推理块');
+  expect(html).not.toContain('<details class="rail-fold sub" open');
+  // 推理块与工具往返默认收起/展开由外层控制；这里锁定推理块默认收起。
 });
 
 test('能力折叠区带稳定键，重绘后按名字恢复开合', () => {

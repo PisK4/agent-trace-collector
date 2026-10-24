@@ -39,7 +39,7 @@ Status: implemented
 - 同一事务里两个阶段都要排空，一批大组不再因为用途只判了 100 条而卡住；`purposeLimit` 是每批大小，不是总量上限。
 - 未知归属的请求也会被判定用途，但不产生组；读模型里它没有组可加入，因此恒为 `dirty`，关系为 `unknown`。
 - 读模型多一次 `LEFT JOIN derive_queue`，以及每次调用一个只读事务。列表不带摘要算法列，详情带。
-- 非当前行的工具调用保留调用身份，`result_req`/`result_ord`/`result_path` 清空、`state` 退回 `pending`：界面显示"结果位置未确认"，而不是一个可能是旧的位置。
+- 非当前行的工具调用保留调用身份，`result_req`/`result_ord`/`result_path` 清空、`state` 退回 `pending`：不显示可能是旧的位置，正常态也不挂提示（「结果位置未确认」chip 后经[读数条与「无则不显」收敛](../../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)删除）。
 - 请求阶段按版本 2 解释，不能与版本 1 并行运行；历史 v1 行只有显式 `rebuild --session` 才升级。
 - 会话标题只取已完成组且用途已结算的行，与会话的 `derived_state='current'` 同条件。
 

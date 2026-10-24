@@ -69,27 +69,27 @@ const entryOf = (ord: number, text: string) => ({
 
 function factsHtml(structureHtml: string) {
   return railFactsHtml({
-    capabilitiesHtml: '<section class="cap-section"><h3>请求能力</h3></section>',
+    capabilitiesHtml: '<details class="rail-fold" data-fold="cap:tools"><summary>工具清单</summary></details>',
     structureHtml,
-    replyHtml: '<section class="rail-section"><h3>本次回复</h3></section>',
-    usageHtml: '<section class="rail-section"><h3>用量</h3></section>',
-    timingHtml: '<section class="rail-section"><h3>时间构成</h3></section>',
-    promptHtml: '<section class="rail-section"><h3>上下文组成</h3></section>',
+    replyHtml: '<details class="rail-fold" data-fold="reply:1" open><summary>本次回复</summary></details>',
+    promptHtml: '<details class="rail-fold" data-fold="prompt:1"><summary>上下文组成</summary></details>',
     completenessHtml: '<section class="rail-section"><h3>身份完整性</h3></section>',
   });
 }
 
-test('读数页按能力→结构→回复→用量→计时→上下文→身份完整排序，默认全折叠', () => {
+test('读数页按回复→结构→能力→上下文→身份完整排序；用量与计时在头部读数条，不进读数页', () => {
   const html = factsHtml(structureFoldHtml({
     reqId: 1, row: factsRow, meta: { total: 45 }, entries: [],
     structure: emptyStructure, delta: new Set<number>(), relation: '会话首笔',
   }));
-  expect(html.indexOf('请求能力')).toBeLessThan(html.indexOf('请求结构'));
-  expect(html.indexOf('请求结构')).toBeLessThan(html.indexOf('本次回复'));
-  expect(html.indexOf('本次回复')).toBeLessThan(html.indexOf('用量'));
-  expect(html.indexOf('时间构成')).toBeLessThan(html.indexOf('上下文组成'));
+  expect(html.indexOf('本次回复')).toBeLessThan(html.indexOf('请求结构'));
+  expect(html.indexOf('请求结构')).toBeLessThan(html.indexOf('工具清单'));
+  expect(html.indexOf('工具清单')).toBeLessThan(html.indexOf('上下文组成'));
   expect(html.indexOf('上下文组成')).toBeLessThan(html.indexOf('身份完整性'));
-  expect(html).not.toContain('<details open');
+  expect(html).not.toContain('用量');
+  expect(html).not.toContain('时间构成');
+  // 回复默认展开；结构与能力默认折叠。
+  expect(html).toContain('<details class="rail-fold" data-fold="reply:1" open>');
 });
 
 test('结构折叠：total=45、ords=[] 时有数量没有消息；正文回收不给加载按钮', () => {
