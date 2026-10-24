@@ -2,6 +2,7 @@ import { readdirSync, statfsSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
+import { commitUnit } from './store';
 import { markRequestInputTx } from './derive-state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
 
@@ -358,6 +359,19 @@ export function evictOldestBodyBatch(store: Store, now: number, limit = EVICT_BA
  * 所以先标证据过期再删原文；仍带正文又没完成关联的 hook 原文不按到期删，只在 issue 里记一笔。
  */
 export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): PruneResult {
+  const candidate = store.read.query(`
+    SELECT 1 WHERE EXISTS (SELECT 1 FROM raw_ledger WHERE t_ms<?)
+      OR EXISTS (SELECT 1 FROM raw_route r WHERE r.time_ms<?
+        AND (EXISTS (SELECT 1 FROM route_summary s WHERE s.route_id=r.route_id)
+          OR NOT EXISTS (SELECT 1 FROM request q WHERE q.route_id=r.route_id)))
+      OR EXISTS (SELECT 1 FROM raw_hook h WHERE h.received_at<?
+        AND ((h.request_z IS NULL AND h.response_z IS NULL)
+          OR EXISTS (SELECT 1 FROM request_evidence e JOIN request q ON q.req_id=e.req_id
+            WHERE e.source_kind='hook' AND e.ref_key=h.hook_id AND q.skeleton_z IS NOT NULL)
+          OR NOT EXISTS (SELECT 1 FROM ingest_issue i WHERE i.source_kind='hook'
+            AND i.ref_key=h.hook_id AND i.reason='raw_hook_body_unlinked')))
+  `).get(beforeMs, beforeMs, beforeMs);
+  if (candidate === null) return { ledger: 0, route: 0, hook: 0 };
   return store.write(db => {
     const ledgerRows = db.query<{ source_kind: string; file_generation: string; byte_offset: number }, [number, number]>(`
       SELECT source_kind, file_generation, byte_offset FROM raw_ledger
@@ -399,7 +413,13 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
              (h.request_z IS NOT NULL OR h.response_z IS NOT NULL) AS has_body,
              (SELECT COUNT(*) FROM request_evidence e JOIN request q ON q.req_id=e.req_id
                WHERE e.source_kind='hook' AND e.ref_key=h.hook_id AND q.skeleton_z IS NOT NULL) AS linked
-      FROM raw_hook h WHERE h.received_at < ? ORDER BY h.received_at LIMIT ?`).all(beforeMs, limit);
+      FROM raw_hook h WHERE h.received_at < ?
+        AND ((h.request_z IS NULL AND h.response_z IS NULL)
+          OR EXISTS (SELECT 1 FROM request_evidence e JOIN request q ON q.req_id=e.req_id
+            WHERE e.source_kind='hook' AND e.ref_key=h.hook_id AND q.skeleton_z IS NOT NULL)
+          OR NOT EXISTS (SELECT 1 FROM ingest_issue i WHERE i.source_kind='hook'
+            AND i.ref_key=h.hook_id AND i.reason='raw_hook_body_unlinked'))
+      ORDER BY h.received_at LIMIT ?`).all(beforeMs, limit);
     const deleteHook = db.prepare('DELETE FROM raw_hook WHERE hook_id=?');
     let ledger = 0;
     let route = 0;
@@ -425,7 +445,7 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
       markRequestInputTx(db, reqId);
     }
     return { ledger, route, hook };
-  });
+  }, 'raw_prune');
 }
 
 /** 物理收缩：分批增量回收空闲页，再截断 WAL。不做在线全库 VACUUM。 */
@@ -582,26 +602,29 @@ export function markStaleGapsTx(
  * 换了代际（文件被重写/截断）就补不回来了，标记永久可见。
  */
 export function resumeSourceGaps(store: Store, sourceName: string): ResumeResult {
-  return store.write(db => {
-    const rows = db.query<{ source_kind: string; source_name: string; file_generation: string; from_off: number }, [string]>(`
-      SELECT source_kind, source_name, file_generation, from_off FROM source_gap
-      WHERE source_name=? AND state IN ('open','resumable')`).all(sourceName);
-    let recoverable = 0;
-    let unrecoverable = 0;
-    const now = Date.now();
+  const result = { recoverable: 0, unrecoverable: 0 };
+  commitUnit(store, 'gap', read => {
+    const rows = read.query<{ source_kind: string; source_name: string; file_generation: string;
+      from_off: number; state: string; same: number }, [string]>(`
+      SELECT g.source_kind,g.source_name,g.file_generation,g.from_off,g.state,
+        COALESCE(g.file_generation=c.file_generation,0) AS same FROM source_gap g
+      LEFT JOIN source_cursor c ON c.source_kind=g.source_kind AND c.source_name=g.source_name
+      WHERE g.source_name=? AND g.state IN ('open','resumable')`).all(sourceName);
+    const changed = rows.filter(row => row.state !== (row.same ? 'resumable' : 'unrecoverable')).slice(0, 100);
+    const committed = new Set(changed);
     for (const row of rows) {
-      const cursor = db.query<{ file_generation: string }, [string, string]>(
-        'SELECT file_generation FROM source_cursor WHERE source_kind=? AND source_name=?',
-      ).get(row.source_kind, row.source_name);
-      const same = cursor !== null && cursor.file_generation === row.file_generation;
-      db.run(
-        `UPDATE source_gap SET state=?, updated_at=?
-         WHERE source_kind=? AND source_name=? AND file_generation=? AND from_off=?`,
-        [same ? 'resumable' : 'unrecoverable', now, row.source_kind, row.source_name, row.file_generation, row.from_off],
-      );
-      if (same) recoverable += 1;
-      else unrecoverable += 1;
+      if (row.same) result.recoverable += 1;
+      else if (committed.has(row)) result.unrecoverable += 1;
     }
-    return { recoverable, unrecoverable };
+    if (changed.length === 0) return null;
+    return db => {
+      for (const row of changed) {
+        db.run(`UPDATE source_gap SET state=?,updated_at=?
+          WHERE source_kind=? AND source_name=? AND file_generation=? AND from_off=?`,
+        [row.same ? 'resumable' : 'unrecoverable', Date.now(), row.source_kind,
+          row.source_name, row.file_generation, row.from_off]);
+      }
+    };
   });
+  return result;
 }

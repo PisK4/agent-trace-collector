@@ -42,9 +42,9 @@ export type Store = {
   path: string;
   db: Database;
   read: Database;
-  write<T>(fn: (db: Database) => T): T;
-  /** 进程内所有写事务的累计计时；失败与回滚同样计数。 */
-  writeStats: WriteStats;
+  write<T>(fn: (db: Database) => T, name?: string): T;
+  /** 进程内写事务累计计时与归属；失败与回滚同样计数。 */
+  writeStats: WriteStats & { by_name: Record<string, WriteStats> };
   /**
    * 派生按哪条路径跑：设了就是切片，没设就是同步。
    *
@@ -54,6 +54,13 @@ export type Store = {
   deriveRuntime?: SliceRuntime;
   close(): void;
 };
+
+/** 同步准备只读意图；null 不开事务，返回的写函数立即在唯一 writer 内提交。 */
+export function commitUnit<T>(store: Store, name: string,
+  prepare: (read: Database) => ((db: Database) => T) | null): T | null {
+  const intent = prepare(store.read);
+  return intent === null ? null : store.write(intent, name);
+}
 
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
 const SCHEMA_V6 = readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8');
@@ -136,8 +143,8 @@ export function openStore(path: string): Store {
   read.exec('PRAGMA busy_timeout=1000');
 
   let closed = false;
-  const writeStats: WriteStats = { count: 0, total_ms: 0, max_ms: 0 };
-  const write = <T>(fn: (db: Database) => T): T => {
+  const writeStats: Store['writeStats'] = { count: 0, total_ms: 0, max_ms: 0, by_name: {} };
+  const write = <T>(fn: (db: Database) => T, name = 'other'): T => {
     const started = performance.now();
     try {
       return db.transaction(() => {
@@ -151,6 +158,11 @@ export function openStore(path: string): Store {
       writeStats.count += 1;
       writeStats.total_ms += elapsed;
       writeStats.max_ms = Math.max(writeStats.max_ms, elapsed);
+      const named = writeStats.by_name[name] ?? { count: 0, total_ms: 0, max_ms: 0 };
+      named.count += 1;
+      named.total_ms += elapsed;
+      named.max_ms = Math.max(named.max_ms, elapsed);
+      writeStats.by_name[name] = named;
     }
   };
 

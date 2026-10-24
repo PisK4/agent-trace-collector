@@ -440,13 +440,13 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
 /** 组内全部阶段与 CAS 在调用方的同一个事务内完成；失败回滚当前事务。 */
 export function drainDeriveGroupTx(db: Database, convKey: string, actor: string):
   { processed: number; recomputed: number; retained: number } | null {
-    const group = db.query<QueuedGroup, [string, string]>(`
-      SELECT conv_key,actor,group_epoch,input_revision,target_algorithm FROM derive_queue
-      WHERE conv_key=? AND actor=? AND ${queuePendingSql()}`).get(convKey, actor);
-    if (group === null) return null;
-    let processed = 0;
-    let recomputed = 0;
-    let retained = 0;
+  const group = db.query<QueuedGroup, [string, string]>(`
+    SELECT conv_key,actor,group_epoch,input_revision,target_algorithm FROM derive_queue
+    WHERE conv_key=? AND actor=? AND ${queuePendingSql()}`).get(convKey, actor);
+  if (group === null) return null;
+  let processed = 0;
+  let recomputed = 0;
+  let retained = 0;
     // 组里还有未判定用途的请求时不能完成：把组算干净等于替它们猜了一个用途。
     const waiting = db.query<{ n: number }, [string, string]>(`
       SELECT COUNT(*) AS n FROM request
@@ -538,12 +538,7 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
     return { processed, recomputed, retained };
 }
 
-/**
- * 在线入口：校验参数后在自己的写事务里跑一次完整排空。
- *
- * 迁移与维护直接调用 `drainDeriveTx`，因为它们要把多个批次放进同一个事务；
- * 在线调度只需要"一批一组事务"，不需要知道事务边界。
- */
+/** 显式批事务入口；在线调度由 derive-unit 按组提交并检查预算。 */
 export function drainDerive(store: Store, limit = 100, scope?: DeriveScope): DrainResult {
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid_derive_limit');
   if (scope !== undefined && (typeof scope.convKey !== 'string' || scope.convKey.length === 0)) {

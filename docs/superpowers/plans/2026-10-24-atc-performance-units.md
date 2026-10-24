@@ -23,33 +23,37 @@
 
 ### Task 1: 派生预算工作单元（含阶段 0）
 
+已提交 `3870eea`；派生、切片、启动与维护六文件 126 项测试通过。同步组事务提取保留了离线批事务回滚用例。
+
 **Files:** 新建 `src/derive-unit.ts`、`tests/derive-unit.test.ts`；修改 `src/derive.ts`、`src/derive-slice.ts`、`src/main.ts`、`tests/derive-slice.test.ts`、架构设计与相关 Agent Note。
 
 **Interfaces:** 消费 `drainRequestPurposesTx`、同步组派生和切片阶段机；产出 `createDeriveUnit(store).run({budgetMs}) → {didWork,nextDueMs}`。维护和容量实验的 `drainDeriveEntry` 保留完整计数返回值。
 
-- [ ] 添加空闲零事务用例：记录 `writeStats.count`，调用工作单元，断言计数不变且 `didWork=false`。
-- [ ] 添加预算停止用例：合成多个独立组，在组提交后让计时超过预算，断言已完成组保留、其余仍 dirty，下轮可继续。
-- [ ] 添加故障恢复用例：第二组确认触发 SQL 错误，重开库后第一组 clean、第二组 dirty，移除故障后继续完成。
-- [ ] 实现用途小批事务、同步每组事务和组间预算检查；每轮最多 10 个组，默认 400 ms。每个组的链、角色、工具、摘要与 CAS 不可分割。
-- [ ] 让切片完整流程测试调用调度入口；阶段专项测试可直接调用对应阶段，避免完整流程复制阶段次序。
-- [ ] 在线 tick 按 `nextDueMs` 安排后续调用，积压时让出事件循环；停止时取消定时器。
-- [ ] 执行 `bun test tests/derive-unit.test.ts tests/derive.test.ts tests/derive-slice.test.ts tests/main.test.ts tests/capacity-slice.test.ts`；同步维护共享实现时补跑 `tests/maintenance.test.ts`。
-- [ ] 更新组事务与崩溃语义：已完成组保留；未完成同步组回滚；启动恢复丢弃未发布切片代。写明同步单大组仍可能超过预算。
-- [ ] 运行 note 门禁并提交 `perf(derive): bound online work and commit groups independently`。
+- [x] 添加空闲零事务用例：记录 `writeStats.count`，调用工作单元，断言计数不变且 `didWork=false`。
+- [x] 添加预算停止用例：合成多个独立组，在组提交后让计时超过预算，断言已完成组保留、其余仍 dirty，下轮可继续。
+- [x] 添加故障恢复用例：第二组确认触发 SQL 错误，重开库后第一组 clean、第二组 dirty，移除故障后继续完成。
+- [x] 实现用途小批事务、同步每组事务和组间预算检查；每轮最多 10 个组，默认 400 ms。每个组的链、角色、工具、摘要与 CAS 不可分割。
+- [x] 让切片完整流程测试调用调度入口；阶段专项测试可直接调用对应阶段，避免完整流程复制阶段次序。
+- [x] 在线 tick 按 `nextDueMs` 安排后续调用，积压时让出事件循环；停止时取消定时器。
+- [x] 执行 `bun test tests/derive-unit.test.ts tests/derive.test.ts tests/derive-slice.test.ts tests/main.test.ts tests/capacity-slice.test.ts`；同步维护共享实现时补跑 `tests/maintenance.test.ts`。
+- [x] 更新组事务与崩溃语义：已完成组保留；未完成同步组回滚；启动恢复丢弃未发布切片代。写明同步单大组仍可能超过预算。
+- [x] 运行 note 门禁并提交 `perf(derive): bound online work and commit groups independently`。
 
 ### Task 2: 具名提交与空闲判断
+
+合成验收：`bun scripts/perf-work-units.ts`，120 s 稳态写事务增量 0；100 组共 800 笔积压期间 hook 80/80 成功，投递最大 21.9 ms，derive job 最大 68.1 ms，具名派生事务最大 3.45 ms。实验第一次因临时根前缀错误被隔离断言拒绝，修正后重跑成功；不将第一次启动失败算作性能采样。真实采集器仅只读采样，writer 累计最大 1911.5 ms，未发布或重启。
 
 **Files:** 修改 `src/store.ts`、`src/capacity.ts`、`src/main.ts`、`src/hook.ts`、`src/retention.ts`、`src/sources/magpie.ts`、对应窄测试、架构设计；新增提交单元 Agent Note。
 
 **Interfaces:** 存储层接收具名写意图与只读准备函数，准备返回无操作时不打开事务；`writer` 保留累计计数并增加按名统计。
 
-- [ ] 在存储测试中覆盖空准备零事务、具名成功和具名回滚都计数，异步事务仍拒绝。
-- [ ] probe 只在探测结果变化时写；pending 没有可合并或新歧义时不写；gap 状态不变时不写；raw_prune 没有到期候选时不写。
-- [ ] cost 在请求和校验页成功后提交进度，失败前不单独写窗口重置；相同空页不重复提交。保留费用冲突整页回滚与独立健康记录。
-- [ ] 有积压的 pending、gap、raw_prune 使用有界候选批次，提交归属名出现在 `/api/ingest-metrics`。
-- [ ] 执行 `bun test tests/store.test.ts tests/hook.test.ts tests/retention.test.ts tests/magpie.test.ts tests/capacity.test.ts tests/main.test.ts` 与 `bun run typecheck`。
-- [ ] 在隔离合成采集器中采样 120 s 稳态写事务，区分启动写入与窗口增量；保留真实采集器聚合基线，不重启真实进程。
-- [ ] 更新架构设计与 note，执行 note 门禁并提交 `perf(store): skip idle commits and attribute writer time`。
+- [x] 在存储测试中覆盖空准备零事务、具名成功和具名回滚都计数，异步事务仍拒绝。
+- [x] probe 只在探测结果变化时写；pending 没有可合并或新歧义时不写；gap 状态不变时不写；raw_prune 没有到期候选时不写。
+- [x] cost 在请求和校验页成功后提交进度，失败前不单独写窗口重置；相同空页不重复提交。保留费用冲突整页回滚与独立健康记录。
+- [x] 有积压的 pending、gap、raw_prune 使用有界候选批次，提交归属名出现在 `/api/ingest-metrics`。
+- [x] 执行 `bun test tests/store.test.ts tests/hook.test.ts tests/retention.test.ts tests/magpie.test.ts tests/capacity.test.ts tests/main.test.ts` 与 `bun run typecheck`。
+- [x] 在隔离合成采集器中采样 120 s 稳态写事务，区分启动写入与窗口增量；保留真实采集器聚合基线，不重启真实进程。
+- [x] 更新架构设计与 note，执行 note 门禁并提交 `perf(store): skip idle commits and attribute writer time`。
 
 ### Task 3: 原子文件摄入
 
@@ -66,6 +70,6 @@
 
 ### 收尾
 
-- [ ] 检查 C1.5 的真实读侧状态和迁移范围，记录后续任务与启用前提；C4 保持冻结。
+- [x] 检查 C1.5：查询、会话标题与 reading token 已有发布代读取，`tests/queries.test.ts`、`tests/reading.test.ts`、`tests/http.test.ts` 通过；交接对迁移范围的描述过时。生产开关继续冻结，后续核验实际切片发布后的读侧完整性、算法切换和长组容量，不能仅据读代测试解除启用限制。C4 保持冻结，右栏虽已出现新提交，后续阅读修复仍在进行。
 - [ ] 对实现差异进行独立审查；只修证据可确认的行为问题。
 - [ ] 运行剩余必要检查，核对阶段提交与用户 WIP，提供按仓库分类的英文 Git commit message。
