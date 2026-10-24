@@ -444,6 +444,15 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
     SELECT conv_key,actor,group_epoch,input_revision,target_algorithm FROM derive_queue
     WHERE conv_key=? AND actor=? AND ${queuePendingSql()}`).get(convKey, actor);
   if (group === null) return null;
+  // 认领前把队列行的目标算法归一到当前同步算法号：组变脏时旧行保留旧号，
+  // 直接完成等于宣称产物是新算法算的。只改未完成的行——clean 行有已发布
+  // 产物，改号等于伪造它的出处。与切片认领的归一同一条规则。
+  if (group.target_algorithm !== GROUP_ALGORITHM) {
+    db.run(`UPDATE derive_queue SET target_algorithm=? WHERE conv_key=? AND actor=?
+      AND ${queuePendingSql()} AND target_algorithm<>?`,
+    [GROUP_ALGORITHM, convKey, actor, GROUP_ALGORITHM]);
+    group.target_algorithm = GROUP_ALGORITHM;
+  }
   let processed = 0;
   let recomputed = 0;
   let retained = 0;

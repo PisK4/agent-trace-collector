@@ -133,6 +133,9 @@ function anthropicResults(request: unknown): ToolResultView[] {
 
 function chatCalls(reply: unknown): ToolCallView[] {
   if (!isRecord(reply) || !Array.isArray(reply.choices)) return [];
+  // 多 choice 的调用序号在 choice 内各自从 0 计数：发布出去会撞 (req_id, ord)
+  // 主键，工具结果读取又只按 ord 找 choice0。只发布单 choice 的确定位置。
+  if (reply.choices.length !== 1) return [];
   const calls: ToolCallView[] = [];
   for (const [choiceIndex, choice] of reply.choices.entries()) {
     if (!isRecord(choice) || !isRecord(choice.message)) continue;

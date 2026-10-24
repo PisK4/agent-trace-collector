@@ -17,7 +17,7 @@ import {
 import type { DeriveScope, LogicalRow } from './derive';
 
 /** 切片派生的算法号。与同步组的 `GROUP_ALGORITHM` 分开：两者算出的结果不能互相复用。 */
-export const DERIVE_ALGORITHM = 5;
+export const DERIVE_ALGORITHM = 6;
 
 export type SliceStep = {
   status: 'idle' | 'advanced' | 'published' | 'discarded' | 'rotated';

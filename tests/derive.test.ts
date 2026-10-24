@@ -9,6 +9,7 @@ import type { Store } from '../src/store';
 import { deriveTitle, matchPredecessor } from '../src/derive-decision';
 import { drainDerive, drainDeriveTx, enqueueDerive } from '../src/derive';
 import { PURPOSE_VERSION } from '../src/semantics';
+import { readBodyTx } from '../src/body';
 import { GROUP_ALGORITHM } from '../src/derive-state';
 import { listSessions } from '../src/queries';
 import { modelTimeTitle } from '../src/sources/magpie';
@@ -1445,5 +1446,32 @@ test('派生不再从回复形状识别标题', () => {
     }, [number]>(
       'SELECT req_kind, chain_role, model_title FROM request WHERE req_id=?').get(id))
       .toEqual({ req_kind: 'chat', chain_role: 'main', model_title: null });
+  } finally { f.close(); }
+});
+
+test('多 choice 回复不发布工具行，组照常完成且原回复可读', () => {
+  const f = fixture();
+  try {
+    seedRound(f.store, [1, 2]);
+    const user = { role: 'user', content: 'synthetic input' };
+    const callOf = (id: string) => ({ id, type: 'function', function: { name: 'read_file', arguments: '{}' } });
+    const multi = {
+      choices: [
+        { finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [callOf('choice_left')] } },
+        { finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [callOf('choice_right')] } },
+      ],
+    };
+    persistBody(f.store, 1, { protocol: 'chat', request: { messages: [user] }, reply: multi, redact_version: 1 });
+    persistBody(f.store, 2, { protocol: 'chat', request: { messages: [user, { role: 'tool', tool_call_id: 'choice_left', content: 'left output' }] }, reply: { choices: [{ message: { role: 'assistant', content: 'done' } }] }, redact_version: 1 });
+    rebuild(f.store);
+    // 两个抽取入口都不发布确定位置：没有 tool_call 行，组仍 clean 完成。
+    expect(f.store.read.query(`SELECT COUNT(*) AS n FROM tool_call WHERE req_id=1`).get())
+      .toEqual({ n: 0 });
+    expect(f.store.read.query<{ state: string }, [string, string]>(
+      'SELECT state FROM derive_queue WHERE conv_key=? AND actor=?').get(GROUP, ACTOR))
+      .toEqual({ state: 'clean' });
+    // 原 reply 仍可整份读出，多 choice 保留原始对象。
+    const body = readBodyTx(f.store.read, 1);
+    expect((body?.reply as { choices: unknown[] }).choices).toHaveLength(2);
   } finally { f.close(); }
 });

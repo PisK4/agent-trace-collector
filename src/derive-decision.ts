@@ -22,9 +22,10 @@ export function anthropicReplyCalls(reply: unknown): { id: string; name: string;
   if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return [];
   const content = (reply as Record<string, unknown>).content;
   if (!Array.isArray(content)) {
-    // chat 形状：choices[0].message.tool_calls
+    // chat 形状：choices[0].message.tool_calls。多 choice 的 ord 在 choice 内
+    // 各自从 0 计数，发布确定位置会撞主键或指错 choice，只认单 choice。
     const choices = (reply as Record<string, unknown>).choices;
-    if (!Array.isArray(choices)) return [];
+    if (!Array.isArray(choices) || choices.length !== 1) return [];
     const out: { id: string; name: string; ord: number }[] = [];
     for (const choice of choices) {
       if (choice === null || typeof choice !== 'object') continue;
