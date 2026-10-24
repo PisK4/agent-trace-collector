@@ -1,4 +1,4 @@
-export const PURPOSE_VERSION = 2;
+export const PURPOSE_VERSION = 3;
 
 export type PurposeStatus =
   | 'recognized' | 'unrecognized' | 'missing' | 'retained' | 'unsupported' | 'error';

@@ -1,4 +1,4 @@
-# Agent Note: 请求用途按版本 2 解释，主链身份只由已存用途决定
+# Agent Note: 请求用途版本化解释，主链身份只由已存用途决定
 
 Status: implemented
 
@@ -10,9 +10,9 @@ Status: implemented
 
 ## Decision
 
-`src/semantics.ts` 是纯解释模块，只看一笔已读出的请求视图，不读数据库。`PURPOSE_VERSION=2`，规则优先级固定为：分类器强指纹 > 来源 kind > 标题兼容 > 兜底。
+`src/semantics.ts` 是纯解释模块，只看一笔已读出的请求视图，不读数据库。`PURPOSE_VERSION` 记在模块顶部，算法改动必须提升并经显式会话升级重判历史，规则优先级固定为：分类器强指纹 > 来源 kind > 标题兼容 > 兜底。
 
-分类器必须同时满足 `agent='claude'`、system 文本包含 `security monitor for autonomous ai coding agents`、`stop_sequences` 包含 `</block>`。消息数 2 与工具数 0 只写 `classifier.shape.*` 信号，不作为门槛；回复判定取最后一个 `<block>yes|no`，缺失记 `classifier.verdict.unknown`。
+分类器必须同时满足 `agent='claude'`、system 文本包含 `security monitor for autonomous ai coding agents`、stop 序列包含 `</block>`（`stop_sequences` 与 Chat 的 `stop` 两个键都读）。消息数 2 与工具数 0 只写 `classifier.shape.*` 信号，不作为门槛；回复判定取最后一个 `<block>yes|no`，缺失记 `classifier.verdict.unknown`。
 
 来源 kind 只有精确值 `title` 排除链，其它非空值变成 `source:<value>` 并保持参与；`conflict`、`missing`、`invalid`、`overflow` 不出结论，交给标题兼容兜底。标题兼容先看回复形状（整段 `<title>` 或只含 `title` 键的 JSON），再看已存 `req_kind='title'`；已存 title 在回复不再是标题形状时保留旧 `model_title`。
 
@@ -22,9 +22,9 @@ Status: implemented
 
 用途由 `src/request-purpose.ts` 按单笔结算：读完视图后以请求行上的身份、修订、目标与待处理标记为条件写回；条件不命中说明读视图之后输入又变了，返回 stale 并保留 pending，等下一轮重来。错误最多记三次，终态把状态落成 `error` 并消费当前修订，避免一笔永远读不出来的请求把整组卡在 dirty。只有结论改变链归属或标题时才标脏所属组，单纯重算同一条结论不动队列。
 
-用途读取只解骨架与引用索引，不解压消息块。正文读取是共享的一条严格路径：骨架字段、请求行上的消息条数、引用数与连续 ord、块存在，任何一项不一致都返回 null；派生因此把正文当成不可读，用途因此走 retained/missing，而不是把部分正文当完整证据。旧实现里"缺引用就抛错"与"补一个空位"的做法都取消了。
+用途读取解骨架、引用索引与 role=2 的 System/developer 消息块，不解压普通消息块：顶层 system 与 stop 在骨架里，消息级 System（Chat 的 system/developer 消息）按引用解压，损坏的 System 块走用途错误路径，不静默宣称没有 System——那会把分类器请求算进主链。正文读取是共享的一条严格路径：骨架字段、请求行上的消息条数、引用数与连续 ord、块存在，任何一项不一致都返回 null；派生因此把正文当成不可读，用途因此走 retained/missing，而不是把部分正文当完整证据。
 
-[阅读角色与步骤定位提案](../../proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)记录 Chat System 用途取数遗漏，拟部分取代仅解骨架的读取范围；版本化用途、显式会话升级、严格正文和不可读时保留的决定继续有效。
+[阅读角色与步骤定位提案](../../proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)补齐了 Chat System 用途取数，并部分取代仅解骨架的读取范围；版本化用途、显式会话升级、严格正文和不可读时保留的决定继续有效。
 
 ## Alternatives considered
 
@@ -51,8 +51,8 @@ Status: implemented
 - 查询原样返回未知的 `req_kind` 与 `chain_role`，不折叠成 chat/main；会话标题只取已完成组且用途已结算的行，排除用途提供 `model_title`，参与链提供用户标题。
 - 历史 v1 行不会在普通 tick 里改写，只有显式 `rebuild --session` 才换代；代价是升级要按会话逐个运维，换来例行调度不重判整库。
 - 页面按 `purpose_chain`/`chain_role` 认辅助请求，按 `req_kind` 给分类器与标题生成贴标签；摘要字符串不再参与类别判断。
-- 只有显式 `rebuild --session` 会把该会话 `purpose_target<2` 的行置为待判并排空；普通 tick 不升级 clean 的历史行，避免一次例行调度把整库重判。同一时间只有一个用途写入者。
+- 只有显式 `rebuild --session` 会把该会话 `purpose_target<PURPOSE_VERSION` 的行置为待判并排空（升级该会话内全部旧目标行，不是只改其中某一类）；普通 tick 不升级 clean 的历史行，避免一次例行调度把整库重判。同一时间只有一个用途写入者。
 
 ## Testing
 
-`tests/semantics.test.ts` 覆盖规则优先级、agent 门控、普通 `<block>` 回复、两种标题形状、来源别名与冲突、retained/missing/unsupported。`tests/request-purpose.test.ts` 覆盖 CAS stale、三次重试终态、回收后 retained、引用缺失按不可读、来源别名与目标升级；`tests/body.test.ts` 固定末条引用缺失时不可还原。
+`tests/semantics.test.ts` 覆盖规则优先级、agent 门控、普通 `<block>` 回复、两种标题形状、来源别名与冲突、retained/missing/unsupported。`tests/request-purpose.test.ts` 覆盖 CAS stale、三次重试终态、回收后 retained、引用缺失按不可读、来源别名与目标升级，并覆盖 Chat system/developer 消息与标准 `stop` 键的分类器识别、Anthropic 顶层 system 对照、普通 System 不误判、System 块损坏走错误路径、普通 tick 不升级已完成历史；`tests/maintenance.test.ts` 覆盖重建把目标会话的旧 Chat 分类器改判为 exclude 且其他会话不动；`tests/body.test.ts` 固定末条引用缺失时不可还原。

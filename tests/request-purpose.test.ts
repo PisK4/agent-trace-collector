@@ -1,12 +1,13 @@
 import { expect, test } from 'bun:test';
 import type { Store } from '../src/store';
 import { markRequestInputTx } from '../src/derive-state';
+import { persistBodyTx } from '../src/body';
 import {
   applyPurposeDecisionTx, applyPurposeErrorTx, drainRequestPurposesTx,
   readPurposeTaskTx, upgradePurposeTargetTx,
   type PurposeDrainResult, type PurposeTask,
 } from '../src/request-purpose';
-import { classifyPurpose, type PurposeDecision } from '../src/semantics';
+import { classifyPurpose, PURPOSE_VERSION, type PurposeDecision } from '../src/semantics';
 import { fixture, seedPurposeRequest } from './fixtures';
 
 function drainPurposes(store: Store, limit = 100): PurposeDrainResult {
@@ -62,8 +63,8 @@ test('分类器指纹在写入时按 CAS 结算用途并标脏所属组', () => 
     expect(result).toMatchObject({ processed: 1, applied: 1, remaining: 0 });
     const row = purposeRow(f.store, id);
     expect(row).toMatchObject({
-      purpose_status: 'recognized', purpose_version: 2, purpose_chain: 'exclude',
-      purpose_pending: 0, purpose_target: 2, req_kind: 'auto-mode-classifier',
+      purpose_status: 'recognized', purpose_version: PURPOSE_VERSION, purpose_chain: 'exclude',
+      purpose_pending: 0, purpose_target: PURPOSE_VERSION, req_kind: 'auto-mode-classifier',
     });
     expect(JSON.parse(row.purpose_signals)).toContain('classifier.verdict.pass');
     expect(f.store.read.query<{ state: string }, [string, string]>(
@@ -99,7 +100,7 @@ test('用途错误最多重试三次，终态消费当前修订', () => {
     }
     const terminal = purposeRow(f.store, id);
     expect(terminal).toMatchObject({
-      purpose_status: 'error', purpose_pending: 0, purpose_retry: 3, purpose_target: 2,
+      purpose_status: 'error', purpose_pending: 0, purpose_retry: 3, purpose_target: PURPOSE_VERSION,
     });
     expect(terminal.purpose_revision).toBe(terminal.input_revision);
     f.store.write(db => markRequestInputTx(db, id));
@@ -123,7 +124,7 @@ test('正文回收后新修订保留旧用途', () => {
     });
     drainPurposes(f.store);
     expect(purposeRow(f.store, id)).toMatchObject({
-      purpose_status: 'retained', purpose_version: 2, purpose_chain: 'exclude',
+      purpose_status: 'retained', purpose_version: PURPOSE_VERSION, purpose_chain: 'exclude',
       req_kind: 'title', model_title: '旧标题',
     });
   } finally { f.close(); }
@@ -156,7 +157,7 @@ test('来源 title 别名在正文不可读时仍能识别', () => {
     });
     expect(drainPurposes(f.store).applied).toBe(1);
     expect(purposeRow(f.store, id)).toMatchObject({
-      purpose_status: 'recognized', purpose_version: 2,
+      purpose_status: 'recognized', purpose_version: PURPOSE_VERSION,
       req_kind: 'title', purpose_chain: 'exclude', model_title: null,
     });
   } finally { f.close(); }
@@ -174,7 +175,7 @@ test('普通对话记为 unrecognized，不支持的协议记为 unsupported', (
     });
     drainPurposes(f.store);
     expect(purposeRow(f.store, chat)).toMatchObject({
-      purpose_status: 'unrecognized', purpose_version: 2,
+      purpose_status: 'unrecognized', purpose_version: PURPOSE_VERSION,
       req_kind: 'chat', purpose_chain: 'participate',
     });
     expect(purposeRow(f.store, other)).toMatchObject({
@@ -198,7 +199,7 @@ test('目标升级只改显式会话并保留旧解释', () => {
     });
     expect(upgrade(f.store, 'target')).toBe(1);
     expect(purposeRow(f.store, target)).toMatchObject({
-      purpose_target: 2, purpose_pending: 1, purpose_version: 1,
+      purpose_target: PURPOSE_VERSION, purpose_pending: 1, purpose_version: 1,
       purpose_status: 'recognized', req_kind: 'title', model_title: '旧',
     });
     expect(purposeRow(f.store, other)).toMatchObject({
@@ -207,5 +208,118 @@ test('目标升级只改显式会话并保留旧解释', () => {
     expect(f.store.read.query<{ state: string }, [string]>(
       'SELECT state FROM derive_queue WHERE conv_key=?').get('target'))
       .toEqual({ state: 'dirty' });
+  } finally { f.close(); }
+});
+
+const FINGERPRINT = 'You are a security monitor for autonomous AI coding agents.';
+
+test('用途视图读取 Chat System 消息中的分类器指纹', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'chat-system', agent: 'claude', protocol: 'chat',
+      messages: [{ role: 'system', content: FINGERPRINT }, { role: 'user', content: 'synthetic input' }],
+      stop: ['</block>'],
+      reply: { choices: [{ message: { role: 'assistant', content: '<block>no' } }] },
+    });
+    const task = readTask(f.store, id)!;
+    expect(task.view.systemTexts).toEqual([FINGERPRINT]);
+    expect(classifyPurpose(task.view)).toMatchObject({
+      status: 'recognized', kind: 'auto-mode-classifier', chain: 'exclude',
+    });
+  } finally { f.close(); }
+});
+
+test('Chat 标准 stop 键与 developer 消息同样识别', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'chat-stop', agent: 'claude', protocol: 'chat',
+      messages: [{ role: 'developer', content: FINGERPRINT }, { role: 'user', content: 'synthetic input' }],
+      reply: { choices: [{ message: { role: 'assistant', content: '<block>no' } }] },
+    });
+    // 工厂把 stop 写进 stop_sequences；这里覆盖为标准 Chat 的 stop 键形状。
+    f.store.write(db => persistBodyTx(db, id, {
+      protocol: 'chat',
+      request: {
+        messages: [
+          { role: 'developer', content: FINGERPRINT },
+          { role: 'user', content: 'synthetic input' },
+        ],
+        stop: ['</block>'],
+      },
+      reply: { choices: [{ message: { role: 'assistant', content: '<block>no' } }] },
+      redact_version: 1,
+    }));
+    const task = readTask(f.store, id)!;
+    expect(task.view.systemTexts).toEqual([FINGERPRINT]);
+    expect(task.view.stopSequences).toEqual(['</block>']);
+    expect(classifyPurpose(task.view)).toMatchObject({
+      status: 'recognized', kind: 'auto-mode-classifier', chain: 'exclude',
+    });
+  } finally { f.close(); }
+});
+
+test('Anthropic 顶层 system 对照识别，普通 System 不误判', () => {
+  const f = fixture();
+  try {
+    const anthropic = seedPurposeRequest(f.store, {
+      convKey: 'anthropic-top', agent: 'claude',
+      system: FINGERPRINT,
+      stop: ['</block>'],
+      messages: [{ role: 'user', content: 'synthetic input' }],
+      reply: { content: [{ type: 'text', text: '<block>no' }] },
+    });
+    const plain = seedPurposeRequest(f.store, {
+      convKey: 'plain-system', agent: 'claude',
+      messages: [{ role: 'system', content: '你是写作助手。' }, { role: 'user', content: 'hi' }],
+      reply: { content: [{ type: 'text', text: 'hello' }] },
+    });
+    expect(classifyPurpose(readTask(f.store, anthropic)!.view)).toMatchObject({
+      status: 'recognized', kind: 'auto-mode-classifier', chain: 'exclude',
+    });
+    expect(classifyPurpose(readTask(f.store, plain)!.view)).toMatchObject({
+      status: 'unrecognized', kind: 'chat', chain: 'participate',
+    });
+  } finally { f.close(); }
+});
+
+test('System 块损坏进入用途错误路径，不产出无 System 的成功结论', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'corrupt-system', agent: 'claude', protocol: 'chat',
+      messages: [{ role: 'system', content: FINGERPRINT }, { role: 'user', content: 'go' }],
+      stop: ['</block>'],
+      reply: { choices: [{ message: { role: 'assistant', content: '<block>no' } }] },
+    });
+    f.store.write(db => db.run(
+      `UPDATE block SET z=x'00ff00ff' WHERE id IN
+         (SELECT block FROM request_block WHERE req_id=? AND role=2)`, [id]));
+    const result = drainPurposes(f.store);
+    expect(result.failed).toBe(1);
+    const row = purposeRow(f.store, id);
+    expect(row.purpose_status).toBe('error');
+    expect(row.req_kind).toBe('chat');
+    expect(row.purpose_chain).toBe('participate');
+  } finally { f.close(); }
+});
+
+test('普通 tick 不升级已完成历史，保留旧目标版本', () => {
+  const f = fixture();
+  try {
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'old-done', agent: 'claude', protocol: 'chat',
+      purposeTarget: PURPOSE_VERSION - 1, purposeVersion: PURPOSE_VERSION - 1,
+      purposeStatus: 'unrecognized', purposePending: 0,
+      messages: [{ role: 'system', content: FINGERPRINT }, { role: 'user', content: 'go' }],
+      reply: { choices: [{ message: { role: 'assistant', content: '<block>no' } }] },
+    });
+    drainPurposes(f.store);
+    const row = purposeRow(f.store, id);
+    expect(row).toMatchObject({
+      purpose_pending: 0, purpose_target: PURPOSE_VERSION - 1,
+      purpose_version: PURPOSE_VERSION - 1, purpose_status: 'unrecognized',
+    });
   } finally { f.close(); }
 });
