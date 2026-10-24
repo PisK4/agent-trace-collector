@@ -9,17 +9,33 @@ import { deltaOrdinals, messageBlocks, replyView } from './body-view.js';
  */
 
 /**
+ * 步骤来源：请求字段、请求消息内容块或本次回复内容块，path 是实际协议路径。
+ * 记录与辅助步骤不落在协议对象上，source 为 null，点击打开该请求读数。
+ * @typedef {{side:'request', path:'request.system', messageOrd:null, blockIndex:null}
+ *   | {side:'request', path:string, messageOrd:number, blockIndex:number|null}
+ *   | {side:'reply', path:string, messageOrd:null, blockIndex:number|null}
+ *   | null} StepSource
+ */
+
+/**
  * @typedef {Object} TraceStep 单行轨迹的一步。
- * @property {string} key 稳定键：reqId:message:N / reqId:reply:text:N / reqId:call:N 等
+ * @property {string} key 稳定键：reqId:message:N / reqId:reply:text:N / reqId:call:N / reqId:system 等
  * @property {number} reqId
- * @property {'user'|'assistant'|'tool'|'record'|'aux'} kind
+ * @property {'user'|'assistant'|'tool'|'tool_result'|'system'|'record'|'aux'} kind
  * @property {string} text 行文本（工具行是动作摘要）
  * @property {number|null} messageOrd
  * @property {number|null} callOrd
+ * @property {StepSource} source 步骤在协议对象里的位置
  * @property {unknown} raw 原文或原始块
  * @property {boolean} unrecognized
  * @property {'failed'|'missing_body'|'missing_reply'|'unknown'|'truncated'|null} status
  * @property {{state: 'resolved'|'pending'|'ambiguous'|'unpaired', reqId: number|null} | null} result
+ */
+
+/**
+ * 顶层 System 上下文：当前请求的 system 文本，以及与同 actor 已确认前驱的比较。
+ * changed 为 null 表示没有可比较的前驱（首个已加载、前驱不在窗口或正文不可读）。
+ * @typedef {{text: string, changed: boolean | null} | null} SystemContext
  */
 
 /** @param {unknown} value @returns {string} */
@@ -46,9 +62,11 @@ export function toolSummary(name, inputText) {
 /**
  * @param {import('../src/queries').RequestRow} row
  * @param {import('./reader-store.js').RequestRead | null} read
+ * @param {SystemContext} [systemContext] 顶层 System 的当前值与比较结果；由装配层按
+ * 同 actor 已确认前驱计算，投影不做时间推断，也不持久化比较结果。
  * @returns {TraceStep[]}
  */
-export function projectSteps(row, read) {
+export function projectSteps(row, read, systemContext = null) {
   /** @type {TraceStep[]} */
   const steps = [];
   const detail = read?.detail ?? null;
@@ -56,7 +74,7 @@ export function projectSteps(row, read) {
   const record = (key, status, text, extra = {}) => {
     steps.push(/** @type {TraceStep} */ ({
       key: `${row.req_id}:${key}`, reqId: row.req_id, kind: 'record', text,
-      messageOrd: null, callOrd: null, raw: null, unrecognized: false,
+      messageOrd: null, callOrd: null, source: null, raw: null, unrecognized: false,
       status, result: null, ...extra,
     }));
   };
@@ -64,9 +82,20 @@ export function projectSteps(row, read) {
   if (row.purpose_chain === 'exclude' || row.chain_role === 'aux') {
     steps.push({ key:`${row.req_id}:aux`, reqId: row.req_id, kind: 'aux',
       text: `辅助请求 · ${row.req_kind === 'title' ? '标题生成' : row.req_kind}`,
-      messageOrd: null, callOrd: null, raw: null, unrecognized: false,
+      messageOrd: null, callOrd: null, source: null, raw: null, unrecognized: false,
       status: null, result: null });
     return steps;
+  }
+  // 顶层 System：与已确认前驱同值不重复，变化标明；不可比较时只声明当前上下文。
+  if (systemContext !== null && systemContext.text.length > 0 && systemContext.changed !== false) {
+    steps.push({
+      key: `${row.req_id}:system`, reqId: row.req_id, kind: 'system',
+      text: systemContext.changed === true
+        ? `System 与已确认前驱不同 · ${systemContext.text}` : systemContext.text,
+      messageOrd: null, callOrd: null,
+      source: { side: 'request', path: 'request.system', messageOrd: null, blockIndex: null },
+      raw: systemContext.text, unrecognized: false, status: null, result: null,
+    });
   }
   if (row.chain_role === 'branch') {
     record('branch', null, '分支链请求 · 归属来自派生记录，不按时间推断父子');
@@ -78,7 +107,7 @@ export function projectSteps(row, read) {
     read === null ? '读取中' : '请求详情不可用');
     return steps;
   }
-  // 可信新增：只认 delta 里的输入解释；dirty/unknown/branch 的 delta 不升级。
+  // 可信新增：输入解释、System 消息与工具结果都只认 delta；dirty/unknown/branch 不升级。
   const trusted = deltaOrdinals(detail);
   if (trusted === null) {
     record('uncertain', detail.prev_relation === 'unknown' || detail.derived_state !== 'current'
@@ -86,16 +115,42 @@ export function projectSteps(row, read) {
     `新增输入未确认 · ${detail.prev_relation ?? detail.derived_state}`);
   } else {
     for (const entry of read.entries) {
-      if (!trusted.has(entry.ord) || !entry.isInput) continue;
+      if (!trusted.has(entry.ord)) continue;
+      const msgBase = `request.messages[${entry.ord}]`;
+      // 工具结果块按内容块出独立步骤；混合消息的真实用户文本只产生一次。
+      const resultBlocks = entry.blocks.filter(block => block.kind === 'result');
+      for (const block of resultBlocks) {
+        steps.push({
+          key: `${row.req_id}:message:${entry.ord}:result:${block.index}`, reqId: row.req_id,
+          kind: 'tool_result',
+          text: block.text.length > 0 ? block.text : '（空工具结果）',
+          messageOrd: entry.ord, callOrd: null,
+          source: { side: 'request', path: `${msgBase}.${block.path}`, messageOrd: entry.ord, blockIndex: block.index },
+          raw: block.raw, unrecognized: false, status: null, result: null,
+        });
+      }
+      if (entry.role === 'system') {
+        steps.push({
+          key: `${row.req_id}:message:${entry.ord}`, reqId: row.req_id, kind: 'system',
+          text: entry.preview, messageOrd: entry.ord, callOrd: null,
+          source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
+          raw: entry.blocks.map(block => block.text).join('\n\n'), unrecognized: false,
+          status: null, result: null,
+        });
+        continue;
+      }
+      if (!entry.isInput) continue;
       if (entry.input?.state === 'text') {
         steps.push({ key:`${row.req_id}:message:${entry.ord}`, reqId: row.req_id, kind: 'user',
           text: entry.input.text, messageOrd: entry.ord, callOrd: null,
+          source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
           raw: entry.input.original ?? entry.input.text, unrecognized: false,
           status: null, result: null });
       } else {
         // unrecognized 输入也是新增事实：占一行，原文进详情。
         steps.push({ key:`${row.req_id}:message:${entry.ord}`, reqId: row.req_id, kind: 'user',
           text: entry.input?.text ?? '未识别的用户输入', messageOrd: entry.ord, callOrd: null,
+          source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
           raw: entry.input?.original ?? null, unrecognized: true,
           status: null, result: null });
       }
@@ -115,6 +170,8 @@ export function projectSteps(row, read) {
     } else {
       // 两类协议统一经 messageBlocks 归一化：Anthropic 读 content 数组，
       // Chat 的 tool_calls 在消息层，提升为 call 块；块序号沿用协议内位置。
+      const replyBase = choices !== null && choices.length === 1
+        ? 'reply.choices[0].message' : 'reply';
       const blocks = reply !== null && Array.isArray(reply.content)
         ? messageBlocks({ role: 'assistant', content: reply.content })
         : choices !== null && choices.length === 1
@@ -124,26 +181,31 @@ export function projectSteps(row, read) {
         const index = block.index;
         if (block.kind === 'text' && block.text.length > 0) {
           steps.push({ key:`${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
-            text: block.text, messageOrd: null, callOrd: null, raw: block.text,
-            unrecognized: false, status: null, result: null });
+            text: block.text, messageOrd: null, callOrd: null,
+            source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
+            raw: block.text, unrecognized: false, status: null, result: null });
         } else if (block.kind === 'call') {
           const call = view.calls.find(item => item.ord === index) ?? null;
           const pair = detail.tool_calls?.find(item => item.ord === index) ?? null;
           steps.push({ key:`${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
             text: toolSummary(call?.name ?? '', call?.inputText ?? ''),
-            messageOrd: null, callOrd: index, raw: block.raw,
+            messageOrd: null, callOrd: index,
+            source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
+            raw: block.raw,
             unrecognized: false, status: null,
             result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req } });
         } else if (block.kind !== 'thinking') {
           // 未知块给记录入口，不做语义推测。
           steps.push({ key:`${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
-            text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
+            text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null, source: null,
             raw: block.raw, unrecognized: true, status: null, result: null });
         }
       }
       if (blocks.length === 0 && view.text.length > 0) {
         steps.push({ key:`${row.req_id}:reply:text:0`, reqId: row.req_id, kind: 'assistant',
-          text: view.text, messageOrd: null, callOrd: null, raw: view.text,
+          text: view.text, messageOrd: null, callOrd: null,
+          source: { side: 'reply', path: `${replyBase}.content`, messageOrd: null, blockIndex: null },
+          raw: view.text,
           unrecognized: false, status: null, result: null });
       }
     }
@@ -167,11 +229,14 @@ export function projectSteps(row, read) {
   return steps;
 }
 
-const KIND_LABEL = { user: '用户', assistant: '助手', tool: '工具', record: '记录', aux: '辅助' };
-const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'tool', record: 'aux', aux: 'aux' };
+// 参与角色英文标签 + 内容类型：调用由 Assistant 发出、结果显示在 Tool 上，
+// 辅助与记录表达请求用途和事件，不伪装成模型消息。
+const KIND_LABEL = { user: 'User', assistant: 'Assistant', tool: 'Assistant', tool_result: 'Tool', system: 'System', record: 'Event', aux: 'Aux' };
+const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'reply', tool_result: 'tool', system: 'system', record: 'aux', aux: 'aux' };
+const KIND_CONTENT = /** @type {Partial<Record<TraceStep['kind'], string>>} */ ({ tool: 'Tool call', tool_result: 'Tool result' });
 
 /**
- * 单行轨迹只显示请求序号、类型与内容，点击行在右栏阅读详情。
+ * 单行轨迹只显示请求序号、角色、内容类型与内容，点击行在右栏阅读详情。
  * @param {import('../src/queries').RequestRow} row
  * @param {TraceStep[]} steps
  * @param {number} ordinal 当前窗口展示号（仅显示，身份用 req_id）
@@ -184,13 +249,15 @@ export function renderTraceRows(row, steps, ordinal, selected) {
   const clip = (text, max = 140) => [...String(text)].length <= max ? String(text)
     : `${[...String(text)].slice(0, max).join('')}…`;
   for (const step of steps) {
-    const label = KIND_LABEL[step.kind] ?? '记录';
+    const label = KIND_LABEL[step.kind] ?? 'Event';
+    const content = KIND_CONTENT[step.kind] ?? '';
     pieces.push(`<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
 <div class="compact-row">
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${step.key === selected}">
     <span class="compact-meta" title="请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
-    <span class="compact-preview">${step.kind === 'tool' ? `<code>${esc(clip(step.text))}</code>` : esc(clip(step.text))}</span>
+    ${content !== '' ? `<span class="row-kind">${content}</span>` : ''}
+    <span class="compact-preview">${step.kind === 'tool' || step.kind === 'tool_result' ? `<code>${esc(clip(step.text))}</code>` : esc(clip(step.text))}</span>
   </button>
 </div>
 </div>`);

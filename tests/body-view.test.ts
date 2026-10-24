@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
 import {
-  bodyNotice, deltaOrdinals, messageCopyText, messageEntries, partColor, partLabel, renderAttemptChain, renderCapabilities,
-  renderMessageDetail, renderMessages, renderRaw, renderReply, renderReplyDetail, renderTools, replyView, toolEntries,
+  bodyNotice, deltaOrdinals, displayRoleOf, messageCopyText, messageEntries, partColor, partLabel,
+  renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderRaw, renderReply,
+  renderReplyDetail, renderTools, replyView, roleClass, roleTag, toolEntries, topSystemText,
 } from '../web/body-view.js';
 import type { BodyPage } from '../src/protocols';
 import type { CapabilityView } from '../src/capabilities';
@@ -44,6 +45,66 @@ test('Anthropic 文本、推理与工具块各自归一化', () => {
   expect(messages[0]?.blocks.map(block => block.kind)).toEqual(['text', 'result']);
   expect(messages[0]?.blocks[1]?.text).toBe('ok');
   expect(messages[0]?.preview).toBe('读一下配置');
+});
+
+test('英文角色标签：调用是 Assistant，结果是 Tool，原始 role 保留', () => {
+  const entries = messageEntries(page({
+    messages: [
+      { ord: 0, value: { role: 'assistant', content: null, tool_calls: [
+        { id: 't1', type: 'function', function: { name: 'Bash', arguments: '{"command":"ls"}' } },
+      ] } },
+      { ord: 1, value: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+        { type: 'text', text: '继续' },
+      ] } },
+      { ord: 2, value: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't1', content: '第二次结果' },
+      ] } },
+      { ord: 3, value: { role: 'tool', content: 'chat result body' } },
+      { ord: 4, value: { role: 'developer', content: 'policy text' } },
+      { ord: 5, value: { role: 'alien', content: '???' } },
+    ],
+  }));
+  // rawRole 保留原始协议值；developer 归 System 显示，未知 role 显示 Unknown。
+  expect(entries.map(entry => entry.rawRole)).toEqual(['assistant', 'user', 'user', 'tool', 'developer', 'alien']);
+  expect(entries.map(entry => entry.role)).toEqual(['assistant', 'user', 'user', 'tool', 'system', 'unknown']);
+  // 混合消息保留 User 与文本，不被整条改成 Tool；纯结果消息显示 Tool。
+  expect(displayRoleOf(entries[1]!)).toBe('user');
+  expect(displayRoleOf(entries[2]!)).toBe('tool');
+  expect(displayRoleOf(entries[4]!)).toBe('system');
+  expect(entries[1]?.preview).toBe('ok');
+  // 英文标签，无中文回退。
+  expect(roleTag('assistant')).toBe('Assistant');
+  expect(roleTag('tool')).toBe('Tool');
+  expect(roleTag('system')).toBe('System');
+  expect(roleTag('user')).toBe('User');
+  expect(roleTag('unknown')).toBe('Unknown');
+  expect(roleClass('developer' as never)).toBe('unknown');
+  // 渲染：主角色加内容类型，工具结果正文不冒充用户输入。
+  const list = renderMessages(entries, { delta: null });
+  expect(list).toContain('Assistant');
+  expect(list).toContain('Tool result · ');
+  expect(list).toContain('Tool call · ');
+  expect(list).toContain('>Unknown<');
+  expect(list).not.toContain('用户');
+  expect(list).not.toContain('助手');
+  // 详情单列原始协议角色。
+  const devDetail = renderMessageDetail(entries[4]!);
+  expect(devDetail).toContain('>System<');
+  expect(devDetail).toContain('role=developer');
+  // 输入序号不变。
+  expect(entries.map(entry => entry.ord)).toEqual([0, 1, 2, 3, 4, 5]);
+});
+
+test('顶层 system 文本从 request_fields 读取，字符串与块数组都支持', () => {
+  expect(topSystemText(page({ request_fields: { system: 'base prompt' } }))).toBe('base prompt');
+  expect(topSystemText(page({ request_fields: { system: [
+    { type: 'text', text: 'first' },
+    { type: 'text', text: 'second' },
+  ] } }))).toBe('first\n\nsecond');
+  expect(topSystemText(page({ request_fields: null }))).toBeNull();
+  expect(topSystemText(page({ request_fields: { system: '' } }))).toBeNull();
+  expect(topSystemText(null)).toBeNull();
 });
 
 test('工具结果的 is_error 按需透出为失败标记', () => {

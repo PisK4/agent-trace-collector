@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   auxSummary, isErrorText, isAuxRow, purposeLabel, railFactsHtml, readingChangedNote, replyCompleteness,
-  resolveTraceTarget, restoreScroll, structureFoldHtml, toolOverviewHtml, toolResultPanel, toolSchemaSection,
+  resolveTraceTarget, restoreScroll, structureFoldHtml, systemContextOf, toolOverviewHtml, toolResultPanel, toolSchemaSection,
 } from '../web/app.js';
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {
@@ -63,7 +63,7 @@ const readingOf = (state: 'available' | 'pending' | 'ambiguous' | 'unpaired' | '
 });
 /** @param {number} ord @param {string} text */
 const entryOf = (ord: number, text: string) => ({
-  ord, role: 'user' as const, blocks: [{ kind: 'text', text, index: 0, raw: text }],
+  ord, role: 'user' as const, rawRole: 'user', blocks: [{ kind: 'text', text, index: 0, raw: text, path: 'content[0]' }],
   preview: text, input: null, isInput: false,
 });
 
@@ -234,6 +234,32 @@ test('阅读版本变化说明只给显式重读入口，不自动重建', () =>
   expect(note).toContain('阅读版本已变化');
   // 不挂自动重读的隐藏行为：说明里没有静默重建的脚本入口。
   expect(note).not.toContain('script');
+});
+
+test('System 上下文按已确认前驱比较，前驱不可读只声明当前', () => {
+  const row = { req_id: 7 };
+  const same = (id: number) => ({
+    detail: { prev_req_id: id === 7 ? 6 : null, prev_relation: id === 7 ? 'confirmed' : 'first' },
+    meta: { request_fields: { system: 'v2' } },
+  });
+  expect(systemContextOf(row as never, (same as never))).toEqual({ text: 'v2', changed: false });
+  // 前驱不在窗口或未读：只声明当前上下文，不宣称未变化。
+  const unreadablePrev = (id: number) => id === 7
+    ? { detail: { prev_req_id: 6, prev_relation: 'confirmed' }, meta: { request_fields: { system: 'v2' } } }
+    : null;
+  expect(systemContextOf(row as never, (unreadablePrev as never))).toEqual({ text: 'v2', changed: null });
+  const changed = (id: number) => ({
+    detail: { prev_req_id: 6, prev_relation: 'confirmed' },
+    meta: { request_fields: { system: id === 7 ? 'v2' : 'v1' } },
+  });
+  expect(systemContextOf(row as never, (changed as never))).toEqual({ text: 'v2', changed: true });
+  // first 或 relation 未确认：只声明当前。
+  const firstRow = { req_id: 7 };
+  const first = () => ({ detail: { prev_req_id: null, prev_relation: 'first' }, meta: { request_fields: { system: 'v1' } } });
+  expect(systemContextOf(firstRow as never, (first as never))).toEqual({ text: 'v1', changed: null });
+  // 没有 system 字段就没有上下文步骤，不伪造。
+  const noSystem = () => ({ detail: null, meta: { request_fields: null } });
+  expect(systemContextOf(row as never, (noSystem as never))).toBeNull();
 });
 
 test('工具概览显示配对与正文加载两种状态，时长归属说明保留', () => {

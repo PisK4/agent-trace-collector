@@ -12,7 +12,7 @@
 import {
   bodyNotice, deltaOrdinals, esc, messageCopyText, partColor, partLabel, roleTag,
   renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderReply,
-  renderReplyDetail, replyView, toolEntries,
+  renderReplyDetail, replyView, toolEntries, topSystemText,
 } from './body-view.js';
 import { createReaderStore } from './reader-store.js';
 import { projectSteps, renderTraceRows } from './trace-view.js';
@@ -326,6 +326,28 @@ export function toolSchemaSection(capabilities, toolName) {
 export function readingChangedNote(reqId) {
   return `<p class="note warn">阅读版本已变化：这一笔的详情与正文缓存已作废。</p>
     <div class="conv-tools"><button class="chip-btn" data-body-load="${reqId}">重新读取</button></div>`;
+}
+
+/**
+ * 顶层 System 上下文：读当前请求的 system 文本，并与同 actor 的已确认前驱比较。
+ * 前驱由派生的 prev_req_id 给出，不按相邻时间猜；前驱不在窗口、未读或 system
+ * 不可读时只声明当前上下文（changed=null），不宣称首次出现或未变化。
+ * @param {RequestRow} row
+ * @param {(id: number) => RequestRead | null} readOf
+ * @returns {{text: string, changed: boolean | null} | null}
+ */
+export function systemContextOf(row, readOf) {
+  const read = readOf(row.req_id);
+  const text = topSystemText(/** @type {import('../src/protocols').BodyPage | null} */ (read?.meta ?? null));
+  if (text === null) return null;
+  const detail = read?.detail ?? null;
+  const prevId = detail?.prev_req_id ?? null;
+  if (detail === null || detail.prev_relation !== 'confirmed' || prevId === null) {
+    return { text, changed: null };
+  }
+  const prevText = topSystemText(/** @type {import('../src/protocols').BodyPage | null} */ (readOf(prevId)?.meta ?? null));
+  if (prevText === null) return { text, changed: null };
+  return { text, changed: prevText !== text };
 }
 
 if (typeof document !== 'undefined') {
@@ -751,7 +773,7 @@ if (typeof document !== 'undefined') {
     html += '<span class="history-range">序号表示当前窗口内的请求 · 时间从上往下 · 点击行查看详情</span></div>';
     for (const r of rows) {
       const read = reads.get(r.req_id) ?? null;
-      const steps = projectSteps(r, read);
+      const steps = projectSteps(r, read, systemContextOf(r, id => reads.get(id) ?? null));
       const ordinal = ordinalOf(r.req_id);
       html += `<section class="trace-group" data-req="${r.req_id}" data-status="${r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success'}" aria-current="${r.req_id === state.reqId}">`;
       html += renderTraceRows(r, steps, ordinal, state.selectedStep);
@@ -1313,7 +1335,7 @@ if (typeof document !== 'undefined') {
     state.toolOrd = step?.callOrd ?? null;
     state.toolPage = 'overview';
     state.railTab = step?.kind === 'tool' ? 'tools'
-      : step?.kind === 'user' || step?.kind === 'assistant' ? 'body' : 'facts';
+      : step?.kind === 'user' || step?.kind === 'assistant' || step?.kind === 'system' || step?.kind === 'tool_result' ? 'body' : 'facts';
     state.missingReqId = null;
     state.offPageReqId = null;
     document.body.classList.remove('rail-collapsed');
