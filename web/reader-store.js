@@ -6,7 +6,9 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * 不进 DOM 闭包。正文与工具结果带阅读版本；409 整笔作废（详情、meta、消息、
  * 区间、结构、增量、工具与路由一起），下一次普通读取重建。token 变化的 validate
  * 读取同样重置整笔快照。迟到响应必须同时匹配会话代次、当前记录归属与捕获的
- * token 才可写入缓存；作废记录不再作为可用快照返回。
+ * token 才可写入缓存；作废记录不再作为可用快照返回。真正作废当前记录时通过
+ * onInvalidated 通知页面；迟到响应与会话切换后的旧回调不作废、不通知，页面
+ * 不按 reading_changed 错误自行清理副本。
  *
  * 缓存边界：只保留当前会话已加载窗口的请求，外加显式读取过的窗口外请求。
  */
@@ -64,8 +66,13 @@ function createLanes(limit, fetcher) {
   return run;
 }
 
-/** @param {(url: string) => Promise<Response>} fetcher @returns {ReaderStore} */
-export function createReaderStore(fetcher) {
+/**
+ * @param {(url: string) => Promise<Response>} fetcher
+ * @param {(id: number) => void} [onInvalidated] store 真正作废当前记录时通知页面；
+ *   迟到响应与会话切换后的旧任务不作废、不通知。
+ * @returns {ReaderStore}
+ */
+export function createReaderStore(fetcher, onInvalidated) {
   const lane = createLanes(4, fetcher);
   let epoch = 0;
 
@@ -209,7 +216,10 @@ export function createReaderStore(fetcher) {
    * @param {any} rec @param {number} id @param {number} myEpoch @param {string | null} myToken
    */
   function invalidateIfCurrent(rec, id, myEpoch, myToken) {
-    if (myEpoch === epoch && reads.get(id) === rec && rec.token === myToken) invalidate(id);
+    if (myEpoch === epoch && reads.get(id) === rec && rec.token === myToken) {
+      invalidate(id);
+      onInvalidated?.(id);
+    }
   }
 
   /** @param {any} rec @param {boolean} validate */
@@ -237,6 +247,7 @@ export function createReaderStore(fetcher) {
         rec.delta = { next: 0, done: false, loading: false, error: null, unconfirmed: false };
         rec.tools = new Map();
         routes.delete(rec.id);
+        onInvalidated?.(rec.id);
       }
       rec.detail = detail;
       rec.token = detail.reading_token;
@@ -247,7 +258,10 @@ export function createReaderStore(fetcher) {
       await task;
     } catch (error) {
       if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
-        if (reads.get(rec.id) === rec) reads.delete(rec.id);
+        if (reads.get(rec.id) === rec) {
+          reads.delete(rec.id);
+          onInvalidated?.(rec.id);
+        }
         throw error;
       }
       rec.detailError = error instanceof Error ? error.message : 'detail_failed';
@@ -437,15 +451,12 @@ export function createReaderStore(fetcher) {
       const myEpoch = epoch;
       pending = (async () => {
         const route = await getJson(`/api/requests/${id}/route`);
-        if (myEpoch !== epoch) {
-          const error = /** @type {Error & {code?: string}} */ (new Error('reading_changed'));
-          error.code = 'reading_changed';
-          throw error;
-        }
+        // 迟到响应：会话已切换，或本任务已作废被新读取取代；成功路径同样核对身份。
+        if (myEpoch !== epoch || routes.get(id) !== pending) throwReadingChanged();
         return route;
       })();
       routes.set(id, pending);
-      pending.catch(() => { routes.delete(id); });
+      pending.catch(() => { if (routes.get(id) === pending) routes.delete(id); });
     }
     return pending;
   }
