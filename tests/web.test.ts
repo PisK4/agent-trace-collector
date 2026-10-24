@@ -1,9 +1,13 @@
 import { expect, test } from 'bun:test';
+import { restoreScroll } from '../web/app.js';
+import { auxSummary, isAuxRow, purposeLabel, replyCompleteness } from '../web/row-summary.js';
 import {
-  auxSummary, isAuxRow, ledgerParts, ledgerRowsHtml, purposeLabel, railFactsHtml, railTabFromParam,
-  railTabParam, readingChangedNote, replyCompleteness, resolveTraceTarget, restoreScroll, routeReadTarget,
+  ledgerParts, ledgerRowsHtml, railFactsHtml, readingChangedNote,
   structureFoldHtml, systemContextOf, toolOverviewHtml, toolSchemaSection, usageFoldHtml,
-} from '../web/app.js';
+} from '../web/rail-facts.js';
+import {
+  railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget,
+} from '../web/url-route.js';
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {
   const rows = [{ req_id: 1 }, { req_id: 2 }];

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { resolveSelectedSource } from '../web/app.js';
+import { resolveSelectedSource } from '../web/rail-facts.js';
 import { projectSteps, renderTraceRows, toolSummary } from '../web/trace-view.js';
 
 const TOKEN = 'r1-' + 'a'.repeat(64);

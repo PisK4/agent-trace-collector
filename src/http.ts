@@ -32,9 +32,12 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/body-view.js': { file: 'body-view.js', type: 'text/javascript; charset=utf-8' },
+  '/rail-facts.js': { file: 'rail-facts.js', type: 'text/javascript; charset=utf-8' },
   '/reader-store.js': { file: 'reader-store.js', type: 'text/javascript; charset=utf-8' },
+  '/row-summary.js': { file: 'row-summary.js', type: 'text/javascript; charset=utf-8' },
   '/trace-pair.js': { file: 'trace-pair.js', type: 'text/javascript; charset=utf-8' },
   '/trace-view.js': { file: 'trace-view.js', type: 'text/javascript; charset=utf-8' },
+  '/url-route.js': { file: 'url-route.js', type: 'text/javascript; charset=utf-8' },
 };
 
 export function loadReadToken(dataDir: string): string {
