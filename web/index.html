@@ -221,7 +221,10 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-select{display:flex;align-items:center;gap:9px;flex:1;min-width:0;text-align:left;height:100%}
 .compact-select:hover{background:var(--hover)}
 .compact-select[aria-current="true"]{background:var(--accent-soft)}
-.compact-meta{display:flex;align-items:center;flex:none;width:86px;font:9px var(--mono);color:var(--muted)}
+/* 序号槽整个当前窗口共用一个宽度：基准 28px，按窗口最大序号的位数以等宽
+   字体的 ch 加内距扩展（--ord-digits 由步骤列表按 rows.length 写入），
+   不按每行的数字单独撑宽，标签起点不参差。 */
+.compact-meta{display:flex;align-items:center;flex:none;width:max(28px,calc(var(--ord-digits,1)*1ch + 8px));font:9px var(--mono);color:var(--muted)}
 .compact-meta b{font-weight:400;color:var(--text-2)}
 /* 角色标签用英文（User/Assistant/Tool/System/Aux/Event），列宽按最宽的 Assistant 给足，
    不截断；内容类型（Tool call / Tool result）单列跟随角色之后。 */
@@ -235,8 +238,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-preview code{font-size:10px;color:var(--text-2)}
 .timeline-end{display:flex;align-items:center;justify-content:center;gap:6px;padding:22px 0 5px;color:var(--muted);font-size:10px}
 .timeline-end span{width:5px;height:5px;background:var(--line-strong);border-radius:50%}
-@media(max-width:1300px){.compact-meta{width:76px;font-size:8px;gap:5px}}
-@media(max-width:620px){.compact-row{gap:5px}.compact-meta{width:22px}.compact-select{gap:5px}.compact-preview{font-size:11px}.history-range{width:100%;text-align:center}.row-label{width:56px;font-size:9px}.row-kind{font-size:9px}}
+@media(max-width:1300px){.compact-meta{font-size:8px}}
+@media(max-width:620px){.compact-row{gap:5px}.compact-select{gap:5px}.compact-preview{font-size:11px}.history-range{width:100%;text-align:center}.row-label{width:56px;font-size:9px}.row-kind{font-size:9px}}
 
 .msg-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
 .msg{border-bottom:1px solid var(--line)}
