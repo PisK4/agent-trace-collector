@@ -176,7 +176,9 @@ export function createReaderStore(fetcher) {
     windowLoading = true;
     windowError = null;
     try {
-      const page = await getJson(`/api/sessions/${encodeURIComponent(String(sessionKey))}/requests?direction=older&limit=${windowRows.length > 0 ? windowRows.length : 30}&cursor=${encodeURIComponent(olderCursor)}`);
+      // 服务端窗口分页上限 200（queries.checkLimit）：翻倍请求越过上限后
+      // 每次都会 400，窗口停在 400 行以内；clamp 到上限继续按页加载。
+      const page = await getJson(`/api/sessions/${encodeURIComponent(String(sessionKey))}/requests?direction=older&limit=${Math.min(windowRows.length > 0 ? windowRows.length : 30, 200)}&cursor=${encodeURIComponent(olderCursor)}`);
       if (myEpoch !== epoch) return;
       // prepend + 去重 + 排序：失败保留旧 rows/cursor 由 catch 负责。
       const seen = new Set(windowRows.map(row => row.req_id));

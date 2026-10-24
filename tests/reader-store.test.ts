@@ -75,6 +75,28 @@ function harness(handler: Handler) {
 
 const respond = (value: unknown, status = 200) => Response.json(value, { status });
 
+test('loadEarlier 翻倍越过服务端 200 上限后 clamp，窗口继续增长', async () => {
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) {
+      const limit = Number(/limit=(\d+)/.exec(url)?.[1] ?? 0);
+      if (!url.includes('cursor=')) {
+        return respond({ items: Array.from({ length: limit }, (_, i) => ({ req_id: 1000 - i, started_ms: 1000 - i })), next_cursor: 'c1' });
+      }
+      return respond({ items: [{ req_id: 500, started_ms: 500 }], next_cursor: null });
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  // 初始窗口 240 行（仅用于把窗口撑过翻倍阈值；生产 windowLimit ≤ 100）。
+  await store.selectSession('k', 240);
+  await store.loadEarlier();
+  const older = h.urls.find(u => u.includes('cursor='));
+  expect(older).toContain('limit=200');
+  const rows = store.getWindow().requests;
+  expect(rows).toHaveLength(241);
+  expect(rows[0]?.req_id).toBe(500);
+});
+
 test('窗口选择、元信息读取与并发去重的 fetch 序列', async () => {
   const h = harness(url => {
     if (url.includes('/requests?direction=older')) {
