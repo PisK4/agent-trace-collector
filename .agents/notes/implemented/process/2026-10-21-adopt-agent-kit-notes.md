@@ -8,7 +8,7 @@ ATC 第一版完成后，决策依据散在 README、架构设计、评审记录
 
 ## Decision
 
-采用 agent-kit M1 的 Agent Notes 体系。`.agents/notes/` 按生命周期与分类存放决策记录；`scripts/verify-agent-note-format.mjs` 与 `scripts/verify-archived-agent-notes.mjs` 机械检查格式与归档封印；根 `AGENTS.md` 规定常备规则，`docs/AGENTS.md` 规定文档分层。闸门接在 `package.json` 的 `verify:notes`，提交前由根 `AGENTS.md` 要求执行，不装本地 git hook。`.agents/KIT-VERSION` 记录安装基线；kit 升级时逐文件对比 `LINEAGE.md` 后重新覆盖规则文件与闸门。
+采用 agent-kit M1 的 Agent Notes 体系。`.agents/notes/` 按生命周期与分类存放决策记录。`scripts/verify-agent-note-format.mjs` 与 `scripts/verify-archived-agent-notes.mjs` 机械检查格式与归档封印。根 `AGENTS.md` 规定常备规则，`docs/AGENTS.md` 规定文档分层。闸门接在 `package.json` 的 `verify:notes`，提交前由根 `AGENTS.md` 要求执行，不装本地 git hook。`.agents/KIT-VERSION` 记录安装基线。kit 升级时逐文件对比 `LINEAGE.md`，再重新覆盖规则文件与闸门。
 
 首批 note 回填有真实替代方案的决策：语义指纹与祖先前缀、schema v3 拒绝原地升级、容量三门槛、维护锁与备份探测、隐私与本地访问边界。事实仍以 [docs/architecture-design.md](../../../../docs/architecture-design.md) 与 [docs/operations.md](../../../../docs/operations.md) 为权威，note 只记录 rationale、被否决的方案与代价。
 
