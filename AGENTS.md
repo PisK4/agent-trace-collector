@@ -57,6 +57,7 @@ bun run verify-cutover
 - 监听地址写死 `127.0.0.1`，不读环境变量覆盖；数据目录在仓库外，文件权限 0600、目录 0700。
 - 测试只用合成数据；真实请求正文、账号、令牌和用户配置不进 fixture、日志或提交。
 - 正文与路由内容在页面一律转义，不直接插 HTML。
+- 界面不加多余的二级标签与说明文字，让布局解释结构：分组、间距、对齐与表面明度差承担解释职责；正常态不带装饰性状态，异常才出现标签。原文：Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.
 
 ## 上位文档
 
