@@ -389,12 +389,14 @@ pre.raw{
 .rail-id{display:flex;align-items:center;gap:7px;font:10.5px var(--mono);color:var(--muted)}
 .rail-id .grow{flex:1}
 .rail-title{font-size:13px;font-weight:600;line-height:1.4;margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-/* 顶部读数条：模型+计时一行、用量一行，所有页签常驻；口径解释在各数字的 title 里。 */
+/* 读数行：计时+用量两行，用于「用量与上下文」折叠行与窗口外请求；口径解释在各数字的 title 里。 */
 .rail-strip{margin-top:8px;display:flex;flex-direction:column;gap:3px}
 .rail-strip .strip-row{display:flex;flex-wrap:wrap;gap:1px 6px;align-items:baseline;font:11px var(--mono);font-variant-numeric:tabular-nums;color:var(--text-2)}
 .rail-strip .strip-row .sep{color:var(--line-strong)}
-.rail-strip .strip-model{font-weight:600;color:var(--text)}
+.rail-strip .strip-row .lbl{color:var(--muted)}
 .rail-strip .miss{color:var(--missing);font-style:normal}
+.rail-id .strip-model{font-weight:600;color:var(--text)}
+.fold-body .rail-strip{margin:2px 0 8px}
 .rail-tabs{display:flex;gap:0;margin:0 -14px;padding:0 14px;background:var(--surface)}
 .rail-tabs button{font-size:11px;padding:8px 10px 7px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
 .rail-tabs button[aria-pressed="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:550}
@@ -409,8 +411,6 @@ pre.raw{
 .u-total{display:flex;justify-content:space-between;gap:8px;margin-top:6px;font-size:10.5px;color:var(--muted);flex-wrap:wrap}
 .u-total b{font-family:var(--mono);color:var(--text-2);font-weight:500}
 
-.usage-bar{display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--line);margin:8px 0 2px}
-.usage-bar i{display:block}
 .comp-bar{display:flex;gap:2px;height:9px;margin-bottom:9px}
 .comp-bar i{display:block;border-radius:1px;min-width:2px}
 .comp-legend{display:grid;grid-template-columns:1fr auto auto;gap:3px 8px;font-size:10.5px}
