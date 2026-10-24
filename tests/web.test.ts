@@ -262,6 +262,54 @@ test('System 上下文按已确认前驱比较，前驱不可读只声明当前'
   expect(systemContextOf(row as never, (noSystem as never))).toBeNull();
 });
 
+test('结构并集：稀疏已读的 99 可见，40–98 标未读，游标仍为 40', () => {
+  const entries = Array.from({ length: 40 }, (_, i) => entryOf(i, `m${i}`));
+  entries.push({ ...entryOf(99, 'm99'), input: null, isInput: false });
+  const html = structureFoldHtml({
+    reqId: 1, row: factsRow, meta: { total: 100 },
+    entries,
+    structure: {
+      open: true, next: 40, total: 100,
+      ords: Array.from({ length: 40 }, (_, i) => i), selected: null, loading: false, error: null,
+    },
+    delta: new Set([99]),
+    deltaState: { next: 1, done: true, loading: false, error: null },
+    relation: '',
+  });
+  // 缓存尾部的稀疏消息不被游标过滤掉。
+  expect(html).toContain('data-msg="99"');
+  // 相邻序号之间的空洞标明未读；连续游标语义不变。
+  expect(html).toContain('#40–#98 未读取');
+  expect(html).toContain('data-structure-more="1"');
+  expect(html).toContain('已读 40 / 100');
+  // 已完成的增量只显示数量，不给续读按钮。
+  expect(html).not.toContain('data-delta-more');
+});
+
+test('增量未完成给续读入口，失败给重试并保留未读位置', () => {
+  const base = {
+    reqId: 1, row: factsRow, meta: { total: 3 },
+    entries: [entryOf(0, 'a'), entryOf(1, 'b'), entryOf(2, 'c')],
+    structure: { ...emptyStructure, total: 3, next: 3, ords: [0, 1, 2] },
+    delta: new Set([0, 1, 2]),
+    relation: '',
+  };
+  const pending = structureFoldHtml({
+    ...base, deltaState: { next: 2, done: false, loading: false, error: null },
+  });
+  expect(pending).toContain('data-delta-more="1"');
+  expect(pending).toContain('已消费 2 / 3');
+  const failed = structureFoldHtml({
+    ...base, deltaState: { next: 0, done: false, loading: false, error: 'delta_gap' },
+  });
+  expect(failed).toContain('新增读取失败');
+  expect(failed).toContain('delta_gap');
+  expect(failed).toContain('data-delta-more="1"');
+  expect(failed).toContain('已消费 0 / 3');
+  // 无 deltaState 的旧调用形状保持原有数量说明。
+  expect(structureFoldHtml({ ...base, deltaState: null })).toContain('新增 3 条消息');
+});
+
 test('工具概览显示配对与正文加载两种状态，时长归属说明保留', () => {
   expect(toolOverviewHtml(7, pairOf('resolved', { result_req: 9, result_ord: 2 }), null)).toContain('待读取');
   expect(toolOverviewHtml(7, pairOf('resolved', { result_req: 9, result_ord: 2 }), readingOf('available'))).toContain('已读取');

@@ -156,6 +156,14 @@ export function projectSteps(row, read, systemContext = null) {
       }
     }
   }
+  // 增量读取未完成或失败：一条事件记录显示剩余与失败，点击续读两片；完成时不出现。
+  const deltaState = read.delta ?? null;
+  if (deltaState !== null && !deltaState.done && trusted !== null) {
+    const total = trusted.size;
+    record('delta', deltaState.error !== null ? 'unknown' : null, deltaState.error !== null
+      ? `新增读取失败 · 已消费 ${Math.min(deltaState.next, total)} / ${total} · ${deltaState.error}`
+      : `还有 ${total - deltaState.next} 条新增未读取 · 点击续读`);
+  }
   // 回复块按协议原始顺序；thinking 不常驻，多 choice 不结构化拆行。
   const meta = read?.meta ?? null;
   const view = meta === null ? null : replyView(meta);

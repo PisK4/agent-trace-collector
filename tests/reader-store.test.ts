@@ -395,6 +395,67 @@ test('迟到的工具结果不写入已换版本的请求', async () => {
   expect(toolCalls).toBe(2);
 });
 
+test('81 条可信增量分两片后可显式续读剩余', async () => {
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) {
+      return respond(detail(1, { delta_ordinals: Array.from({ length: 81 }, (_, i) => i) }));
+    }
+    if (url.includes('/body')) {
+      const from = Number(/from=(\d+)/.exec(url)?.[1]);
+      const to = Number(/to=(\d+)/.exec(url)?.[1]);
+      return respond(bodyPage(from, to, 81));
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  // 首轮两片：0–39、40–79；done 仍为 false，剩余 1 条。
+  const first = await store.loadDelta(1, 2);
+  expect(first.delta.next).toBe(80);
+  expect(first.delta.done).toBe(false);
+  // 显式续读第 81 条后完成。
+  const second = await store.loadDelta(1, 2);
+  expect(second.delta.next).toBe(81);
+  expect(second.delta.done).toBe(true);
+  expect(h.count('/body?from=80&to=81')).toBe(1);
+  expect(h.count('/body?from=0&to=40')).toBe(1);
+});
+
+test('增量片缺口：空页成功响应不推进消费位置，重试重新走网络', async () => {
+  let emptyPieces = true;
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { delta_ordinals: [0, 1] }));
+    if (url.includes('/body')) {
+      const from = Number(/from=(\d+)/.exec(url)?.[1]);
+      const to = Number(/to=(\d+)/.exec(url)?.[1]);
+      if (emptyPieces) {
+        const page = bodyPage(from, to, 2);
+        return respond({ ...page, messages: [] });
+      }
+      return respond(bodyPage(from, to, 2));
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  // 成功 HTTP 页但消息为空：固定原因、done 保持 false、next 不动。
+  const failed = await store.loadDelta(1, 2);
+  expect(failed.delta.error).toBe('delta_gap');
+  expect(failed.delta.done).toBe(false);
+  expect(failed.delta.next).toBe(0);
+  const failedCount = h.count('/body?from=0&to=2');
+  // 重试成功：缺口页不留在缓存，两条均可见并完成。
+  emptyPieces = false;
+  const ok = await store.loadDelta(1, 2);
+  expect(ok.delta.done).toBe(true);
+  expect(ok.delta.next).toBe(2);
+  expect(h.count('/body?from=0&to=2')).toBe(failedCount + 1);
+});
+
 test('delta 分片消费与未确认关系不读消息', async () => {
   const h = harness(url => {
     if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });

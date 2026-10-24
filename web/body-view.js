@@ -15,7 +15,7 @@
  * @typedef {{id: string, name: string, inputText: string, ord: number}} ToolCallView
  * @typedef {{state: 'ok' | 'absent' | 'invalid', text: string, thinking: string[], calls: ToolCallView[], finish: string | null, model: string | null, raw: unknown}} ReplyView
  * @typedef {{call_id: string, name: string, inputText: string, ord: number, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null, result_label?: string | null}} ToolEntry
- * @typedef {{delta: Set<number> | null, limit?: number, selectedOrd?: number | null}} MessageOptions
+ * @typedef {{delta: Set<number> | null, limit?: number, selectedOrd?: number | null, gaps?: {from: number, to: number}[]}} MessageOptions
  */
 
 const ESCAPES = /** @type {Record<string, string>} */ ({
@@ -428,32 +428,43 @@ export function bodyNotice(page) {
 
 /**
  * 消息列表。可折叠行都是 button，键盘可达；预览单行截断，不撑破窄屏。
+ * gaps 是相邻已缓存序号之间的未读区间，按位置插进列表，不冒充已读。
  * @param {Entry[]} entries
  * @param {MessageOptions} options
  */
 export function renderMessages(entries, options) {
   const limit = options.limit ?? 40;
   const shown = entries.slice(0, limit);
-  const rows = shown.map(entry => {
+  const gaps = options.gaps ?? [];
+  /** @param {{from: number, to: number}} gap */
+  const gapRow = gap => `<li class="msg-gap"><span>#${gap.from}${gap.to > gap.from ? `–#${gap.to}` : ''} 未读取</span></li>`;
+  /** @type {string[]} */
+  const rows = [];
+  let gapIndex = 0;
+  shown.forEach(entry => {
+    while (gapIndex < gaps.length && gaps[gapIndex] !== undefined && gaps[gapIndex].to < entry.ord) {
+      rows.push(gapRow(/** @type {{from: number, to: number}} */ (gaps[gapIndex])));
+      gapIndex += 1;
+    }
     const isNew = options.delta !== null && options.delta.has(entry.ord);
     const current = options.selectedOrd === entry.ord ? ' aria-current="true"' : '';
     const displayRole = displayRoleOf(entry);
     // 消息级列表用主角色加内容类型：纯结果与纯调用在预览前标明类型。
     const typePrefix = entry.blocks.length > 0 && entry.blocks.every(block => block.kind === 'result') ? 'Tool result · '
       : entry.blocks.length > 0 && entry.blocks.every(block => block.kind === 'call') ? 'Tool call · ' : '';
-    return `<li class="msg" data-ord="${entry.ord}"${current}>
+    rows.push(`<li class="msg" data-ord="${entry.ord}"${current}>
       <button class="msg-head" data-msg="${entry.ord}" aria-label="查看消息 ${entry.ord}">
         <span class="kind ${roleClass(displayRole)}">${roleTag(displayRole)}</span>
         <span class="msg-ord">#${entry.ord}</span>
         <span class="msg-preview">${esc(typePrefix + entry.preview)}</span>
         ${isNew ? '<span class="msg-new">新增</span>' : ''}
       </button>
-    </li>`;
-  }).join('');
+    </li>`);
+  });
   const more = entries.length > limit
     ? `<li class="msg-more"><button class="chip-btn" data-body-more-msg="1">还有 ${entries.length - limit} 条未显示</button></li>`
     : '';
-  return `<ol class="msg-list">${rows}${more}</ol>`;
+  return `<ol class="msg-list">${rows.join('')}${more}</ol>`;
 }
 
 /**

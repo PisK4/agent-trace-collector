@@ -251,6 +251,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .msg-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
 .msg-new{font:9px var(--ui);color:var(--accent);white-space:nowrap}
 .msg-more{padding:8px 10px;text-align:center;border-top:1px solid var(--line)}
+/* 未读区间：已缓存序号之间的空洞，原样说明，不冒充已读。 */
+.msg-gap{padding:5px 10px;font-size:10.5px;color:var(--muted);border-bottom:1px dashed var(--line);list-style:none}
 .msg-thinking{margin:6px 0;border:1px dashed var(--line-strong);border-radius:4px;padding:0 9px}
 .msg-thinking summary{font-size:10.5px;color:var(--muted);padding:6px 0;cursor:pointer;list-style:none}
 .msg-thinking summary::-webkit-details-marker{display:none}
