@@ -525,6 +525,97 @@ test('delta 分片消费与未确认关系不读消息', async () => {
   expect(h3.urls.filter(u => u.includes('/body?from=') && !u.includes('to=0')).length).toBe(0);
 });
 
+test('同会话作废后迟到的路由成功响应不可用，新缓存保留', async () => {
+  let routeCalls = 0;
+  const releases: Array<(value: Response) => void> = [];
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/route')) {
+      routeCalls += 1;
+      if (routeCalls === 1) return new Promise<Response>(resolve => { releases.push(resolve); });
+      return respond({ state: 'absent', summary: null });
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  const stale = store.readRoute(1);
+  await delay(5);
+  store.invalidate(1);
+  const fresh = await store.readRoute(1);
+  expect(fresh).toEqual({ state: 'absent', summary: null });
+  releases[0]!(respond({ state: 'present', summary: { served: 'stale' } }));
+  // 旧任务已被取代：成功响应也不能作为可用值返回。
+  await expect(stale).rejects.toThrow('reading_changed');
+  // 新缓存原样：第三次读取不发网。
+  expect(await store.readRoute(1)).toEqual({ state: 'absent', summary: null });
+  expect(h.count('/route')).toBe(2);
+});
+
+test('迟到的路由失败不清除已重建的新路由缓存', async () => {
+  let routeCalls = 0;
+  const releases: Array<() => void> = [];
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/route')) {
+      routeCalls += 1;
+      if (routeCalls === 1) {
+        return new Promise<Response>(resolve => { releases.push(() => resolve(respond({ error: 'unavailable' }, 503))); });
+      }
+      return respond({ state: 'absent', summary: null });
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  const stale = store.readRoute(1);
+  await delay(5);
+  store.invalidate(1);
+  await expect(store.readRoute(1)).resolves.toEqual({ state: 'absent', summary: null });
+  releases[0]!();
+  await expect(stale).rejects.toThrow();
+  // 旧失败已迟到：新缓存保留，第三次读取不发网。
+  await expect(store.readRoute(1)).resolves.toEqual({ state: 'absent', summary: null });
+  expect(h.count('/route')).toBe(2);
+});
+
+test('409 只在真正作废当前记录时通知页面', async () => {
+  let token = TOKEN;
+  let bodyStatus = 200;
+  let rangeCalls = 0;
+  let releaseStale: (value: Response) => void = () => {};
+  const gated = new Promise<Response>(resolve => { releaseStale = resolve; });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
+    if (url.includes('/body?from=1&to=2')) {
+      rangeCalls += 1;
+      if (rangeCalls === 1) return gated;
+      return bodyStatus === 409 ? respond({ error: 'reading_changed' }, 409) : respond(bodyPage(1, 2, 3));
+    }
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 3));
+    return respond({ error: 'not_found' }, 404);
+  });
+  const invalidated: number[] = [];
+  const store = createReaderStore(h.fetcher, id => invalidated.push(id));
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  const stale = store.readRange(1, 1, 2);
+  await delay(5);
+  // 旧请求还挂着时版本重建：token 变化是真正作废，通知一次。
+  token = TOKEN2;
+  await store.readRequest(1, true);
+  expect(invalidated).toEqual([1]);
+  releaseStale(respond({ error: 'reading_changed' }, 409));
+  await expect(stale).rejects.toThrow('reading_changed');
+  // 迟到 409：不作废、不新增通知，新缓存保留。
+  expect(invalidated).toEqual([1]);
+  // 当前版本的 409：整笔作废并再次通知。
+  bodyStatus = 409;
+  await expect(store.readRange(1, 1, 2)).rejects.toThrow('reading_changed');
+  expect(invalidated).toEqual([1, 1]);
+});
+
 test('共享网络队列并发不超过 4', async () => {
   const h = harness(async url => {
     await delay(15);

@@ -498,7 +498,8 @@ if (typeof document !== 'undefined') {
     return key;
   }
 
-  const store = createReaderStore((/** @type {string} */ url) => fetch(url));
+  const store = createReaderStore((/** @type {string} */ url) => fetch(url),
+    id => handleReadingChanged(id));
   /** @type {Map<number, RequestRead>} 窗口内请求的已读取内容；随会话切换清空。 */
   const reads = new Map();
   /** @type {Map<string, ToolResultReading>} 工具结果按 `${owner}:${ord}` 缓存展示层副本。 */
@@ -614,11 +615,8 @@ if (typeof document !== 'undefined') {
           const read = await store.readRequest(row.req_id);
           reads.set(row.req_id, read);
           if (!read.delta.done) await store.loadDelta(row.req_id, 2).then(next => reads.set(row.req_id, next));
-        } catch (error) {
-          if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
-            handleReadingChanged(row.req_id);
-          }
-          /* 其余单笔失败保留占位记录；刷新可重试 */
+        } catch {
+          /* reading_changed 的副本清理由 store 作废通知负责；其余单笔失败保留占位记录，刷新可重试 */
         }
       }));
       if (epoch !== loadEpoch) return;
@@ -798,7 +796,7 @@ if (typeof document !== 'undefined') {
 
   /**
    * 按调用位置读取结果。force 用于重试：先丢掉页面侧的失败快照再发起。
-   * 409 表示阅读版本已变：清掉旧关联展示，整笔重建后再读。
+   * 409 的作废与副本清理由 store 通知负责；迟到 409 保留现有副本，这里只刷新展示。
    * @param {number} ownerId @param {number} callOrd @param {boolean} [force]
    */
   async function readToolResult(ownerId, callOrd, force = false) {
@@ -809,8 +807,6 @@ if (typeof document !== 'undefined') {
       toolReadings.set(key, reading);
     } catch (error) {
       if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
-        // 409 整笔作废：清展示副本并显示重读入口，不自动重建。
-        handleReadingChanged(ownerId);
         renderMain();
         renderRail();
         return null;
@@ -1285,6 +1281,8 @@ if (typeof document !== 'undefined') {
     state.requestOpen = new Set();
     reads.clear();
     toolReadings.clear();
+    // 路由副本随阅读版本一起清：导航完成处的自动读取才不会命中旧窗口缓存。
+    routes.clear();
     state.readingChanged.clear();
     state.refreshedAt = Date.now();
     state.revealed = false;
@@ -1342,8 +1340,10 @@ if (typeof document !== 'undefined') {
   }
 
   /**
-   * 阅读版本变化的统一处理：作废该请求的全部展示副本（已读快照、该 owner 的
-   * 全部工具结果与路由），标记待重读；渲染说明与显式重读入口由调用方负责。
+   * store 真正作废当前记录时的统一处理：作废该请求的全部展示副本（已读快照、
+   * 该 owner 的全部工具结果与路由），标记待重读；迟到响应与会话切换后的旧回调
+   * 不作废、不进入本函数，页面不按 reading_changed 错误自行清理。渲染说明与
+   * 显式重读入口由调用方负责。
    * @param {number} id
    */
   function handleReadingChanged(id) {
@@ -1371,8 +1371,8 @@ if (typeof document !== 'undefined') {
       const read = await store.readRequest(id);
       reads.set(id, read);
       state.readingChanged.delete(id);
-    } catch (error) {
-      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') handleReadingChanged(id);
+    } catch {
+      /* reading_changed 的副本清理由 store 作废通知负责 */
       renderMain();
       renderRail();
       return;
@@ -1461,9 +1461,8 @@ if (typeof document !== 'undefined') {
     try {
       const read = await store.loadStructure(id);
       reads.set(id, read);
-    } catch (error) {
-      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') handleReadingChanged(id);
-      /* 其余结构失败保留 error 状态 */
+    } catch {
+      /* reading_changed 的副本清理由 store 作废通知负责；其余结构失败保留 error 状态 */
     }
     renderMain();
     renderRail();
@@ -1474,8 +1473,8 @@ if (typeof document !== 'undefined') {
     try {
       const read = await store.loadDelta(id, 2);
       reads.set(id, read);
-    } catch (error) {
-      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') handleReadingChanged(id);
+    } catch {
+      /* reading_changed 的副本清理由 store 作废通知负责；其余失败保留未消费位置可重试 */
     }
     renderMain();
     renderRail();
@@ -1536,6 +1535,7 @@ if (typeof document !== 'undefined') {
     state.revealed = false;
     reads.clear();
     toolReadings.clear();
+    routes.clear();
     state.readingChanged.clear();
     renderMain();
     await store.selectSession(key, windowLimit());
