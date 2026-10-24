@@ -1,6 +1,7 @@
 {
   "version": 1,
   "files": {
+    "architecture/2026-10-20-schema-v3-rejects-in-place-upgrade.md": "sha256:39e529f222aba53f7cc706b8c91358f75a5b45423a6bf498f6f9537910cdfca3",
     "bug-fix/2026-10-21-ledger-readings-overflow.md": "sha256:47643b1e58c36c4db90e145211aedfcdfc3942a7388a94c26d486d92e6a80ab4",
     "feature/2026-10-21-ledger-fixed-row-and-type-tags.md": "sha256:5f54bb37cd4895448386d75ed0ecf01cb8e6c6b482227d2554cb28a988f0e985",
     "feature/2026-10-23-local-trace-prototype-reader.md": "sha256:68b69cb358c0e41ab8cf954568a8b36187143c2b2b1905f9ac22b343b39eff98",

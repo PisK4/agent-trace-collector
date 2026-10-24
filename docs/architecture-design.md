@@ -872,7 +872,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 ### 组完成与输入修订
 
-派生按 `(conv_key, actor)` 成组重算整条链，所以"这一组的产物是不是最新的"必须由持久状态回答，不能靠队列里还有没有这一行。
+派生按 `(conv_key, actor)` 成组重算整条链，所以"这一组的产物是不是最新的"必须由持久状态回答，不能靠队列里还有没有这一行。判定只有一份实现：`src/derive-state.ts` 的 `groupCurrentSql` / `queuePendingSql` / `groupIsCurrent`，读模型、组选取、切片认领、维护报告与容量探测都引用同一片段，理由见[组待办与当前判定收进 derive-state](../.agents/notes/implemented/architecture/2026-10-23-group-current-predicate-single-home.md)。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -1037,7 +1037,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 详情另附四个展示视图：`prompt`（上下文阅读）、`source_facts`、`projection_meta` 与 `derivation`。上下文比例只在 prompt 族状态为 `recomputed` 且窗口为正时计算；`retained`、`invalid_input`、`missing` 即使带着旧计数也不给比例，并说明原因。正文分页附带 `interpretations`、`coverage` 与 `capabilities`，解释只覆盖当前页。这些视图都按白名单挑标量，不返回原始 JSON；失效或缺失的值保持 null，不从邻近字段补猜。
 
-分页用 keyset 不用 offset。摄入一直在写，offset 会漂移，游标是本页边界行的 `(started_ms, req_id)`。`direction=older` 无游标取最近一页并向更早翻页，返回仍按时间正序；它的游标额外绑定会话与方向，未知方向返回 400，不静默按 forward 处理。
+分页用 keyset 不用 offset。摄入一直在写，offset 会漂移，游标是本页边界行的 `(started_ms, req_id)`。`direction=older` 无游标取最近一页并向更早翻页，返回仍按时间正序；它的游标额外绑定会话与方向，未知方向返回 400，不静默按 forward 处理。为什么两方向共用一个索引、以及旧二元游标不能混用，见[最近请求窗口与向前分页](../.agents/notes/implemented/feature/2026-10-24-older-window-pagination.md)。
 
 阅读版本（reading token）绑定一笔请求的轨迹输入与派生位置：输入修订、组代际、发布指针、正文状态与用途身份变化都会换发，只改费用不换。token 形如 `r1-` 加 64 位十六进制，只是读取身份，不是认证凭证。详情响应附带 `reading_token`；正文接口的 `if_reading` 可选，携带后与当前身份不符返回 409 `reading_changed`，畸形值 400。工具结果接口必须携带 token：它按 owner 的调用序号定位一次调用，再按记录的 `result_req + result_ord + result_path` 精确取一个内容块，路径只认 `request.messages[N](.content[M])?` 且 N 必须等于 `result_ord`，目标 canonical 与 actor 要和调用方一致；Anthropic 块须是配对 `tool_use_id` 的 `tool_result`，Chat 须是 `role=tool` 且 `tool_call_id` 匹配。关联未确认或组不 current 返回 `pending` / `ambiguous` / `unpaired`，目标不可读返回 `unavailable`，位置或身份不符返回 `invalid_location`；原因用固定词（`body_evicted`、`location_mismatch`、`call_id_mismatch` 等），不回传 SQL 错误。`resolved` 只代表关联已确认，`is_error` 三态表达工具是否报告失败。成功响应另带 `raw` 精确协议对象：Anthropic 是配对的 `tool_result` 块，Chat 是整条 `role=tool` 消息；其余状态 `raw` 为 null。alias 解析、身份与读取在同一个只读事务内完成。
 

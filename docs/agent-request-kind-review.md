@@ -154,7 +154,7 @@ magpie 的 `Prompt.Counted` 为 `bool` 且带 omitempty，true 表示用 vendor 
 | route.kind、folder、effort、error | 属于来源决策。是否加索引列由实际查询决定；不因上浮就同时复制进 request、显式列和压缩 JSON |
 | kind、分类依据、算法版本 | 是字段保真与 Feature 的共同接点；上游报告与 ATC 解释分离，依赖变化后重新入队 |
 
-schema 策略需准确引用[既有升级决策](../.agents/notes/implemented/architecture/2026-10-20-schema-v3-rejects-in-place-upgrade.md)：拒绝的是 openStore 启动时自动升级，既有 backfill 本身会显式补列并重算，且保住正文。第 92 行不能被解释成删库或只提升 user_version。联合变更需支持失败后续跑，并让未完成的迁移状态可见，避免结构版本已更新就被误认为全部回填完成。
+schema 策略需准确引用[既有升级决策](../.agents/notes/archived/architecture/2026-10-20-schema-v3-rejects-in-place-upgrade.md)：拒绝的是 openStore 启动时自动升级，既有 backfill 本身会显式补列并重算，且保住正文。第 92 行不能被解释成删库或只提升 user_version。联合变更需支持失败后续跑，并让未完成的迁移状态可见，避免结构版本已更新就被误认为全部回填完成。
 
 route_summary.z 也不能被当成完整 raw_route 的压缩备份。`saveRouteSummary` 只压缩自己选择的 summary（`src/reconcile.ts:508`），其中有 error，但没有 kind、folder、effort 或 prompt；原始层过期后不能从 z 补出这些字段。已有 order/tries 等信息是否继续同时存显式列与 z，可以按读取成本评估，但不能拿解压 z 代替保存它从未包含的字段。容量估算应按每笔请求对应的路由/尝试数量及新增字节计算；既有每笔约 2 KB 的元数据估计不等于 route_summary 单行实测大小。
 
