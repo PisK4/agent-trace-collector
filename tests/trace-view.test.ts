@@ -83,6 +83,19 @@ test('读取未完成与不可用时不拆 input_preview 为用户步骤', () =>
   expect(unsupported[0]?.status).toBe('missing_body');
 });
 
+test('读取作废与读取失败文案如实区分，不冒充读取中', () => {
+  const loading = projectSteps(row(), null);
+  expect(loading[0]?.text).toBe('读取中');
+  const invalidated = projectSteps(row(), null, null, { reason: 'invalidated' });
+  expect(invalidated[0]?.text).toBe('阅读版本已变化 · 点击重读');
+  const failed = projectSteps(row(), null, null, { reason: 'failed', error: 'http_503' });
+  expect(failed[0]?.text).toBe('详情读取失败 · http_503');
+  // 三种态共用同一条记录步骤身份：点击行都走普通读取重建。
+  expect(loading[0]?.key).toBe('7:loading');
+  expect(invalidated[0]?.key).toBe('7:loading');
+  expect(failed[0]?.key).toBe('7:loading');
+});
+
 test('注入与空 content 不是用户', () => {
   const d = detail({ delta_ordinals: [2, 3] });
   const entries = [

@@ -617,9 +617,10 @@ test('409 只在真正作废当前记录时通知页面', async () => {
 });
 
 test('peek 同步读取入口：不发网、无快照为 null、失败占位与作废可见', async () => {
+  let detailFails = false;
   const h = harness(url => {
     if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
-    if (url.endsWith('/api/requests/1')) return respond(detail(1));
+    if (url.endsWith('/api/requests/1')) return detailFails ? respond({ error: 'unavailable' }, 503) : respond(detail(1));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
     if (url.includes('/tools/0/result')) return respond({ owner_req: 1, call_ord: 0, state: 'available', target: null, content: 'ok', is_error: null, reason: null, reading_token: TOKEN });
     if (url.includes('/tools/1/result')) return respond({ error: 'unavailable' }, 503);
@@ -650,6 +651,16 @@ test('peek 同步读取入口：不发网、无快照为 null、失败占位与�
   store.peekToolResult(1, 0);
   store.peekRoute(1);
   expect(h.urls.length).toBe(urlsAtPeek);
+  // 详情读取失败如实可见：peekDetailError 报告原因，重读成功后清空。
+  expect(store.peekDetailError(1)).toBeNull();
+  detailFails = true;
+  store.invalidate(1);
+  await expect(store.readRequest(1)).rejects.toThrow('http_503');
+  expect(store.peekRequest(1)).toBeNull();
+  expect(store.peekDetailError(1)).toBe('http_503');
+  detailFails = false;
+  await store.readRequest(1);
+  expect(store.peekDetailError(1)).toBeNull();
   // 作废后同步读取回到未读；换会话同样清空。
   store.invalidate(1);
   expect(store.peekRequest(1)).toBeNull();

@@ -38,6 +38,7 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * @property {(id: number, ord: number) => Promise<import('../src/reading').ToolResultReading>} readToolResult
  * @property {(id: number) => Promise<unknown>} readRoute
  * @property {(id: number) => RequestRead | null} peekRequest 同步读取当前缓存态，不发网络；无可用快照返回 null。
+ * @property {(id: number) => string | null} peekDetailError 同步读取详情读取失败原因；无记录或未失败返回 null。
  * @property {(id: number, ord: number) => import('../src/reading').ToolResultReading | null} peekToolResult 同步读取工具结果缓存，失败占位也算可用。
  * @property {(id: number) => {state: string, summary: unknown} | null} peekRoute 同步读取路由缓存；未读到或读取失败返回 null。
  * @property {(id: number) => void} invalidate
@@ -487,6 +488,11 @@ export function createReaderStore(fetcher, onInvalidated) {
     return assemble(rec);
   }
 
+  /** @param {number} id @returns {string | null} 详情读取的失败原因；409 作废删除整笔记录，走 onInvalidated 通道。 */
+  function peekDetailError(id) {
+    return reads.get(id)?.detailError ?? null;
+  }
+
   /** @param {number} id @param {number} ord @returns {import('../src/reading').ToolResultReading | null} */
   function peekToolResult(id, ord) {
     const rec = reads.get(id);
@@ -519,6 +525,7 @@ export function createReaderStore(fetcher, onInvalidated) {
     readToolResult,
     readRoute,
     peekRequest,
+    peekDetailError,
     peekToolResult,
     peekRoute,
     invalidate,
