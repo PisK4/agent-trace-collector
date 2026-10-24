@@ -83,4 +83,4 @@ bun prototypes/serve-local.ts
 
 ## 参考
 
-[项目定位](../docs/project-overview.md)、[magpie 机制与复用边界](../docs/magpie-mechanisms-research.md)与[单一轨迹原型决策](../.agents/notes/implemented/feature/2026-10-23-single-timeline-prototype.md)。布局参考本轮提供的 Deepseek Harness 截图，保留 ATC 的请求计量单位与现有主题。
+[项目定位](../docs/project-overview.md)、[magpie 机制与复用边界](../docs/magpie-mechanisms-research.md)与[单一轨迹原型决策](../.agents/notes/archived/feature/2026-10-23-single-timeline-prototype.md)。布局参考本轮提供的 Deepseek Harness 截图，保留 ATC 的请求计量单位与现有主题。

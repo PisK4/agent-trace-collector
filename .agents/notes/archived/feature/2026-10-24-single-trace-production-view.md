@@ -1,6 +1,7 @@
 # Agent Note: 生产单一轨迹视图与窗口导航
 
 Status: implemented
+Archived: 2026-10-24
 
 ## Problem
 

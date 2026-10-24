@@ -111,7 +111,7 @@ direct 只能经 API 拿，且要以 `native_session` 作为软身份键才不�
 
 ## 与现有记录的关系
 
-**交付现状。** 批 0 的字段读法已交付：映射层按 magpie 的真实键读、`counted` 当布尔三态、折叠行的 part 颜色与列表标志接上真实值，形状见[来源投影与字段保真](../../implemented/architecture/2026-10-22-source-projection-and-field-fidelity.md)与[账本读数溢出](../../implemented/bug-fix/2026-10-21-ledger-readings-overflow.md)。批 1 没有按本文的加列清单落地：`effort`、`native_session`、`host`、`account`、`tier_asked`／`tier_sent`／`tier_served` 与 vendor 错误文本仍只在 `raw_ledger` 行上，route 决策字段也没有折进 `route_summary`——投影改用 `source_facts_json` 承载，见[有界来源事实与来源依据](../../implemented/architecture/2026-10-22-bounded-source-facts-and-provenance.md)。批 2 与批 3 未做。
+**交付现状。** 批 0 的字段读法已交付：映射层按 magpie 的真实键读、`counted` 当布尔三态、折叠行的 part 颜色与列表标志接上真实值，形状见[来源投影与字段保真](../../implemented/architecture/2026-10-22-source-projection-and-field-fidelity.md)与[账本读数溢出](../../archived/bug-fix/2026-10-21-ledger-readings-overflow.md)。批 1 没有按本文的加列清单落地：`effort`、`native_session`、`host`、`account`、`tier_asked`／`tier_sent`／`tier_served` 与 vendor 错误文本仍只在 `raw_ledger` 行上，route 决策字段也没有折进 `route_summary`——投影改用 `source_facts_json` 承载，见[有界来源事实与来源依据](../../implemented/architecture/2026-10-22-bounded-source-facts-and-provenance.md)。批 2 与批 3 未做。
 
 本文与[Agent Profile 与请求类别注册表](2026-10-22-agent-request-kind-registry.md)的分工不变：它持有 agent 语义缝（`req_kind`/`chain_role` 的注册机制、保留未知值），本文不重写它，只要求批 1 的列集合与它的验收项不冲突。
 

@@ -1,6 +1,7 @@
 # Agent Note: 账本读数列的裁剪与异常标志外移
 
 Status: implemented
+Archived: 2026-10-24
 
 ## Problem
 
