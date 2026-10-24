@@ -39,17 +39,6 @@ export function insertPreparedLedgerTx(
   ).changes > 0;
 }
 
-export function writePreparedLedgerTx(
-  db: Database, ref: LedgerPhysicalRef, fields: LedgerFields, payloadJson: string,
-): boolean {
-  const assignments = LEDGER_COLUMNS.split(',').map(column => `${column}=?`).join(',');
-  return db.run(
-    `UPDATE raw_ledger SET ${assignments}
-     WHERE source_kind='file' AND file_generation=? AND byte_offset=?`,
-    [...ledgerColumns(fields, payloadJson), ref.generation, ref.offset],
-  ).changes > 0;
-}
-
 function routeColumns(route: RouteFields, payloadJson: string): (string | number | null)[] {
   return [
     route.routeId, route.timeMs, route.day, route.agent, route.session, route.conv, route.folder,
@@ -78,22 +67,6 @@ export function upsertPreparedRouteTx(db: Database, route: RouteFields, payloadJ
        mapping_version=excluded.mapping_version,privacy_version=excluded.privacy_version`,
     routeColumns(route, payloadJson),
   );
-}
-
-/**
- * 只改既有 raw route 行：不 INSERT、不碰 request_evidence、不调用 redact。
- * 迁移批次复用同一列清单，不复制 SQL。
- */
-export function writePreparedRouteTx(
-  db: Database, routeId: number, route: RouteFields, payloadJson: string,
-): boolean {
-  const assignments = ROUTE_COLUMNS.split(',').filter(column => column !== 'route_id')
-    .map(column => `${column}=?`).join(',');
-  const values = routeColumns(route, payloadJson).slice(1);
-  return db.run(
-    `UPDATE raw_route SET ${assignments} WHERE route_id=?`,
-    [...values, routeId],
-  ).changes > 0;
 }
 
 /**
