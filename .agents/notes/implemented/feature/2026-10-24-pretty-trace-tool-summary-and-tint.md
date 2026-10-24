@@ -65,16 +65,14 @@ Status: implemented
 - `web/body-view.js` 新增 `toolTint(name)`：与 `partColor` 同属共享显示原语。映射 `tint-read / -edit / -write / -bash / -skill / -agent / -other` 七个色类；`index.html` 对应 `--tool-*` 七个色对（前景加背景，亮暗两套），背景沿用 `--k-*` 的 0.11–0.14 透明度模式。色相：Read 蓝、Edit 橙、Write 紫、Bash 红、Skill 黄、Agent 绿、其他青灰。
 - 不复用 `--p1..p6`：那是上下文组成条的固定槽位，两套语义不混。
 - 中栏应用位：调用行 chip 显示工具名、结果行按三级前缀，取代 `Tool call` / `Tool result` 文字小标（`row-kind` 类删除）。配对 result 沿用 call 的颜色，未配对用 `--tool-other`。
+- 右栏应用位：配对页 Call 与 Result 面板头（`bp-kind`）与正文页 `tool-chip.call`（工具往返折叠行、工具页列表）换用同款色类，配对页 Call 面板头的工具名不再在 `bp-meta` 重复；Result 面板头配对确认后显示工具名并沿用 call 色类，未确认保持中性 `Tool result`。
 - 角色标签 `User` / `Assistant` / `Tool` / `System` 的文案与配色不动。颜色只承载工具身份一个语义：正常态无装饰，异常才着色。
 
-### 失败异常态与悬停
+### 失败异常态、Edit 对照与悬停
 
-- 结果块 `is_error=true` 时中栏结果行整行给 warn 软色（`--warn-soft`），符合「异常才出现标签」的既有界面立场；正常行不新增状态元素。
+- 结果块 `is_error=true` 时中栏结果行整行给 warn 软色（`--warn-soft`），配对页 Result 面板整块同样给 warn 软色，符合「异常才出现标签」的既有界面立场；正常行与正常面板不新增状态元素。
+- 配对页 Call 面板对 Edit 调用把 `old_string` 与 `new_string` 各渲染成一个着色块（红绿 soft 背景、等宽字体，块上小标签写协议键名；空串不渲染），其余键维持缩进 JSON，原始参数 JSON 按调用身份折叠保留；非 Edit 或参数不可解析回退整段缩进 JSON。纯显示层。
 - 中栏行悬停给完整信息：调用行 title 放完整参数 JSON，结果行 title 放完整结果正文。
-
-## Deferred
-
-右栏两个应用位随后续提交交付，格式与色类已在本文定死：配对页 Call/Result 面板头（`bp-kind`）与正文页 `tool-chip.call` 换用同款色类、未配对面板用 `--tool-other`、`is_error=true` 的 Result 面板给 warn 软色；配对页对 Edit 调用把 `old_string` 与 `new_string` 各渲染成红绿 soft 对照块，其余键维持缩进 JSON，原始 JSON 折叠保留。
 
 ## Alternatives considered
 
@@ -98,4 +96,4 @@ Status: implemented
 
 ## Testing
 
-`bun test tests/trace-view.test.ts`（27 项）与 `bun run typecheck` 通过（2026-10-25）。覆盖：逐工具摘要断言（Read offset/limit 四种组合、Edit 含与不含 replace_all、Bash 有与无 description、Skill 有与无 args、协作与查询工具、非 JSON 参数回退原文、未知工具回退链、截断只作用参数段）；结果行三级前缀各有用例（缓存命中给摘要带箭头、缓存外只工具名、未配对中性 chip）；chip 色类映射（六核心工具、bash 小写、其他统一）；`is_error=true` 行带异常态类而正常行没有；调用行悬停放完整参数 JSON；参数文本含 HTML 字符仍转义（既有断言保持）。
+`bun test tests/trace-view.test.ts tests/trace-pair.test.ts tests/body-view.test.ts`（79 项）与 `bun run typecheck` 通过（2026-10-25）。覆盖：逐工具摘要断言（Read offset/limit 四种组合、Edit 含与不含 replace_all、Bash 有与无 description、Skill 有与无 args、协作与查询工具、非 JSON 参数回退原文、未知工具回退链、截断只作用参数段）；结果行三级前缀各有用例（缓存命中给摘要带箭头、缓存外只工具名、未配对中性 chip）；chip 色类映射（六核心工具、bash 小写、其他统一，配对面板头配对后与 call 同色）；`is_error=true` 的中栏行与 Result 面板带异常态类而正常态没有；Edit 对照块、其余键缩进 JSON 与原始 JSON 折叠键；调用行悬停放完整参数 JSON；参数文本含 HTML 字符仍转义（既有断言保持）。

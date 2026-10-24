@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { isErrorText, prettyJson, renderTracePair } from '../web/trace-pair.js';
+import { editCompareHtml, isErrorText, prettyJson, renderTracePair } from '../web/trace-pair.js';
 
 const TOKEN = 'r1-' + 'a'.repeat(64);
 
@@ -32,10 +32,13 @@ test('配对页两端同屏：Call 在上、Result 在下，身份是文本不�
     }),
     carrierLabel: '09',
   });
-  expect(html.indexOf('Tool call')).toBeLessThan(html.indexOf('Tool result'));
+  // 两端面板头都是工具名 chip：配对 result 沿用 call 的色类。
+  const callChip = html.indexOf('bp-kind tint-other">read_file</span>');
+  expect(callChip).toBeGreaterThanOrEqual(0);
+  expect(html.match(/bp-kind tint-other">read_file</g)?.length).toBe(2);
+  expect(html.indexOf('first result')).toBeGreaterThan(callChip);
   // 两端同一套 pre.raw 缩进样式；调用参数按格式化 JSON 显示。
   expect(html).toContain('&quot;path&quot;: &quot;a.txt&quot;');
-  expect(html).toContain('first result');
   // 身份行：调用方与承载请求都以文本出现。
   expect(html).toContain('请求 03');
   expect(html).toContain('请求 09');
@@ -43,6 +46,22 @@ test('配对页两端同屏：Call 在上、Result 在下，身份是文本不�
   // 就地阅读：不出现跳转类按钮属性。
   expect(html).not.toContain('data-result-owner');
   expect(html).not.toContain('data-locate');
+});
+
+test('面板头色类映射：核心工具各自色类，未确认配对保持中性 Tool result', () => {
+  const read = renderTracePair({
+    owner: 7, ownerLabel: '07', call: callOf({ name: 'Read', inputText: '{"file_path":"a.txt"}' }),
+    pair: pairOf('resolved', { result_req: 9, result_ord: 2 }),
+    reading: readingOf('available', { content: 'x' }), carrierLabel: '09',
+  });
+  expect(read.match(/bp-kind tint-read">Read</g)?.length).toBe(2);
+  // 未确认（pending/ambiguous/unpaired）不给结果正文也不借用 call 颜色。
+  const pending = renderTracePair({
+    owner: 7, ownerLabel: '07', call: callOf({ name: 'Read', inputText: '{"file_path":"a.txt"}' }),
+    pair: pairOf('pending'), reading: null, carrierLabel: null,
+  });
+  expect(pending).toContain('bp-kind tint-other">Tool result</span>');
+  expect(pending).toContain('bp-kind tint-read">Read</span>');
 });
 
 test('未读取给待读取与读取入口；失败保留重试；未确认不给正文与读取入口', () => {
@@ -101,9 +120,39 @@ test('is_error 三态分开，resolved 不写成成功', () => {
     reading: readingOf('available', { content: 'x', is_error: isError }), carrierLabel: '09',
   });
   expect(of(false)).toContain('上游未标记错误');
+  expect(of(false)).not.toContain('pair-error');
   expect(of(true)).toContain('工具执行失败');
+  // is_error=true 的 Result 面板整块 warn 软色。
+  expect(of(true)).toContain('body-panel pair-error');
   expect(of(null)).toContain('未报告');
   expect(isErrorText(null)).toContain('未报告');
+});
+
+test('Edit 调用渲染红绿对照块，其余键维持缩进 JSON，原始 JSON 折叠保留', () => {
+  const html = renderTracePair({
+    owner: 7, ownerLabel: '07',
+    call: callOf({ name: 'Edit', inputText: JSON.stringify({ file_path: 'src/a.ts', old_string: 'a\nb', new_string: 'x', replace_all: true }) }),
+    pair: pairOf('resolved', { result_req: 9, result_ord: 2 }),
+    reading: readingOf('available', { content: 'done' }), carrierLabel: '09',
+  });
+  expect(html).toContain('edit-block old');
+  expect(html).toContain('edit-block new');
+  expect(html).toContain('>old_string</span>');
+  expect(html).toContain('>new_string</span>');
+  // 其余键维持缩进 JSON。
+  expect(html).toContain('&quot;file_path&quot;: &quot;src/a.ts&quot;');
+  expect(html).toContain('&quot;replace_all&quot;: true');
+  // 原始参数 JSON 折叠保留，键按 owner + 调用序号稳定。
+  expect(html).toContain('data-fold="edit:7:1"');
+  expect(html).toContain('原始参数 JSON');
+  // 非 Edit 与不可解析参数回退整段缩进 JSON。
+  const plain = renderTracePair({
+    owner: 7, ownerLabel: '07', call: callOf(), pair: pairOf('resolved', { result_req: 9 }),
+    reading: readingOf('available', { content: 'x' }), carrierLabel: '09',
+  });
+  expect(plain).not.toContain('edit-block');
+  expect(editCompareHtml('Edit', 'not json', 'k')).toBeNull();
+  expect(editCompareHtml('Read', '{"file_path":"a"}', 'k')).toBeNull();
 });
 
 test('正文与工具名转义；非 JSON 参数按原文展示', () => {

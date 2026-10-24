@@ -1,11 +1,12 @@
 // @ts-check
-import { esc } from './body-view.js';
+import { esc, toolTint } from './body-view.js';
 
 /**
  * 工具配对页：一次调用的两端在右栏同屏就地阅读，Call 在上、Result 在下，
  * 默认同时展开。纯字符串拼接，不碰 DOM、不发请求；读取与失效由 app 装配。
  * 视觉与交互边界：复用正文详情的 body-panel/pre.raw 组件语言，不分左右栏；
  * 两端身份与承载请求只以文本显示，不提供跳转到别处阅读的按钮。
+ * 面板头用与中栏同款的工具色类 chip（配对 result 沿用 call 的颜色，未配对中性）。
  */
 
 /**
@@ -56,6 +57,32 @@ export function prettyJson(inputText) {
 }
 
 /**
+ * Edit 调用的对照渲染：old_string 与 new_string 各成一个红绿 soft 着色块（空串不渲染），
+ * 其余键维持缩进 JSON，原始参数 JSON 折叠保留。非 Edit 或参数不可解析返回 null。
+ * @param {string} name @param {string} inputText @param {string} foldKey
+ * @returns {string | null}
+ */
+export function editCompareHtml(name, inputText, foldKey) {
+  if (name !== 'Edit') return null;
+  let args = null;
+  try { args = JSON.parse(inputText); } catch { return null; }
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return null;
+  const record = /** @type {Record<string, unknown>} */ (args);
+  const oldS = typeof record.old_string === 'string' && record.old_string !== '' ? record.old_string : null;
+  const newS = typeof record.new_string === 'string' && record.new_string !== '' ? record.new_string : null;
+  if (oldS === null && newS === null) return null;
+  const rest = { ...record };
+  delete rest.old_string;
+  delete rest.new_string;
+  const restHtml = Object.keys(rest).length > 0
+    ? `<pre class="raw" tabindex="0">${esc(JSON.stringify(rest, null, 2) ?? '')}</pre>` : '';
+  const block = (/** @type {string} */ cls, /** @type {string} */ label, /** @type {string | null} */ text) =>
+    text === null ? '' : `<div class="edit-block ${cls}"><span class="edit-tag">${esc(label)}</span><pre class="raw" tabindex="0">${esc(text)}</pre></div>`;
+  const fold = `<details class="rail-fold sub" data-fold="${esc(foldKey)}"><summary>原始参数 JSON</summary><div class="fold-body"><pre class="raw" tabindex="0">${esc(prettyJson(inputText))}</pre></div></details>`;
+  return `${restHtml}${block('old', 'old_string', oldS)}${block('new', 'new_string', newS)}${fold}`;
+}
+
+/**
  * 配对页主体。关联与正文加载分立；未确认关联不显示结果正文，
  * 读取失败保留重试，两端默认展开，身份只作文本。
  * @param {{
@@ -78,13 +105,17 @@ export function renderTracePair(input) {
     ? input.carrierLabel ?? `请求 ${pair.result_req}` : null;
   const status = `<div class="detail-label">关联 ${esc(pairStateText(pairState))} · 正文加载 ${esc(loadStateText(loadState))}${
     carrier !== null ? ` · 结果承载 ${esc(carrier)}` : ''}</div>`;
+  const callName = input.call.name || '未命名工具';
+  const compare = editCompareHtml(input.call.name, input.call.inputText, `edit:${input.owner}:${input.call.ord}`);
+  const callBody = compare !== null ? compare
+    : `<pre class="raw" tabindex="0">${esc(prettyJson(input.call.inputText))}</pre>`;
   const callPanel = `<div class="body-panel">
     <div class="bp-head">
-      <span class="kind assistant bp-kind">Tool call</span>
+      <span class="kind bp-kind ${toolTint(input.call.name)}">${esc(callName)}</span>
       <span class="bp-path">${esc(input.call.path ?? 'reply')}</span>
     </div>
-    <div class="bp-meta"><span>请求 ${esc(input.ownerLabel)} · 调用 #${input.call.ord}</span><span>·</span><span>${esc(input.call.name)}</span></div>
-    <pre class="raw" tabindex="0">${esc(prettyJson(input.call.inputText))}</pre>
+    <div class="bp-meta"><span>请求 ${esc(input.ownerLabel)} · 调用 #${input.call.ord}</span></div>
+    ${callBody}
     <p class="rail-note">调用参数按原文保存，与结果正文同一套缩进样式；配对已确认只说明关联成立，不代表工具执行成功。</p>
   </div>`;
   /** @type {string} */
@@ -121,9 +152,13 @@ export function renderTracePair(input) {
     carrier !== null ? `请求 ${esc(carrier)}` : '',
     pair !== null && pair.result_ord !== null ? `messages[${pair.result_ord}]` : '',
   ].filter(Boolean).join('<span>·</span>');
-  const resultPanel = `<div class="body-panel">
+  // 配对确认后面板头沿用 call 的工具色类；未确认保持中性。is_error=true 给整块 warn 软色。
+  const resolved = pairState === 'resolved';
+  const errorTint = reading !== null && reading.state === 'available' && reading.is_error === true
+    ? ' pair-error' : '';
+  const resultPanel = `<div class="body-panel${errorTint}">
     <div class="bp-head">
-      <span class="kind tool bp-kind">Tool result</span>
+      <span class="kind bp-kind ${resolved ? toolTint(input.call.name) : 'tint-other'}">${esc(resolved ? callName : 'Tool result')}</span>
       <span class="bp-path">${esc(resultPath ?? '未定位')}</span>
     </div>
     ${metaBits !== '' ? `<div class="bp-meta">${metaBits}</div>` : ''}
