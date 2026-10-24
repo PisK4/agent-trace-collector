@@ -12,13 +12,13 @@ Status: implemented
 
 将原型确认的交互迁入生产页面，继续以请求作为身份和计量单位，由前端把可信新增输入与实际回复转换为阅读步骤。保留生产的输入解释、能力提取、状态说明、用量与路由展示；原型的静态数据、独立服务和上下文集合比较不进入生产。
 
-读取层按实施计划（Task 1–8）交付：查询整套选择派生来源（发布代优先、同步旧列回退，判据与派生内核的 `groupCurrentSql` 一致）；最近窗口与向前分页（older 游标编码页最早行）；请求阅读版本 token（`r1-` + 64 位十六进制，条件正文 409 校验）与按调用位置读取工具结果（`owner/tools/:ord/result`，路径白名单、六状态）；读取协调独立为 `web/reader-store.js`（区间缓存、inflight 去重、固定 4 并发、409 整笔作废、迟到响应双守卫），步骤投影独立为 `web/trace-view.js` 纯函数，`app.js` 只做装配。右栏读数页的排序与默认折叠后经[读数条与「无则不显」收敛](../../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)重排，以该篇为准。工具四页（概览/参数/结果/Schema）只用 owner+callOrd 定位。侧栏折叠、详情栏拖动与键盘调宽（280..640、中栏保底 320）、双击恢复、Session ID 复制与剪贴板拒绝降级均为原生控制，宽度与折叠状态只存内存。
+读取层按实施计划（Task 1–8）交付：查询整套选择派生来源（发布代优先、同步旧列回退，判据与派生内核的 `groupCurrentSql` 一致）；最近窗口与向前分页（older 游标编码页最早行）；请求阅读版本 token（`r1-` + 64 位十六进制，条件正文 409 校验）与按调用位置读取工具结果（`owner/tools/:ord/result`，路径白名单、六状态）；读取协调独立为 `web/reader-store.js`（区间缓存、inflight 去重、固定 4 并发、409 整笔作废、迟到响应双守卫），步骤投影独立为 `web/trace-view.js` 纯函数，`app.js` 只做装配。右栏读数页的排序与默认折叠后经[读数条与「无则不显」收敛](../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)重排，以该篇为准。工具四页（概览/参数/结果/Schema）只用 owner+callOrd 定位。侧栏折叠、详情栏拖动与键盘调宽（280..640、中栏保底 320）、双击恢复、Session ID 复制与剪贴板拒绝降级均为原生控制，宽度与折叠状态只存内存。
 
 实现范围、接口与任务验收以[实施计划](../../../../docs/superpowers/plans/2026-10-23-single-timeline-production-reader.md)为准；接口与读取机制的现行契约写入[架构设计](../../../../docs/architecture-design.md)。
 
-本决定补充[单一轨迹原型](../../feature/2026-10-23-single-timeline-prototype.md)、[本机读取原型](../../feature/2026-10-23-local-trace-prototype-reader.md)和[右栏原型](../../feature/2026-10-23-prototype-request-context-rail.md)，它们继续拥有原型范围及验证限制。生产实施后部分取代[固定账本行](../../feature/2026-10-21-ledger-fixed-row-and-type-tags.md)和[读数裁剪修复](../../bug-fix/2026-10-21-ledger-readings-overflow.md)的布局选择；防止读数内部裁剪的验收仍有效。[服务端输入解释](../../feature/2026-10-22-server-side-input-interpretation.md)的语义与能力归属保持有效。
+本决定补充[单一轨迹原型](../feature/2026-10-23-single-timeline-prototype.md)、[本机读取原型](../feature/2026-10-23-local-trace-prototype-reader.md)和[右栏原型](../feature/2026-10-23-prototype-request-context-rail.md)，它们继续拥有原型范围及验证限制。生产实施后部分取代[固定账本行](../feature/2026-10-21-ledger-fixed-row-and-type-tags.md)和[读数裁剪修复](../bug-fix/2026-10-21-ledger-readings-overflow.md)的布局选择；防止读数内部裁剪的验收仍有效。[服务端输入解释](../feature/2026-10-22-server-side-input-interpretation.md)的语义与能力归属保持有效。
 
-[阅读角色与步骤定位提案](../../proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)修正了角色、System、选择与缓存缺口，并把本决定按请求组高亮的呈现改为单步骤高亮；本决定的请求归属、有界读取与容量限制继续有效。
+[阅读角色与步骤定位修复](../../implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)修正了角色、System、选择与缓存缺口，并把本决定按请求组高亮的呈现改为单步骤高亮；本决定的请求归属、有界读取与容量限制继续有效。
 
 ## Alternatives considered
 
