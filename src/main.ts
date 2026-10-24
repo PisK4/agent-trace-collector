@@ -8,7 +8,7 @@ import type { Store } from './store';
 import { readBatch, readRouteFiles } from './sources/files';
 import { ingestLedger, resumePausedLedger } from './reconcile';
 import {
-  committedRouteFingerprints, ingestDecodedRouteFile, observeSourceOffset, readFileCursor,
+  ingestDecodedRouteFile, observeSourceOffset, readFileCursor, readRouteCursors,
 } from './reconcile';
 import { probeMagpie, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
@@ -136,12 +136,9 @@ export async function startCollector(
   });
 
   const routeTick = guard('route', async () => {
-    // 每轮只读一次已提交指纹：命中就不解压，也不重复 ingest。
-    const cursors = committedRouteFingerprints(store);
-    const files = await readRouteFiles(
-      config.routingDir,
-      (name, fingerprint) => cursors.get(name) === fingerprint,
-    );
+    // 每轮只读一次游标：`.gz` 命中指纹就跳过解压，`.jsonl` 从已提交偏移继续。
+    const cursors = readRouteCursors(store);
+    const files = await readRouteFiles(config.routingDir, cursors);
     metrics.route.record({
       files: files.length,
       decoded: files.filter(file => file.state === 'decoded').length,

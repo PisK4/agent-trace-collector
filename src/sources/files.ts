@@ -26,8 +26,26 @@ export type FileBatch = {
   issues: FileIssue[];
 };
 
-/** 路由文件的三态：解压成功、指纹已提交所以未变、读取或解压失败。 */
+/** 路由文件的三态：读到新内容、没有新内容、读取或解压失败。 */
 export type RouteState = 'decoded' | 'unchanged' | 'error';
+
+/**
+ * 一个路由来源的游标。
+ *
+ * `.jsonl` 用文件身份 + 已提交偏移 + 冻结的头部基线增量读取；`.gz` 用整份
+ * 字节的 `fingerprint` 识别，偏移对它没有意义。
+ */
+export type RouteCursor = {
+  sourceKind: 'route_file' | 'route_gz';
+  generation: string;
+  committedOff: number;
+  observedOff: number;
+  seenSize: number;
+  headLen: number;
+  headHash: string | null;
+  rewriteEpoch: number;
+  fingerprint: string | null;
+};
 
 export type RouteFile = {
   name: string;
@@ -36,10 +54,12 @@ export type RouteFile = {
   state: RouteState;
   lines: string[];
   error: string | null;
+  /** 本轮要写回的游标；`unchanged` 与 `error` 为 null。 */
+  cursor: RouteCursor | null;
+  /** 本批行在文件中的起始字节，用于让坏行引用键跨批次唯一。 */
+  startOff: number;
+  issues: FileIssue[];
 };
-
-/** 指纹是否已被提交过。命中就跳过解压，调用方不因此推进 cursor。 */
-export type RouteKnown = (name: string, fingerprint: string) => boolean;
 
 const MAX_LINES = 128;
 const BATCH_BYTES = 8 * 1024 * 1024;
@@ -176,7 +196,36 @@ export async function readBatch(path: string, cursor: FileCursor | null): Promis
   }
 }
 
-export async function readRouteFiles(dir: string, known: RouteKnown = () => false): Promise<RouteFile[]> {
+function fileCursorOf(cursor: RouteCursor | undefined): FileCursor | null {
+  if (cursor === undefined || cursor.sourceKind !== 'route_file') return null;
+  return {
+    generation: cursor.generation,
+    rewriteEpoch: cursor.rewriteEpoch,
+    committedOff: cursor.committedOff,
+    seenSize: cursor.seenSize,
+    headLen: cursor.headLen,
+    headHash: cursor.headHash,
+  };
+}
+
+function routeCursorOf(batch: FileBatch): RouteCursor {
+  return {
+    sourceKind: 'route_file',
+    generation: batch.generation,
+    committedOff: batch.committedOff,
+    observedOff: batch.observedOff,
+    seenSize: batch.seenSize,
+    headLen: batch.headLen,
+    headHash: batch.headHash,
+    rewriteEpoch: batch.rewriteEpoch,
+    fingerprint: null,
+  };
+}
+
+export async function readRouteFiles(
+  dir: string,
+  cursors: Map<string, RouteCursor> = new Map(),
+): Promise<RouteFile[]> {
   const names = readdirSync(dir)
     .filter(name => /^\d{4}-\d{2}-\d{2}\.jsonl(?:\.gz)?$/.test(name))
     .sort();
@@ -184,18 +233,57 @@ export async function readRouteFiles(dir: string, known: RouteKnown = () => fals
   for (const name of names) {
     const path = join(dir, name);
     const kind = name.endsWith('.gz') ? 'gz' as const : 'jsonl' as const;
+    if (kind === 'jsonl') {
+      // 当日文件持续追加：走账本同一套行读取器，只消费已经写完的完整行。
+      const previous = fileCursorOf(cursors.get(name));
+      let batch: FileBatch;
+      try {
+        if (!statSync(path).isFile()) continue;
+        batch = await readBatch(path, previous);
+      } catch {
+        files.push({
+          name, fingerprint: '', kind, state: 'error', lines: [], error: 'route_file_unreadable',
+          cursor: null, startOff: 0, issues: [],
+        });
+        continue;
+      }
+      const startOff = previous !== null && batch.generation === previous.generation
+        ? previous.committedOff
+        : 0;
+      if (batch.lines.length === 0 && batch.issues.length === 0) {
+        files.push({
+          name, fingerprint: '', kind, state: 'unchanged', lines: [], error: null,
+          cursor: null, startOff, issues: [],
+        });
+        continue;
+      }
+      files.push({
+        name, fingerprint: '', kind, state: 'decoded',
+        lines: batch.lines.map(line => line.text), error: null,
+        cursor: routeCursorOf(batch), startOff, issues: batch.issues,
+      });
+      continue;
+    }
     let bytes: Buffer;
     try {
       if (!statSync(path).isFile()) continue;
       bytes = readFileSync(path);
     } catch {
-      files.push({ name, fingerprint: '', kind, state: 'error', lines: [], error: 'route_file_unreadable' });
+      files.push({
+        name, fingerprint: '', kind, state: 'error', lines: [], error: 'route_file_unreadable',
+        cursor: null, startOff: 0, issues: [],
+      });
       continue;
     }
     // 指纹先于解压：同一份字节只解一次，替换检测也以这次读取的快照为准。
     const fingerprint = createHash('sha256').update(bytes).digest('hex');
-    if (known(name, fingerprint)) {
-      files.push({ name, fingerprint, kind, state: 'unchanged', lines: [], error: null });
+    const previous = cursors.get(name);
+    if (previous !== undefined && previous.sourceKind === 'route_gz'
+      && previous.fingerprint === fingerprint) {
+      files.push({
+        name, fingerprint, kind, state: 'unchanged', lines: [], error: null,
+        cursor: null, startOff: 0, issues: [],
+      });
       continue;
     }
     let text: string;
@@ -207,18 +295,24 @@ export async function readRouteFiles(dir: string, known: RouteKnown = () => fals
       // 读取成功但解压失败：指纹照留，调用方据此不推进 cursor，下一轮同指纹重试。
       const code = (error as NodeJS.ErrnoException).code;
       files.push({
-        name,
-        fingerprint,
-        kind,
-        state: 'error',
-        lines: [],
-        error: code === 'ERR_BUFFER_TOO_LARGE' ? 'route_gzip_limit' : 'route_gzip_invalid',
+        name, fingerprint, kind, state: 'error', lines: [], error:
+          code === 'ERR_BUFFER_TOO_LARGE' ? 'route_gzip_limit' : 'route_gzip_invalid',
+        cursor: null, startOff: 0, issues: [],
       });
       continue;
     }
     const lines = text.split('\n');
     if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-    files.push({ name, fingerprint, kind, state: 'decoded', lines, error: null });
+    const committed = lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
+    files.push({
+      name, fingerprint, kind, state: 'decoded', lines, error: null,
+      cursor: {
+        sourceKind: 'route_gz', generation: fingerprint, committedOff: committed,
+        observedOff: committed, seenSize: bytes.length, headLen: 0, headHash: null,
+        rewriteEpoch: 0, fingerprint,
+      },
+      startOff: 0, issues: [],
+    });
   }
   return files;
 }
