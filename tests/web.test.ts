@@ -72,24 +72,24 @@ function factsHtml(structureHtml: string) {
     capabilitiesHtml: '<details class="rail-fold" data-fold="cap:tools"><summary>工具清单</summary></details>',
     structureHtml,
     replyHtml: '<details class="rail-fold" data-fold="reply:1" open><summary>本次回复</summary></details>',
-    promptHtml: '<details class="rail-fold" data-fold="prompt:1"><summary>上下文组成</summary></details>',
+    usageHtml: '<details class="rail-fold" data-fold="prompt:1" open><summary>用量与上下文</summary></details>',
     completenessHtml: '<section class="rail-section"><h3>身份完整性</h3></section>',
   });
 }
 
-test('读数页按回复→结构→能力→上下文→身份完整排序；用量与计时在头部读数条，不进读数页', () => {
+test('读数页按回复→结构→能力→用量与上下文→身份完整排序；计时与用量在末位折叠行，头部只留身份行', () => {
   const html = factsHtml(structureFoldHtml({
     reqId: 1, row: factsRow, meta: { total: 45 }, entries: [],
     structure: emptyStructure, delta: new Set<number>(), relation: '会话首笔',
   }));
   expect(html.indexOf('本次回复')).toBeLessThan(html.indexOf('请求结构'));
   expect(html.indexOf('请求结构')).toBeLessThan(html.indexOf('工具清单'));
-  expect(html.indexOf('工具清单')).toBeLessThan(html.indexOf('上下文组成'));
-  expect(html.indexOf('上下文组成')).toBeLessThan(html.indexOf('身份完整性'));
-  expect(html).not.toContain('用量');
+  expect(html.indexOf('工具清单')).toBeLessThan(html.indexOf('用量与上下文'));
+  expect(html.indexOf('用量与上下文')).toBeLessThan(html.indexOf('身份完整性'));
   expect(html).not.toContain('时间构成');
-  // 回复默认展开；结构与能力默认折叠。
+  // 回复与用量折叠行默认展开；结构与能力默认折叠。
   expect(html).toContain('<details class="rail-fold" data-fold="reply:1" open>');
+  expect(html).toContain('<details class="rail-fold" data-fold="prompt:1" open>');
 });
 
 test('结构折叠：total=45、ords=[] 时有数量没有消息；正文回收不给加载按钮', () => {

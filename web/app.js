@@ -122,15 +122,15 @@ export function replyCompleteness(row, view) {
 }
 
 /**
- * 右栏读数页：本次回复 → 请求结构 → 能力清单 → 上下文组成 → 身份完整性（异常时）。
- * 用量与计时在头部读数条，不进入读数页；区块缺的跳过，不重排也不补位。
- * @param {{replyHtml: string, structureHtml: string, capabilitiesHtml: string, promptHtml: string, completenessHtml: string}} parts
+ * 右栏读数页：本次回复 → 请求结构 → 能力清单 → 用量与上下文 → 身份完整性（异常时）。
+ * 计时与用量在末位折叠行，头部只留身份行；区块缺的跳过，不重排也不补位。
+ * @param {{replyHtml: string, structureHtml: string, capabilitiesHtml: string, usageHtml: string, completenessHtml: string}} parts
  * @returns {string}
  */
 export function railFactsHtml(parts) {
   return [
     parts.replyHtml, parts.structureHtml, parts.capabilitiesHtml,
-    parts.promptHtml, parts.completenessHtml,
+    parts.usageHtml, parts.completenessHtml,
   ].filter(html => html !== '').join('');
 }
 
@@ -778,38 +778,45 @@ if (typeof document !== 'undefined') {
   }
 
   /* ---------------- 右栏 ---------------- */
-  /** 模型只在这里显示一次：优先实际服务模型，未关联账本时回退请求模型。 @param {RequestRow} r */
+  /** 模型只在头部身份行显示一次：优先实际服务模型，未关联账本时回退请求模型。 @param {RequestRow} r */
   function canonicalModel(r) {
     return r.model_served ?? r.model_requested;
   }
 
+  /** 费用按 6 位有效数字渲染，去掉上游浮点尾差（账本存原始 float）。 @param {number} v */
+  function fmtCost(v) {
+    return String(Number(v.toPrecision(6)));
+  }
+
   /**
-   * 顶部读数条：模型与计时一行、用量一行，所有页签常驻。
+   * 计时与用量读数：「用量与上下文」折叠行与窗口外请求共用。
+   * 速度分母用「总 − 首字」，与同一行显示的两个数字自洽；缺首字才退回账本 flow_ms（存在 1ms 这类退化值）。
    * 口径解释放每个数字的 title；数值缺位显示「—」，不当作 0；整行全缺时整行不渲染。
    * @param {RequestRow} r @param {RequestDetail | null} [detail]
+   * @returns {{timeRow: string, usageRow: string, headline: string}}
    */
-  function usageStrip(r, detail = currentDetail()) {
+  function ledgerParts(r, detail = currentDetail()) {
     const ttft = detail?.ttft_ms ?? r.ttft_ms;
     const ms = detail?.ms ?? r.ms;
-    const flow = detail?.flow_ms ?? r.flow_ms
-      ?? (ms !== null && ttft !== null ? Math.max(0, ms - ttft) : null);
+    const flow = ttft !== null && ms !== null ? Math.max(0, ms - ttft) : (detail?.flow_ms ?? r.flow_ms);
     const speed = flow && r.out_tok ? Math.round(r.out_tok / (flow / 1000)) : null;
     const firstText = detail?.first_text_ms ?? null;
-    const model = canonicalModel(r);
+    /** @param {string} t */
+    const lbl = (t) => `<span class="lbl">${t}</span>`;
     const timeParts = [
-      model !== null ? `<span class="strip-model" title="实际服务模型（model_served；未关联账本时为请求模型）">${esc(model)}</span>` : '',
-      ttft !== null ? `<span title="TTFT：到第一个内容">首字 ${(ttft / 1000).toFixed(2)}s</span>` : '',
-      ms !== null ? `<span title="从请求到回复结束">总 ${(ms / 1000).toFixed(2)}s</span>` : '',
-      speed !== null && speed > 0 ? `<span title="输出 token ÷ 生成耗时">${speed} tok/s</span>` : '',
-      firstText != null ? `<span title="第一个文本块到达的时刻">首个文本 ${(firstText / 1000).toFixed(2)}s</span>` : '',
+      ttft !== null ? `<span title="TTFT：到第一个内容">${lbl('首字')} ${(ttft / 1000).toFixed(2)}s</span>` : '',
+      ms !== null ? `<span title="从请求到回复结束">${lbl('总')} ${(ms / 1000).toFixed(2)}s</span>` : '',
+      speed !== null && speed > 0 ? `<span title="输出 token ÷（总 − 首字）">${n(speed)} tok/s</span>` : '',
+      firstText != null ? `<span title="第一个文本块到达的时刻">${lbl('首个文本')} ${(firstText / 1000).toFixed(2)}s</span>` : '',
     ].filter(Boolean);
     /** @param {string} label @param {string | null} v @param {string} tip */
     const slot = (label, v, tip) =>
-      `<span title="${esc(tip)}">${label} ${v === null ? '<i class="miss">—</i>' : esc(v)}</span>`;
+      `<span title="${esc(tip)}">${lbl(label)} ${v === null ? '<i class="miss">—</i>' : esc(v)}</span>`;
     /** @param {string} label @param {number | null} v @param {string} tip */
     const num = (label, v, tip) => slot(label, v === null ? null : n(v), tip);
     const anyUsage = r.in_tok !== null || r.out_tok !== null || r.cache_read !== null || r.cache_write !== null;
     const usageParts = [];
+    let headline = '';
     if (anyUsage) {
       const total = (r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0);
       const hit = r.cache_read !== null && total > 0 ? Math.round(r.cache_read / total * 100) : null;
@@ -818,16 +825,28 @@ if (typeof document !== 'undefined') {
         num('出', r.out_tok, '输出 token'),
         num('缓读', r.cache_read, '缓存读取 token'),
         num('缓写', r.cache_write, '缓存写入 token'),
-        num('共', total, '提示总量 = 入 + 缓读 + 缓写'),
       );
       if (hit !== null) usageParts.push(slot('命中', `${hit}%`, '缓存命中 = 缓读 ÷ 提示总量，展示比例，不是计费口径'));
-      if (r.cost_state === 'priced') usageParts.push(slot('费用', `$${r.cost}`, '费用（上游报告）'));
+      if (r.cost_state === 'priced' && r.cost !== null) usageParts.push(slot('费用', `$${fmtCost(r.cost)}`, '费用（上游报告）'));
       if (r.cost_state === 'zero') usageParts.push(slot('费用', '$0', '费用（上游报告）'));
+      headline = [
+        ms !== null ? `总 ${(ms / 1000).toFixed(2)}s` : '',
+        r.out_tok !== null ? `出 ${n(r.out_tok)}` : '',
+        hit !== null ? `命中 ${hit}%` : '',
+      ].filter(Boolean).join(' · ');
     }
-    return `<div class="rail-strip">
-      ${timeParts.length > 0 ? `<div class="strip-row">${timeParts.join('<span class="sep">·</span>')}</div>` : ''}
-      ${usageParts.length > 0 ? `<div class="strip-row">${usageParts.join('<span class="sep">·</span>')}</div>` : ''}
-    </div>`;
+    return {
+      timeRow: timeParts.length > 0 ? `<div class="strip-row">${timeParts.join('<span class="sep">·</span>')}</div>` : '',
+      usageRow: usageParts.length > 0 ? `<div class="strip-row">${usageParts.join('<span class="sep">·</span>')}</div>` : '',
+      headline,
+    };
+  }
+
+  /** 折叠行外复用（窗口外请求）：两行读数合成一块，全缺时整块不渲染。 @param {RequestRow} r @param {RequestDetail | null} [detail] */
+  function ledgerRowsHtml(r, detail = null) {
+    const p = ledgerParts(r, detail);
+    const html = p.timeRow + p.usageRow;
+    return html === '' ? '' : `<div class="rail-strip">${html}</div>`;
   }
 
   /** 标题只渲染内容标题；model_time 兜底标题不再显示（模型与时间已在读数条里）。 @param {RequestRow} r */
@@ -844,11 +863,12 @@ if (typeof document !== 'undefined') {
       }
       return '<div class="rail-id">未选择请求</div>';
     }
+    const model = canonicalModel(r);
     return `<div class="rail-id"><span>req ${r.req_id}</span><span class="muted">·</span><span>${esc(dayTime(r.started_ms))}</span>
       ${r.agent === null ? '' : `<span class="muted">·</span><span>${esc(agentLabel(r.agent))}</span>`}
+      ${model !== null ? `<span class="muted">·</span><span class="strip-model" title="实际服务模型（model_served；未关联账本时为请求模型）">${esc(model)}</span>` : ''}
       <span class="grow"></span>${statusDot(r)}${statusChip(r)}</div>
       ${contentTitle(r)}
-      ${usageStrip(r)}
       <div class="rail-tabs" role="tablist">
         <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">读数</button>
         <button role="tab" data-rail="body" aria-pressed="${state.railTab === 'body'}">正文</button>
@@ -858,40 +878,38 @@ if (typeof document !== 'undefined') {
   }
 
   /**
-   * 上下文组成折叠行。摘要行给出占比前三类；完整条形图与口径在展开后。
+   * 用量与上下文折叠行（读数页末位，默认展开）：计时与用量两行读数 + 构成单条柱。
+   * 摘要行给计时与用量的关键三项；构成状态提示只在非常态出现（旧结果/缺失/本地估计）。
    * @param {RequestRow} r
    */
-  function promptFoldHtml(r) {
+  function usageFoldHtml(r) {
     const d = currentDetail();
     const p = d?.prompt ?? null;
     const list = /** @type {{kind: string, tokens: number}[]} */ (p?.parts ?? []);
-    const foldOpen = `<details class="rail-fold" data-fold="prompt:${r.req_id}">`;
-    if (p === null || (p.tokens === null && list.length === 0)) {
-      return `${foldOpen}<summary>上下文组成</summary>
-        <div class="fold-body"><p class="rail-note">${esc(p?.note ?? '没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。')}</p></div></details>`;
+    const hasComp = p !== null && !(p.tokens === null && list.length === 0);
+    const ledger = ledgerParts(r);
+    const hint = p === null || (p.state === 'recomputed' && p.counted === true) ? '' : [
+      p.state === 'recomputed' ? '' : ({ recomputed: '当前结果', retained: '旧结果', missing: '缺失' }[p.state] ?? p.state),
+      p.counted === true ? '' : '本地估计',
+    ].filter(Boolean).join(' · ');
+    let comp = '';
+    if (hasComp) {
+      const sum = list.reduce((a, x) => a + x.tokens, 0) || 1;
+      const bar = `<div class="comp-bar" aria-hidden="true">${list.filter(x => x.tokens > 0).map(x => `<i style="flex:${x.tokens / sum};background:${partColor(String(x.kind))}"></i>`).join('')}</div>`;
+      const legend = `<div class="comp-legend">${[...list].sort((a, b) => b.tokens - a.tokens).map(x => `<span class="name"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></span>
+        <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>`;
+      const total = `<div class="u-total" style="margin-top:8px"><span>提示总量 <b>${p.tokens === null ? '<i class="miss">—</i>' : n(p.tokens)}</b></span><span>${p.window ? `窗口 <b>${kk(p.window)}</b>` : '窗口未知'}</span>${p.ratio !== null ? `<span>占用 <b>${(p.ratio * 100).toFixed(1)}%</b></span>` : ''}</div>`;
+      comp = `${bar}${legend}${total}`;
     }
-    const sum = list.reduce((a, x) => a + x.tokens, 0) || 1;
-    const top = [...list].sort((a, b) => b.tokens - a.tokens).slice(0, 3)
-      .map(x => `${partLabel(String(x.kind))} ${Math.round(x.tokens / sum * 100)}%`).join(' · ');
-    /** @type {Record<string,string>} */
-    const stateText = { recomputed: '当前结果', retained: '旧结果', missing: '缺失' };
-    const hint = `${stateText[p.state] ?? p.state} · ${p.counted === true ? '总量已校准' : '本地估计'}`;
-    const usage = p.ratio !== null
-      ? `<div class="usage-bar" aria-hidden="true"><i style="width:${Math.min(100, p.ratio * 100)}%;background:var(--accent)"></i></div>`
-      : '';
-    const ratioText = p.ratio !== null
-      ? `<span>占用 <b>${(p.ratio * 100).toFixed(1)}%</b></span>`
-      : '';
-    const note = p.note ?? (p.window === null ? '没有可用分母，不显示占用率。' : '分类是估计分配，不是逐类精确计数。');
-    return `${foldOpen}
-      <summary>上下文组成${top !== '' ? `<span class="fold-count">${esc(top)}</span>` : ''}</summary>
+    const note = hasComp
+      ? (p?.note ?? (p?.window === null ? '没有可用分母，不显示占用率。' : '分类是估计分配，不是逐类精确计数。'))
+      : (p?.note ?? '没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。');
+    return `<details class="rail-fold" data-fold="prompt:${r.req_id}" open>
+      <summary>用量与上下文${ledger.headline !== '' ? `<span class="fold-count">${esc(ledger.headline)}</span>` : ''}</summary>
       <div class="fold-body">
-        <p class="note">${esc(hint)}</p>
-        ${usage}
-        <div class="comp-bar" aria-hidden="true">${list.filter(x => x.tokens > 0).map(x => `<i style="flex:${x.tokens / sum};background:${partColor(String(x.kind))}"></i>`).join('')}</div>
-        <div class="comp-legend">${[...list].sort((a, b) => b.tokens - a.tokens).map(x => `<span class="name"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></span>
-          <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>
-        <div class="u-total" style="margin-top:8px"><span>提示总量 <b>${n(p.tokens ?? 0)}</b></span><span>${p.window ? `窗口 <b>${kk(p.window)}</b>` : '窗口未知'}</span>${ratioText}</div>
+        ${ledger.timeRow}${ledger.usageRow}
+        ${hint !== '' ? `<p class="note">${esc(hint)}</p>` : ''}
+        ${comp}
         <p class="rail-note">${esc(note)}</p>
       </div>
     </details>`;
@@ -917,8 +935,8 @@ if (typeof document !== 'undefined') {
   }
 
   /**
-   * 读数页：本次回复（默认展开）→ 请求结构 → 能力清单 → 上下文组成 → 身份完整性（异常时）。
-   * 用量与计时在头部读数条；能力与结构默认折叠；正常态不带状态标签（异常才出现）。
+   * 读数页：本次回复（默认展开）→ 请求结构 → 能力清单 → 用量与上下文（默认展开，末位）→ 身份完整性（异常时）。
+   * 能力与结构默认折叠；正常态不带状态标签（异常才出现）。
    */
   function railFacts() {
     const r = currentRow();
@@ -964,7 +982,7 @@ if (typeof document !== 'undefined') {
     return railFactsHtml({
       replyHtml, structureHtml,
       capabilitiesHtml: meta !== null ? renderCapabilities(meta) : '',
-      promptHtml: promptFoldHtml(r),
+      usageHtml: usageFoldHtml(r),
       completenessHtml: completenessSection(r),
     });
   }
@@ -1045,7 +1063,7 @@ if (typeof document !== 'undefined') {
     if (r === null) {
       if (state.offPageReqId !== null) {
         const read = reads.get(state.offPageReqId) ?? null;
-        return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口（可能在更早的历史里）。这里只读了它的详情；需要完整轨迹请从顶部加载更早记录，不自动扫描全部历史。</p></section>${read?.detail ? usageStrip(read.detail, null) : ''}`;
+        return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口（可能在更早的历史里）。这里只读了它的详情；需要完整轨迹请从顶部加载更早记录，不自动扫描全部历史。</p></section>${read?.detail ? ledgerRowsHtml(read.detail) : ''}`;
       }
       return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
     }

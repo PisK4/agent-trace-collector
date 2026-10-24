@@ -18,6 +18,8 @@ Status: implemented
 
 本决定补充[单一轨迹原型](../../feature/2026-10-23-single-timeline-prototype.md)、[本机读取原型](../../feature/2026-10-23-local-trace-prototype-reader.md)和[右栏原型](../../feature/2026-10-23-prototype-request-context-rail.md)，它们继续拥有原型范围及验证限制。生产实施后部分取代[固定账本行](../../feature/2026-10-21-ledger-fixed-row-and-type-tags.md)和[读数裁剪修复](../../bug-fix/2026-10-21-ledger-readings-overflow.md)的布局选择；防止读数内部裁剪的验收仍有效。[服务端输入解释](../../feature/2026-10-22-server-side-input-interpretation.md)的语义与能力归属保持有效。
 
+[阅读角色与步骤定位提案](../../proposed/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)拟修正角色、System、选择与缓存缺口，并将已有单 choice 工具定位限制落实到后端抽取；本决定的请求归属、有界读取与容量限制继续有效。
+
 ## Alternatives considered
 
 **直接把原型 HTML 替换生产首页。** 原型具有合成对象、全局结果查找、演示路由和独立数据库窗口查询，缺少生产缓存失效与读取一致性保证。只迁移交互和可复用的纯渲染函数。
@@ -36,7 +38,7 @@ Status: implemented
 
 ## Consequences
 
-生产只保留步骤轨迹：用户消息、助手文本与工具调用各占紧凑一行（实测 36px 整行一致），点击后在右栏阅读详情；同请求步骤共享当前载入窗口的数字序号；中栏只呈现类型与内容，行内附加信息与右栏默认宽度的取舍见[中栏内容与右栏详情](../simplification/2026-10-24-trace-content-only-and-wide-rail.md)。初始窗口按视口高度取 30–100 笔，顶部追加历史用锚点补偿保持阅读位置（实测残差约 3px，来自多帧重绘的 scrollTop 亚像素取整，记录在案）。右栏四页签：读数/正文/工具/路由，结构 40+5 分页、消息全文可返回列表；同请求同页签重绘保持滚动与展开（稳定键恢复），页签切换与换请求归顶。读数页的排序、默认折叠与用量展示以[读数条与「无则不显」收敛](../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)为准。
+生产只保留步骤轨迹：用户消息、助手文本与工具调用各占紧凑一行（实测 36px 整行一致），点击后在右栏阅读详情；同请求步骤共享当前载入窗口的数字序号；中栏只呈现类型与内容，行内附加信息与右栏默认宽度的取舍见[中栏内容与右栏详情](../simplification/2026-10-24-trace-content-only-and-wide-rail.md)。初始窗口按视口高度取 30–100 笔，顶部追加历史用锚点补偿保持阅读位置（实测残差约 3px，来自多帧重绘的 scrollTop 亚像素取整，记录在案）。右栏四页签：读数/正文/工具/路由，结构 40+5 分页、消息全文可返回列表；同请求同页签重绘保持滚动与展开（稳定键恢复），页签切换与换请求归顶。读数页的排序与默认折叠以[读数条与「无则不显」收敛](../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)为准，用量展示以[计时与用量并入「用量与上下文」折叠行](../simplification/2026-10-24-usage-ledger-fold.md)为准。
 
 已知边界：读取版本只在后续读取或显式刷新时发现失效，不提供实时一致性；首笔可信增量可能含大量历史，按片推进并显示未读范围，单条消息或完整回复的字节量不受分页限制；多 choices 的 Chat 调用位置尚不能用一个 ord 唯一表达，本轮只把单 choice 回复作为确定工具定位来源，多 choice 保留原始对象并明确限制；锚点补偿残差约 3px；未取得用户可读性确认的项只记为待确认。
 
