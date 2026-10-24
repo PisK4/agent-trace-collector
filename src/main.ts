@@ -6,9 +6,8 @@ import { createCapacityMetrics } from './capacity';
 import { intervalOf } from './config';
 import type { Store } from './store';
 import { readBatch, readRouteFiles } from './sources/files';
-import { ingestLedger, resumePausedLedger } from './reconcile';
 import {
-  ingestDecodedRouteFile, observeSourceOffset, readFileCursor, readRouteCursors,
+  ingestSource, observeSourceOffset, readFileCursor, readRouteCursors, resumePausedLedger,
 } from './reconcile';
 import { probeMagpie, saveProbe, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
@@ -33,13 +32,8 @@ const RETENTION_INTERVAL_MS = 30_000;
 const RAW_PRUNE_INTERVAL_MS = 60 * 60_000;
 
 /**
- * 切片模式的豁免通道，只给容量实验台用。
- *
- * 读模型还没迁移到发布指针：`queries.ts` 只读 `request` 派生列，而切片模式
- * 不写这些列——旧值若恰好满足当前判据，读侧会把过期的派生结果当现行结论。
- * 在读模型改经 `published_generation` 取结果之前，启用路径在这里拒绝切片
- * 模式；容量实验台读数走 `readEffectiveGroup`，不受这个缺口影响，显式声明
- * 身份后可以起切片采集器。
+ * 切片只供显式容量实验使用。查询已接入发布代，生产启用仍等待长组容量收敛、
+ * 实际切片发布后的完整读侧验收与算法切换核验；错误码保留 slice_read_unmigrated。
  */
 export type CollectorOptions = { capacityExperiment?: boolean };
 
@@ -117,7 +111,7 @@ export async function startCollector(
 
   const ledgerTick = guard('ledger', async () => {
     const cursor = readFileCursor(store, 'ledger', 'usage.jsonl');
-    const batch = await readBatch(config.ledgerPath, cursor);
+    const batch = await readBatch(config.ledgerPath, cursor, { kind: 'ledger', name: 'usage.jsonl' });
     // 暂停时只记缺口、不动游标：下一轮仍从 committed_off 重读，证据不会漏。
     const admission = gate.check(batch.observedOff - batch.committedOff);
     if (admission.mode === 'paused' && batch.observedOff > batch.committedOff) {
@@ -125,12 +119,12 @@ export async function startCollector(
       return;
     }
     if (batch.lines.length === 0 && batch.issues.length === 0 && batch.committedOff === (cursor?.committedOff ?? 0)) {
-      if (cursor !== null && batch.observedOff !== cursor.committedOff) {
+      if (cursor !== null && batch.generation === cursor.generation && batch.observedOff > cursor.observedOff) {
         observeSourceOffset(store, 'ledger', 'usage.jsonl', batch.observedOff);
       }
       return;
     }
-    const result = ingestLedger(store, 'usage.jsonl', batch, Date.now(), salt);
+    const result = ingestSource(store, batch, salt, Date.now());
     if (result.purged_skip > 0) process.stderr.write(`purged_skip:${result.purged_skip}\n`);
   });
 
@@ -149,7 +143,7 @@ export async function startCollector(
         if (file.state === 'error') process.stderr.write(`route_file_error:${file.name}:${file.error}\n`);
         continue;
       }
-      ingestDecodedRouteFile(store, file, salt, Date.now());
+      ingestSource(store, file, salt, Date.now());
     }
   });
 

@@ -41,6 +41,8 @@
 
 ### Task 2: 具名提交与空闲判断
 
+已提交 `9f36f50`。
+
 合成验收：`bun scripts/perf-work-units.ts`，120 s 稳态写事务增量 0；100 组共 800 笔积压期间 hook 80/80 成功，投递最大 21.9 ms，derive job 最大 68.1 ms，具名派生事务最大 3.45 ms。实验第一次因临时根前缀错误被隔离断言拒绝，修正后重跑成功；不将第一次启动失败算作性能采样。真实采集器仅只读采样，writer 累计最大 1911.5 ms，未发布或重启。
 
 **Files:** 修改 `src/store.ts`、`src/capacity.ts`、`src/main.ts`、`src/hook.ts`、`src/retention.ts`、`src/sources/magpie.ts`、对应窄测试、架构设计；新增提交单元 Agent Note。
@@ -61,15 +63,15 @@
 
 **Interfaces:** `ingestSource` 接收统一来源读取结果；追加 jsonl 与封口 gzip 各自适配到同一游标与提交流程。证据映射的事务内函数由既有公共入口复用。
 
-- [ ] 添加路由批仅一个事务与坏行、记录、游标共同回滚的用例，失败后同内容可重读重记。
-- [ ] 添加路由与账本共享的同代同 rewrite_epoch 偏移不回退用例，换代或重写可归零。
-- [ ] 统一 cursor upsert，删除 `fileCursorOf` / `routeCursorOf`，保留 gzip 整体指纹和半行不推进。
-- [ ] 将在线 ledger/route 调度接入统一摄入入口；暂停与缺口逻辑保持可恢复。
-- [ ] 执行 `bun test tests/files.test.ts tests/reconcile.test.ts`，按调用方影响补跑 hook、retention 与 maintenance 测试；不重复已通过且未再改变的检查。
-- [ ] 更新文档与 note，执行门禁并提交 `refactor(ingest): commit source evidence and cursors atomically`。
+- [x] 添加路由批仅一个事务与坏行、记录、游标共同回滚的用例，失败后同内容可重读重记。
+- [x] 添加路由与账本共享的同代同 rewrite_epoch 偏移不回退用例，换代或重写可归零。
+- [x] 统一 cursor upsert，删除 `fileCursorOf` / `routeCursorOf`，保留 gzip 整体指纹和半行不推进。
+- [x] 将在线 ledger/route 调度接入统一摄入入口；暂停与缺口逻辑保持可恢复。账本显式保留 `usage.jsonl` 身份，稳定半行不重复写观察位置。
+- [x] 执行 `bun test tests/files.test.ts tests/reconcile.test.ts`，按调用方影响补跑 hook、retention 与 maintenance 测试；不重复已通过且未再改变的检查。在线接线后 main、reconcile、retention、maintenance 共 81 项测试通过。
+- [x] 更新文档与 note，执行门禁并提交 `refactor(ingest): commit source evidence and cursors atomically`。C3 读取与摄入测试在子任务中 49 项通过，扩展旧调用方后 98 项通过；父线程在线集成后 81 项测试与全库 typecheck 通过，Agent Note 与差异格式检查通过。
 
 ### 收尾
 
 - [x] 检查 C1.5：查询、会话标题与 reading token 已有发布代读取，`tests/queries.test.ts`、`tests/reading.test.ts`、`tests/http.test.ts` 通过；交接对迁移范围的描述过时。生产开关继续冻结，后续核验实际切片发布后的读侧完整性、算法切换和长组容量，不能仅据读代测试解除启用限制。C4 保持冻结，右栏虽已出现新提交，后续阅读修复仍在进行。
-- [ ] 对实现差异进行独立审查；只修证据可确认的行为问题。
+- [x] 对实现差异进行独立审查；C1/C2 未发现可复现的正确性缺陷。审查方补跑工作单元与存储 20 项回归，并用临时合成探针核验未发布切片的重开恢复与 Bun 嵌套事务行为；C3 由父线程核对记录语义、调用方和最终接线。
 - [ ] 运行剩余必要检查，核对阶段提交与用户 WIP，提供按仓库分类的英文 Git commit message。

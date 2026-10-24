@@ -310,26 +310,30 @@ API 来源没有物理身份。分页位置会随新记录插入而整体位移�
 
 ```sql
 CREATE TABLE source_cursor (
-  source_kind     TEXT NOT NULL,       -- ledger / route_file
-  source_name     TEXT NOT NULL,       -- usage.jsonl / 2026-10-20.jsonl
-  file_generation TEXT NOT NULL,       -- dev+inode+birthtime，不含 size
-  committed_off   INTEGER NOT NULL,    -- 已提交的完整行末尾字节
-  seen_size       INTEGER,             -- 上一轮看到的长度，只用于判断截断
-  head_len        INTEGER,             -- 首次见到时冻结的基线长度，不随后续增长变
-  head_hash       TEXT,                -- 该长度的哈希，用于识别 inode 复用
-  fingerprint     TEXT,                -- 压缩文件的整体摘要，重新识别用
+  source_kind     TEXT NOT NULL,       -- ledger / route_file / route_gz
+  source_name     TEXT NOT NULL,       -- usage.jsonl / 日期.jsonl / 日期.jsonl.gz
+  file_generation TEXT NOT NULL,       -- jsonl: dev+inode+birthtime+epoch；gz: 整份指纹
+  committed_off   INTEGER NOT NULL,    -- jsonl: 已提交完整行末尾；gz: 解压后长度
+  seen_size       INTEGER,             -- 读取时的文件长度，不参与物理身份
+  head_len        INTEGER,             -- jsonl 当前代际冻结的头部基线长度
+  head_hash       TEXT,                -- 头部基线哈希，用于识别原地重写
+  fingerprint     TEXT,                -- gz 整份压缩字节的 SHA-256
   last_ok_ms      INTEGER NOT NULL,
+  rewrite_epoch   INTEGER NOT NULL DEFAULT 0,
+  observed_off    INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (source_kind, source_name)
 );
 ```
 
-`seen_size` 只参与判断，不进 `file_generation`；`head_len` 写入之后不再改。
+`seen_size` 不进 `file_generation`；`head_len` 在当前代际首次提交完整行时冻结，换代后重新建立。账本在库内固定标识为 `ledger / usage.jsonl`，不随配置里的文件名改变。
 
-证据与游标同事务。一批行入库、游标前移、`last_ok_ms` 更新在一个事务内提交。中途崩溃时游标回到上批末尾，重读的那几行靠物理记录身份去重，不产生重复。
+读取结果统一为 `SourceRead`，包含 `SourceCursor` 的来源身份与全部游标字段，以及文件形态、状态、行与坏行。在线账本与路由共用 `ingestSource`：追加 jsonl 与封口 gzip 按不同引用基址记录路由坏行，记录内核分别保留账本物理身份与路由 `route_id` 规则。坏行、证据、游标与 `last_ok_ms` 在一个具名事务内提交（`ledger` 或 `route`）。失败时共同回滚，游标回到上批末尾，下轮重新读取并记账，证据按既有身份幂等。
+
+同一 `file_generation` 和 `rewrite_epoch` 下，摄入游标的 `committed_off` 与 `observed_off` 都取新旧最大值；换代或重写时允许归零。只观察到新的半行字节时仅推进 `observed_off`，相同观察位置不重复提交。暂停只记录缺口和观察位置，保留已提交位置以便恢复重读。
 
 半行不前移游标。只读到换行符为止，末行没有换行就等下一轮，不猜也不补。盘上文件末尾本来就没有换行时，这个行为会一直等到该行写完，这是对的。
 
-代际变了就重新识别，长度变了只判断截断。每轮读取前重算 `file_generation`，与游标里记录的不一致说明文件被替换，把该来源的 `committed_off` 归零、换上新代际再重读，已有的行按物理身份幂等跳过。dev 与 inode 都没变时补一次头部基线比对，按 `head_len` 重算哈希，与 `head_hash` 不一致说明 inode 被复用或者文件被原地重写，同样算新代际。文件身份不变而 `seen_size` 小于 `committed_off`，说明文件被截断重写，把偏移归零重读，但代际保持不变，旧行的身份仍然有效，不会重复入库。
+文件身份使用 dev、inode 与 birthtime，代际附带 `rewrite_epoch`。每轮读取比对文件身份；不同则从偏移 0 重读。身份不变时，实际长度小于 `committed_off` 或按冻结 `head_len` 重算的哈希不符，表示截断或原地重写，递增 epoch、清空头部基线并从偏移 0 重读，避免新内容复用旧物理记录身份。
 
 历史日整体重写是常态。`pruneHistory` 会读整个 `.jsonl`、以 gzip 成员形式追加到 `.gz`、再临时文件替换整个 `.gz`（`internal/gateway/history.go:110-160`）。所以 `.gz` 的偏移没有意义，同一天可能在 `.jsonl` 与 `.gz` 里各存一份。做法是 `.gz` 按 `fingerprint` 识别，整体摘要没变就跳过，变了就全量解压重读、靠 `route_id` upsert 去重；`.jsonl` 按游标增量读取，只消费新增的完整行。同一天两个文件都在时两份都读，重复的 `route_id` 收敛成一份。
 
@@ -337,7 +341,7 @@ CREATE TABLE source_cursor (
 
 路由入口每轮按三态记账：`decoded`（读到新内容）、`unchanged`（没有新内容）、`error`（`route_file_unreadable` 读取失败、`route_gzip_invalid` 解压失败、`route_gzip_limit` 输出超过 512 MiB）。`.jsonl` 走与账本相同的行读取器：文件身份 + `committed_off` + 冻结的头部基线，每批最多 128 行或 8 MiB，只消费已经写完的完整行，末行没有换行就等下一轮；`.gz` 用整份字节的 SHA-256 作 `fingerprint`，摘要没变就跳过，变了就整份解压重读。只有 `decoded` 且 ingest 成功才推进游标：`.jsonl` 推进身份与偏移，`.gz` 推进 `fingerprint`；`unchanged` 与 `error` 都不推进，`error` 下一轮重试。单行超过 64 MiB 的完整行只记 `route_line_too_large` 与位置，游标照常推进。
 
-账本与路由的 `.jsonl` 共用 `readBatch`，只差解析函数；`.gz` 例外，按整份指纹识别，不做偏移。
+账本与路由的 `.jsonl` 共用 `readBatch`，读取结果本身可直接作为下一轮游标；`.gz` 同样返回 `SourceRead`，以整份指纹识别，偏移仅记录解压后长度，不用于定位。
 
 ### `handed_on` 与 `kind` 是两件事
 
@@ -911,7 +915,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 `effective_request` 让一次查询拿到同一代的快照：结果行全部来自 `published_generation` 指向的那一代，不会一半来自旧代、一半来自新代。
 
-读模型还没有迁到这组视图上：`queries.ts` 仍只读 `request` 派生列，`effective_request` 与 `readEffectiveGroup` 只有测试与容量实验在读。切片模式下 `request` 旧派生列不再被写，库里的旧值若恰好满足当前判据，会被读侧当成现行结论。所以在读模型改经 `published_generation` 取结果之前，生产启用路径拒绝切片模式：`startCollector` 见到 `deriveBudget` 即以 `slice_read_unmigrated` 拒绝启动，只有声明实验身份（`capacityExperiment`）的容量采集器能起切片进程。
+查询与 reading token 按 `published_generation` 选择发布代，具体读口径见[查询接口](#查询接口)；`effective_request` 与 `readEffectiveGroup` 主要供测试和容量实验使用。生产切片仍被冻结：`startCollector` 见到 `deriveBudget` 即以保留错误码 `slice_read_unmigrated` 拒绝启动，声明实验身份（`capacityExperiment`）的容量采集器可运行切片。发布代读取的合成测试不代表切片长组容量已收敛；生产启用还须验证实际切片发布后的完整读取与算法切换，并通过既有长组和速率门槛。
 
 发布是指针的原子切换，条件在切换前全部校验完：组修订与逐请求修订一致、每笔候选都有结果行、这一代覆盖了全部已知请求、暂存行与 WAL 增长都在预算内。任何一条不成立就丢弃整代（`derive_generation.state='discarded'`，队列行写 `last_error`），指针不动，旧代继续可读。丢弃不是"抛错回滚后的补救"，而是校验结论本身，与校验在同一个事务里提交。
 
