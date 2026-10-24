@@ -10,7 +10,7 @@ Status: implemented
 
 `Config` 增加可选的 `intervals`，只允许九个固定作业名，值必须是正安全整数；`intervalOf` 是唯一读取点，缺省返回调用处的现有常量，非法值抛 `invalid_capacity_interval`。生产 `loadConfig` 不设置该字段，容量子进程用对象字面量构造配置时注入。
 
-`guard` 在任务进入后开始计时，成功、抛错与停止中的任务都记一笔到 `CapacityMetrics.jobs`；`routeTick` 在 `readRouteFiles` 返回后记录文件数、按 `error` 分类的读取数，`unchanged` 暂记 0，等路由文件三态落地后再细分。
+`guard` 在任务进入后开始计时，成功、抛错与停止中的任务都记一笔到 `CapacityMetrics.jobs`；`routeTick` 在 `readRouteFiles` 返回后记录文件数，并按文件源的三态（`decoded` / `unchanged` / `error`）分别累加。
 
 ## Alternatives considered
 
@@ -25,7 +25,7 @@ Status: implemented
 - `Config` 多一个可选字段；`assertCapacityIsolation` 仍只比较三个来源路径，不检查间隔。
 - 作业计时包含 `await` 的 I/O 等待，不是纯 CPU 时间；长作业的最大值容易被文件读取放大。
 - 被防重入挡下的 tick 不计时，报告看到的是实际执行次数。
-- `route.unchanged` 在路由三态落地前恒为 0，不能据此判断去重效果。
+- `route.unchanged` 是这一轮真正跳过的文件数，不是"还没实现的占位"；它由文件读取器的指纹与偏移判定给出。
 
 ## Testing
 

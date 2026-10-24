@@ -41,7 +41,7 @@ Status: implemented
 
 **历史保留政策。** 任何后到的 invalid、absent、expired、partial、conflict、duplicate 都不清空旧列，只把该族 `current` 置 false 并写原因；`unprovable` 是唯一例外——顺序不可证时清空排序键与响应身份，因为留着它们等于声称知道顺序。
 
-`request.req_kind`、长期版本列与 `projection_meta` 不在这里写；kind、hook 与 nativeSession 只返回给调用方。长期落库归[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)。
+`request.req_kind`、长期版本列与 `projection_meta` 不在这里写；kind、hook 与 nativeSession 只返回给调用方。长期落库由[来源事实有界落盘](2026-10-22-bounded-source-facts-and-provenance.md)的 `source_facts_json` 与 `projection_meta_json` 承载。
 
 ## Decision：在线写入只经过同一个投影入口
 
@@ -55,9 +55,9 @@ Status: implemented
 
 **路由只挂证据与归属。** `applyRouteToRequest` 只登记 `request_evidence`、写会话归属与标题，然后调一次投影取 Prompt 族。Prompt 不再由 route 到达顺序决定，同一 route 先到还是后到得到相同列。
 
-**hook 不合成账本事实。** hook 请求插入时 `status`、`model_requested`、`model_served` 都是 NULL：`success` 是"这个 hook 观察到调用成功"，不是 HTTP 状态码；`model` 是 hook 侧看到的模型，不是 provider 侧账本读数。两者都留在 `raw_hook` 里，由 `HookProjection` 作为独立报告给出。`acceptHook` 与 `mergeHookInto` 末尾各调一次投影，合并时按目标已完整的证据重算，不迁移 hook 的 model 或 success。旧行里已经写进这两列的 hook 伪值由[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)的迁移处理。
+**hook 不合成账本事实。** hook 请求插入时 `status`、`model_requested`、`model_served` 都是 NULL：`success` 是"这个 hook 观察到调用成功"，不是 HTTP 状态码；`model` 是 hook 侧看到的模型，不是 provider 侧账本读数。两者都留在 `raw_hook` 里，由 `HookProjection` 作为独立报告给出。`acceptHook` 与 `mergeHookInto` 末尾各调一次投影，合并时按目标已完整的证据重算，不迁移 hook 的 model 或 success。旧结构里写进这两列的 hook 伪值随旧库一起删除，不做原地修复：v5 起没有跨结构迁移，见[旧库删除重建](2026-10-23-destructive-schema-replacement.md)。
 
-账号脱敏归一到同一形态：`account` 与 `providerAccount` 都是敏感键，都得到同一个 `credential` 占位符，所以同一个订阅身份在两个入口下不会看起来像两个人。`placeholder` 对已经是占位符的值原样返回，敏感键、请求头与普通字符串三处分支都调用它，重复脱敏不会把占位符再散列成另一个 digest。历史明文账号的修复与隐私变换版本由[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)交付。
+账号脱敏归一到同一形态：`account` 与 `providerAccount` 都是敏感键，都得到同一个 `credential` 占位符，所以同一个订阅身份在两个入口下不会看起来像两个人。`placeholder` 对已经是占位符的值原样返回，敏感键、请求头与普通字符串三处分支都调用它，重复脱敏不会把占位符再散列成另一个 digest。历史明文账号只在旧库里存在，随旧库一起丢弃；本仓库不提供逐行改写路径，可用的补救只有重建后按新规则重新采集。隐私变换版本记在 `privacy_version` 上，用来分辨一行是按哪版规则变换的，见[来源事实有界落盘](2026-10-22-bounded-source-facts-and-provenance.md)。
 
 ## Decision：读模型也按真实键名读取，读不到的键删掉
 
@@ -89,7 +89,7 @@ Status: implemented
 ## Consequences
 
 - `request.model_requested` 与 `request.own_cost` 从此可能真有值；此前它们恒为 NULL，任何"这两个字段没有数据"的判断都要重新核对。
-- 字段状态进到投影层的完整性判断，但仍不进数据库。要把它变成长期可读的事实，需要迁移批次，见[长期信息与显式重建计划](../../../../docs/superpowers/plans/2026-10-22-atc-durable-rebuild.md)。
+- 字段状态进到投影层的完整性判断，但不进结构化列；需要长期保留的部分走 `source_facts_json` 的有界集合，见[来源事实有界落盘](2026-10-22-bounded-source-facts-and-provenance.md)。
 - 旧账本里的 `own_cost` 不再被读取。若存在只写了旧键的来源，它的自报费用会表现为 `absent`，而不是一个可疑的数值。
 - 非法类型不再被静默吞掉成"没有值"，但也没有日志：状态字段是唯一出口，读它的人必须显式检查。
 - 投影不写库时读不到"这列是哪一版映射算出来的"：同一列里可能并存新事实与历史保留值，读者只能看 `families.*.current` 判断。

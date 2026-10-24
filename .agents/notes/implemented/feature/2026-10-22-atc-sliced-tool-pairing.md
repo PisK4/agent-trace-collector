@@ -1,4 +1,4 @@
-# Agent Note: 切片工具配对只写本代结果表，判定逐条复刻同步路径
+# Agent Note: 切片工具配对只写本代结果表，配对阶梯归共用内核
 
 Status: implemented
 
