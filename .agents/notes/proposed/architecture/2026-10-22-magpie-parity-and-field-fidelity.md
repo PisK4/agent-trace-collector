@@ -107,7 +107,7 @@ magpie 的 Agent 层里，`Field`/`Option` 表单模型（`internal/agent/agent.
 
 ### 批 3：direct 行另立提案
 
-direct 只能经 API 拿，且要以 `native_session` 作为软身份键才不会把同一个调用记两次——magpie 自己在配对上给了明确态度（`internal/usage/ledger.go:367-372` 的「ID 先行，其次 native session、等 token、2s 内」，以及 `calls_dsh.go`、`calls_workbuddy.go` 里明知会双计就**放弃配对**）。因此批 3 排在批 1 之后，第一版只做「读进来、不合并」的观测态，配对规则与取消配对的判据单独评审。
+direct 只能经 API 拿，且要以 `native_session` 作为软身份键才不会把同一个调用记两次——magpie 自己在配对上给了明确态度（`internal/usage/ledger.go:367-372` 的「ID 先行，其次 native session、等 token、2s 内」，以及 `calls_dsh.go`、`calls_workbuddy.go` 里明知会双计就**放弃配对**）。因此批 3 排在批 1 之后，第一版只做「读进来、不合并」的观测态，配对规则与取消配对的判据单独评审。批 3 最重的证据来自 zcode：30 天 6,365 次调用对 ATC 库里的 56 笔，量级与实测见[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)。
 
 ## 与现有记录的关系
 

@@ -2,7 +2,7 @@
 
 Status: proposed
 
-本提案作为 Agent 语义问题的输入材料保留；下一轮统筹范围与顺序见[架构演进方案 v2](../../../../docs/architecture-evolution-v2.md)，具体规则修正见[联合评审](../../../../docs/agent-request-kind-review.md)。本文尚未修订的 Interface、匹配门槛与迁移验收不直接作为执行依据。
+本提案作为 Agent 语义问题的输入材料保留；下一轮统筹范围与顺序见[架构演进方案 v2](../../../../docs/architecture-evolution-v2.md)，具体规则修正见[联合评审](../../../../docs/agent-request-kind-review.md)。本文尚未修订的 Interface、匹配门槛与迁移验收不直接作为执行依据。zcode 一家的实测形状、它需要的那条规则与验收见[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)。
 
 ## Problem
 
