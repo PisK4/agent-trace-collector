@@ -20,6 +20,8 @@ Status: implemented
 
 语义与判据本身不变：关系取值、根判据、配对阶梯、展示分支的每条规则与此前逐条一致；[切片等价](../feature/2026-10-22-atc-slice-equivalence.md)的逐行对照测试保留，[切片链角色](../feature/2026-10-22-atc-sliced-chain-roles.md)记录的根判据现在是内核的唯一实现。两个算法号（`GROUP_ALGORITHM` 与 `DERIVE_ALGORITHM`）保持分开：判定共用了，算法号仍区分结果是谁算的、写在哪张表。
 
+「哪些结果位置算本轮确定新增」的判据后续也收进内核（`confirmedDeltaOf`），见[派生层四片共享逻辑各归其位](2026-10-24-derive-layer-consolidation.md)。
+
 ## Alternatives considered
 
 **维持两份实现，靠 parity 测试对齐。** 测试只能发现已经发生的漂移，不能阻止漂移；每次判定改动仍然要求人工同步四处，而正确性最敏感的恰恰是这些判定。现状的两次漂移都走到「测试或验收发现问题、人工回补」这一步，成本已经付过。

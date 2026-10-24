@@ -3,18 +3,21 @@ import { statSync } from 'node:fs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type { Store } from './store';
 import { readBodyTx } from './body';
-import { queuePendingSql } from './derive-state';
+import {
+  normalizeTargetAlgorithmTx, purposePendingSql, queuePendingSql,
+} from './derive-state';
 import {
   anthropicReplyCalls, anthropicRequestResults, chainTrunk, chainTrunkRoot, commonPrefix,
-  flattenToolContent, initialPairState, pairOutcome, presentationDecision, settleRelation,
+  confirmedDeltaOf, flattenToolContent, initialPairState, pairOutcome, presentationDecision,
+  settleRelation,
 } from './derive-decision';
 import type { ResolvedTool } from './derive-decision';
 import type { DeriveBudget, SliceRuntime } from './config';
 import {
   compareLogicalOrder, compareTraversalOrder, fingerprintsOf, presentationPortsOf,
   replyInfoOf, uncertainOrderIds,
-} from './derive';
-import type { DeriveScope, LogicalRow } from './derive';
+} from './derive-read';
+import type { DeriveScope, LogicalRow } from './derive-read';
 
 /** 切片派生的算法号。与同步组的 `GROUP_ALGORITHM` 分开：两者算出的结果不能互相复用。 */
 export const DERIVE_ALGORITHM = 6;
@@ -527,16 +530,15 @@ function finishRoleWork(db: Database, generation: string, work: RoleWork): void 
   }
   db.run('UPDATE derive_generation SET role_scan_ord=? WHERE generation=?',
     [work.traversal_ord, generation]);
-  // 结果是否落在"确定新增"的 ord 上，只有这里知道：配对阶段据此决定把候选升成
-  // resolved 还是留在 pending。第一次（'first'）整笔都是新增；'confirmed' 只看增量
-  // 的 ord；关系未知、分支与排除用途都不构成"本轮新增"。
-  const confirmedAll = relation === 'first';
-  const deltaOrds = relation === 'confirmed' && delta !== null ? delta : [];
+  // 结果是否落在"确定新增"的 ord 上：first 整笔新增、confirmed 只看增量的
+  // 判据住在 derive-decision（confirmedDeltaOf），同步配对阶段走同一份。
+  // 关系未知、分支与排除用途都不构成"本轮新增"。
+  const confirmedDelta = confirmedDeltaOf(relation, delta);
   const rows = db.query<{ ord: number }, [string, number]>(`
     SELECT ord FROM derive_result_work WHERE generation=? AND req_id=?`)
     .all(generation, work.req_id);
   for (const row of rows) {
-    const confirmed = confirmedAll || deltaOrds.includes(row.ord) ? 1 : 0;
+    const confirmed = confirmedDelta.all || confirmedDelta.ords.includes(row.ord) ? 1 : 0;
     db.run('UPDATE derive_result_work SET confirmed=? WHERE generation=? AND req_id=? AND ord=?',
       [confirmed, generation, work.req_id, row.ord]);
   }
@@ -1248,17 +1250,15 @@ export function sliceGroupStep(store: Store, runtime: SliceRuntime,
     SELECT q.conv_key,q.actor,q.compute_generation FROM derive_queue q
     WHERE ${queuePendingSql('q')} AND (? IS NULL OR q.conv_key=?)
       AND NOT EXISTS (SELECT 1 FROM request r WHERE r.conv_key=q.conv_key AND r.actor=q.actor
-        AND r.actor_state='known' AND r.purpose_pending=1)
+        AND ${purposePendingSql('r')})
     ORDER BY q.last_claimed_ms IS NOT NULL,q.last_claimed_ms,q.dirty_since_ms,q.conv_key,q.actor
     LIMIT 1`).get(scope?.convKey ?? null, scope?.convKey ?? null);
   if (candidate === null) return idle();
-  // 认领前把队列行的目标算法归一到本模式的算法号：组变脏时写下的算法号是同步的，
-  // 直接认领会硬失败。只改未完成的行——clean 行有已发布产物，改号等于伪造它是
-  // 另一套算法算出来的。
+  // 认领前把队列行的目标算法归一到本模式的算法号。写入规则与同步认领共用
+  // （derive-state 的 normalizeTargetAlgorithmTx），算法号是参数：
+  // GROUP_ALGORITHM 与 DERIVE_ALGORITHM 各自保留，产物不能互相复用。
   store.write(db => {
-    db.run(`UPDATE derive_queue SET target_algorithm=? WHERE conv_key=? AND actor=?
-      AND ${queuePendingSql()} AND target_algorithm<>?`,
-    [DERIVE_ALGORITHM, candidate.conv_key, candidate.actor, DERIVE_ALGORITHM]);
+    normalizeTargetAlgorithmTx(db, candidate.conv_key, candidate.actor, DERIVE_ALGORITHM);
     db.run('UPDATE derive_queue SET last_claimed_ms=? WHERE conv_key=? AND actor=?',
       [now, candidate.conv_key, candidate.actor]);
   });

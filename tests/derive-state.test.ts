@@ -1,6 +1,31 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
-import { markGroupDirtyTx, markRequestGroupsTx, markRequestInputTx } from '../src/derive-state';
+import {
+  markGroupDirtyTx, markRequestGroupsTx, markRequestInputTx,
+  normalizeTargetAlgorithmTx, purposePendingSql,
+} from '../src/derive-state';
+
+test('用途门控片段：已知归属且待判定，别名可选', () => {
+  expect(purposePendingSql()).toBe("actor_state='known' AND purpose_pending=1");
+  expect(purposePendingSql('r')).toBe("r.actor_state='known' AND r.purpose_pending=1");
+});
+
+test('认领归一目标算法只改未完成行', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => markGroupDirtyTx(db, 'k', 'a', ''));
+    f.store.write(db => db.run('UPDATE derive_queue SET target_algorithm=1'));
+    f.store.write(db => normalizeTargetAlgorithmTx(db, 'k', 'a', 9));
+    expect(f.store.read.query('SELECT target_algorithm FROM derive_queue').get())
+      .toEqual({ target_algorithm: 9 });
+    // clean 行有已发布产物：再归一也不能改写它的算法出处。
+    f.store.write(db => db.run(
+      "UPDATE derive_queue SET state='clean',published_algorithm=1,target_algorithm=1"));
+    f.store.write(db => normalizeTargetAlgorithmTx(db, 'k', 'a', 9));
+    expect(f.store.read.query('SELECT target_algorithm FROM derive_queue').get())
+      .toEqual({ target_algorithm: 1 });
+  } finally { f.close(); }
+});
 
 test('组完成后再次触发不复用旧修订', () => {
   const f = fixture();
