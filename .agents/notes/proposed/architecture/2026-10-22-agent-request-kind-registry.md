@@ -2,29 +2,29 @@
 
 Status: proposed
 
-本提案作为 Agent 语义问题的输入材料保留；下一轮统筹范围与顺序见[架构演进方案 v2](../../../../docs/architecture-evolution-v2.md)，具体规则修正见[联合评审](../../../../docs/agent-request-kind-review.md)。本文尚未修订的 Interface、匹配门槛与迁移验收不直接作为执行依据。zcode 一家的实测形状、它需要的那条规则与验收见[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)。
+本提案作为 Agent 语义问题的输入材料保留。下一轮统筹范围与顺序见[架构演进方案 v2](../../../../docs/architecture-evolution-v2.md)，具体规则修正见[联合评审](../../../../docs/agent-request-kind-review.md)。本文尚未修订的 Interface、匹配门槛与迁移验收不直接作为执行依据。zcode 一家的实测形状、它需要的那条规则与验收见[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)。
 
 ## Problem
 
-ATC 要成为本机所有 agent 的唯一 trace 入口。它的记录单位是请求，阅读入口是会话：每一笔经过 magpie 的请求留一条记录，账本保存请求本身，派生字段再把请求组织成可读的会话。这个选择来自两个前身：AVA 自己判定会话归属，判不准；ATA 的事件账本要先还原成请求，才能知道模型当时看到了什么（[项目定位](../../../../docs/project-overview.md)）。本项目的回答是不再自己发明归属，直接用 magpie 已经输出的请求、agent 与 session，把事实记下来，视图从事实派生。
+ATC 要成为本机所有 agent 的唯一 trace 入口。它的记录单位是请求，阅读入口是会话。每一笔经过 magpie 的请求留一条记录，账本保存请求本身，派生字段再把请求组织成可读的会话。这个选择来自两个前身：AVA 自己判定会话归属，判不准；ATA 的事件账本要先还原成请求，才能知道模型当时看到了什么（[项目定位](../../../../docs/project-overview.md)）。本项目的回答是不再自己发明归属，直接用 magpie 已经输出的请求、agent 与 session，把事实记下来，视图从事实派生。
 
-因此账本有两层不能混：请求是事实，会话是派生视图。三路证据先收敛成同一条请求，派生字段在摄入时算好、证据到达时局部重算，查询与页面的设计前提是只消费派生结果（[架构设计](../../../../docs/architecture-design.md#派生字段)）。协议差异已经有自己的位置，`anthropic` 与 `chat` 的 wire shape 由 `src/protocols.ts` 的适配器转成统一字段，未实现的协议保存原对象并标 `unsupported`。Agent 身份则完全沿用 magpie 的标签，ATC 不解析 User-Agent，不维护 Agent 名单（[项目定位](../../../../docs/project-overview.md)）。
+因此账本有两层不能混：请求是事实，会话是派生视图。三路证据先收敛成同一条请求，派生字段在摄入时算好、证据到达时局部重算。查询与页面的设计前提是只消费派生结果（[架构设计](../../../../docs/architecture-design.md#派生字段)）。协议差异已经有自己的位置，`anthropic` 与 `chat` 的 wire shape 由 `src/protocols.ts` 的适配器转成统一字段，未实现的协议保存原对象并标 `unsupported`。Agent 身份则完全沿用 magpie 的标签，ATC 不解析 User-Agent，不维护 Agent 名单（[项目定位](../../../../docs/project-overview.md)）。
 
-缺的是夹在协议适配与派生之间的那一层：一笔请求对某个 agent 意味着什么。提案撰写时，派生管线只认识普通对话，以及硬编码的 Title Generator；页面又从 `reply_preview.startsWith('标题 · ')` 重新猜一次标题。这带来三个后果。
+缺的是夹在协议适配与派生之间的那一层：一笔请求对某个 agent 意味着什么。提案撰写时，派生管线只认识普通对话和硬编码的 Title Generator，页面又从 `reply_preview.startsWith('标题 · ')` 重新猜一次标题。这带来三个后果。
 
-- harness 的旁路请求没有地方声明，只能伪装成 chat。Claude Code 的 auto mode 分类器是当前样本：两条拼接消息、0 工具、回复 `<block>no`，被标成 `branch`，折叠行只显示 `<transcript>`。2026-10-21 23:46 的快照里，641 笔请求中有 120 笔 Stage 1、8 笔 Stage 2 分类器；样本会话 130 笔中有 42 笔。
-- 每加一种 agent 语义，要同时改 derive、查询层和页面；改漏一处，三处判断就会互相矛盾。查询层还会把未知 `req_kind` 折叠成 `chat`、未知 `chain_role` 折叠成 `main`，即使派生写出了新值，数据模型也表达不出来。这两处折叠现已按本节末尾的交付现状改为原样保留。
+- harness 的旁路请求没有地方声明，只能伪装成 chat。Claude Code 的 auto mode 分类器是当前样本：两条拼接消息、工具数为 0、回复 `<block>no`，被标成 `branch`，折叠行只显示 `<transcript>`。2026-10-21 23:46 的快照里，641 笔请求中有 120 笔 Stage 1、8 笔 Stage 2 分类器；样本会话 130 笔中有 42 笔。
+- 每加一种 agent 语义，要同时改 derive、查询层和页面。改漏一处，三处判断就会互相矛盾。查询层还会把未知 `req_kind` 折叠成 `chat`、未知 `chain_role` 折叠成 `main`，即使派生写出了新值，数据模型也表达不出来。这两处折叠现已按本节末尾的交付现状改为原样保留。
 - 页面从摘要字符串反推语义，显示结果与账本里的派生值可以不一致。标题请求已经出现这条裂缝，分类器只是让它变得明显。
 
-这不是一笔请求的显示问题，而是通用账本模型缺少一个存放 agent 语义的位置。多 agent 是 ATC 的前提：同一本账上会出现 Claude Code、OMP、Codex、Pi 等不同 harness，每个 harness 都可能在自己的主循环之外发标题、压缩摘要、权限分类、记忆提取这类旁路请求。Title Generator 与 auto mode 分类器已经在本机样本里实测到，其余类别是否出现取决于具体客户端；结构上的问题是同一个，通用派生管线不应该认识这些特称。
+这不是一笔请求的显示问题，而是通用账本模型缺少一个存放 agent 语义的位置。多 agent 是 ATC 的前提：同一本账上会出现 Claude Code、OMP、Codex、Pi 等不同 harness，每个 harness 都可能在自己的主循环之外发标题、压缩摘要、权限分类、记忆提取这类旁路请求。Title Generator 与 auto mode 分类器已经在本机样本里实测到，其余类别是否出现取决于具体客户端。结构上的问题是同一个，通用派生管线不应该认识这些特称。
 
-首版 tag 之前是补这个缝成本最低的时候。仓库的立场是地基优先于兼容，目录、命名与接口可以自由调整（[根 AGENTS.md](../../../../AGENTS.md)）。现在补，代价是一次 `derive_version` 升版与重跑；等 schema 与派生契约冻结后再补，代价是迁移与兼容路径。
+首版 tag 之前是补这个缝成本最低的时候。仓库的立场是地基优先于兼容，目录、命名与接口可以自由调整（[根 AGENTS.md](../../../../AGENTS.md)）。现在补，代价是一次 `derive_version` 升版与重跑。等 schema 与派生契约冻结后再补，代价是迁移与兼容路径。
 
 ## Proposal
 
-把 agent 语义从通用派生管线里移出去，做成一个显式的、静态的扩展缝。账本继续只认识请求、证据与派生；一笔请求属于标题生成还是权限分类，由 Agent Profile 挂载的 RequestKind 纯函数判定。分类器不是这个机制要新增的能力，它只是第一个只属于某个 agent 的类别；Title Generator 是共享类别，而且已经交付，先迁进注册表，机制因此有一条现成的回归基线。
+把 agent 语义从通用派生管线里移出去，做成一个显式的、静态的扩展缝。账本继续只认识请求、证据与派生。一笔请求属于标题生成还是权限分类，由 Agent Profile 挂载的 RequestKind 纯函数判定。分类器不是这个机制要新增的能力，它只是第一个只属于某个 agent 的类别。Title Generator 是共享类别，而且已经交付，先迁进注册表，机制因此有一条现成的回归基线。
 
-缝放在派生阶段，因为只有那里同时具备三个条件：agent 标签、回复形状与请求体已经收敛；同一笔请求只判定一次；判定结果能随 `derive_version` 重跑。放在 ingest 太早，agent 与账本证据可能还没到；放在查询或页面则会让每个消费者各自解释一遍，标题的现状已经证明这条路的代价。
+缝放在派生阶段，因为只有那里同时具备三个条件：agent 标签、回复形状与请求体已经收敛；同一笔请求只判定一次；判定结果能随 `derive_version` 重跑。把缝放在 ingest 太早，agent 与账本证据可能还没到；放在查询或页面则会让每个消费者各自解释一遍，标题的现状已经证明这条路的代价。
 
 三层各自负责一种变化：
 
@@ -101,7 +101,7 @@ const genericProfile = {
 };
 ```
 
-Title Generator 在 Claude Code 与 OMP 上都能识别，放共享集合；auto mode 分类器只属于 Claude Code，放 `claude` profile。共享类别只依赖协议与回复形状，不依赖 agent 特称；agent 特有类别只注册在对应 profile。agent 标签缺失或未知时走 generic，不用内容形状去猜 agent。
+Title Generator 在 Claude Code 与 OMP 上都能识别，放共享集合；auto mode 分类器只属于 Claude Code，放 `claude` profile。共享类别只依赖协议与回复形状，不依赖 agent 特称。agent 特有类别只注册在对应 profile。agent 标签缺失或未知时走 generic，不用内容形状去猜 agent。
 
 ## 边界：这不是什么
 
@@ -144,9 +144,9 @@ Title Generator 在 Claude Code 与 OMP 上都能识别，放共享集合；auto
 
 `assignChainRoles` 已经只处理 `req_kind='chat'`，新类别不会进入主链。`SESSION_TITLE_SQL` 也只取 `req_kind='chat'`，分类器不会污染会话标题。
 
-查询层必须保留未知值。`getRequest` 不能把未知 `req_kind` 折叠成 `chat`、未知 `chain_role` 折叠成 `main`；未知值原样返回，页面用通用样式兜底。正文不可读时，派生要保留已存的 `req_kind`，不能重新判成 chat。现有 Title 逻辑已经这样处理，新机制沿用。
+查询层必须保留未知值。`getRequest` 不能把未知 `req_kind` 折叠成 `chat`、未知 `chain_role` 折叠成 `main`，未知值要原样返回，页面用通用样式兜底。正文不可读时，派生要保留已存的 `req_kind`，不能重新判成 chat。现有 Title 逻辑已经这样处理，新机制沿用。
 
-`derive_version` 升版，按会话重跑派生。不需要 schema 迁移；现有 `scripts/backfill-fingerprint.ts` 的入队与 drain 模式可以复用。可选的 `req_kind_evidence TEXT` 用于记录分类依据，审计价值高，但不是第一版的必要条件。
+`derive_version` 升版，按会话重跑派生。不需要 schema 迁移，现有 `scripts/backfill-fingerprint.ts` 的入队与 drain 模式可以复用。可选的 `req_kind_evidence TEXT` 用于记录分类依据，审计价值高，但不是第一版的必要条件。
 
 ## 页面与序号
 
@@ -163,7 +163,7 @@ Title Generator 在 Claude Code 与 OMP 上都能识别，放共享集合；auto
 - `web/app.js` 里 `reply_preview.startsWith('标题 · ')` 的判断
 - `web/app.js` 把 `branch` 直接写成 `另起一支` 的文案，至少区分 `aux` 与真实分支
 
-账本里的 `Request N` 可以是全部请求的索引；会话视图的轮次只数主链请求，辅助行用 `辅助` 或 `A1` 标记。这样不会再出现 Request 10 是一笔分类器调用的误解。
+账本里的 `Request N` 可以是全部请求的索引。会话视图的轮次只数主链请求，辅助行用 `辅助` 或 `A1` 标记。这样不会再出现 Request 10 是一笔分类器调用的误解。
 
 ## 新增一个 RequestKind 的流程
 
@@ -178,9 +178,9 @@ Title Generator 在 Claude Code 与 OMP 上都能识别，放共享集合；auto
 
 ## 与现有记录的关系
 
-**交付现状。** 用途判定已交付，形状与本文不同：`req_kind` 当稳定 ID、旁路请求写 `chain_role='aux'`、未知值原样保留、正文不可读时保留已存 `req_kind`、标题请求单独写 `model_title`——这些都落地了；判据与依据记在 `purpose_*` 列上（`purpose_version`、`purpose_rule`、`purpose_signals`、`purpose_chain`、`purpose_pending`），不是本文的 `req_feature` 文档加 `req_kind_evidence` 列，见[请求用途与链](../../implemented/architecture/2026-10-22-request-purpose-and-chain.md)与[组发布前处理请求](../../implemented/architecture/2026-10-22-request-work-before-group-publish.md)。页面按 `purpose_chain` 与 `chain_role` 读：本文点名的 `isAuxTitleRequest` 与 `reply_preview.startsWith('标题 · ')` 已经不在，`web/app.js` 里 `prev_relation === 'branch'` 的文案仍在。未建的是注册表机制本身：没有 `src/features/<id>.ts` 的纯匹配器，也没有 Agent Profile 注册入口——新增一个类别仍要改派生代码，本文的「新增一个 RequestKind 的流程」尚未成立。
+**交付现状。** 用途判定已交付，形状与本文不同：`req_kind` 用作稳定 ID，旁路请求写 `chain_role='aux'`，未知值原样保留，正文不可读时保留已存 `req_kind`，标题请求单独写 `model_title`——这些都已落地。判据与依据记在 `purpose_*` 列上（`purpose_version`、`purpose_rule`、`purpose_signals`、`purpose_chain`、`purpose_pending`），不是本文设想的 `req_feature` 文档加 `req_kind_evidence` 列，见[请求用途与链](../../implemented/architecture/2026-10-22-request-purpose-and-chain.md)与[组发布前处理请求](../../implemented/architecture/2026-10-22-request-work-before-group-publish.md)。页面按 `purpose_chain` 与 `chain_role` 读：本文点名的 `isAuxTitleRequest` 与 `reply_preview.startsWith('标题 · ')` 已经不在，`web/app.js` 里 `prev_relation === 'branch'` 的文案仍在。未建的是注册表机制本身：没有 `src/features/<id>.ts` 的纯匹配器，也没有 Agent Profile 注册入口，新增一个类别仍要改派生代码，本文的「新增一个 RequestKind 的流程」尚未成立。
 
-**扩展缝的触发条件。** 当前没有第二个消费者：zcode 的实测结论是只有记忆维护轮一类需要新规则，输入壳与标题形状已被通用规则正确解释，因此[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)选择给它加一条用途规则，而不是建 Profile。注册表在满足下列任一条件之前不动工，避免为一个消费者预建框架：
+**扩展缝的触发条件。** 当前没有第二个消费者：zcode 的实测结论是只有记忆维护轮一类需要新规则，输入壳与标题形状已被通用规则正确解释，因此[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)选择给它加一条用途规则，没有建 Profile。注册表在满足下列任一条件之前不动工，避免为一个消费者预建框架：
 
 - 出现第二种 agent 特有类别，需要在同一处注册、或需要按 agent 门控同一类别的不同变体；
 - 新增类别的改动需要同时落在派生、查询与页面三处各写一遍；
@@ -188,7 +188,7 @@ Title Generator 在 Claude Code 与 OMP 上都能识别，放共享集合；auto
 
 在那之前，新类别按 zcode 那条路加在 `classifyPurpose` 的优先级档位里，并复用 `purpose_rule` 记录是哪条规则判的。
 
-这篇提案不取代 [Title Generator 与主链分离](../../implemented/feature/2026-10-21-title-generator-and-main-chain.md)。标题请求的识别与主链规则继续以那篇为准；这篇只把它的 `req_kind='title'`、`chain_role='aux'` 扩展成可注册的通用机制。
+这篇提案不取代 [Title Generator 与主链分离](../../implemented/feature/2026-10-21-title-generator-and-main-chain.md)。标题请求的识别与主链规则继续以那篇为准。这篇只把它的 `req_kind='title'`、`chain_role='aux'` 扩展成可注册的通用机制。
 
 语义指纹与任意祖先共同前缀、正文不可读请求保持中性这两条规则不变，分别见[语义指纹与任意祖先共同前缀](../../implemented/architecture/2026-10-20-semantic-fingerprint-and-ancestor-predecessor.md)和[正文不可读的请求保持中性](../../implemented/bug-fix/2026-10-21-unreadable-requests-stay-neutral.md)。
 
@@ -196,7 +196,7 @@ Title Generator 在 Claude Code 与 OMP 上都能识别，放共享集合；auto
 
 ## 待评审的决策点
 
-1. `req_kind` 直接当 RequestKind ID，还是保留宽类别再加 `req_feature`。本文建议前者，复用现有列，不迁移。
+1. `req_kind` 直接用作 RequestKind ID，还是保留宽类别再加 `req_feature`。本文建议前者，复用现有列，不迁移。
 2. 分类器请求在会话视图里显示为折叠的辅助行，还是完全隐藏。本文建议显示但折叠，账本始终保留。
 3. 是否加 `req_kind_evidence` 记录分类依据。本文建议加，成本是一列和一次回填；不想动 schema 就先写日志。
 4. agent 标签缺失但内容指纹明确命中时，是否分类。本文建议不分类，走 generic，失败方向保守。
