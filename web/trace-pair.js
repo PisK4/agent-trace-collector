@@ -103,8 +103,14 @@ export function renderTracePair(input) {
     : reading.state === 'available' ? 'loaded' : reading.state;
   const carrier = pair !== null && pair.state === 'resolved' && pair.result_req !== null
     ? input.carrierLabel ?? `请求 ${pair.result_req}` : null;
-  const status = `<div class="detail-label">关联 ${esc(pairStateText(pairState))} · 正文加载 ${esc(loadStateText(loadState))}${
-    carrier !== null ? ` · 结果承载 ${esc(carrier)}` : ''}</div>`;
+  // 正常态（已配对且正文已读或待读取）不挂状态行；结果承载由结果面板的 bp-meta 承担。
+  const loadAbnormal = loadState !== 'not_loaded' && loadState !== 'loaded' && loadState !== 'pending'
+    && loadState !== 'ambiguous' && loadState !== 'unpaired';
+  const statusBits = [
+    pairState !== 'resolved' || loadAbnormal ? `关联 ${esc(pairStateText(pairState))}` : '',
+    loadAbnormal ? `正文加载 ${esc(loadStateText(loadState))}` : '',
+  ].filter(Boolean).join(' · ');
+  const status = statusBits === '' ? '' : `<div class="bp-meta">${statusBits}</div>`;
   const callName = input.call.name || '未命名工具';
   const compare = editCompareHtml(input.call.name, input.call.inputText, `edit:${input.owner}:${input.call.ord}`);
   const callBody = compare !== null ? compare
@@ -116,7 +122,6 @@ export function renderTracePair(input) {
     </div>
     <div class="bp-meta"><span>请求 ${esc(input.ownerLabel)} · 调用 #${input.call.ord}</span></div>
     ${callBody}
-    <p class="rail-note">调用参数按原文保存，与结果正文同一套缩进样式；配对已确认只说明关联成立，不代表工具执行成功。</p>
   </div>`;
   /** @type {string} */
   let resultBody;
@@ -130,8 +135,9 @@ export function renderTracePair(input) {
       resultBody = `<p class="note">${esc(pairStateText(pairState))}；没有可读取的结果正文。</p>`;
     }
   } else if (reading.state === 'available') {
+    // is_error=false 是上游明确给出的正常态，静默；true 与未报告才挂标签。
     resultBody = `<pre class="raw" tabindex="0">${esc(typeof reading.content === 'string' ? reading.content : JSON.stringify(reading.content, null, 2) ?? '')}</pre>
-      <p class="note">${esc(isErrorText(reading.is_error))}</p>`;
+      ${reading.is_error === false ? '' : `<p class="note">${esc(isErrorText(reading.is_error))}</p>`}`;
   } else if (reading.state === 'pending') {
     resultBody = '<p class="note">结果位置待定：派生还没算完，不猜配对。</p>';
   } else if (reading.state === 'ambiguous') {

@@ -119,7 +119,8 @@ test('is_error 三态分开，resolved 不写成成功', () => {
     owner: 7, ownerLabel: '07', call: callOf(), pair: pairOf('resolved', { result_req: 9, result_ord: 2 }),
     reading: readingOf('available', { content: 'x', is_error: isError }), carrierLabel: '09',
   });
-  expect(of(false)).toContain('上游未标记错误');
+  // is_error=false 是上游明确给出的正常态：静默即与未报告区分，不挂标签。
+  expect(of(false)).not.toContain('上游未标记错误');
   expect(of(false)).not.toContain('pair-error');
   expect(of(true)).toContain('工具执行失败');
   // is_error=true 的 Result 面板整块 warn 软色。

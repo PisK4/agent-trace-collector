@@ -121,7 +121,7 @@ export function toolOverviewHtml(ownerReq, pair, reading) {
     ${row('正文加载', esc(loadStateText(loadState)))}
     ${reading !== null && reading.state === 'available' ? row('错误标记', esc(isErrorText(reading.is_error))) : ''}
   </div>
-  <p class="rail-note">配对已确认只说明关联成立，不代表工具执行成功。模型响应时长归属承载它的请求；工具执行时长未采集。配对页在同一屏阅读两端。</p>`;
+  <p class="rail-note">模型响应时长归属承载它的请求；工具执行时长未采集。</p>`;
 }
 
 /**
@@ -145,7 +145,7 @@ export function toolSchemaSection(capabilities, toolName) {
   }
   if (matches.length > 1) {
     return `<p class="note warn">能力清单里有 ${matches.length} 个同名工具，无法唯一选择，逐项列出：</p>${
-      matches.map(item => `<div class="schema-item"><div class="detail-label">来源 ${esc(String(item.source ?? 'tools'))}</div><pre class="raw" tabindex="0">${
+      matches.map(item => `<div class="schema-item"><div class="label">来源 ${esc(String(item.source ?? 'tools'))}</div><pre class="raw" tabindex="0">${
         item.schema === null || item.schema === undefined ? '（无 Schema）' : esc(JSON.stringify(item.schema, null, 2))
       }</pre></div>`).join('')}`;
   }
