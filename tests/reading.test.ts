@@ -132,6 +132,7 @@ test('同消息两个工具结果按完整位置精确读取', () => {
     expect(result.state).toBe('available');
     expect(result.content).toBe('second result');
     expect(result.is_error).toBe(true);
+    expect(result.raw).toMatchObject({ type:'tool_result', tool_use_id:'call_b', is_error:true });
     expect(result.target?.path).toBe('request.messages[0].content[1]');
     expect(result.target?.req_id).toBe(result.target?.req_id);
   } finally { f.close(); }
@@ -202,9 +203,12 @@ test('Chat 工具结果按 role=tool 消息与 tool_call_id 校验', () => {
         'request.messages[0]','resolved')`, [owner, target]);
     });
     const token = getReadingDetail(f.store, owner)!.reading_token;
-    expect(getToolResultReading(f.store, owner, 0, token)).toMatchObject({
+    const chat = getToolResultReading(f.store, owner, 0, token)!;
+    expect(chat).toMatchObject({
       state:'available', content:'chat output', is_error:null,
     });
+    // raw 是整条 role=tool 协议消息，不只是 content 字符串。
+    expect(chat.raw).toMatchObject({ role:'tool', tool_call_id:'chat_b', content:'chat output' });
     // tool_call_id 不匹配：invalid_location，不回退第一块。
     f.store.write(db => db.run(
       `UPDATE tool_call SET call_id='chat_x' WHERE req_id=? AND ord=0`, [owner]));
@@ -228,7 +232,7 @@ test('未确认关系返回对应状态且不读正文', () => {
        VALUES (?,0,'pend_1','grep',NULL,NULL,NULL,'pending')`, [owner]));
     const token = getReadingDetail(f.store, owner)!.reading_token;
     expect(getToolResultReading(f.store, owner, 0, token)).toMatchObject({
-      state:'pending', content:null, target:null,
+      state:'pending', content:null, target:null, raw:null,
     });
   } finally { f.close(); }
 });

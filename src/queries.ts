@@ -56,6 +56,9 @@ export type ToolCallRow = {
   result_path: string | null; state: string;
 };
 
+/** 反向配对：本请求承载的结果块指向的调用，owner_req 是发起调用的请求。 */
+export type ToolResultIndexRow = ToolCallRow & { owner_req: number };
+
 export type RequestDetail = RequestRow & {
   prev_req_id: number | null;
   prev_relation: 'confirmed' | 'unknown' | 'first' | 'branch' | 'aux' | null;
@@ -95,6 +98,8 @@ export type RequestDetail = RequestRow & {
   prompt: PromptReading;
   derivation: DerivationReading;
   tool_calls: ToolCallRow[];
+  /** 反向配对索引：与 tool_calls 同源同闸门，非 current 时为空。 */
+  tool_results: ToolResultIndexRow[];
   /**
    * 非当前行在这里附上旧的派生结论，标明它不是当前值。
    * 当前行为 null：当前值就在顶层字段里，不需要再抄一份。
@@ -584,10 +589,26 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
         .all(row.published_generation, canonical);
       if (generational.length > 0) toolCalls = generational;
     }
-    return { row, toolCalls };
+    // 反向配对与 tool_calls 同源：发布代表先（generation 是无 rowid 主键前缀，代内有界）；
+    // 同步回退没有 result_req 索引，用同组请求做 IN 子查询驱动 (req_id, ord) 主键，
+    // 候选规模是组内请求数，不全局扫描 tool_call，也顺带排除跨组的脏行。
+    const toolResultsFromSync = () => store.read.query<ToolResultIndexRow, [number, string | null, string | null]>(`
+      SELECT call_id, ord, tool_name, result_req, result_ord, result_path, state, req_id AS owner_req
+      FROM tool_call
+      WHERE result_req = ? AND req_id IN (SELECT req_id FROM request WHERE conv_key IS ? AND actor IS ?)
+      ORDER BY req_id, ord`).all(canonical, row.conv_key, row.actor);
+    let toolResults: ToolResultIndexRow[] = toolResultsFromSync();
+    if (row.published_generation !== null) {
+      const generationalResults = store.read.query<ToolResultIndexRow, [string, number]>(`
+        SELECT call_id, ord, tool_name, result_req, result_ord, result_path, state, req_id AS owner_req
+        FROM derive_tool_result WHERE generation = ? AND result_req = ? ORDER BY req_id, ord`)
+        .all(row.published_generation, canonical);
+      if (generationalResults.length > 0) toolResults = generationalResults;
+    }
+    return { row, toolCalls, toolResults };
   })();
   if (snapshot === null) return null;
-  const { row, toolCalls } = snapshot;
+  const { row, toolCalls, toolResults } = snapshot;
   const projected = projectRow(row);
   const current = projected.state === 'current';
   let summaryRaw: unknown = null;
@@ -654,6 +675,8 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
       ...call, result_req: null, result_ord: null, result_path: null,
       state: 'pending',
     })),
+    // 反向索引整条都是组结果：非当前时没有可保留的身份，直接为空。
+    tool_results: current ? toolResults : [],
     historical: projected.historical,
   };
 }

@@ -28,6 +28,8 @@ export type ToolResultReading = {
   target: { req_id: number; ord: number; path: string } | null;
   content: unknown;
   is_error: boolean | null;
+  /** available 时是精确协议对象：Anthropic 为 tool_result 块，Chat 为整条 role=tool 消息。 */
+  raw: unknown;
   reason: string | null;
 };
 
@@ -140,7 +142,7 @@ export function getToolResultReading(
     if (row === null) return null;
     const token = identityOf(row);
     requireReading(token, expected);
-    const base = { owner_req: canonical, call_ord: callOrd, reading_token: token };
+    const base = { owner_req: canonical, call_ord: callOrd, reading_token: token, raw: null };
     const detail = getRequest(store, canonical);
     if (detail === null) return null;
     const pair = detail.tool_calls.find(call => call.ord === callOrd);
@@ -183,7 +185,8 @@ export function getToolResultReading(
         return { ...base, state:'invalid_location', target:null, content:null, is_error:null, reason:'call_id_mismatch' };
       }
       return { ...base, state:'available', target:located,
-        content:(message as { content?: unknown }).content ?? null, is_error:null, reason:null };
+        content:(message as { content?: unknown }).content ?? null, is_error:null,
+        raw: message, reason:null };
     }
     // Anthropic：目标消息里的第 N 个内容块必须是配对的 tool_result。
     const blocks = (message as { content?: unknown }).content;
@@ -193,8 +196,9 @@ export function getToolResultReading(
       return { ...base, state:'invalid_location', target:null, content:null, is_error:null, reason:'call_id_mismatch' };
     }
     const flagged = (block as { is_error?: unknown }).is_error;
-    return { ...base, state:'available', target:located,
+    return { ...base, state: 'available', target: located,
       content:(block as { content?: unknown }).content ?? null,
+      raw: block,
       is_error: flagged === true ? true : flagged === false ? false : null, reason:null };
   })();
 }

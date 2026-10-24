@@ -1025,13 +1025,13 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | `GET /api/sessions/:key/requests?limit=100&cursor=&direction=older` | 会话内请求列表，只返回列字段；direction 省略为 forward | keyset，(started_ms, req_id)；older 游标绑定会话与方向 |
 | `GET /api/requests/:id` | 单笔读数、费用状态、正文状态 | 无 |
 | `GET /api/requests/:id/body?from=0&to=40&if_reading=` | 分页取消息；`if_reading` 可选，携带时校验阅读版本 | 消息序号区间 |
-| `GET /api/requests/:owner/tools/:ord/result?if_reading=` | 按调用位置读取一个工具结果内容块；token 必填 | 无 |
+| `GET /api/requests/:owner/tools/:ord/result?if_reading=` | 按调用位置读取一个工具结果内容块与原始协议对象；token 必填 | 无 |
 | `GET /api/requests/:id/route` | 路由决策与尝试链，来自 `route_summary` | 无 |
 | `GET /api/stats` | 体积、覆盖位统计、健康状态、探针结果 | 无 |
 
 列表接口不返回骨架。会话内 1,825 笔的列表，每笔骨架 9.5 KB，全取就是 17 MB，列表只返回 `req_id`、时间、状态、模型、四个读数、标题、`have`、`body_state`。
 
-列表与详情都带 `derived_state`，并只在该值为 `current` 时把关系、增量与折叠行摘要放在顶层。详情另带 `historical`（旧派生结论连同状态）与摘要的算法三列；列表不携带这几项。判定的具体规则见[读模型里的派生状态](#读模型里的派生状态)。
+列表与详情都带 `derived_state`，并只在该值为 `current` 时把关系、增量与折叠行摘要放在顶层。详情另带 `historical`（旧派生结论连同状态）、摘要的算法三列与 `tool_results` 反向配对；列表不携带这几项。`tool_results` 是本请求承载的结果块指向的已发布调用（调用方请求加既有工具行）：与 `tool_calls` 同源同闸门，发布代表先、非空不回退，同步回退用同组请求（conv_key/actor）的 IN 子查询驱动 `(req_id, ord)` 主键，候选规模是组内请求数，不全局扫描，也不外露跨组脏行；非 current 为空数组。判定的具体规则见[读模型里的派生状态](#读模型里的派生状态)。
 
 派生列的取值来源整套一致：队列带 `published_generation` 指针时，标题、摘要、关系、增量、链角色、回复摘要与工具配对整组读 `derive_request_result` / `derive_tool_result`，摘要状态映射代际的 `retention_state` / `algorithm` / `basis_json`；没有指针时整组读 `request` / `tool_call` 同步旧列，它们同时是「上一次完成值」的家，dirty 组的 `historical` 从这里取。同一条件应用于整组列，不出现标题取发布代、摘要取同步列的混拼；当前与否的屏蔽闸门仍是 `projectRow` 与 `derived_state`。同步可用性判据唯一落在 `derive-state` 的 `groupCurrentSql` / `groupIsCurrent`，查询不另立第二套口径。alias 解析与行读取在同一只读事务内，避免跨快照。
 
@@ -1039,7 +1039,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 分页用 keyset 不用 offset。摄入一直在写，offset 会漂移，游标是本页边界行的 `(started_ms, req_id)`。`direction=older` 无游标取最近一页并向更早翻页，返回仍按时间正序；它的游标额外绑定会话与方向，未知方向返回 400，不静默按 forward 处理。
 
-阅读版本（reading token）绑定一笔请求的轨迹输入与派生位置：输入修订、组代际、发布指针、正文状态与用途身份变化都会换发，只改费用不换。token 形如 `r1-` 加 64 位十六进制，只是读取身份，不是认证凭证。详情响应附带 `reading_token`；正文接口的 `if_reading` 可选，携带后与当前身份不符返回 409 `reading_changed`，畸形值 400。工具结果接口必须携带 token：它按 owner 的调用序号定位一次调用，再按记录的 `result_req + result_ord + result_path` 精确取一个内容块，路径只认 `request.messages[N](.content[M])?` 且 N 必须等于 `result_ord`，目标 canonical 与 actor 要和调用方一致；Anthropic 块须是配对 `tool_use_id` 的 `tool_result`，Chat 须是 `role=tool` 且 `tool_call_id` 匹配。关联未确认或组不 current 返回 `pending` / `ambiguous` / `unpaired`，目标不可读返回 `unavailable`，位置或身份不符返回 `invalid_location`；原因用固定词（`body_evicted`、`location_mismatch`、`call_id_mismatch` 等），不回传 SQL 错误。`resolved` 只代表关联已确认，`is_error` 三态表达工具是否报告失败。alias 解析、身份与读取在同一个只读事务内完成。
+阅读版本（reading token）绑定一笔请求的轨迹输入与派生位置：输入修订、组代际、发布指针、正文状态与用途身份变化都会换发，只改费用不换。token 形如 `r1-` 加 64 位十六进制，只是读取身份，不是认证凭证。详情响应附带 `reading_token`；正文接口的 `if_reading` 可选，携带后与当前身份不符返回 409 `reading_changed`，畸形值 400。工具结果接口必须携带 token：它按 owner 的调用序号定位一次调用，再按记录的 `result_req + result_ord + result_path` 精确取一个内容块，路径只认 `request.messages[N](.content[M])?` 且 N 必须等于 `result_ord`，目标 canonical 与 actor 要和调用方一致；Anthropic 块须是配对 `tool_use_id` 的 `tool_result`，Chat 须是 `role=tool` 且 `tool_call_id` 匹配。关联未确认或组不 current 返回 `pending` / `ambiguous` / `unpaired`，目标不可读返回 `unavailable`，位置或身份不符返回 `invalid_location`；原因用固定词（`body_evicted`、`location_mismatch`、`call_id_mismatch` 等），不回传 SQL 错误。`resolved` 只代表关联已确认，`is_error` 三态表达工具是否报告失败。成功响应另带 `raw` 精确协议对象：Anthropic 是配对的 `tool_result` 块，Chat 是整条 `role=tool` 消息；其余状态 `raw` 为 null。alias 解析、身份与读取在同一个只读事务内完成。
 
 正文按消息序号区间取，一次 40 条，块解码在单次请求内复用缓存。实测取 40 条 0.13 ms，最重的一笔 526 块全取 13.7 ms。正文已回收时返回 `evicted` 与回收原因，不返回空。
 
