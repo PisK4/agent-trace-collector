@@ -12,11 +12,13 @@ Status: implemented
 
 将原型确认的交互迁入生产页面，继续以请求作为身份和计量单位，由前端把可信新增输入与实际回复转换为阅读步骤。保留生产的输入解释、能力提取、状态说明、用量与路由展示；原型的静态数据、独立服务和上下文集合比较不进入生产。
 
-读取层按实施计划（Task 1–8）交付：查询整套选择派生来源（发布代优先、同步旧列回退，判据与派生内核的 `groupCurrentSql` 一致）；最近窗口与向前分页（older 游标编码页最早行）；请求阅读版本 token（`r1-` + 64 位十六进制，条件正文 409 校验）与按调用位置读取工具结果（`owner/tools/:ord/result`，路径白名单、六状态）；读取协调独立为 `web/reader-store.js`（区间缓存、inflight 去重、固定 4 并发、409 整笔作废、迟到响应双守卫），步骤投影独立为 `web/trace-view.js` 纯函数，`app.js` 只做装配。右栏读数页的排序与默认折叠后经[读数条与「无则不显」收敛](../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)重排，以该篇为准。工具四页（概览/参数/结果/Schema）只用 owner+callOrd 定位。侧栏折叠、详情栏拖动与键盘调宽（280..640、中栏保底 320）、双击恢复、Session ID 复制与剪贴板拒绝降级均为原生控制，宽度与折叠状态只存内存。
+读取层按实施计划（Task 1–8）交付：查询整套选择派生来源（发布代优先、同步旧列回退，判据与派生内核的 `groupCurrentSql` 一致）；最近窗口与向前分页（older 游标编码页最早行）；请求阅读版本 token（`r1-` + 64 位十六进制，条件正文 409 校验）与按调用位置读取工具结果（`owner/tools/:ord/result`，路径白名单、六状态）；读取协调独立为 `web/reader-store.js`（区间缓存、inflight 去重、固定 4 并发、409 整笔作废、迟到响应双守卫），步骤投影独立为 `web/trace-view.js` 纯函数，`app.js` 只做装配。双视图时代的 `createReader`、`ensureDetail` / `ensureBody`、`prefetchDetails` / `prefetchBodies` / `BODY_PREFETCH`、`renderConversation` / `convCard` / `ledgerRow` 家族与 `view` 状态一并删除，只留一套权威缓存；`createReader` 的行为测试随契约迁进 reader-store，`reader-types.ts` 改锚新接口。右栏读数页的排序与默认折叠后经[读数条与「无则不显」收敛](../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)重排，以该篇为准。工具四页（概览/参数/结果/Schema）只用 owner+callOrd 定位。侧栏折叠、详情栏拖动与键盘调宽（280..640、中栏保底 320）、双击恢复、Session ID 复制与剪贴板拒绝降级均为原生控制，宽度与折叠状态只存内存。
 
-实现范围、接口与任务验收以[实施计划](../../../../docs/superpowers/plans/2026-10-23-single-timeline-production-reader.md)为准；接口与读取机制的现行契约写入[架构设计](../../../../docs/architecture-design.md)。
+窗口与地址：URL 只写 session/trace/tab；URL 指定的 trace 在窗口外时保留其语义、右栏说明未在窗口、主列表不改成最新，`popstate` 带 trace 进入时同样处理。选择身份用 `req_id`、稳定步骤键与调用序号，加载更早后的窗口重新编号只影响显示。显式刷新重建最近窗口、清掉旧展开与阅读版本并记录时间；「回到最新」先刷新再定位末笔。
 
-本决定补充[单一轨迹原型](../feature/2026-10-23-single-timeline-prototype.md)、[本机读取原型](../feature/2026-10-23-local-trace-prototype-reader.md)和[右栏原型](../feature/2026-10-23-prototype-request-context-rail.md)，它们继续拥有原型范围及验证限制。生产实施后部分取代[固定账本行](../feature/2026-10-21-ledger-fixed-row-and-type-tags.md)和[读数裁剪修复](../bug-fix/2026-10-21-ledger-readings-overflow.md)的布局选择；防止读数内部裁剪的验收仍有效。[服务端输入解释](../feature/2026-10-22-server-side-input-interpretation.md)的语义与能力归属保持有效。
+实现范围、接口与任务验收以[实施计划](../../../../docs/superpowers/plans/2026-10-23-single-timeline-production-reader.md)为准；接口与读取机制的现行契约写入[架构设计](../../../../docs/architecture-design.md)。生产切换本身（删除对话与账本双视图、窗口导航、地址与选择身份）由本记录持有。
+
+本决定补充[单一轨迹原型](../../archived/feature/2026-10-23-single-timeline-prototype.md)、[本机读取原型](../../archived/feature/2026-10-23-local-trace-prototype-reader.md)和[右栏原型](../../archived/feature/2026-10-23-prototype-request-context-rail.md)，它们继续拥有原型范围及验证限制。生产实施后部分取代[固定账本行](../../archived/feature/2026-10-21-ledger-fixed-row-and-type-tags.md)和[读数裁剪修复](../../archived/bug-fix/2026-10-21-ledger-readings-overflow.md)的布局选择；防止读数内部裁剪的验收仍有效。[服务端输入解释](../feature/2026-10-22-server-side-input-interpretation.md)的语义与能力归属保持有效。
 
 [阅读角色与步骤定位修复](../../implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)修正了角色、System、选择与缓存缺口，并把本决定按请求组高亮的呈现改为单步骤高亮；本决定的请求归属、有界读取与容量限制继续有效。
 
@@ -27,6 +29,12 @@ Status: implemented
 **新建步骤表或重做派生流水线。** 请求身份、可信增量、消息解释和工具结果路径已经存在。步骤属于阅读组织，不需要增加另一套长期数据或改变采集与容量策略。
 
 **只改 CSS。** 列表只给请求级摘要，无法逐条呈现多个新增消息和多个工具调用；最近窗口与顶部向前加载也需要明确的查询支持。
+
+**保留对话与账本两个入口。** 两套渲染与两套缓存路径会继续分叉；单一轨迹是原型验证过的阅读方式，账本特有的读数全部进右栏。
+
+**预取整窗正文。** 30 笔 × 首片在长会话上同时占住内存与连接；按批（4 并发）载入详情、元信息与最多两片可信增量，每批落屏。
+
+**加载更早后把滚动重置到顶部。** prepend 的意义就是保住阅读位置；锚点补偿比归零更符合连续阅读。
 
 **用一个全会话事务冻结所有历史。** 长会话会增加读取与正文保留成本；界面需要的是可重新读取的当前窗口。请求级条件读取可检测失效，不能承诺跨多个 GET 永久冻结整个会话。
 
@@ -48,5 +56,5 @@ Status: implemented
 
 - `bun test` 八文件（queries/http/body-api/reading/reader-store/trace-view/body-view/web）136 例全过，`bun run typecheck`、`bun run verify:notes`、`git diff --check` 通过（2026-10-24）。合成回归覆盖：历史不重复为新增、dirty 与保留状态不升级为确定关系、同消息多个工具结果按精确路径分别读取、409 拒绝过期阅读版本、迟到响应不覆盖新会话或新请求、列表/详情/会话标题统一派生来源。
 - Task 0 原型三项阅读任务通过后（2026-10-24），生产页面在合成场景（18 笔状态会话 + 42 笔窗口会话 + 45 条消息深样本）复测三项阅读任务：任务 a 指向请求 19 的已记录回复并区分未读历史；任务 b 指向 107 的 failed 状态、其后 12 笔请求存在且无「重试成功」表述；任务 c 从 116 调用 #0 读取结果正文并指向承载请求 17，调用方身份保持 116。
-- 布局与交互浏览器验收：36px 行高与默认展开 0；向前两页正序无重复（锚点残差 3px）；未知会话说明就地显示；深色主题无横向溢出；折叠/拖拽/方向键（±20px）/双击恢复与 aria 状态同步；1000px 以下堆叠布局分隔线移除；400/620/1000/1240px 无横向溢出，工具结果 pre 内部滚动；剪贴板拒绝降级为可选中文本。
+- 布局与交互浏览器验收：36px 行高与默认展开 0；向前两页正序无重复（锚点残差 3px）；未知会话说明就地显示；深色主题无横向溢出；折叠/拖拽/方向键（±20px）/双击恢复与 aria 状态同步；1000px 以下堆叠布局分隔线移除；400/620/1000/1240px 无横向溢出，工具结果 pre 内部滚动；剪贴板拒绝降级为可选中文本。读数与计量这类右对齐文本要单独检查子元素是否越出容器左边界——负向溢出不会进入 `document.scrollWidth`，只比较页面宽度发现不了这类裁剪，右对齐后重排或缩窄栏宽时尤其如此。
 - 读取成本实测（合成、1560×960）：窗口列表→首笔详情 +48ms→元信息 +51ms，/api/ 传输 136,161 字节、57 次调用；路由、工具结果与结构历史片均未预取（0 次），并发上限 4 由 reader-store 单测钉住。时间与字节是本轮测量结果，不预设性能达标。

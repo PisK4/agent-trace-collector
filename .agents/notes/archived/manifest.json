@@ -1,4 +1,12 @@
 {
   "version": 1,
-  "files": {}
+  "files": {
+    "bug-fix/2026-10-21-ledger-readings-overflow.md": "sha256:47643b1e58c36c4db90e145211aedfcdfc3942a7388a94c26d486d92e6a80ab4",
+    "feature/2026-10-21-ledger-fixed-row-and-type-tags.md": "sha256:5f54bb37cd4895448386d75ed0ecf01cb8e6c6b482227d2554cb28a988f0e985",
+    "feature/2026-10-23-local-trace-prototype-reader.md": "sha256:68b69cb358c0e41ab8cf954568a8b36187143c2b2b1905f9ac22b343b39eff98",
+    "feature/2026-10-23-prototype-request-context-rail.md": "sha256:c1f16c50f621782af6aa4038da0677ce08e3886d4fe387805510f0fd98b89256",
+    "feature/2026-10-23-single-timeline-prototype.md": "sha256:9b8ba276f312898d12b62fa8d148bc51f50a207e75981172ee24a3db5d7d5b7a",
+    "feature/2026-10-24-prototype-reading-states.md": "sha256:4b1d75189efa65e36397ddb6072b0be100f5185d28116dbbb1114e4ccf402701",
+    "feature/2026-10-24-single-trace-production-view.md": "sha256:f957afc0f6366536d80e4ada5c1fd99f4c948db79ee7efdd62d9b3b227577de9"
+  }
 }

@@ -1,6 +1,7 @@
 # Agent Note: 单一轨迹阅读原型
 
 Status: implemented
+Archived: 2026-10-24
 
 ## Problem
 

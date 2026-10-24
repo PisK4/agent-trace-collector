@@ -147,7 +147,7 @@ schema 升到 v4（`req_kind`、`chain_role`、`model_title`）。沿用不原�
 
 ### 中栏版式（历史）
 
-> 56px 六列账本行版式随单一轨迹切换退役（36px 紧凑单行 + 右栏读数页）；标签语义与固定行高的理由见 [Agent Note：固定账本行](.agents/notes/implemented/feature/2026-10-21-ledger-fixed-row-and-type-tags.md)。
+> 56px 六列账本行版式随单一轨迹切换退役（36px 紧凑单行 + 右栏读数页）；标签语义与固定行高的理由见 [Agent Note：固定账本行](.agents/notes/archived/feature/2026-10-21-ledger-fixed-row-and-type-tags.md)。
 
 折叠行固定 56px，六列网格：`状态点 12px | 类型标签 56px | 时间 46px | 内容 1fr | 读数 168px | 展开 12px`。内容列内两行各 18px；第二行没有回复也保留占位，保证所有行的主文本起点一致。读数列同样两行：上行是首字与总时长，下行是输入与输出 token，右对齐。两行布局把所需宽度压到单行的一半，现有数据最大值下单行最宽 133.5px，168px 仍有余量。类型标签固定 56×18，独占紧挨状态点的一列，两行各一个槽位，颜色沿用 `--k-*`：
 

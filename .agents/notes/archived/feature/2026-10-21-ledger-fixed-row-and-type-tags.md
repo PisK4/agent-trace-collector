@@ -1,6 +1,7 @@
 # Agent Note: 账本折叠行固定高度与类型标签列
 
 Status: implemented
+Archived: 2026-10-24
 
 ## Problem
 

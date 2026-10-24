@@ -1,6 +1,7 @@
 # Agent Note: 原型阅读状态分离与阅读任务验证
 
 Status: implemented
+Archived: 2026-10-24
 
 ## Problem
 

@@ -1,6 +1,7 @@
 # Agent Note: 本机真实轨迹原型读取
 
 Status: implemented
+Archived: 2026-10-24
 
 ## Problem
 

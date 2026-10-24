@@ -10,7 +10,7 @@
 
 **Tech Stack:** TypeScript、Bun 1.4.0、`bun:sqlite`、`node:zlib`、`node:crypto`、原生 JavaScript ES Modules、原生 CSS、Bun Test。
 
-**Spec:** [生产阅读提案（已实施）](../../../.agents/notes/implemented/architecture/2026-10-23-single-timeline-production-reader.md)、[原型交互与验证范围](../../../prototypes/README.md)、[原型右栏与编号决定](../../../.agents/notes/implemented/feature/2026-10-23-prototype-request-context-rail.md)、[现行查询与状态设计](../../architecture-design.md#查询接口)、[服务端输入解释](../../architecture-design.md#输入解释与能力阅读)。生产切换完成后提案移入 implemented，所有入站链接随迁移更新。
+**Spec:** [生产阅读提案（已实施）](../../../.agents/notes/implemented/architecture/2026-10-23-single-timeline-production-reader.md)、[原型交互与验证范围](../../../prototypes/README.md)、[原型右栏与编号决定](../../../.agents/notes/archived/feature/2026-10-23-prototype-request-context-rail.md)、[现行查询与状态设计](../../architecture-design.md#查询接口)、[服务端输入解释](../../architecture-design.md#输入解释与能力阅读)。生产切换完成后提案移入 implemented，所有入站链接随迁移更新。
 
 ## Global Constraints
 

@@ -1,6 +1,7 @@
 # Agent Note: 原型右栏请求上下文
 
 Status: implemented
+Archived: 2026-10-24
 
 ## Problem
 
