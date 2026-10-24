@@ -169,52 +169,29 @@ export function projectSteps(row, read) {
 
 const KIND_LABEL = { user: '用户', assistant: '助手', tool: '工具', record: '记录', aux: '辅助' };
 const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'tool', record: 'aux', aux: 'aux' };
-const STATUS_TEXT = {
-  failed: '失败', missing_body: '缺正文', missing_reply: '未收到回复',
-  unknown: '未知', truncated: '截断',
-};
 
 /**
- * 单行轨迹 HTML：每步一行，默认折叠，选中与展开是独立控件。
- * @returns {string}
- * 计量只出现在该请求最后一个已投影步骤右侧（complete 才显示）；
- * 状态放在不被省略号裁剪的独立元素，颜色只作辅助。
+ * 单行轨迹只显示请求序号、类型与内容，点击行在右栏阅读详情。
  * @param {import('../src/queries').RequestRow} row
  * @param {TraceStep[]} steps
  * @param {number} ordinal 当前窗口展示号（仅显示，身份用 req_id）
- * @param {ReadonlySet<string>} open 已展开的步骤键
- * @param {boolean} complete 增量是否已全部读完
+ * @param {string|null} selected 当前选中的步骤键
+ * @returns {string}
  */
-export function renderTraceRows(row, steps, ordinal, open, complete) {
+export function renderTraceRows(row, steps, ordinal, selected) {
   const pieces = [];
   /** @param {string} text @param {number} [max] */
   const clip = (text, max = 140) => [...String(text)].length <= max ? String(text)
     : `${[...String(text)].slice(0, max).join('')}…`;
-  for (const [index, step] of steps.entries()) {
-    const isOpen = open.has(step.key);
+  for (const step of steps) {
     const label = KIND_LABEL[step.kind] ?? '记录';
-    const status = step.status === null ? '' : STATUS_TEXT[step.status] ?? '异常';
-    const resultEntry = step.kind === 'tool' && step.result !== null && step.result.state === 'resolved'
-      ? `<button class="step-result-link" data-result-owner="${row.req_id}" data-call-ord="${step.callOrd}">结果见请求 <span data-result-req="${step.result.reqId ?? ''}">${step.result.reqId ?? '?'}</span></button>`
-      : step.kind === 'tool' && step.result !== null
-        ? `<span class="step-status warn">关系${step.result.state === 'pending' ? '位置待定' : step.result.state === 'ambiguous' ? '多候选' : '未配对'}</span>`
-        : '';
-    const statusHtml = step.status === null
-      ? (step.kind === 'record' || step.kind === 'aux' ? `<span class="step-status">${esc(clip(step.text))}</span>` : '')
-      : `<span class="step-status ${step.status === 'failed' || step.status === 'missing_body' || step.status === 'missing_reply' ? 'bad' : step.status === 'truncated' ? 'warn' : ''}">${status} · ${esc(clip(step.text))}</span>`;
-    const last = index === steps.length - 1;
-    const metrics = last && complete
-      ? `<span class="compact-metrics" title="所属模型请求的读数；不表示工具执行耗时"></span>`
-      : '';
     pieces.push(`<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
 <div class="compact-row">
-  <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="false">
+  <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${step.key === selected}">
     <span class="compact-meta" title="请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
     <span class="compact-preview">${step.kind === 'tool' ? `<code>${esc(clip(step.text))}</code>` : esc(clip(step.text))}</span>
   </button>
-  ${resultEntry}${statusHtml}${metrics}
-  <button class="step-expand" data-step-expand="${esc(step.key)}" aria-expanded="${isOpen}" aria-label="${isOpen ? '收起' : '展开'}请求 ${ordinal} ${label}详情">${isOpen ? '⌄' : '›'}</button>
 </div>
 </div>`);
   }
