@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
 import {
-  auxSummary, isAuxRow, purposeLabel, railFactsHtml, readingChangedNote, replyCompleteness,
-  resolveTraceTarget, restoreScroll, structureFoldHtml, systemContextOf, toolOverviewHtml, toolSchemaSection,
+  auxSummary, isAuxRow, ledgerParts, ledgerRowsHtml, purposeLabel, railFactsHtml, readingChangedNote,
+  replyCompleteness, resolveTraceTarget, restoreScroll, structureFoldHtml, systemContextOf,
+  toolOverviewHtml, toolSchemaSection, usageFoldHtml,
 } from '../web/app.js';
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {
@@ -288,4 +289,103 @@ test('协议未适配时结构折叠说明边界，不邀请顺序读取', () =>
   expect(html).toContain('协议未适配');
   expect(html).not.toContain('data-structure-more');
   expect(html).not.toContain('尚未读取');
+});
+
+// —— 用量读数两列：计时与用量按标签和值成行，缺值与 0 的口径 ——
+
+/** @param {Record<string, unknown>} extra */
+const ledgerRow = (extra: Record<string, unknown> = {}) => ({
+  req_id: 7, in_tok: 9000, out_tok: 120, cache_read: 10000, cache_write: 700,
+  cost: 0.0034, cost_state: 'priced', ms: 2100, ttft_ms: 420, flow_ms: null, ...extra,
+});
+
+test('计时两列：首 token 与首个文本分立成行，60ms 差异可见，速度分母用 总 − 首 token', () => {
+  const p = ledgerParts(ledgerRow() as never, { ttft_ms: 420, ms: 2100, first_text_ms: 480, flow_ms: null } as never);
+  expect(p.timing).toContain('<dl class="chain ledger-chain">');
+  expect(p.timing).toContain('首 token');
+  expect(p.timing).toContain('0.42 s');
+  expect(p.timing).toContain('首个文本');
+  expect(p.timing).toContain('0.48 s');
+  expect(p.timing).toContain('71 tok/s');
+  // 读数组内不再有 · 分隔符；速度口径解释跟随新标签。
+  expect(p.timing).not.toContain('·');
+  expect(p.timing).toContain('总 − 首 token');
+  // 两项相等也分别展示：数值接近不能作为合并依据。
+  const equal = ledgerParts(ledgerRow() as never, { ttft_ms: 7636, ms: 9000, first_text_ms: 7636, flow_ms: null } as never);
+  expect(equal.timing.match(/7\.64 s/g)?.length).toBe(2);
+});
+
+test('计时缺值：仅一项有值只展示一项，全缺不渲染，0 按有值展示', () => {
+  const onlyFirst = ledgerParts(ledgerRow({ ttft_ms: 420, ms: null }) as never,
+    { ttft_ms: 420, ms: null, first_text_ms: null, flow_ms: null } as never);
+  expect(onlyFirst.timing).toContain('首 token');
+  expect(onlyFirst.timing).not.toContain('>总<');
+  expect(onlyFirst.timing).not.toContain('首个文本');
+  const zero = ledgerParts(ledgerRow({ ttft_ms: 0 }) as never,
+    { ttft_ms: 0, ms: 2100, first_text_ms: null, flow_ms: null } as never);
+  expect(zero.timing).toContain('0.00 s');
+  const none = ledgerParts(ledgerRow({ ttft_ms: null, ms: null }) as never,
+    { ttft_ms: null, ms: null, first_text_ms: null, flow_ms: null } as never);
+  expect(none.timing).toBe('');
+  // 缺首 token 时速度分母退回账本 flow_ms。
+  const flow = ledgerParts(ledgerRow({ ttft_ms: null, flow_ms: 2000 }) as never,
+    { ttft_ms: null, ms: null, first_text_ms: null, flow_ms: 2000 } as never);
+  expect(flow.timing).toContain('60 tok/s');
+});
+
+test('用量两列：缺值显示 —，全缺不渲染，命中与费用口径不变', () => {
+  const p = ledgerParts(ledgerRow() as never, null);
+  expect(p.usage).toContain('<dl class="chain ledger-chain">');
+  expect(p.usage).toContain('>入<');
+  expect(p.usage).toContain('51%');
+  expect(p.usage).toContain('$0.0034');
+  expect(p.headline).toBe('总 2.10s · 出 120 · 命中 51%');
+  // 基础字段缺值保留槽位显示 —；派生行（命中）只在可计算时出现。
+  const missing = ledgerParts(ledgerRow({ out_tok: null }) as never, null);
+  expect(missing.usage.match(/class="miss"/g)?.length).toBe(1);
+  expect(missing.headline).toBe('总 2.10s · 命中 51%');
+  const allMissing = ledgerParts(ledgerRow({ in_tok: null, out_tok: null, cache_read: null, cache_write: null }) as never, null);
+  expect(allMissing.usage).toBe('');
+  expect(allMissing.headline).toBe('');
+});
+
+test('窗口外请求传入详情保留首个文本；fold 图例只列正值类别，全零不留空容器', () => {
+  const offPage = { ...ledgerRow(), first_text_ms: 480 } as never;
+  const rows = ledgerRowsHtml(offPage, offPage);
+  expect(rows).toContain('首个文本');
+  expect(rows).toContain('0.48 s');
+  expect(rows).toContain('9,000');
+  const fold = usageFoldHtml(ledgerRow() as never, {
+    ...ledgerRow(), first_text_ms: 480,
+    prompt: {
+      state: 'recomputed', reason: 'complete', actual_version: 1, tokens: 33500, counted: false,
+      window: 200000, held: false, ratio: 0.1675, legacy: false, note: null,
+      parts: [
+        { kind: 'system', tokens: 31900 }, { kind: 'chat', tokens: 1600 },
+        { kind: 'tools', tokens: 0 }, { kind: 'memory', tokens: 0 },
+      ],
+    },
+  } as never);
+  expect(fold).toContain('data-fold="prompt:7"');
+  expect(fold).toContain('系统提示');
+  expect(fold).toContain('对话内容');
+  expect(fold).not.toContain('工具定义');
+  expect(fold).not.toContain('记忆与技能');
+  expect(fold).toContain('提示总量');
+  expect(fold).toContain('占用');
+  const zeroFold = usageFoldHtml(ledgerRow() as never, {
+    ...ledgerRow(),
+    prompt: {
+      state: 'recomputed', reason: 'complete', actual_version: 1, tokens: 0, counted: false,
+      window: null, held: false, ratio: null, legacy: false, note: null,
+      parts: [{ kind: 'system', tokens: 0 }, { kind: 'chat', tokens: 0 }],
+    },
+  } as never);
+  expect(zeroFold).not.toContain('comp-bar');
+  expect(zeroFold).not.toContain('comp-legend');
+  expect(zeroFold).toContain('提示总量');
+  expect(zeroFold).toContain('窗口未知');
+  const noPrompt = usageFoldHtml(ledgerRow() as never, { ...ledgerRow(), prompt: null } as never);
+  expect(noPrompt).toContain('用量与上下文');
+  expect(noPrompt).not.toContain('comp-bar');
 });
