@@ -1,7 +1,7 @@
 import { constants, zstdCompressSync } from 'node:zlib';
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
-import type { FileBatch, FileCursor } from './sources/files';
+import type { FileBatch, FileCursor, RouteCursor, RouteFile } from './sources/files';
 import { redact } from './privacy';
 import {
   isRecord,
@@ -55,50 +55,79 @@ export function observeSourceOffset(store: Store, sourceKind: string, sourceName
   ));
 }
 
-/** 已提交的路由文件指纹：命中就跳过解压，同一份字节只解一次。 */
-export function committedRouteFingerprints(store: Store): Map<string, string | null> {
+/** 路由来源的游标：`.jsonl` 用身份与偏移，`.gz` 用整份指纹。 */
+export function readRouteCursors(store: Store): Map<string, RouteCursor> {
   return new Map(
-    store.read.query<{ source_name: string; fingerprint: string | null }, []>(
-      "SELECT source_name, fingerprint FROM source_cursor WHERE source_kind IN ('route_file','route_gz')",
-    ).all().map(row => [row.source_name, row.fingerprint] as const),
+    store.read.query<{
+      source_kind: 'route_file' | 'route_gz'; source_name: string; file_generation: string;
+      committed_off: number; observed_off: number; seen_size: number | null;
+      head_len: number | null; head_hash: string | null; fingerprint: string | null;
+      rewrite_epoch: number;
+    }, []>(
+      `SELECT source_kind, source_name, file_generation, committed_off, observed_off,
+         seen_size, head_len, head_hash, fingerprint, rewrite_epoch
+       FROM source_cursor WHERE source_kind IN ('route_file','route_gz')`,
+    ).all().map(row => [row.source_name, {
+      sourceKind: row.source_kind,
+      generation: row.file_generation,
+      committedOff: row.committed_off,
+      observedOff: row.observed_off,
+      seenSize: row.seen_size ?? 0,
+      headLen: row.head_len ?? 0,
+      headHash: row.head_hash,
+      rewriteEpoch: row.rewrite_epoch,
+      fingerprint: row.fingerprint,
+    }]),
   );
 }
 
 /**
- * 一个已解码路由文件的落库：解析行、记录坏行、ingest、推进该文件的游标。
+ * 一批已读路由行的落库：坏行记账、ingest、推进该文件的游标。
  *
- * 路由文件没有物理行身份，游标以整文件指纹为代际，`committed_off` 是整份字节
- * 长度；`.gz` 被整体替换时指纹变化，旧游标被覆盖，重读靠 route_id upsert 幂等。
- * 坏行与账本共用同一张 issue 表、同一个 `recordIssue` 记账。
+ * `.jsonl` 的游标是文件身份 + 已提交偏移，`.gz` 的游标是整份指纹。两个来源
+ * 都只在本轮确实读到新内容时写游标，未变与错误不推进。坏行引用键带本批
+ * 起始位置，增量读取时不与之前批次互相覆盖。
  */
 export function ingestDecodedRouteFile(
   store: Store,
-  file: { name: string; kind: 'jsonl' | 'gz'; fingerprint: string; lines: string[] },
+  file: RouteFile,
   salt: Uint8Array,
   now: number,
 ): void {
-  const kind = file.kind === 'gz' ? 'route_gz' : 'route_file';
+  const cursor = file.cursor;
+  if (cursor === null) return;
+  const refBase = file.kind === 'gz'
+    ? file.fingerprint
+    : `${cursor.generation}:${file.startOff}`;
   const records: unknown[] = [];
   store.write(db => {
-    for (const line of file.lines) {
+    for (const issue of file.issues) {
+      recordIssue(db, 'route', JSON.stringify([file.name, refBase, issue.offset]),
+        'route_line_too_large', now, issue.end - issue.offset);
+    }
+    for (let index = 0; index < file.lines.length; index++) {
+      const line = file.lines[index]!;
       if (line.trim() === '') continue;
       try {
         records.push(JSON.parse(line));
       } catch {
-        recordIssue(db, 'route', JSON.stringify([file.name, file.fingerprint]),
+        recordIssue(db, 'route', JSON.stringify([file.name, refBase, index]),
           'route_invalid_json', now, Buffer.byteLength(line));
       }
     }
   });
-  ingestRoute(store, records, now, salt);
-  const committed = file.lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
+  ingestRoute(store, records, now, salt, refBase);
   store.write(db => db.run(
-    `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,fingerprint,last_ok_ms)
-     VALUES (?,?,?,?,?,?)
+    `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,seen_size,head_len,head_hash,fingerprint,last_ok_ms,rewrite_epoch,observed_off)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)
      ON CONFLICT(source_kind,source_name) DO UPDATE SET
-       file_generation=excluded.file_generation,committed_off=excluded.committed_off,
-       fingerprint=excluded.fingerprint,last_ok_ms=excluded.last_ok_ms`,
-    [kind, file.name, file.fingerprint, committed, file.fingerprint, now],
+       file_generation=excluded.file_generation, committed_off=excluded.committed_off,
+       seen_size=excluded.seen_size, head_len=excluded.head_len, head_hash=excluded.head_hash,
+       fingerprint=excluded.fingerprint, last_ok_ms=excluded.last_ok_ms,
+       rewrite_epoch=excluded.rewrite_epoch, observed_off=excluded.observed_off`,
+    [cursor.sourceKind, file.name, cursor.generation, cursor.committedOff, cursor.seenSize,
+     cursor.headLen, cursor.headHash, cursor.fingerprint, now, cursor.rewriteEpoch,
+     cursor.observedOff],
   ));
 }
 
@@ -562,25 +591,34 @@ function saveRouteSummary(db: Database, route: RouteFields, now: number): void {
   );
 }
 
-export function ingestRoute(store: Store, records: unknown[], now: number, salt: Uint8Array): void {
+export function ingestRoute(
+  store: Store,
+  records: unknown[],
+  now: number,
+  salt: Uint8Array,
+  refBase?: string,
+): void {
+  const issueKey = (value: number) => JSON.stringify(refBase === undefined
+    ? ['route-invalid', value]
+    : ['route-invalid', refBase, value]);
   store.write(db => {
     const seen = new Set<number>();
     for (let index = 0; index < records.length; index++) {
       const record = records[index];
       if (!isRecord(record)) {
-        recordIssue(db, 'route', JSON.stringify(['route-invalid', index]), 'route_invalid_object', now, null);
+        recordIssue(db, 'route', issueKey(index), 'route_invalid_object', now, null);
         continue;
       }
       // 与账本同一条规则：raw 列、payload 与长期摘要都来自同一个已脱敏对象。
       const redacted = redact(record, salt);
       if (!isRecord(redacted)) {
-        recordIssue(db, 'route', JSON.stringify(['route-invalid', index]), 'route_invalid_redaction', now, null);
+        recordIssue(db, 'route', issueKey(index), 'route_invalid_redaction', now, null);
         continue;
       }
       const route = mapRouteRow(redacted);
       if (route === null) {
         const id = optionalNumber(redacted, 'id') ?? optionalNumber(redacted, 'route_id');
-        recordIssue(db, 'route', JSON.stringify(['route-invalid', id ?? index]), 'route_invalid_identity', now, null);
+        recordIssue(db, 'route', issueKey(id ?? index), 'route_invalid_identity', now, null);
         continue;
       }
       if (seen.has(route.routeId)) continue;

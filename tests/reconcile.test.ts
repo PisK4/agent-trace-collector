@@ -697,25 +697,35 @@ test('路由摘要按 format 2 写入展示字段，缺失 prompt 保持 null', 
   }
 });
 
-test('路由文件落库推进指纹游标并记账坏行', () => {
+test('路由文件落库推进游标并记账坏行', () => {
   const f = fixture();
   try {
     const good = JSON.stringify({
       id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm',
       provider: 'p', status: 200, in: 10, out: 5,
     });
+    const lines = ['not json', good];
+    const committed = lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
     ingestDecodedRouteFile(f.store, {
-      name: '2026-10-20.jsonl', kind: 'jsonl', fingerprint: 'fp-1',
-      lines: ['not json', good],
+      name: '2026-10-20.jsonl', kind: 'jsonl', fingerprint: '',
+      state: 'decoded', lines, error: null, startOff: 0,
+      issues: [{ offset: 0, end: 5, reason: 'line_too_large' }],
+      cursor: {
+        sourceKind: 'route_file', generation: 'gen-1', committedOff: committed,
+        observedOff: committed, seenSize: committed, headLen: 0, headHash: null,
+        rewriteEpoch: 0, fingerprint: null,
+      },
     }, salt, 1000);
     const cursor = readFileCursor(f.store, 'route_file', '2026-10-20.jsonl');
-    expect(cursor?.generation).toBe('fp-1');
-    // committed_off 是整份字节长度：每行字节加一个换行。
-    expect(cursor?.committedOff)
-      .toBe(Buffer.byteLength('not json') + 1 + Buffer.byteLength(good) + 1);
-    const issue = f.store.read.query<{ byte_length: number | null }, []>(
-      "SELECT byte_length FROM ingest_issue WHERE reason='route_invalid_json'").get();
-    expect(issue?.byte_length).toBe(Buffer.byteLength('not json'));
+    expect(cursor?.generation).toBe('gen-1');
+    // 提交位置来自读取器的完整行末尾，不再由行文本重算。
+    expect(cursor?.committedOff).toBe(committed);
+    const issue = f.store.read.query<{ reason: string; byte_length: number | null }, []>(
+      'SELECT reason, byte_length FROM ingest_issue ORDER BY reason').all();
+    expect(issue).toEqual([
+      { reason: 'route_invalid_json', byte_length: Buffer.byteLength('not json') },
+      { reason: 'route_line_too_large', byte_length: 5 },
+    ]);
     expect(f.store.read.query<{ n: number }, []>(
       'SELECT COUNT(*) AS n FROM route_summary WHERE route_id=7').get()?.n).toBe(1);
     // observed_off 只推进观察位，提交位置不动。
@@ -725,7 +735,34 @@ test('路由文件落库推进指纹游标并记账坏行', () => {
     ).get('route_file', '2026-10-20.jsonl');
     expect(observed?.observed_off).toBe(999);
     expect(readFileCursor(f.store, 'route_file', '2026-10-20.jsonl')?.committedOff)
-      .toBe(Buffer.byteLength('not json') + 1 + Buffer.byteLength(good) + 1);
+      .toBe(committed);
+  } finally {
+    f.close();
+  }
+});
+
+test('gzip路由文件落库以整份指纹作游标', () => {
+  const f = fixture();
+  try {
+    const good = JSON.stringify({
+      id: 9, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm',
+      provider: 'p', status: 200, in: 10, out: 5,
+    });
+    const committed = Buffer.byteLength(good) + 1;
+    ingestDecodedRouteFile(f.store, {
+      name: '2026-10-20.jsonl.gz', kind: 'gz', fingerprint: 'fp-gz',
+      state: 'decoded', lines: [good], error: null, startOff: 0, issues: [],
+      cursor: {
+        sourceKind: 'route_gz', generation: 'fp-gz', committedOff: committed,
+        observedOff: committed, seenSize: 1024, headLen: 0, headHash: null,
+        rewriteEpoch: 0, fingerprint: 'fp-gz',
+      },
+    }, salt, 1000);
+    const cursor = readFileCursor(f.store, 'route_gz', '2026-10-20.jsonl.gz');
+    expect(cursor?.generation).toBe('fp-gz');
+    const row = f.store.read.query<{ fingerprint: string | null }, [string]>(
+      'SELECT fingerprint FROM source_cursor WHERE source_name=?').get('2026-10-20.jsonl.gz');
+    expect(row?.fingerprint).toBe('fp-gz');
   } finally {
     f.close();
   }

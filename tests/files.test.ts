@@ -114,6 +114,11 @@ function routeIds(files: Awaited<ReturnType<typeof readRouteFiles>>): number[] {
   return ids.sort((a, b) => a - b);
 }
 
+function routeCursors(files: Awaited<ReturnType<typeof readRouteFiles>>) {
+  return new Map(files.flatMap(file =>
+    file.cursor === null ? [] : [[file.name, file.cursor] as const]));
+}
+
 test('路由跨日与gzip替换后证据集合一致', async () => {
   const f = fixture();
   try {
@@ -137,6 +142,91 @@ test('路由跨日与gzip替换后证据集合一致', async () => {
   }
 });
 
+test('路由jsonl只读追加的完整行并推进偏移', async () => {
+  const f = fixture();
+  try {
+    const dir = join(f.dir, 'routing');
+    mkdirSync(dir, { recursive: true });
+    const name = '2026-10-24.jsonl';
+    const path = join(dir, name);
+    const first = '{"id":1,"time":1}\n';
+    writeFileSync(path, `${first}{"id":2,"time":`);
+
+    const decoded = await readRouteFiles(dir);
+    expect(decoded[0]).toMatchObject({ name, state: 'decoded', startOff: 0 });
+    expect(decoded[0]!.lines).toEqual(['{"id":1,"time":1}']);
+    const cursors = routeCursors(decoded);
+    expect(cursors.get(name)!.committedOff).toBe(Buffer.byteLength(first));
+
+    // 半行仍未写完：不推进偏移，也不产生新行。
+    const waiting = await readRouteFiles(dir, cursors);
+    expect(waiting[0]).toMatchObject({ state: 'unchanged', lines: [] });
+
+    appendFileSync(path, '2}\n');
+    const appended = await readRouteFiles(dir, cursors);
+    expect(appended[0]!.state).toBe('decoded');
+    expect(appended[0]!.lines).toEqual(['{"id":2,"time":2}']);
+    expect(appended[0]!.startOff).toBe(Buffer.byteLength(first));
+    expect(appended[0]!.cursor?.committedOff)
+      .toBe(Buffer.byteLength(`${first}{"id":2,"time":2}\n`));
+  } finally {
+    f.close();
+  }
+});
+
+test('路由jsonl原地重写与截断都换代并从头读', async () => {
+  const f = fixture();
+  try {
+    const dir = join(f.dir, 'routing');
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, '2026-10-24.jsonl');
+    writeFileSync(path, '{"id":7,"time":1}\n');
+    const first = await readRouteFiles(dir);
+
+    // 同 inode 原地重写：头部基线不符，按新代际从头读。
+    writeFileSync(path, '{"id":8,"time":1}\n');
+    const rewritten = await readRouteFiles(dir, routeCursors(first));
+    expect(rewritten[0]!.state).toBe('decoded');
+    expect(rewritten[0]!.lines).toEqual(['{"id":8,"time":1}']);
+    expect(rewritten[0]!.startOff).toBe(0);
+
+    writeFileSync(path, '{"id":8,"time":1}\n{"id":9,"time":2}\n');
+    const grown = await readRouteFiles(dir, routeCursors(rewritten));
+    expect(grown[0]!.lines).toEqual(['{"id":9,"time":2}']);
+    expect(grown[0]!.startOff).toBe(Buffer.byteLength('{"id":8,"time":1}\n'));
+
+    // 截断到已提交偏移之前：偏移归零重读，不丢行。
+    writeFileSync(path, '{"id":8,"time":1}\n');
+    const truncated = await readRouteFiles(dir, routeCursors(grown));
+    expect(truncated[0]!.state).toBe('decoded');
+    expect(truncated[0]!.lines).toEqual(['{"id":8,"time":1}']);
+    expect(truncated[0]!.startOff).toBe(0);
+  } finally {
+    f.close();
+  }
+});
+
+test('路由jsonl首次出现空文件不写游标，首行到达后才提交', async () => {
+  const f = fixture();
+  try {
+    const dir = join(f.dir, 'routing');
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, '2026-10-24.jsonl');
+    writeFileSync(path, '');
+    const empty = await readRouteFiles(dir);
+    expect(empty[0]).toMatchObject({ state: 'unchanged', lines: [], issues: [] });
+    expect(empty[0]!.cursor).toBeNull();
+
+    writeFileSync(path, '{"id":1,"time":1}\n');
+    const first = await readRouteFiles(dir);
+    expect(first[0]!.state).toBe('decoded');
+    expect(first[0]!.lines).toEqual(['{"id":1,"time":1}']);
+    expect(first[0]!.cursor?.committedOff).toBe(Buffer.byteLength('{"id":1,"time":1}\n'));
+  } finally {
+    f.close();
+  }
+});
+
 test('未变gzip不再解压，追加与替换仍被检出', async () => {
   const f = fixture();
   try {
@@ -152,17 +242,17 @@ test('未变gzip不再解压，追加与替换仍被检出', async () => {
     expect(decoded).toHaveLength(1);
     expect(decoded[0]).toMatchObject({ name, state: 'decoded', error: null });
     expect(decoded[0]!.lines).toHaveLength(1);
+    const known = routeCursors(decoded);
+    expect(known.get(name)?.fingerprint).toBe(digest);
 
-    const unchanged = await readRouteFiles(dir, (fileName, fingerprint) =>
-      fileName === name && fingerprint === digest);
+    const unchanged = await readRouteFiles(dir, known);
     expect(unchanged[0]).toMatchObject({ name, state: 'unchanged', error: null });
     expect(unchanged[0]!.lines).toEqual([]);
 
     const appended = Buffer.concat([gunzipSync(first), Buffer.from('{"id":2,"time":"2026-10-22T00:01:00Z"}\n')]);
     const replaced = gzipSync(appended);
     writeFileSync(path, replaced);
-    const changed = await readRouteFiles(dir, (fileName, fingerprint) =>
-      fileName === name && fingerprint === digest);
+    const changed = await readRouteFiles(dir, known);
     expect(changed[0]).toMatchObject({ name, state: 'decoded', error: null });
     expect(changed[0]!.lines).toHaveLength(2);
   } finally { f.close(); }
@@ -180,7 +270,7 @@ test('损坏gzip保留指纹并报告固定错误，替换后恢复', async () =
     expect(broken[0]!.fingerprint).toMatch(/^[0-9a-f]{64}$/);
     const fixed = gzipSync(Buffer.from('{"id":1,"time":"2026-10-22T00:00:00Z"}\n'));
     writeFileSync(path, fixed);
-    const recovered = await readRouteFiles(dir, () => false);
+    const recovered = await readRouteFiles(dir);
     expect(recovered[0]).toMatchObject({ state: 'decoded', error: null });
   } finally { f.close(); }
 });
@@ -193,10 +283,9 @@ test('跨午夜只解压新增日期文件', async () => {
     const day1 = '2026-10-22.jsonl.gz';
     const day2 = '2026-10-23.jsonl.gz';
     writeFileSync(join(dir, day1), gzipSync(Buffer.from('{"id":1,"time":"2026-10-22T23:59:00Z"}\n')));
-    const known = new Map<string, string>();
-    for (const file of await readRouteFiles(dir)) known.set(file.name, file.fingerprint);
+    const known = routeCursors(await readRouteFiles(dir));
     writeFileSync(join(dir, day2), gzipSync(Buffer.from('{"id":2,"time":"2026-10-23T00:00:00Z"}\n')));
-    const files = await readRouteFiles(dir, (name, fingerprint) => known.get(name) === fingerprint);
+    const files = await readRouteFiles(dir, known);
     expect(files.map(file => [file.name, file.state])).toEqual([
       [day1, 'unchanged'],
       [day2, 'decoded'],

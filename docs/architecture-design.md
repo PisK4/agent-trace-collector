@@ -329,13 +329,13 @@ CREATE TABLE source_cursor (
 
 代际变了就重新识别，长度变了只判断截断。每轮读取前重算 `file_generation`，与游标里记录的不一致说明文件被替换，把该来源的 `committed_off` 归零、换上新代际再重读，已有的行按物理身份幂等跳过。dev 与 inode 都没变时补一次头部基线比对，按 `head_len` 重算哈希，与 `head_hash` 不一致说明 inode 被复用或者文件被原地重写，同样算新代际。文件身份不变而 `seen_size` 小于 `committed_off`，说明文件被截断重写，把偏移归零重读，但代际保持不变，旧行的身份仍然有效，不会重复入库。
 
-历史日整体重写是常态。`pruneHistory` 会读整个 `.jsonl`、以 gzip 成员形式追加到 `.gz`、再临时文件替换整个 `.gz`（`internal/gateway/history.go:110-160`）。所以 `.gz` 的偏移没有意义，同一天可能在 `.jsonl` 与 `.gz` 里各存一份。做法是 `.gz` 按 `fingerprint` 识别，整体摘要没变就跳过，变了就全量解压重读、靠物理身份去重；`.jsonl` 与 `.gz` 都在时优先读 `.jsonl`，`.gz` 只补它没有的行。
+历史日整体重写是常态。`pruneHistory` 会读整个 `.jsonl`、以 gzip 成员形式追加到 `.gz`、再临时文件替换整个 `.gz`（`internal/gateway/history.go:110-160`）。所以 `.gz` 的偏移没有意义，同一天可能在 `.jsonl` 与 `.gz` 里各存一份。做法是 `.gz` 按 `fingerprint` 识别，整体摘要没变就跳过，变了就全量解压重读、靠 `route_id` upsert 去重；`.jsonl` 按游标增量读取，只消费新增的完整行。同一天两个文件都在时两份都读，重复的 `route_id` 收敛成一份。
 
 跨午夜的迟到路由。凌晨之后到达的路由可能写进前一天的 `.jsonl`，所以读取不按当前日期筛文件，而按每个文件自己的游标判断。一个已经被判为彻底归档的日期文件被重新创建时，按新代际重读。
 
-路由入口每轮按三态记账：`decoded`（解压与切行成功）、`unchanged`（指纹命中已提交值，不解压、不切行）、`error`（`route_file_unreadable` 读取失败、`route_gzip_invalid` 解压失败、`route_gzip_limit` 输出超过 512 MiB）。只有 `decoded` 且 ingest 成功才推进 `source_cursor.fingerprint`；`unchanged` 与 `error` 都不推进，`error` 下一轮按同指纹重试。替换检测看整份字节的 SHA-256，不看 mtime 与长度。
+路由入口每轮按三态记账：`decoded`（读到新内容）、`unchanged`（没有新内容）、`error`（`route_file_unreadable` 读取失败、`route_gzip_invalid` 解压失败、`route_gzip_limit` 输出超过 512 MiB）。`.jsonl` 走与账本相同的行读取器：文件身份 + `committed_off` + 冻结的头部基线，每批最多 128 行或 8 MiB，只消费已经写完的完整行，末行没有换行就等下一轮；`.gz` 用整份字节的 SHA-256 作 `fingerprint`，摘要没变就跳过，变了就整份解压重读。只有 `decoded` 且 ingest 成功才推进游标：`.jsonl` 推进身份与偏移，`.gz` 推进 `fingerprint`；`unchanged` 与 `error` 都不推进，`error` 下一轮重试。单行超过 64 MiB 的完整行只记 `route_line_too_large` 与位置，游标照常推进。
 
-账本与路由共用一个读取器，只差解析函数。实测日增 22 MB（路由）加 10.7 MB（账本），按当前节奏一轮读几 KB 到几百 KB，不构成压力。
+账本与路由的 `.jsonl` 共用 `readBatch`，只差解析函数；`.gz` 例外，按整份指纹识别，不做偏移。
 
 ### `handed_on` 与 `kind` 是两件事
 
