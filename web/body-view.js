@@ -567,7 +567,7 @@ export function renderTools(tools, foldKey = '') {
     const warn = tool.state === 'ambiguous'
       ? '<span class="tool-chip miss"><span>结果有多个候选，未配对</span></span>' : '';
     return `<div class="tool-row">
-      <span class="tool-chip call" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clip(tool.inputText, 90))})</span></span>
+      <span class="tool-chip call ${toolTint(tool.name)}" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clip(tool.inputText, 90))})</span></span>
       ${open}${warn}
     </div>`;
   }).join('');

@@ -503,6 +503,14 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 .body-panel .bp-head{display:flex;align-items:flex-start;gap:8px;margin-bottom:8px}
 .body-panel .bp-kind{flex:none}
 .body-panel .bp-path{font:10px var(--mono);color:var(--text-2);overflow-wrap:anywhere;flex:1}
+/* 配对页 Result 面板的失败软色：is_error=true 才出现。 */
+.body-panel.pair-error{background:var(--warn-soft);border-radius:6px;padding:6px 10px 10px}
+/* Edit 对照块：old_string/new_string 各成一个红绿 soft 着色块，等宽字体沿用 pre.raw。 */
+.edit-block{margin:8px 0;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.edit-block .edit-tag{display:block;font:500 9px/1 var(--ui);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:6px 10px 0}
+.edit-block pre.raw{margin:0;border:0;border-radius:0;background:transparent;max-height:240px}
+.edit-block.old{background:var(--bad-soft)}
+.edit-block.new{background:var(--good-soft)}
 .bp-nav{display:flex;gap:3px;flex:none}
 .bp-nav button{width:22px;height:22px;border:1px solid var(--line);border-radius:3px;color:var(--text-2);display:inline-flex;align-items:center;justify-content:center;font-size:11px}
 .bp-nav button:hover{background:var(--hover)}
