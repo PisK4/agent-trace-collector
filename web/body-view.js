@@ -14,7 +14,7 @@
  * @typedef {{ord: number, role: Role, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
  * @typedef {{id: string, name: string, inputText: string, ord: number}} ToolCallView
  * @typedef {{state: 'ok' | 'absent' | 'invalid', text: string, thinking: string[], calls: ToolCallView[], finish: string | null, model: string | null, raw: unknown}} ReplyView
- * @typedef {{call_id: string, name: string, inputText: string, ord: number, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null}} ToolEntry
+ * @typedef {{call_id: string, name: string, inputText: string, ord: number, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null, result_label?: string | null}} ToolEntry
  * @typedef {{delta: Set<number> | null, limit?: number, selectedOrd?: number | null}} MessageOptions
  */
 
@@ -440,73 +440,76 @@ export function renderMessageDetail(entry) {
 }
 
 /**
- * 工具往返卡片。所有调用与结果都列出来，不只展开第一个。
+ * 工具往返折叠行。已配对给出结果跳转；没有配对信息就不显示状态，只有异常（多候选）才提示。
  * @param {ToolEntry[]} tools
+ * @param {string} [foldKey] 折叠持久化键前缀（req id）；空串不持久化
  */
-export function renderTools(tools) {
+export function renderTools(tools, foldKey = '') {
   if (tools.length === 0) return '';
   const rows = tools.map(tool => {
-    const state = tool.state === 'resolved' && tool.result_req !== null && tool.result_ord !== null
-      ? `<span class="tool-chip res"><span>结果已配对 · 请求 ${tool.result_req}</span></span>
-         <button class="chip-btn" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}">查看结果 · 请求 ${tool.result_req} #${tool.result_ord}</button>`
+    const jump = tool.state === 'resolved' && tool.result_req !== null
+      ? `<button class="chip-btn" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}">→ 结果 · ${esc(tool.result_label ?? `请求 ${tool.result_req}`)}</button>`
       : tool.state === 'ambiguous' ? '<span class="tool-chip miss"><span>结果有多个候选，未配对</span></span>'
-        : tool.state === 'pending' ? '<span class="tool-chip miss"><span>结果位置未确认</span></span>'
-          : '<span class="tool-chip miss"><span>还没有见到结果</span></span>';
+        : '';
     return `<div class="tool-row">
       <span class="tool-chip call" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clip(tool.inputText, 90))})</span></span>
-      ${state}
+      ${jump}
     </div>`;
   }).join('');
-  return `<div class="conv-tools"><span class="label">工具往返</span>${rows}</div>`;
+  const foldAttr = foldKey === '' ? '' : ` data-fold="round:${esc(foldKey)}"`;
+  return `<details class="rail-fold sub"${foldAttr} open>
+    <summary>工具往返<span class="fold-count">${tools.length} 次</span></summary>
+    <div class="fold-body">${rows}</div>
+  </details>`;
 }
 
 /**
- * 本次回复卡片（账本内使用）。空回复与无法解析分别说明。
+ * 本次回复内容。ASSISTANT 头与模型名不再重复：读数条只显示一次 model_served，
+ * finish 移到折叠行摘要（见读数页）。空回复与无法解析分别说明。
  * @param {ReplyView} view
  * @param {ToolEntry[]} [tools]
+ * @param {string} [foldKey] 折叠持久化键前缀（req id）；空串不持久化
  */
-export function renderReply(view, tools = []) {
-  const head = `<div class="reply-head">
-    <span class="who">ASSISTANT</span>
-    <span class="mono muted" style="font-size:10px">${esc(view.model ?? '模型名未报告')}</span>
-    <span class="grow"></span>
-    ${view.finish !== null ? `<span class="mono muted" style="font-size:10px">finish: ${esc(view.finish)}</span>` : ''}
-  </div>`;
+export function renderReply(view, tools = [], foldKey = '') {
+  const keySuffix = foldKey === '' ? '' : `:${esc(foldKey)}`;
+  const subFold = (/** @type {string} */ key, /** @type {string} */ inner) => {
+    const attr = keySuffix === '' ? '' : ` data-fold="${key}${keySuffix}"`;
+    return `<details class="rail-fold sub"${attr}>${inner}</details>`;
+  };
   if (view.state === 'absent') {
-    return `<div class="reply-card">${head}
-      <div class="reply-empty"><b>上游没有提供可用回复</b>
-        <span>请求正文已保存；这一笔只有请求，没有回复对象，这里不补写内容。</span></div></div>`;
+    return `<div class="reply-empty"><b>上游没有提供可用回复</b>
+      <span>请求正文已保存；这一笔只有请求，没有回复对象，这里不补写内容。</span></div>`;
   }
   if (view.state === 'invalid') {
-    return `<div class="reply-card">${head}
-      <div class="reply-empty"><b>回复对象无法结构化</b>
-        <span>原对象仍保存在库里，可在「原始脱敏对象」里查看。</span></div></div>`;
+    return `<div class="reply-empty"><b>回复对象无法结构化</b>
+      <span>原对象仍保存在库里，可在「原始脱敏对象」里查看。</span></div>`;
   }
-  const thinking = view.thinking.length === 0 ? '' : `<details class="msg-thinking">
-    <summary>推理块 · ${view.thinking.length} 段</summary>
-    <pre class="raw" tabindex="0">${esc(view.thinking.join('\n\n'))}</pre></details>`;
+  const thinking = view.thinking.length === 0 ? '' : subFold('think',
+    `<summary>推理块<span class="fold-count">${view.thinking.length} 段</span></summary>
+     <div class="fold-body"><pre class="raw" tabindex="0">${esc(view.thinking.join('\n\n'))}</pre></div>`);
   const text = view.text.length > 0
     ? `<div class="reply-text">${mdToHtml(view.text)}</div>`
     : view.calls.length === 0 ? '<div class="reply-empty"><span>回复对象存在，但没有文本内容。</span></div>' : '';
-  return `<div class="reply-card">${head}${thinking}${text}${renderTools(tools)}</div>`;
+  return `${thinking}${text}${renderTools(tools, foldKey)}`;
 }
 
 /**
  * 右栏的回复详情，比账本卡片多给 finish 与工具状态。
+ * 模型名不在这里重复，只有头部读数条显示一次。
  * @param {ReplyView} view
  * @param {ToolEntry[]} [tools]
+ * @param {string} [foldKey] 折叠持久化键前缀（req id）；空串不持久化
  */
-export function renderReplyDetail(view, tools = []) {
+export function renderReplyDetail(view, tools = [], foldKey = '') {
   return `<div class="body-panel">
     <div class="bp-head">
       <span class="kind REPLY bp-kind">REPLY</span>
       <span class="bp-path">reply</span>
     </div>
     <div class="bp-meta">
-      <span>${esc(view.model ?? '模型名未报告')}</span>
-      ${view.finish !== null ? `<span>·</span><span>finish: ${esc(view.finish)}</span>` : ''}
+      ${view.finish !== null ? `<span>finish: ${esc(view.finish)}</span>` : ''}
     </div>
-    ${renderReply(view, tools)}
+    ${renderReply(view, tools, foldKey)}
     <p class="rail-note">回复与请求上下文分开保存。工具结果不在本回复里，按 call id 指向后续请求的消息。</p>
   </div>`;
 }
@@ -619,32 +622,34 @@ export function renderAttemptChain(chain) {
 }
 
 /**
- * 请求能力区块。只渲染服务端给出的能力视图；两类都为空时仍保留 section
- * 并说明原因，不输出空 details。
- * @param {BodyPage | null} page
+ * 请求能力折叠行（工具清单 / 技能清单各一行）。
+ * present 显示数量；empty 与 present 但零项都不渲染（没有就不显示）；
+ * 其余状态是异常，显示原因。没有可输出的行时返回空串。
+ * @param {BodyPage | null | undefined} page
  * @returns {string}
  */
 export function renderCapabilities(page) {
   const view = page === null || page === undefined ? null : page.capabilities;
-  if (view === null || view === undefined) {
-    return '<section class="section cap-section"><div class="section-head"><h3>请求能力</h3></div>'
-      + '<p class="note">这一片没有能力视图；正文未读或协议不支持。</p></section>';
-  }
-  const tools = view.tools;
-  const skills = view.skills;
-  const toolCount = tools.state === 'present' || tools.state === 'empty'
-    ? `${tools.items.length} 工具` : '工具状态待确认';
-  const skillCount = skills.state === 'present' || skills.state === 'empty'
-    ? `${skills.items.length} 技能` : '技能状态待确认';
-  const head = `<div class="section-head"><h3>请求能力</h3><span class="count">${toolCount} · ${skillCount}</span></div>`;
-  /** @param {{state: string}} result @param {Record<string, string>} text */
-  const note = (result, text) => result.state === 'present'
-    ? '' : `<p class="note">${esc(text[result.state] ?? result.state)}</p>`;
-  const toolBlock = tools.items.length === 0 ? '' : `<details class="cap-block" data-fold="cap:tools">
-    <summary>工具清单 · ${tools.items.length}</summary>
-    <ol class="cap-list">${tools.items.map(renderToolItem).join('')}</ol></details>`;
-  const skillBlock = skills.items.length === 0 ? '' : `<details class="cap-block" data-fold="cap:skills">
-    <summary>技能清单 · ${skills.items.length}</summary>
-    <ul class="cap-list">${skills.items.map(renderSkillItem).join('')}</ul></details>`;
-  return `<section class="section cap-section">${head}${note(tools, TOOL_STATE_TEXT)}${note(skills, SKILL_STATE_TEXT)}${toolBlock}${skillBlock}</section>`;
+  if (view === null || view === undefined) return '';
+  /**
+   * @param {{state: string, items: {name: string}[]}} result
+   * @param {string} label @param {string} key @param {string} listHtml @param {Record<string, string>} text
+   */
+  const row = (result, label, key, listHtml, text) => {
+    if (result.state === 'present' && result.items.length > 0) {
+      return `<details class="rail-fold" data-fold="${key}">
+        <summary>${label}<span class="fold-count">${result.items.length}</span></summary>
+        <div class="fold-body">${listHtml}</div>
+      </details>`;
+    }
+    if (result.state === 'present' || result.state === 'empty') return '';
+    return `<details class="rail-fold" data-fold="${key}">
+      <summary>${label}<span class="fold-count warn">${esc(text[result.state] ?? result.state)}</span></summary>
+      <div class="fold-body"><p class="note">${esc(text[result.state] ?? result.state)}</p></div>
+    </details>`;
+  };
+  return row(view.tools, '工具清单', 'cap:tools',
+      `<ol class="cap-list">${view.tools.items.map(renderToolItem).join('')}</ol>`, TOOL_STATE_TEXT)
+    + row(view.skills, '技能清单', 'cap:skills',
+      `<ul class="cap-list">${view.skills.items.map(renderSkillItem).join('')}</ul>`, SKILL_STATE_TEXT);
 }

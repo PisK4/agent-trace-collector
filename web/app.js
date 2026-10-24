@@ -122,15 +122,15 @@ export function replyCompleteness(row, view) {
 }
 
 /**
- * 右栏读数页（§1.3）：请求能力 → 请求结构 → 本次回复 → 用量 → 计时 → 上下文组成 → 身份完整性。
- * 只按固定顺序拼接调用方给出的区块，缺的跳过，不重排也不补位。
- * @param {{capabilitiesHtml: string, structureHtml: string, replyHtml: string, usageHtml: string, timingHtml: string, promptHtml: string, completenessHtml: string}} parts
+ * 右栏读数页：本次回复 → 请求结构 → 能力清单 → 上下文组成 → 身份完整性（异常时）。
+ * 用量与计时在头部读数条，不进入读数页；区块缺的跳过，不重排也不补位。
+ * @param {{replyHtml: string, structureHtml: string, capabilitiesHtml: string, promptHtml: string, completenessHtml: string}} parts
  * @returns {string}
  */
 export function railFactsHtml(parts) {
   return [
-    parts.capabilitiesHtml, parts.structureHtml, parts.replyHtml,
-    parts.usageHtml, parts.timingHtml, parts.promptHtml, parts.completenessHtml,
+    parts.replyHtml, parts.structureHtml, parts.capabilitiesHtml,
+    parts.promptHtml, parts.completenessHtml,
   ].filter(html => html !== '').join('');
 }
 
@@ -692,11 +692,19 @@ if (typeof document !== 'undefined') {
     const s = /** @type {Record<string, unknown>} */ (route.summary);
     const order = Array.isArray(s.order) ? s.order : [];
     const attempts = /** @type {import('../src/queries').AttemptChain | null} */ (s.attempts ?? null);
+    const canonical = canonicalModel(r);
+    // 头部已显示模型；去向行只在与头部不同（错路由、换模型）时才重复 served。
+    const served = typeof s.served === 'string' ? s.served : null;
+    const servedShown = served !== null && (canonical === null || served !== canonical);
+    // 单次干净尝试不显示尝试链；重试、失败、未结束才是异常。
+    const attemptsAbnormal = attempts !== null && attempts.state === 'present'
+      && (attempts.items.length > 1 || attempts.items.some(item =>
+        item.fail !== null || item.done === false || (item.status !== null && item.status >= 400)));
     return `<dl class="chain">
-      <div class="chain-row"><dt>候选顺序</dt><dd class="mono" style="font-size:10px">${order.map(o => esc(raw(o))).join(' → ') || '<span class="muted">未报告</span>'}</dd></div>
-      <div class="chain-row"><dt>实际去向</dt><dd>${s.served ? `<code>${esc(s.served)}</code>` : '<span class="muted">未报告</span>'} · <code>${esc(s.provider ?? 'unknown')}</code></dd></div>
+      ${order.length > 1 ? `<div class="chain-row"><dt>候选顺序</dt><dd class="mono" style="font-size:10px">${order.map(o => esc(raw(o))).join(' → ')}</dd></div>` : ''}
+      <div class="chain-row"><dt>去向</dt><dd><code>${esc(s.provider ?? 'unknown')}</code>${servedShown ? ` · <code title="实际服务模型与头部显示的不一致">${esc(served)}</code>` : ''}</dd></div>
       <div class="chain-row"><dt>状态</dt><dd>HTTP ${esc(s.status ?? '—')} · ${secs(/** @type {number|null} */ (s.ms))}</dd></div>
-      ${attempts !== null && attempts.state !== 'empty' ? `<div class="chain-row"><dt>尝试链</dt><dd>${renderAttemptChain(attempts)}</dd></div>` : ''}
+      ${attemptsAbnormal ? `<div class="chain-row"><dt>尝试链</dt><dd>${renderAttemptChain(attempts)}</dd></div>` : ''}
     </dl>
     <p class="note" style="margin-top:8px">只显示已记录的决策与尝试。窗口过滤不保证完整留痕；用量条目数量也不等于尝试次数。</p>`;
   }
@@ -770,21 +778,62 @@ if (typeof document !== 'undefined') {
   }
 
   /* ---------------- 右栏 ---------------- */
-  /** @param {RequestRow} r */
-  function bigNumbers(r) {
-    const d = currentDetail();
-    const ttft = d?.ttft_ms ?? r.ttft_ms;
-    const ms = d?.ms ?? r.ms;
-    const flow = d?.flow_ms ?? r.flow_ms
+  /** 模型只在这里显示一次：优先实际服务模型，未关联账本时回退请求模型。 @param {RequestRow} r */
+  function canonicalModel(r) {
+    return r.model_served ?? r.model_requested;
+  }
+
+  /**
+   * 顶部读数条：模型与计时一行、用量一行，所有页签常驻。
+   * 口径解释放每个数字的 title；数值缺位显示「—」，不当作 0；整行全缺时整行不渲染。
+   * @param {RequestRow} r @param {RequestDetail | null} [detail]
+   */
+  function usageStrip(r, detail = currentDetail()) {
+    const ttft = detail?.ttft_ms ?? r.ttft_ms;
+    const ms = detail?.ms ?? r.ms;
+    const flow = detail?.flow_ms ?? r.flow_ms
       ?? (ms !== null && ttft !== null ? Math.max(0, ms - ttft) : null);
-    const speed = flow && r.out_tok ? r.out_tok / (flow / 1000) : null;
-    const cells = [
-      ['首字', ttft !== null ? (ttft / 1000).toFixed(2) : '—', ttft !== null ? 's' : '', 'TTFT：到第一个内容'],
-      ['时长', ms !== null ? (ms / 1000).toFixed(2) : '—', ms !== null ? 's' : '', '从请求到回复结束'],
-      ['输出速度', speed ? String(Math.round(speed)) : '—', speed ? 'tok/s' : '', '输出 token ÷ 生成耗时'],
-    ];
-    return `<div class="rail-big">${cells.map(([k, v, u, title]) => `<div title="${esc(title)}">
-      <div class="k">${k}</div><div class="v">${v}${u ? `<small>${u}</small>` : ''}</div></div>`).join('')}</div>`;
+    const speed = flow && r.out_tok ? Math.round(r.out_tok / (flow / 1000)) : null;
+    const firstText = detail?.first_text_ms ?? null;
+    const model = canonicalModel(r);
+    const timeParts = [
+      model !== null ? `<span class="strip-model" title="实际服务模型（model_served；未关联账本时为请求模型）">${esc(model)}</span>` : '',
+      ttft !== null ? `<span title="TTFT：到第一个内容">首字 ${(ttft / 1000).toFixed(2)}s</span>` : '',
+      ms !== null ? `<span title="从请求到回复结束">总 ${(ms / 1000).toFixed(2)}s</span>` : '',
+      speed !== null && speed > 0 ? `<span title="输出 token ÷ 生成耗时">${speed} tok/s</span>` : '',
+      firstText != null ? `<span title="第一个文本块到达的时刻">首个文本 ${(firstText / 1000).toFixed(2)}s</span>` : '',
+    ].filter(Boolean);
+    /** @param {string} label @param {string | null} v @param {string} tip */
+    const slot = (label, v, tip) =>
+      `<span title="${esc(tip)}">${label} ${v === null ? '<i class="miss">—</i>' : esc(v)}</span>`;
+    /** @param {string} label @param {number | null} v @param {string} tip */
+    const num = (label, v, tip) => slot(label, v === null ? null : n(v), tip);
+    const anyUsage = r.in_tok !== null || r.out_tok !== null || r.cache_read !== null || r.cache_write !== null;
+    const usageParts = [];
+    if (anyUsage) {
+      const total = (r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0);
+      const hit = r.cache_read !== null && total > 0 ? Math.round(r.cache_read / total * 100) : null;
+      usageParts.push(
+        num('入', r.in_tok, '输入 token，不含缓存读取与写入'),
+        num('出', r.out_tok, '输出 token'),
+        num('缓读', r.cache_read, '缓存读取 token'),
+        num('缓写', r.cache_write, '缓存写入 token'),
+        num('共', total, '提示总量 = 入 + 缓读 + 缓写'),
+      );
+      if (hit !== null) usageParts.push(slot('命中', `${hit}%`, '缓存命中 = 缓读 ÷ 提示总量，展示比例，不是计费口径'));
+      if (r.cost_state === 'priced') usageParts.push(slot('费用', `$${r.cost}`, '费用（上游报告）'));
+      if (r.cost_state === 'zero') usageParts.push(slot('费用', '$0', '费用（上游报告）'));
+    }
+    return `<div class="rail-strip">
+      ${timeParts.length > 0 ? `<div class="strip-row">${timeParts.join('<span class="sep">·</span>')}</div>` : ''}
+      ${usageParts.length > 0 ? `<div class="strip-row">${usageParts.join('<span class="sep">·</span>')}</div>` : ''}
+    </div>`;
+  }
+
+  /** 标题只渲染内容标题；model_time 兜底标题不再显示（模型与时间已在读数条里）。 @param {RequestRow} r */
+  function contentTitle(r) {
+    if (r.title_source === 'model_time') return '';
+    return `<div class="rail-title">${esc(r.title || '（无标题）')}</div>`;
   }
 
   function railHead() {
@@ -798,8 +847,8 @@ if (typeof document !== 'undefined') {
     return `<div class="rail-id"><span>req ${r.req_id}</span><span class="muted">·</span><span>${esc(dayTime(r.started_ms))}</span>
       ${r.agent === null ? '' : `<span class="muted">·</span><span>${esc(agentLabel(r.agent))}</span>`}
       <span class="grow"></span>${statusDot(r)}${statusChip(r)}</div>
-      <div class="rail-title">${esc(r.title || '（无标题）')}</div>
-      ${bigNumbers(r)}
+      ${contentTitle(r)}
+      ${usageStrip(r)}
       <div class="rail-tabs" role="tablist">
         <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">读数</button>
         <button role="tab" data-rail="body" aria-pressed="${state.railTab === 'body'}">正文</button>
@@ -808,74 +857,22 @@ if (typeof document !== 'undefined') {
       </div>`;
   }
 
-  /** @param {RequestRow} r */
-  function usageSection(r) {
-    const total = (r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0);
-    const cell = (/** @type {string} */ label, /** @type {number|null} */ val) => `<div class="u-cell"><div class="k">${label}</div>${val == null
-      ? '<div class="v miss">未报告</div>'
-      : `<div class="v">${n(val)}</div>`}</div>`;
-    const hit = r.cache_read !== null && total > 0 ? Math.round(r.cache_read / total * 100) : null;
-    const cost = r.cost_state === 'priced' ? `$${r.cost}` : r.cost_state === 'zero' ? '$0' : r.cost_state === 'unpriced' ? '未定价' : '未取得';
-    return `<section class="rail-section">
-      <h3>用量<span class="grow"></span><span class="hint">上游报告</span></h3>
-      <div class="u-grid">
-        ${cell('输入（不含缓存）', r.in_tok)}
-        ${cell('输出', r.out_tok)}
-        ${cell('缓存读取', r.cache_read)}
-        ${cell('缓存写入', r.cache_write)}
-      </div>
-      <div class="u-total"><span>提示总量 <b>${total > 0 ? n(total) : '—'}</b></span><span>费用 <b>${esc(cost)}</b></span></div>
-      ${hit !== null ? `<div class="meter" aria-hidden="true"><i style="width:${hit}%"></i></div>
-        <div class="u-total"><span>缓存命中 <b>${hit}%</b>（读取 ÷ 提示总量，展示比例，不是计费口径）</span></div>` : ''}
-      <p class="rail-note">输入不含缓存读取与写入。缺失保留为「未报告」，不当作 0 参与合计。费用状态：${esc(r.cost_state)}。</p>
-    </section>`;
-  }
-
-  /** @param {RequestRow} r */
-  function timingSection(r) {
-    const d = currentDetail();
-    const ms = d?.ms ?? r.ms;
-    const ttft = d?.ttft_ms ?? r.ttft_ms;
-    if (ms === null) {
-      return `<section class="rail-section"><h3>时间构成</h3>
-        <p class="rail-note">${(r.have & 2) ? '上游没有报告本笔耗时。' : '这笔记录还没有关联到账本，没有网关计时。'}</p></section>`;
-    }
-    const waitPct = ttft !== null ? Math.min(100, ttft / ms * 100) : 100;
-    const tickPct = d?.first_text_ms != null && ms > 0 ? Math.min(100, d.first_text_ms / ms * 100) : null;
-    const flow = d?.flow_ms ?? r.flow_ms ?? (ttft !== null ? Math.max(0, ms - ttft) : null);
-    const speed = flow && r.out_tok ? Math.round(r.out_tok / (flow / 1000)) : null;
-    const rows = [
-      ttft !== null
-        ? `<span class="k"><i class="sw" style="background:var(--line-strong)"></i>首字前（排队 + 网络 + 首 token）</span><span class="v">${secs(ttft)}</span>`
-        : `<span class="k"><i class="sw" style="background:var(--line-strong)"></i>首字前</span><span class="v">未报告</span>`,
-      ttft !== null
-        ? `<span class="k"><i class="sw" style="background:var(--accent);opacity:.62"></i>首字后生成</span><span class="v">${secs(ms - ttft)}</span>`
-        : '',
-      `<span class="k"><i class="sw" style="background:var(--text);width:2px;height:9px;border-radius:1px"></i>首个文本</span><span class="v">${d?.first_text_ms != null ? secs(d.first_text_ms) : '未报告'}</span>`,
-      speed ? `<span class="k">输出速度</span><span class="v">${speed} tok/s</span>` : '',
-    ].filter(Boolean).join('');
-    return `<section class="rail-section">
-      <h3>时间构成</h3>
-      <div class="time-wrap">
-        <div class="time-bar" aria-hidden="true"><i class="wait" style="width:${waitPct}%"></i><i class="gen" style="width:${100 - waitPct}%"></i>
-          ${tickPct !== null ? `<span class="time-tick" style="left:${tickPct}%"></span>` : ''}</div>
-        <div class="time-legend">${rows}</div>
-      </div>
-      <p class="rail-note">首字是到第一个内容；首个文本通常更晚。生成耗时为总时长减去首字；缺值时留空，不按 0 处理。</p>
-    </section>`;
-  }
-
-  /** @param {RequestRow} r */
-  function promptSection(r) {
+  /**
+   * 上下文组成折叠行。摘要行给出占比前三类；完整条形图与口径在展开后。
+   * @param {RequestRow} r
+   */
+  function promptFoldHtml(r) {
     const d = currentDetail();
     const p = d?.prompt ?? null;
     const list = /** @type {{kind: string, tokens: number}[]} */ (p?.parts ?? []);
+    const foldOpen = `<details class="rail-fold" data-fold="prompt:${r.req_id}">`;
     if (p === null || (p.tokens === null && list.length === 0)) {
-      return `<section class="rail-section"><h3>上下文组成</h3>
-        <p class="rail-note">${esc(p?.note ?? '没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。')}</p></section>`;
+      return `${foldOpen}<summary>上下文组成</summary>
+        <div class="fold-body"><p class="rail-note">${esc(p?.note ?? '没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。')}</p></div></details>`;
     }
     const sum = list.reduce((a, x) => a + x.tokens, 0) || 1;
-    const ordered = [...list].sort((a, b) => b.tokens - a.tokens);
+    const top = [...list].sort((a, b) => b.tokens - a.tokens).slice(0, 3)
+      .map(x => `${partLabel(String(x.kind))} ${Math.round(x.tokens / sum * 100)}%`).join(' · ');
     /** @type {Record<string,string>} */
     const stateText = { recomputed: '当前结果', retained: '旧结果', missing: '缺失' };
     const hint = `${stateText[p.state] ?? p.state} · ${p.counted === true ? '总量已校准' : '本地估计'}`;
@@ -886,33 +883,42 @@ if (typeof document !== 'undefined') {
       ? `<span>占用 <b>${(p.ratio * 100).toFixed(1)}%</b></span>`
       : '';
     const note = p.note ?? (p.window === null ? '没有可用分母，不显示占用率。' : '分类是估计分配，不是逐类精确计数。');
-    return `<section class="rail-section">
-      <h3>上下文组成<span class="grow"></span><span class="hint">${esc(hint)}</span></h3>
-      ${usage}
-      <div class="comp-bar" aria-hidden="true">${list.filter(x => x.tokens > 0).map(x => `<i style="flex:${x.tokens / sum};background:${partColor(String(x.kind))}"></i>`).join('')}</div>
-      <div class="comp-legend">${ordered.map(x => `<span class="name"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></span>
-        <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>
-      <div class="u-total" style="margin-top:8px"><span>提示总量 <b>${n(p.tokens ?? 0)}</b></span><span>${p.window ? `窗口 <b>${kk(p.window)}</b>` : '窗口未知'}</span>${ratioText}</div>
-      <p class="rail-note">${esc(note)}</p>
-    </section>`;
+    return `${foldOpen}
+      <summary>上下文组成${top !== '' ? `<span class="fold-count">${esc(top)}</span>` : ''}</summary>
+      <div class="fold-body">
+        <p class="note">${esc(hint)}</p>
+        ${usage}
+        <div class="comp-bar" aria-hidden="true">${list.filter(x => x.tokens > 0).map(x => `<i style="flex:${x.tokens / sum};background:${partColor(String(x.kind))}"></i>`).join('')}</div>
+        <div class="comp-legend">${[...list].sort((a, b) => b.tokens - a.tokens).map(x => `<span class="name"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></span>
+          <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>
+        <div class="u-total" style="margin-top:8px"><span>提示总量 <b>${n(p.tokens ?? 0)}</b></span><span>${p.window ? `窗口 <b>${kk(p.window)}</b>` : '窗口未知'}</span>${ratioText}</div>
+        <p class="rail-note">${esc(note)}</p>
+      </div>
+    </details>`;
   }
 
-  /** @param {RequestRow} r */
+  /**
+   * 身份完整性只在有异常通道时渲染；三条全正常整节不出现（头部圆点已覆盖整体状态）。
+   * 路由历史未关联是当前来源的常态，不算异常，不在此提示。
+   * @param {RequestRow} r
+   */
   function completenessSection(r) {
+    const rows = [
+      !(r.have & 1) ? ['正文回调', '未收到', 'var(--bad)'] : '',
+      !(r.have & 2) ? ['用量账本', '待关联', 'var(--warn)'] : '',
+    ].filter(Boolean);
+    if (rows.length === 0) return '';
     return `<section class="rail-section">
-      <h3>身份完整性</h3>
-      <div class="chain">
-        <div class="chain-row"><dt>正文回调</dt><dd><span style="color:${(r.have & 1) ? 'var(--good)' : 'var(--bad)'}">${(r.have & 1) ? '已收到' : '未收到'}</span></dd></div>
-        <div class="chain-row"><dt>用量账本</dt><dd><span style="color:${(r.have & 2) ? 'var(--good)' : 'var(--warn)'}">${(r.have & 2) ? '已关联' : '待关联'}</span></dd></div>
-        <div class="chain-row"><dt>路由历史</dt><dd><span style="color:${(r.have & 4) ? 'var(--good)' : 'var(--muted)'}">${(r.have & 4) ? '已关联' : '当前来源不提供'}</span></dd></div>
-      </div>
-      <p class="rail-note">三条通道各自可能缺失。正文状态：${esc(r.body_state)}${r.miss_reason ? ` · ${esc(r.miss_reason)}` : ''}。</p>
+      <h3 title="路由历史未关联是当前来源的常态，不在此提示；需要路由详情看「路由」页签。">身份完整性</h3>
+      <div class="chain">${rows.map(([k, v, color]) =>
+        `<div class="chain-row"><dt>${k}</dt><dd><span style="color:${color}">${v}</span></dd></div>`).join('')}</div>
+      ${r.miss_reason ? `<p class="rail-note">缺失原因：${esc(r.miss_reason)}。</p>` : ''}
     </section>`;
   }
 
   /**
-   * 读数页（§1.3）：能力 → 结构 → 本次回复 → 用量 → 计时 → 上下文组成 → 身份完整性。
-   * 能力与结构默认折叠；回复完整显示；路由不在这里读取。
+   * 读数页：本次回复（默认展开）→ 请求结构 → 能力清单 → 上下文组成 → 身份完整性（异常时）。
+   * 用量与计时在头部读数条；能力与结构默认折叠；正常态不带状态标签（异常才出现）。
    */
   function railFacts() {
     const r = currentRow();
@@ -922,9 +928,32 @@ if (typeof document !== 'undefined') {
     const detail = read?.detail ?? null;
     const view = meta !== null ? replyView(meta) : null;
     const completeness = replyCompleteness(r, view);
-    const capabilitiesHtml = meta !== null
-      ? renderCapabilities(meta)
-      : `<section class="rail-section cap-section"><div class="section-head"><h3>请求能力</h3></div><p class="rail-note">正文未读取或不可读，能力清单无法解析。</p></section>`;
+    const tools = detail === null ? [] : toolEntries(detail, meta).map(tool => ({
+      ...tool,
+      result_label: tool.result_req !== null ? windowLabel(tool.result_req) : null,
+    }));
+    /** @type {string} */
+    let replyHtml;
+    if (view === null) {
+      const canLoad = r.body_state === 'available' || r.body_state === 'partial';
+      replyHtml = `<details class="rail-fold" data-fold="reply:${r.req_id}">
+        <summary>本次回复<span class="fold-count">${esc(canLoad ? '正文未读取' : bodyStateText(r))}</span></summary>
+        <div class="fold-body"><p class="note">${esc(bodyLabelText(r))}</p>
+          ${canLoad ? `<div class="conv-tools"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>
+      </details>`;
+    } else {
+      const cls = completeness.key === 'absent' ? 'bad' : 'warn';
+      const right = completeness.key !== 'complete'
+        ? `<span class="fold-count ${cls}">${esc(completeness.label)}</span>`
+        : view.finish !== null ? `<span class="fold-count">finish: ${esc(view.finish)}</span>` : '';
+      const truncNote = completeness.key === 'truncated'
+        ? `<p class="rail-note">回复在长度上限被截断（finish=${esc(view.finish ?? '')}）。这是成功响应内的完整性状态，请求本身仍算成功。</p>`
+        : '';
+      replyHtml = `<details class="rail-fold" data-fold="reply:${r.req_id}" open>
+        <summary>本次回复${right}</summary>
+        <div class="fold-body">${renderReply(view, tools, String(r.req_id))}${truncNote}</div>
+      </details>`;
+    }
     const structureHtml = structureFoldHtml({
       reqId: r.req_id, row: r, meta,
       entries: read?.entries ?? [],
@@ -932,20 +961,11 @@ if (typeof document !== 'undefined') {
       delta: detail === null ? null : deltaOrdinals(detail),
       relation: relationTextOf(r.req_id),
     });
-    let replyHtml;
-    if (view === null) {
-      replyHtml = `<section class="rail-section"><div class="section-head"><h3>本次回复</h3><span class="count">缺失回复</span></div><p class="rail-note">正文未读取，回复对象不可见。</p></section>`;
-    } else {
-      const truncNote = completeness.key === 'truncated'
-        ? `<p class="rail-note">回复在长度上限被截断（finish=${esc(view.finish ?? '')}）。这是成功响应内的完整性状态，请求本身仍算成功。</p>`
-        : '';
-      const tools = detail === null ? [] : toolEntries(detail, meta);
-      replyHtml = `<section class="rail-section"><div class="section-head"><h3>本次回复</h3><span class="count">${completeness.label}</span></div>${renderReply(view, tools)}${truncNote}</section>`;
-    }
     return railFactsHtml({
-      capabilitiesHtml, structureHtml, replyHtml,
-      usageHtml: usageSection(r), timingHtml: timingSection(r),
-      promptHtml: promptSection(r), completenessHtml: completenessSection(r),
+      replyHtml, structureHtml,
+      capabilitiesHtml: meta !== null ? renderCapabilities(meta) : '',
+      promptHtml: promptFoldHtml(r),
+      completenessHtml: completenessSection(r),
     });
   }
 
@@ -983,19 +1003,12 @@ if (typeof document !== 'undefined') {
         return '<div class="rail-empty"><b>没有工具调用</b>这一笔已读回复里没有工具调用；更早分片读取后可再查。</div>';
       }
       const rows = tools.map(tool => {
-        const reading = toolReadings.get(`${r.req_id}:${tool.ord}`) ?? null;
-        const pairChip = tool.state === 'resolved'
-          ? '<span class="tool-chip res"><span>配对已确认</span></span>'
-          : tool.state === 'pending' ? '<span class="tool-chip miss"><span>结果位置待定</span></span>'
-            : tool.state === 'ambiguous' ? '<span class="tool-chip miss"><span>多个候选</span></span>'
-              : '<span class="tool-chip miss"><span>无结果</span></span>';
-        const loadChip = tool.state !== 'resolved' ? ''
-          : reading === null ? '<span class="tool-chip mute"><span>正文待读取</span></span>'
-            : reading.state === 'available' ? '<span class="tool-chip res"><span>正文已加载</span></span>'
-              : `<span class="tool-chip miss"><span>正文加载 ${esc(reading.state)}</span></span>`;
+        // 正常态（已配对、正文未读已读）不挂 chip；异常（多候选）才提示，详情页给完整状态。
+        const warn = tool.state === 'ambiguous'
+          ? '<span class="tool-chip miss"><span>多个候选</span></span>' : '';
         return `<button class="tool-row tool-link" data-tool-select="${tool.ord}">
           <span class="tool-chip call" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clipText(tool.inputText, 60))})</span></span>
-          ${pairChip}${loadChip}
+          ${warn}
         </button>`;
       });
       return `<section class="rail-section"><h3>工具调用<span class="grow"></span><span class="hint">${tools.length} 次调用 · 点开看四页详情</span></h3>${rows.join('')}</section>`;
@@ -1032,7 +1045,7 @@ if (typeof document !== 'undefined') {
     if (r === null) {
       if (state.offPageReqId !== null) {
         const read = reads.get(state.offPageReqId) ?? null;
-        return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口（可能在更早的历史里）。这里只读了它的详情；需要完整轨迹请从顶部加载更早记录，不自动扫描全部历史。</p></section>${read?.detail ? usageSection(read.detail) + timingSection(read.detail) : ''}`;
+        return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口（可能在更早的历史里）。这里只读了它的详情；需要完整轨迹请从顶部加载更早记录，不自动扫描全部历史。</p></section>${read?.detail ? usageStrip(read.detail, null) : ''}`;
       }
       return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
     }
@@ -1054,7 +1067,10 @@ if (typeof document !== 'undefined') {
     }
     const view = replyView(page);
     const detail = read.detail ?? null;
-    const tools = detail === null ? [] : toolEntries(detail, page);
+    const tools = detail === null ? [] : toolEntries(detail, page).map(tool => ({
+      ...tool,
+      result_label: tool.result_req !== null ? windowLabel(tool.result_req) : null,
+    }));
     const completeness = replyCompleteness(r, view);
     const truncNote = completeness.key === 'truncated'
       ? `<p class="rail-note">回复在长度上限被截断（finish=${esc(view.finish ?? '')}）；请求本身仍是成功状态。</p>` : '';
@@ -1068,7 +1084,7 @@ if (typeof document !== 'undefined') {
     const body = chosen !== null
       ? renderMessageDetail(chosen)
       : view.state === 'ok'
-        ? `${truncNote}${renderReplyDetail(view, tools)}`
+        ? `${truncNote}${renderReplyDetail(view, tools, String(r.req_id))}`
         : `<div class="rail-empty"><b>没有可读的回复</b>${esc(bodyNotice(page) || '这一笔只有请求。')}</div>`;
     const structure = read.structure;
     // 结构总数未读时用元信息页的 total 判断：正文页签也能发起首次结构读取。
