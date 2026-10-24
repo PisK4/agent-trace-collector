@@ -81,7 +81,7 @@ test('读取未完成与不可用时不拆 input_preview 为用户步骤', () =>
   expect(unsupported[0]?.status).toBe('missing_body');
 });
 
-test('注入与空 content 不是用户；tool_result 消息不进轨迹', () => {
+test('注入与空 content 不是用户', () => {
   const d = detail({ delta_ordinals: [2, 3] });
   const entries = [
     entry(2, { state: 'text', text: '<img src=x onerror=alert(1)>', original: '<img src=x onerror=alert(1)>' }, true),
@@ -93,6 +93,111 @@ test('注入与空 content 不是用户；tool_result 消息不进轨迹', () =>
   const html = renderTraceRows(row(), steps, 1, null);
   expect(html).not.toContain('<img src=x');
   expect(html).toContain('&lt;img src=x');
+});
+
+test('System 步骤：顶层独立来源键，消息级带原路径，输入总数不变', () => {
+  const d = detail({ delta_ordinals: [1] });
+  const sysEntry = {
+    ord: 1, role: 'system', rawRole: 'system',
+    blocks: [{ kind: 'text', text: 'be nice', index: 0, raw: 'be nice', path: 'content' }],
+    preview: 'be nice', input: null, isInput: false,
+  };
+  const steps = projectSteps(row(), read(d, [sysEntry], { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'c', name: 'x', input: {} }] }),
+    { text: 'base', changed: null });
+  const topLevel = steps.find(s => s.key === '7:system');
+  expect(topLevel?.kind).toBe('system');
+  expect(topLevel?.source).toEqual({ side: 'request', path: 'request.system', messageOrd: null, blockIndex: null });
+  const msgSys = steps.find(s => s.kind === 'system' && s.messageOrd === 1);
+  expect(msgSys?.key).toBe('7:message:1');
+  expect(msgSys?.source).toEqual({ side: 'request', path: 'request.messages[1]', messageOrd: 1, blockIndex: null });
+  // ord1 是 System 消息，不是用户输入；输入总数不含它。
+  expect(steps.some(s => s.kind === 'user')).toBe(false);
+  // 渲染：System 英文标签一行摘要，全文放右栏。
+  const html = renderTraceRows(row(), steps, 1, null);
+  expect(html).toContain('>System<');
+  expect(html).toContain('be nice');
+});
+
+test('System 上下文：同值不重复，变化标明，不可比只声明当前', () => {
+  const reply = { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] };
+  const base = read(detail(), [], reply);
+  const same = projectSteps(row(), base, { text: 'base', changed: false });
+  expect(same.some(s => s.kind === 'system')).toBe(false);
+  const changed = projectSteps(row(), base, { text: 'base v2', changed: true });
+  const changedStep = changed.find(s => s.kind === 'system');
+  expect(changedStep?.text).toContain('与已确认前驱不同');
+  const current = projectSteps(row(), base, { text: 'base', changed: null });
+  const currentStep = current.find(s => s.kind === 'system');
+  expect(currentStep?.text).toBe('base');
+  expect(currentStep?.text).not.toContain('不同');
+  // 没有可读 system（request_fields 缺失）时不给步骤，也不伪造。
+  expect(projectSteps(row(), base, null).some(s => s.kind === 'system')).toBe(false);
+});
+
+test('混合消息按块出步骤：结果带内容块路径，用户文本只出一次', () => {
+  const d = detail({ delta_ordinals: [2] });
+  const mixed = {
+    ord: 2, role: 'user', rawRole: 'user',
+    blocks: [
+      { kind: 'result', text: 'file body', index: 0, raw: { type: 'tool_result' }, path: 'content[0]' },
+      { kind: 'text', text: '继续', index: 1, raw: '继续', path: 'content[1]' },
+    ],
+    preview: 'file body',
+    input: { state: 'text', text: '继续', original: '继续' },
+    isInput: true,
+  };
+  const steps = projectSteps(row(), read(d, [mixed], { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
+  const result = steps.find(s => s.kind === 'tool_result');
+  expect(result?.key).toBe('7:message:2:result:0');
+  expect(result?.source).toEqual({ side: 'request', path: 'request.messages[2].content[0]', messageOrd: 2, blockIndex: 0 });
+  const users = steps.filter(s => s.kind === 'user');
+  expect(users.length).toBe(1);
+  expect(users[0]?.key).toBe('7:message:2');
+  expect(users[0]?.source).toEqual({ side: 'request', path: 'request.messages[2]', messageOrd: 2, blockIndex: null });
+});
+
+test('回复来源是实际协议路径：Anthropic content[i]，Chat tool_calls[i]', () => {
+  const anthropic = projectSteps(row(), read(detail(), [], { stop_reason: 'tool_use', content: [
+    { type: 'text', text: '先看' },
+    { type: 'tool_use', id: 'c1', name: 'Bash', input: {} },
+  ] }));
+  expect(anthropic.find(s => s.kind === 'assistant')?.source).toEqual({
+    side: 'reply', path: 'reply.content[0]', messageOrd: null, blockIndex: 0,
+  });
+  expect(anthropic.find(s => s.kind === 'tool')?.source).toEqual({
+    side: 'reply', path: 'reply.content[1]', messageOrd: null, blockIndex: 1,
+  });
+  const chat = projectSteps(row(), read(detail(), [], { choices: [{ finish_reason: 'tool_calls', message: {
+    role: 'assistant', content: null,
+    tool_calls: [{ id: 'a', type: 'function', function: { name: 'read', arguments: '{}' } }],
+  } }] }));
+  expect(chat.find(s => s.kind === 'tool')?.source).toEqual({
+    side: 'reply', path: 'reply.choices[0].message.tool_calls[0]', messageOrd: null, blockIndex: 0,
+  });
+  // 记录与辅助步骤不落在协议对象上，点击打开请求读数。
+  const aux = projectSteps(row({ purpose_chain: 'exclude', req_kind: 'title' }), null);
+  expect(aux[0]?.source).toBeNull();
+  const record = projectSteps(row(), null);
+  expect(record[0]?.source).toBeNull();
+});
+
+test('英文角色标签与内容类型上屏：调用 Assistant + Tool call，结果 Tool + Tool result', () => {
+  const d = detail({ delta_ordinals: [2] });
+  const mixed = {
+    ord: 2, role: 'user', rawRole: 'user',
+    blocks: [{ kind: 'result', text: 'file body', index: 0, raw: {}, path: 'content[0]' }],
+    preview: 'file body', input: null, isInput: false,
+  };
+  const steps = projectSteps(row(), read(d, [mixed], { stop_reason: 'tool_use', content: [
+    { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } },
+  ] }));
+  const html = renderTraceRows(row(), steps, 3, null);
+  expect(html).toContain('>Assistant<');
+  expect(html).toContain('Tool call');
+  expect(html).toContain('>Tool<');
+  expect(html).toContain('Tool result');
+  expect(html).not.toContain('用户');
+  expect(html).not.toContain('工具<');
 });
 
 test('dirty、branch、unknown 没有确定用户步骤', () => {

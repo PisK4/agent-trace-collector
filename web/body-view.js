@@ -9,9 +9,9 @@
  * @typedef {import('../src/protocols').BodyPage} BodyPage
  * @typedef {import('../src/queries').RequestDetail} RequestDetail
  * @typedef {'system' | 'user' | 'assistant' | 'tool' | 'unknown'} Role
- * @typedef {{kind: string, text: string, index: number, raw: unknown, failed?: boolean}} Block
+ * @typedef {{kind: string, text: string, index: number, raw: unknown, path: string, failed?: boolean}} Block
  * @typedef {import('../src/input-interpretation').UserInputView} UserInputView
- * @typedef {{ord: number, role: Role, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
+ * @typedef {{ord: number, role: Role, rawRole: string | null, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
  * @typedef {{id: string, name: string, inputText: string, ord: number}} ToolCallView
  * @typedef {{state: 'ok' | 'absent' | 'invalid', text: string, thinking: string[], calls: ToolCallView[], finish: string | null, model: string | null, raw: unknown}} ReplyView
  * @typedef {{call_id: string, name: string, inputText: string, ord: number, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null, result_label?: string | null}} ToolEntry
@@ -157,35 +157,37 @@ function imageLabel(block) {
  * 单个内容块归一化。两种协议的差别在这里收敛成同一组 kind。
  * @param {unknown} block
  * @param {number} index
+ * @param {string} path 块在所属消息内的协议位置（content[i] / tool_calls[i]），由调用方给出
  * @returns {Block}
  */
-function blockView(block, index) {
-  if (!isRecord(block)) return { kind: 'other', text: previewOf(block), index, raw: block };
+function blockView(block, index, path) {
+  if (!isRecord(block)) return { kind: 'other', text: previewOf(block), index, raw: block, path };
   const type = String(block.type ?? '');
-  if (type === 'text') return { kind: 'text', text: previewOf(block.text), index, raw: block };
+  if (type === 'text') return { kind: 'text', text: previewOf(block.text), index, raw: block, path };
   if (type === 'thinking') {
-    return { kind: 'thinking', text: typeof block.thinking === 'string' ? block.thinking : previewOf(block), index, raw: block };
+    return { kind: 'thinking', text: typeof block.thinking === 'string' ? block.thinking : previewOf(block), index, raw: block, path };
   }
   if (type === 'redacted_thinking') {
-    return { kind: 'thinking', text: '（推理内容已被上游加密，只保留占位块）', index, raw: block };
+    return { kind: 'thinking', text: '（推理内容已被上游加密，只保留占位块）', index, raw: block, path };
   }
-  if (type === 'tool_use') return { kind: 'call', text: callLabel(block.name, block.input), index, raw: block };
+  if (type === 'tool_use') return { kind: 'call', text: callLabel(block.name, block.input), index, raw: block, path };
   if (type === 'tool_result') {
     // is_error 只在正文里按需读取；缺失保持未报告，不等于成功。
     const failed = typeof block.is_error === 'boolean' ? block.is_error : undefined;
-    return { kind: 'result', text: previewOf(block.content), index, raw: block, failed };
+    return { kind: 'result', text: previewOf(block.content), index, raw: block, path, failed };
   }
-  if (type === 'image' || type === 'input_image') return { kind: 'image', text: imageLabel(block), index, raw: block };
+  if (type === 'image' || type === 'input_image') return { kind: 'image', text: imageLabel(block), index, raw: block, path };
   // chat 的函数调用块：{id, type:'function', function:{name, arguments}}
   if (isRecord(block.function)) {
-    return { kind: 'call', text: callLabel(block.function.name, block.function.arguments), index, raw: block };
+    return { kind: 'call', text: callLabel(block.function.name, block.function.arguments), index, raw: block, path };
   }
-  return { kind: 'other', text: previewOf(block), index, raw: block };
+  return { kind: 'other', text: previewOf(block), index, raw: block, path };
 }
 
 /**
- * 一条消息的内容块。chat 的 tool_calls 在消息层，这里提升成 call 块；
+ * 单条消息的内容块。chat 的 tool_calls 在消息层，这里提升成 call 块；
  * 索引沿用各自协议里的位置，便于和服务端的 tool_call.ord 对齐。
+ * path 是块在消息内的实际协议位置（content[i] / tool_calls[i]），供步骤来源拼接。
  * @param {unknown} message
  * @returns {Block[]}
  */
@@ -195,14 +197,18 @@ export function messageBlocks(message) {
   const out = [];
   const content = message.content;
   if (typeof content === 'string') {
-    out.push({ kind: message.role === 'tool' ? 'result' : 'text', text: content, index: 0, raw: content });
+    out.push({ kind: message.role === 'tool' ? 'result' : 'text', text: content, index: 0, raw: content, path: 'content' });
   } else if (Array.isArray(content)) {
-    for (const [index, block] of content.entries()) out.push(blockView(block, index));
+    for (const [index, block] of content.entries()) {
+      out.push(blockView(block, index, `content[${index}]`));
+    }
   } else if (isRecord(content)) {
-    out.push(blockView(content, 0));
+    out.push(blockView(content, 0, 'content'));
   }
   if (Array.isArray(message.tool_calls)) {
-    for (const [index, call] of message.tool_calls.entries()) out.push(blockView(call, index));
+    for (const [index, call] of message.tool_calls.entries()) {
+      out.push(blockView(call, index, `tool_calls[${index}]`));
+    }
   }
   return out;
 }
@@ -216,9 +222,49 @@ export function roleOf(message) {
   return 'unknown';
 }
 
-/** @param {Role} role */
+/** 参与角色标签统一用英文；tag 只管显示文本，CSS 类名走 roleClass。 @param {Role} role */
 export function roleTag(role) {
-  return role.toUpperCase();
+  return ROLE_TAGS[role] ?? 'Unknown';
+}
+
+/** CSS 类名用稳定的角色小写名，不随显示文本变化。 @param {Role} role */
+export function roleClass(role) {
+  return ROLE_TAGS[role] !== undefined ? role : 'unknown';
+}
+
+const ROLE_TAGS = /** @type {Record<Role, string>} */ ({
+  system: 'System', user: 'User', assistant: 'Assistant', tool: 'Tool', unknown: 'Unknown',
+});
+
+/**
+ * 消息级主角色：纯工具结果消息显示 Tool，混合消息保留协议角色、逐块解释，
+ * 不把整条 user 消息改成 Tool。纯调用的助手消息仍是 Assistant。
+ * @param {Entry} entry
+ * @returns {Role}
+ */
+export function displayRoleOf(entry) {
+  if (entry.blocks.length > 0 && entry.blocks.every(block => block.kind === 'result')) return 'tool';
+  return entry.role;
+}
+
+/**
+ * 顶层 system 字段的文本。Chat 与 Anthropic 都保存在 request_fields.system：
+ * 字符串直读，块数组取 text 块拼接。缺失或为空返回 null，不从相邻字段补猜。
+ * @param {BodyPage | null | undefined} page
+ * @returns {string | null}
+ */
+export function topSystemText(page) {
+  const fields = page === null || page === undefined ? null : page.request_fields;
+  const system = fields !== null && typeof fields === 'object' && !Array.isArray(fields)
+    ? /** @type {Record<string, unknown>} */ (fields).system ?? null : null;
+  if (typeof system === 'string') return system.length > 0 ? system : null;
+  if (Array.isArray(system)) {
+    const texts = system
+      .map(block => isRecord(block) && typeof block.text === 'string' ? block.text : '')
+      .filter(text => text.length > 0);
+    return texts.length > 0 ? texts.join('\n\n') : null;
+  }
+  return null;
 }
 
 /** @param {Block[]} blocks */
@@ -248,6 +294,7 @@ export function messageEntries(page) {
     return {
       ord: message.ord,
       role,
+      rawRole: isRecord(message.value) && typeof message.value.role === 'string' ? message.value.role : null,
       blocks,
       preview: messagePreview(blocks),
       input: interpretation === null ? null : interpretation.input,
@@ -326,7 +373,7 @@ export function replyView(page) {
   };
 
   if (Array.isArray(reply.content)) {
-    const blocks = reply.content.map((block, index) => blockView(block, index));
+    const blocks = reply.content.map((block, index) => blockView(block, index, `content[${index}]`));
     return fromBlocks(blocks, textOrNull(reply.stop_reason));
   }
   const choices = Array.isArray(reply.choices) ? reply.choices : [];
@@ -390,11 +437,15 @@ export function renderMessages(entries, options) {
   const rows = shown.map(entry => {
     const isNew = options.delta !== null && options.delta.has(entry.ord);
     const current = options.selectedOrd === entry.ord ? ' aria-current="true"' : '';
+    const displayRole = displayRoleOf(entry);
+    // 消息级列表用主角色加内容类型：纯结果与纯调用在预览前标明类型。
+    const typePrefix = entry.blocks.length > 0 && entry.blocks.every(block => block.kind === 'result') ? 'Tool result · '
+      : entry.blocks.length > 0 && entry.blocks.every(block => block.kind === 'call') ? 'Tool call · ' : '';
     return `<li class="msg" data-ord="${entry.ord}"${current}>
       <button class="msg-head" data-msg="${entry.ord}" aria-label="查看消息 ${entry.ord}">
-        <span class="kind ${roleTag(entry.role)}">${roleTag(entry.role)}</span>
+        <span class="kind ${roleClass(displayRole)}">${roleTag(displayRole)}</span>
         <span class="msg-ord">#${entry.ord}</span>
-        <span class="msg-preview">${esc(entry.preview)}</span>
+        <span class="msg-preview">${esc(typePrefix + entry.preview)}</span>
         ${isNew ? '<span class="msg-new">新增</span>' : ''}
       </button>
     </li>`;
@@ -410,6 +461,7 @@ export function renderMessages(entries, options) {
  * @param {Entry} entry
  */
 export function renderMessageDetail(entry) {
+  const displayRole = displayRoleOf(entry);
   const blocks = entry.blocks.map(block => {
     if (block.kind === 'text') {
       return entry.role === 'assistant'
@@ -423,17 +475,17 @@ export function renderMessageDetail(entry) {
     if (block.kind === 'call' || block.kind === 'result') {
       const failed = block.kind === 'result' && block.failed === true
         ? '<span class="tool-chip miss"><span>工具结果失败</span></span>' : '';
-      return `${failed}<pre class="raw" tabindex="0">${esc(block.text)}</pre>`;
+      return `${failed}<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(block.text)}</pre>`;
     }
-    return `<pre class="raw" tabindex="0">${esc(JSON.stringify(block.raw, null, 2))}</pre>`;
+    return `<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(JSON.stringify(block.raw, null, 2))}</pre>`;
   }).join('');
   return `<div class="body-panel">
     <div class="bp-head">
-      <span class="kind ${roleTag(entry.role)} bp-kind">${roleTag(entry.role)}</span>
+      <span class="kind ${roleClass(displayRole)} bp-kind">${roleTag(displayRole)}</span>
       <span class="bp-path">messages[${entry.ord}]</span>
       <button class="chip-btn" data-copy-msg="${entry.ord}">复制原文</button>
     </div>
-    <div class="bp-meta"><span>${entry.blocks.length} 个内容块</span><span>·</span><span>按协议字段顺序展示</span></div>
+    <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${entry.blocks.length} 个内容块</span><span>·</span><span>按协议字段顺序展示</span></div>
     ${blocks.length > 0 ? blocks : '<p class="note">这条消息没有内容块。</p>'}
     <p class="rail-note">内容按脱敏后的原文保存；未知块以转义 JSON 展示，不做语义推测。</p>
   </div>`;

@@ -222,22 +222,26 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-select[aria-current="true"]{background:var(--accent-soft)}
 .compact-meta{display:flex;align-items:center;flex:none;width:86px;font:9px var(--mono);color:var(--muted)}
 .compact-meta b{font-weight:400;color:var(--text-2)}
-.row-label{width:34px;flex:none;padding:2px 3px;border-radius:3px;text-align:center;font:10px var(--ui);color:var(--k-user);background:var(--k-user-bg)}
+/* 角色标签用英文（User/Assistant/Tool/System/Aux/Event），列宽按最宽的 Assistant 给足，
+   不截断；内容类型（Tool call / Tool result）单列跟随角色之后。 */
+.row-label{width:62px;flex:none;padding:2px 3px;border-radius:3px;text-align:center;font:10px var(--ui);color:var(--k-user);background:var(--k-user-bg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-label.tool{color:var(--k-tool);background:var(--k-tool-bg)}
 .row-label.reply{color:var(--k-assistant);background:var(--k-assistant-bg)}
+.row-label.system{color:var(--k-system);background:var(--k-system-bg)}
 .row-label.aux{color:var(--k-system);background:var(--k-system-bg)}
+.row-kind{flex:none;font:9.5px var(--ui);color:var(--muted);white-space:nowrap}
 .compact-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:11px}
 .compact-preview code{font-size:10px;color:var(--text-2)}
 .timeline-end{display:flex;align-items:center;justify-content:center;gap:6px;padding:22px 0 5px;color:var(--muted);font-size:10px}
 .timeline-end span{width:5px;height:5px;background:var(--line-strong);border-radius:50%}
 @media(max-width:1300px){.compact-meta{width:76px;font-size:8px;gap:5px}}
-@media(max-width:620px){.compact-row{gap:5px}.compact-meta{width:22px}.compact-select{gap:5px}.compact-preview{font-size:11px}.history-range{width:100%;text-align:center}}
+@media(max-width:620px){.compact-row{gap:5px}.compact-meta{width:22px}.compact-select{gap:5px}.compact-preview{font-size:11px}.history-range{width:100%;text-align:center}.row-label{width:56px;font-size:9px}.row-kind{font-size:9px}}
 
 .msg-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
 .msg{border-bottom:1px solid var(--line)}
 .msg:last-child{border-bottom:0}
 .msg-head{
-  display:grid;grid-template-columns:58px 34px minmax(0,1fr) auto;gap:8px;align-items:center;
+  display:grid;grid-template-columns:64px 34px minmax(0,1fr) auto;gap:8px;align-items:center;
   width:100%;padding:6px 10px;font-size:12px;border-left:2px solid transparent;
 }
 .msg-head:hover{background:var(--hover)}
@@ -313,6 +317,12 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
   display:inline-block;font:500 9px/1 var(--mono);letter-spacing:.05em;padding:3px 4px;border-radius:2px;
   text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
+/* 消息列表的角色类名用稳定小写（roleClass）；REPLY 等大写类仍由回复详情等固定标签使用。 */
+.kind.system{color:var(--k-system);background:var(--k-system-bg)}
+.kind.user{color:var(--k-user);background:var(--k-user-bg)}
+.kind.assistant{color:var(--k-assistant);background:var(--k-assistant-bg)}
+.kind.tool{color:var(--k-tool);background:var(--k-tool-bg)}
+.kind.unknown{color:var(--k-field);background:var(--k-field-bg)}
 .kind.SYSTEM{color:var(--k-system);background:var(--k-system-bg)}
 .kind.USER{color:var(--k-user);background:var(--k-user-bg)}
 .kind.ASSISTANT,.kind.CALL{color:var(--k-assistant);background:var(--k-assistant-bg)}
@@ -497,9 +507,10 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
   .crumb{display:none}
       .session-head{padding:12px 14px}
   .req-body{margin-left:10px}
-  /* 消息行在窄屏去掉角色文字宽度，改用序号做锚点，预览仍单行截断 */
-  .msg-head{grid-template-columns:36px 28px minmax(0,1fr);gap:6px}
-  .msg-new{grid-column:3;justify-self:start}
+  /* 消息行在窄屏保留完整英文角色标签，去掉序号列，预览仍单行截断 */
+  .msg-head{grid-template-columns:64px minmax(0,1fr);gap:6px}
+  .msg-ord{display:none}
+  .msg-new{grid-column:2;justify-self:start}
   .conv-tools .mini-search{width:100%}
 }
 /* 主题切换会同时改变变量；background 过渡会把旧主题的颜色多留一帧，
