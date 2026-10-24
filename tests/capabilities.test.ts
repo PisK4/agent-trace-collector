@@ -1,5 +1,12 @@
 import { expect, test } from 'bun:test';
-import { capabilityView, extractSkills, extractTools } from '../src/capabilities';
+import { capabilityView, extractSkills, extractTools, protocolSupported } from '../src/capabilities';
+
+test('支持名单谓词：anthropic 与 chat 受支持，名单外一律不支持', () => {
+  expect(protocolSupported('anthropic')).toBe(true);
+  expect(protocolSupported('chat')).toBe(true);
+  expect(protocolSupported('gemini')).toBe(false);
+  expect(protocolSupported('unknown')).toBe(false);
+});
 
 const complete = {
   complete: true,

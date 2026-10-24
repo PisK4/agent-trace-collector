@@ -1,10 +1,12 @@
 import { expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { zstdDecompressSync } from 'node:zlib';
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import { fixture } from './fixtures';
-import { persistBody, restoreBody } from '../src/body';
+import { persistBody, persistBodyTx, restoreBody } from '../src/body';
 import type { BodyInput } from '../src/body';
+import { getBodyPage } from '../src/protocols';
+import { skeletonLike, validateSkeleton } from '../src/skeleton';
 import { redact } from '../src/privacy';
 
 const salt = new Uint8Array(32).fill(7);
@@ -235,6 +237,54 @@ test('末条块引用缺失时正文不可还原', () => {
     f.store.write(db => db.run(
       'DELETE FROM request_block WHERE req_id=1 AND ord=1'));
     expect(restoreBody(f.store, 1)).toBeNull();
+  } finally {
+    f.close();
+  }
+});
+
+test('骨架验证：严格契约逐项拒绝，宽松读取对损坏形状容错', () => {
+  const ok = {
+    format: 1, protocol: 'anthropic',
+    request_without_messages: { system: 's' }, reply: { id: 'r1' },
+    has_messages: false, redact_version: 1,
+  };
+  expect(validateSkeleton(ok, null)?.messageCount).toBe(0);
+  expect(validateSkeleton(ok, 0)?.messageCount).toBe(0);
+  // has_messages=true 时条数必须是非负整数；false 时条数只能是 null 或 0。
+  expect(validateSkeleton({ ...ok, has_messages: true }, 3)?.messageCount).toBe(3);
+  expect(validateSkeleton({ ...ok, has_messages: true }, null)).toBeNull();
+  expect(validateSkeleton({ ...ok, has_messages: true }, -1)).toBeNull();
+  // 逐项契约：格式号、协议名、has_messages 类型、redact_version 整数下界。
+  expect(validateSkeleton({ ...ok, format: 2 }, null)).toBeNull();
+  expect(validateSkeleton({ ...ok, protocol: '' }, null)).toBeNull();
+  expect(validateSkeleton({ ...ok, has_messages: 'yes' }, null)).toBeNull();
+  expect(validateSkeleton({ ...ok, redact_version: 0 }, null)).toBeNull();
+  // 宽松读取：非对象（数组、原始值）返回 null，读模型据此展示未知协议。
+  expect(skeletonLike([1, 2])).toBeNull();
+  expect(skeletonLike('skeleton')).toBeNull();
+  expect(skeletonLike(ok)).not.toBeNull();
+});
+
+test('骨架损坏时分页返回空字段与未知协议，不拒绝整页', () => {
+  const f = fixture();
+  try {
+    const store = f.store;
+    seedRequest(store, 1);
+    store.write(db => {
+      persistBodyTx(db, 1, {
+        protocol: 'anthropic',
+        request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
+        reply: { id: 'msg_1', content: [{ type: 'text', text: 'hello' }] },
+        redact_version: 1,
+      });
+      // 覆写成一个非对象骨架：宽松读取按未知协议展示，不抛给调用方。
+      db.run('UPDATE request SET skeleton_z=? WHERE req_id=1', [
+        zstdCompressSync(Buffer.from(JSON.stringify(['not', 'an', 'object']))),
+      ]);
+    });
+    const page = getBodyPage(store, 1, 0, 0);
+    expect(page).not.toBeNull();
+    expect(page?.request_fields).toBeNull();
   } finally {
     f.close();
   }

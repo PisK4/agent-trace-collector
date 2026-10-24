@@ -4,6 +4,7 @@ import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
 import { resolveRequestId } from './store';
 import { ADAPTER_VERSION, parseProtocol } from './protocols';
+import { skeletonLike, validateSkeleton } from './skeleton';
 import { fingerprintHash, messageFingerprint } from './fingerprint';
 import { markRequestInputTx } from './derive-state';
 
@@ -173,15 +174,6 @@ export type StoredBody = {
   redact_version: number;
 };
 
-type SkeletonFields = {
-  format?: unknown;
-  protocol?: unknown;
-  request_without_messages?: unknown;
-  reply?: unknown;
-  has_messages?: unknown;
-  redact_version?: unknown;
-};
-
 /**
  * 严格读取骨架。任何一项不符合写入契约都返回 null：正文要么完整可读，
  * 要么不可读，不能把结构损坏的对象交给派生或用途判定去猜。
@@ -204,30 +196,9 @@ function readSkeletonTx(db: Database, reqId: number): {
   } catch {
     return null;
   }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const skeleton = parsed as SkeletonFields;
-  if (skeleton.format !== 1) return null;
-  if (typeof skeleton.protocol !== 'string' || skeleton.protocol.length === 0) return null;
-  if (typeof skeleton.has_messages !== 'boolean') return null;
-  if (typeof skeleton.redact_version !== 'number'
-    || !Number.isInteger(skeleton.redact_version) || skeleton.redact_version < 1) return null;
-
-  let messageCount = 0;
-  if (skeleton.has_messages) {
-    if (typeof row.msg_count !== 'number'
-      || !Number.isInteger(row.msg_count) || row.msg_count < 0) return null;
-    messageCount = row.msg_count;
-  } else if (row.msg_count !== null && row.msg_count !== 0) {
-    return null;
-  }
-  return {
-    protocol: skeleton.protocol,
-    request: skeleton.request_without_messages ?? null,
-    reply: skeleton.reply ?? null,
-    hasMessages: skeleton.has_messages,
-    messageCount,
-    redactVersion: skeleton.redact_version,
-  };
+  const skeleton = skeletonLike(parsed);
+  if (skeleton === null) return null;
+  return validateSkeleton(skeleton, row.msg_count);
 }
 
 /** 引用必须恰好覆盖 0..n-1，且每个引用指向存在的块；只看索引，不解压。 */

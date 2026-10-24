@@ -240,6 +240,24 @@ test('非法limit、坏cursor与缺实体分别返回400与404', () => {
   }
 });
 
+test('正文区间规则与内层防御共用：HTTP 层映射 400', async () => {
+  const f = fixture();
+  try {
+    seedRequests(f.store, 'range-seed', 1);
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
+    const range = (from: number, to: number) =>
+      handler(new Request(`http://127.0.0.1:8320/api/requests/1/body?from=${from}&to=${to}`, {
+        headers: { host: '127.0.0.1:8320', authorization: 'Bearer synthetic-read-token' },
+      }));
+    // to < from 与跨度越界都走同一条共享规则（bodyRangeError）映射 400。
+    expect((await range(10, 5)).status).toBe(400);
+    expect((await range(0, 41)).status).toBe(400);
+    expect((await (await range(0, 40)).json()).error).not.toBe('invalid_body_range');
+  } finally {
+    f.close();
+  }
+});
+
 test('详情不返回账户字段也不返回骨架', () => {
   const f = fixture();
   try {
@@ -351,6 +369,10 @@ test('hook 拒绝按固定原因计数且不保留正文', async () => {
     expect((await handler(make(`{"marker":"${marker}"`, {
       authorization: 'Bearer synthetic-hook-token',
     }))).status).toBe(400);
+    // hook 带 same-origin Origin 也不放行：必须始终 Bearer，不继承读路径的 same-site 放行。
+    expect((await handler(make('{"x":1}', {
+      origin: 'http://127.0.0.1:8320',
+    }))).status).toBe(401);
     // 合法 JSON、缺 hook_id：必须走 422，而不是被当成语法错误。
     expect((await handler(make(JSON.stringify({ marker, origin: 'local' }), {
       authorization: 'Bearer synthetic-hook-token',
@@ -359,7 +381,8 @@ test('hook 拒绝按固定原因计数且不保留正文', async () => {
       authorization: 'Bearer synthetic-hook-token', origin: 'http://evil.example',
     }))).status).toBe(403);
     const snapshot = metrics.ingest.snapshot(2000);
-    expect(snapshot.rejected_by_reason.unauthorized).toBe(1);
+    // 同源 Origin 无令牌也计入 unauthorized：hook 必须始终 Bearer。
+    expect(snapshot.rejected_by_reason.unauthorized).toBe(2);
     expect(snapshot.rejected_by_reason.invalid_json).toBe(1);
     expect(snapshot.rejected_by_reason.missing_hook_id).toBe(1);
     expect(snapshot.rejected_by_reason.origin).toBe(1);
