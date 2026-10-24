@@ -36,7 +36,7 @@ Status: proposed
 
 ### 三、读数按标签和值对齐，保留计时口径
 
-计时与用量各用一个 `<dl class="chain">`，内部复用 `.chain-row` 的标签和值结构；新增局部的读数样式范围，为数值列设置右对齐、等宽数字与适当行距，不修改全局 `.chain-row dd`，以免改变路由等文字详情的排版。移除这两组读数中的 `·` 分隔符；旧 `.strip-row` 样式只在确认没有其他使用者后删除。
+计时与用量各用一个 `<dl class="chain">`，内部复用 `.chain-row` 的标签和值结构；新增局部的读数样式范围，为数值列设置右对齐、等宽数字与适当行距，不修改全局 `.chain-row dd`，以免改变路由等文字详情的排版。移除这两组读数中的 `·` 分隔符；旧 `.strip-row` 样式只在确认没有其他使用者后删除。读数输出集中在模块级纯函数 `ledgerParts()`/`ledgerRowsHtml()`/`usageFoldHtml()` 并导出供回归断言；局部样式范围是 `.ledger-chain`，`usageFoldHtml()` 的详情由调用方显式传入，不再默认读 `currentDetail()`。
 
 `ttft_ms` 和 `first_text_ms` 分别保留，标签使用首 token 与首个文本，说明中明确首 token 指第一个内容，可能是文本、推理或工具调用。上游 magpie 检出 `2374ffe1` 的 [usage.Record 定义](../../../../../../repos-external/magpie/internal/usage/usage.go)分别定义这两个结束事件，[上报校验](../../../../../../repos-external/magpie/internal/gateway/usage_ingest.go)也禁止首个文本早于首个内容。它们共享请求起点，但测量事件不同；数值相近或相等都不能作为合并依据。现有前端用 `toFixed(2)` 显示秒，精度为 0.01s，样本的 60ms 差异已经可见。删除 100ms 阈值与把另一个数藏进 `title` 的方案，也不把 `first_text_ms` 替作缺失的 `ttft_ms`。源码证据锚定上述检出，不代表已核对本机运行二进制版本或真实数据分布。
 
