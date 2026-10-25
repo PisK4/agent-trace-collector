@@ -164,6 +164,12 @@ OMP 源码参照（`repos-external/oh-my-pi`，注意 18.0.10 滞后于装机 18
 
 合成 fixture 清单（tests 只用合成数据，锚点文案可直接用上面的模板字符串）：旁路压缩调用会话、含 HISTORY 归档消息的请求（含块 0 是 `system-reminder` 的形态）、归档消息在后续请求重发的请求、bg_NNN 发起与通知跨两笔、bg_NNN 发起与通知在同一笔、复数通知 `N background jobs have completed.` 与 `── Job bg_NNN ──` 行、`<system-notice>` 里的非作业通知、带与不带 `reasoning_effort` 的 Chat 请求、OMP 小写工具名调用步骤（含 `path` 参数）、（第二批）TTSR 注入对与 fallback 重放对。
 
+## 实施记录
+
+随实现逐项回填；最终随 proposed → implemented 转写合并进 Decision。
+
+- 2026-10-25 第四项已交付：effort 读数行落在「用量与上下文」折叠行（`usageFoldHtml` 第三参收正文首片，新增 `requestEffortOf` 从 `request_fields.reasoning_effort` 取值），装配处在 `web/app.js` 的 `railFacts`。值取自正文首片而非尝试链，因此单次干净调用（尝试链不渲染）也显示；未读正文或字段缺失时整行不渲染，不占位。
+
 ## Alternatives considered
 
 **读 `~/.omp/agent` 作第四路证据源。** session JSONL 是结构化金矿：`model_usage`（api/provider/model/purpose/usage 含 cost 与 reasoningTokens）、`compaction`（tokensBefore/After/firstKeptEntryId）、`title_change`、`thinking_level_change`、`custom` 事件（tool_execution_start、async-result）、header 的 `parentSession`/`previousSessionFiles` lineage 能解掉子代理与 advisor 的归并问题。否决理由：架构设计的安全边界明写「不扫描 Agent 会话文件，只读 magpie 自己写的来源」；引入第四源是方向性决策，需要用户单独拍板（见边界外），不该夹带在本提案里。

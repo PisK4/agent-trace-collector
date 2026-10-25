@@ -377,6 +377,25 @@ test('窗口外请求传入详情保留首个文本；fold 图例只列正值类
   expect(noPrompt).not.toContain('comp-bar');
 });
 
+test('effort 读数：request_fields 有值才显示该行，缺字段或未读正文不显示', () => {
+  const withEffort = usageFoldHtml(ledgerRow() as never, null, {
+    state: 'available', request_fields: { reasoning_effort: 'high' },
+  } as never);
+  expect(withEffort).toContain('<dt>effort</dt>');
+  expect(withEffort).toContain('>high<');
+  const withoutField = usageFoldHtml(ledgerRow() as never, null, {
+    state: 'available', request_fields: {},
+  } as never);
+  expect(withoutField).not.toContain('<dt>effort</dt>');
+  const noMeta = usageFoldHtml(ledgerRow() as never, null);
+  expect(noMeta).not.toContain('<dt>effort</dt>');
+  // 非字符串值不显示，不冒充有读数。
+  const badValue = usageFoldHtml(ledgerRow() as never, null, {
+    state: 'available', request_fields: { reasoning_effort: 3 },
+  } as never);
+  expect(badValue).not.toContain('<dt>effort</dt>');
+});
+
 test('URL 页签声明：合法内容页签原样解析与写回，无效或缺省回读数', () => {
   expect(railTabFromParam('body')).toBe('body');
   expect(railTabFromParam('tools')).toBe('tools');

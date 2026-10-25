@@ -4,6 +4,7 @@
  * 只拼 HTML 字符串，不读写 DOM，也不发起读取；测试直接断言输出。
  * @typedef {import('../src/queries/projection').RequestRow} RequestRow
  * @typedef {import('../src/queries/requests').RequestDetail} RequestDetail
+ * @typedef {import('../src/protocols').BodyPage} BodyPage
  * @typedef {import('./reader-store.js').RequestRead} RequestRead
  */
 
@@ -348,14 +349,28 @@ export function ledgerRowsHtml(r, detail = null) {
 }
 
 /**
+ * 客户端随请求声明的 reasoning_effort：正文首片的 request_fields 顶层字段。
+ * 值来自骨架而不是尝试链，单次干净调用没有异常态也读得到。
+ * @param {BodyPage | null | undefined} page
+ * @returns {string | null}
+ */
+export function requestEffortOf(page) {
+  const fields = page === null || page === undefined ? null : page.request_fields;
+  const value = fields !== null && typeof fields === 'object'
+    ? (/** @type {Record<string, unknown>} */ (fields)).reasoning_effort : null;
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
  * 用量与上下文折叠行（读数页末位，默认展开）：计时与用量两列读数 + 构成单条柱。
  * 摘要行给计时与用量的关键三项；构成条与图例共用正值类别，图例按 token 数降序；
  * 没有正值类别时不留空的条和图例容器，总量、窗口、占用与缺失或估计说明保留。
  * @param {RequestRow} r
  * @param {RequestDetail | null} detail
+ * @param {BodyPage | null} [meta] 正文首片；effort 从 request_fields 取，未读到不显示该行
  * @returns {string}
  */
-export function usageFoldHtml(r, detail) {
+export function usageFoldHtml(r, detail, meta = null) {
   const p = detail?.prompt ?? null;
   const list = /** @type {{kind: string, tokens: number}[]} */ (p?.parts ?? []);
   const hasComp = p !== null && !(p.tokens === null && list.length === 0);
@@ -383,10 +398,13 @@ export function usageFoldHtml(r, detail) {
   const note = hasComp
     ? (p?.note ?? (p?.window === null ? '没有可用分母，不显示占用率。' : '分类是估计分配，不是逐类精确计数。'))
     : (p?.note ?? '没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。');
+  const effort = requestEffortOf(meta);
+  const effortHtml = effort === null ? ''
+    : `<dl class="chain ledger-chain"><div class="chain-row"><dt>effort</dt><dd title="客户端随请求声明的 reasoning_effort">${esc(effort)}</dd></div></dl>`;
   return `<details class="rail-fold" data-fold="prompt:${r.req_id}" open>
     <summary>用量与上下文${ledger.headline !== '' ? `<span class="fold-count">${esc(ledger.headline)}</span>` : ''}</summary>
     <div class="fold-body">
-      ${ledger.timing}${ledger.usage}
+      ${ledger.timing}${ledger.usage}${effortHtml}
       ${hint !== '' ? `<p class="note">${esc(hint)}</p>` : ''}
       ${comp}
       <p class="rail-note">${esc(note)}</p>
