@@ -322,9 +322,10 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
 
   // 4) 目标缺正文而源有正文时搬过去，不覆盖已有正文。
   const targetBody = db.query<{ body_state: string }, [number]>('SELECT body_state FROM request WHERE req_id=?').get(targetId);
-  const sourceBody = db.query<{ skeleton_z: Uint8Array | null; body_state: string; parse_state: string | null; reply_state: string | null; msg_count: number | null }, [number]>(
-    'SELECT skeleton_z, body_state, parse_state, reply_state, msg_count FROM request WHERE req_id=?',
+  const sourceBody = db.query<{ skeleton_z: Uint8Array | null; body_state: string; parse_state: string | null; reply_state: string | null; msg_count: number | null; miss_reason: string | null }, [number]>(
+    'SELECT skeleton_z, body_state, parse_state, reply_state, msg_count, miss_reason FROM request WHERE req_id=?',
   ).get(sourceId);
+  let bodyState = targetBody?.body_state ?? null;
   if (targetBody?.body_state !== 'available' && sourceBody?.skeleton_z != null) {
     db.run(
       `UPDATE request SET skeleton_z=?, body_state=?, parse_state=COALESCE(parse_state,?), reply_state=COALESCE(reply_state,?),
@@ -332,7 +333,15 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
       [sourceBody.skeleton_z, sourceBody.body_state, sourceBody.parse_state, sourceBody.reply_state, sourceBody.msg_count, targetId],
     );
     db.run('UPDATE request SET skeleton_z=NULL WHERE req_id=?', [sourceId]);
+    bodyState = sourceBody.body_state;
   }
+  // 原因对账：hook 证据已并入本行，"等不到 hook"类原因不再成立。正文完整时
+  // 任何缺失原因都不成立；否则降级原因随合并后的正文现实走——迁移了取源行的，
+  // 未迁移时源行的降级原因仍是本行正文现实的最好描述，源行没有就清空。
+  db.run(
+    'UPDATE request SET miss_reason=? WHERE req_id=?',
+    [bodyState === 'available' ? null : sourceBody?.miss_reason ?? null, targetId],
+  );
 
   // 5) 归属：hook 阶段 actor 未知，账本已确认时保留账本的。
   db.run(
@@ -404,4 +413,50 @@ export function reconcilePending(store: Store, now: number): { merged: number; p
     };
   });
   return result;
+}
+
+/**
+ * hook 缺席老化的等待阈值：正常 chat 请求在分钟级结束，1 小时留出一个数量级
+ * 余量。偏长只是标签晚出现；偏短会给仍在运行的超长请求写错误事实。
+ */
+export const HOOK_ABSENT_THRESHOLD_MS = 60 * 60_000;
+
+/** 每轮标注上限：积压在部署后首轮清完，常态轮次为 0。 */
+const HOOK_ABSENT_MARK_LIMIT = 200;
+
+/**
+ * hook 缺席老化：账本行等满阈值仍没有任何已关联的 hook 证据，且等待关联
+ * 队列里没有指向本行的候选时，写 miss_reason='hook_absent'。
+ *
+ * 只写原因，不改 body_state：正文确实没到，pending 仍是事实。判定不断言
+ * "hook 从未发生"——只断言本行没有任何已关联的 hook 证据；reply 缺失的
+ * 孤儿回调无法按 response ID 关联，是长期现实。迟到的 hook 由两条路径
+ * 解除标注：直接命中在落正文时清掉原因，后台合并按正文现实对账。
+ * 歧义候选行与等待队列指向的行是"待裁决"，不是"缺席"，一律不标。
+ */
+export function markHookAbsent(store: Store, now: number): number {
+  let marked = 0;
+  commitUnit(store, 'hook_absent', read => {
+    // NOT EXISTS 而非 NOT IN：response_id_norm 为 NULL 的行在 NOT IN 下永远
+    // 不命中；EXISTS 的等值比较对 NULL 两边都过滤，NULL 行自然放行为"无指向、可标注"。
+    const rows = read.query<{ req_id: number }, [number, number]>(`
+      SELECT req_id FROM request
+      WHERE body_state='pending' AND (have & ${HAVE_BODY})=0 AND miss_reason IS NULL
+        AND started_ms < ?
+        AND NOT EXISTS (SELECT 1 FROM pending_hook ph
+          WHERE ph.response_id_norm = request.response_id_norm)
+      ORDER BY started_ms
+      LIMIT ?`).all(now - HOOK_ABSENT_THRESHOLD_MS, HOOK_ABSENT_MARK_LIMIT);
+    if (rows.length === 0) return null;
+    marked = rows.length;
+    const ids = rows.map(row => row.req_id);
+    return db => {
+      db.run(
+        `UPDATE request SET miss_reason='hook_absent', updated_at=?
+         WHERE req_id IN (${ids.map(() => '?').join(',')})`,
+        [now, ...ids],
+      );
+    };
+  });
+  return marked;
 }

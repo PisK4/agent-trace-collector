@@ -11,7 +11,7 @@ import {
 } from './reconcile';
 import { probeMagpie, saveProbe, syncCosts } from './sources/magpie';
 import { createHandler, loadReadToken } from './http';
-import { reconcilePending } from './hook';
+import { markHookAbsent, reconcilePending } from './hook';
 import { createDeriveUnit } from './derive-unit';
 import {
   RAW_TTL_MS,
@@ -160,7 +160,10 @@ export async function startCollector(
   });
 
   const pendingTick = guard('pending', () => {
-    reconcilePending(store, Date.now());
+    const now = Date.now();
+    reconcilePending(store, now);
+    const marked = markHookAbsent(store, now);
+    if (marked > 0) process.stderr.write(`hook_absent_marked:${marked}\n`);
   });
 
   const retentionTick = guard('retention', () => {
