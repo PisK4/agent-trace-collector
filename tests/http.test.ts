@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config';
 import { createHandler, loadReadToken, STATIC_FILES } from '../src/http';
 import { getRequest, getRoute, listRequests, listSessions } from '../src/queries';
 import { createCapacityMetrics } from '../src/capacity';
+import { persistBody } from '../src/body';
 
 function seedRequests(store: ReturnType<typeof fixture>['store'], convKey: string, count: number, sameMs = false): number[] {
   const ids: number[] = [];
@@ -466,4 +467,63 @@ test('older 分页方向经 HTTP 校验，未知方向与游标混用返回 400'
     const badCursor = Buffer.from(JSON.stringify(['older', JSON.stringify(['session', 'older-http']), 1.5, 1]), 'utf8').toString('base64url');
     expect((await handler(make('?direction=older&cursor=' + encodeURIComponent(badCursor)))).status).toBe(400);
   } finally { f.close(); }
+});
+
+test('轮次端点按累计窗口下界返回结算结果，参数非法显式 400', async () => {
+  const f = fixture();
+  try {
+    const convKey = JSON.stringify(['session', 'turns-http']);
+    f.store.write(db => {
+      for (let i = 0; i < 2; i++) {
+        db.run(`INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,day,via,
+          body_state,derive_version,have,created_at,updated_at,input_epoch,input_revision,
+          purpose_revision,purpose_version,purpose_pending,req_kind)
+          VALUES (?,?,'session','a','known',?,'2026-10-25','hook','available',0,1,1,1,'e',1,
+          1,1,0,'chat')`, [i + 1, convKey, 1000 + i]);
+      }
+      db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,input_revision,
+        published_revision,target_algorithm,published_algorithm,state)
+        VALUES (?,?,'','g',1,1,1,1,'clean')`, [convKey, 'a']);
+      db.run(`UPDATE request SET reply_shape='final', input_preview_kind='delta',
+        prev_relation='first', delta_ordinals='[0]' WHERE req_id=1`);
+      db.run(`UPDATE request SET reply_shape='final', input_preview_kind='delta',
+        prev_relation='confirmed', prev_req_id=1, delta_ordinals='[1]' WHERE req_id=2`);
+    });
+    // 命令组 ords 要经起点正文重解读：给两笔种上可读正文。
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: '第一轮' }] }] },
+      reply: { stop_reason: 'end_turn', content: [{ type: 'text', text: '答' }] },
+      redact_version: 1,
+    });
+    persistBody(f.store, 2, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: '第一轮' }] }, { role: 'user', content: [{ type: 'text', text: '第二轮' }] }] },
+      reply: { stop_reason: 'end_turn', content: [{ type: 'text', text: '答' }] },
+      redact_version: 1,
+    });
+    // 正文写入会重开输入修订与用途待判：手工行没有派生在跑，重新冻结成 current。
+    f.store.write(db => {
+      db.run(`UPDATE derive_queue SET state='clean', published_revision=input_revision,
+        published_algorithm=target_algorithm WHERE conv_key=? AND actor='a'`, [convKey]);
+      db.run('UPDATE request SET purpose_pending=0');
+    });
+    const handler = createHandler(f.store, loadConfig({}), 't');
+    const get = (path: string) => handler(new Request(`http://127.0.0.1:8320${path}`, {
+      headers: { host: '127.0.0.1:8320', 'sec-fetch-site': 'same-origin' },
+    }));
+    const all = await (await get(`/api/sessions/${encodeURIComponent(convKey)}/turns`)).json();
+    expect(all.items).toEqual([
+      { turn: 1, start_req: 1, ordinals: [0], reply_req: 1 },
+      { turn: 2, start_req: 2, ordinals: [1], reply_req: 2 },
+    ]);
+    const windowed = await (await get(`/api/sessions/${encodeURIComponent(convKey)}/turns?from=2`)).json();
+    expect(windowed.items).toEqual([
+      { turn: 2, start_req: 2, ordinals: [1], reply_req: 2 },
+    ]);
+    expect((await get(`/api/sessions/${encodeURIComponent(convKey)}/turns?from=-1`)).status).toBe(400);
+    expect((await get('/api/sessions/["session","missing"]/turns')).status).toBe(200);
+  } finally {
+    f.close();
+  }
 });

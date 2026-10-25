@@ -764,8 +764,8 @@ Bun.serve({
     const turns = /^\/api\/sessions\/([^/]+)\/turns$/.exec(url.pathname);
     if (turns) {
       const key = decodeURIComponent(turns[1]!);
-      const all = TURNS_BY_SESSION.get(key);
-      if (all === undefined) return json({error:'not_found'}, 404);
+      // 与生产同形：未知会话返回空表，不报 404。
+      const all = TURNS_BY_SESSION.get(key) ?? [];
       // 累计窗口下界：只返回起点在下界之后的轮；缺参数按全会话结算。
       const rawFrom = url.searchParams.get('from');
       if (rawFrom !== null && !/^\d+$/.test(rawFrom)) return json({error:'invalid_from'}, 400);
