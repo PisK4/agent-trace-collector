@@ -17,7 +17,7 @@ import { pairStateText } from './trace-pair.js';
 export const clock = (ms) => new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 /** @param {number} ms */
 export const dayTime = (ms) => new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-const AGENT_LABELS = /** @type {Record<string, string>} */ ({ claude: 'Claude Code', omp: 'OMP' });
+const AGENT_LABELS = /** @type {Record<string, string>} */ ({ claude: 'Claude Code', omp: 'OMP', codex: 'Codex' });
 /** @param {string} v */
 export const agentLabel = (v) => AGENT_LABELS[v] ?? v;
 

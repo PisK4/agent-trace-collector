@@ -8,7 +8,7 @@ import {
 import {
   railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget,
 } from '../web/url-route.js';
-import { sessionsListBypassHtml } from '../web/session-view.js';
+import { agentLabel, sessionsListBypassHtml } from '../web/session-view.js';
 
 test('旁路折叠行：有旁路条目才渲染，展开与收起各自如实计数', () => {
   const row = (flags: string[]) => ({
@@ -491,4 +491,11 @@ test('路由读取目标：路由页签且请求已定才读取，其余页签�
   expect(routeReadTarget('facts', 7)).toBeNull();
   expect(routeReadTarget('body', 7)).toBeNull();
   expect(routeReadTarget('tools', 7)).toBeNull();
+});
+
+test('agent 标签覆盖三条通道的已知来源，未知来源原样透出', () => {
+  expect(agentLabel('claude')).toBe('Claude Code');
+  expect(agentLabel('omp')).toBe('OMP');
+  expect(agentLabel('codex')).toBe('Codex');
+  expect(agentLabel('someone-new')).toBe('someone-new');
 });

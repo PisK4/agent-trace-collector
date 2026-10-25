@@ -183,7 +183,7 @@ magpie gateway
   ├─ 路由文件（只读）───────> route tailer ──┼─> reconciler ─> SQLite（WAL）
   └─ 用量接口（只读）───────> direct 回填 ───┘                   ▲
                                                                 │
-harness OTLP exporter（Claude Code / OMP）
+harness OTLP exporter（Claude Code / OMP / Codex）
   └─ POST /v1/traces、/v1/logs ─────────────────────────────────┘
 
 浏览器 ─────────────────────────────────────────> /api/*
@@ -200,7 +200,7 @@ harness OTLP exporter（Claude Code / OMP）
 
 两个摄入端点 `POST /v1/traces` 与 `POST /v1/logs` 收 harness 侧 OTLP。Bearer 认证用独立的 `otlp.token`，与 `hook.token` 分开——一份密钥不进两份上游配置。content-type 只收 `application/x-protobuf` 与 `application/json`，非白名单的简单请求形态直接 415：浏览器防线三件套（预检、Host 校验、显式拒绝非白名单 content-type）与 hook 共用同一段。解码失败 400 带原因码，单飞守卫共用（429），整批上限 64 MiB（413），95% 磁盘档整批拒绝（507），成功回 OTLP 规范的 `{"partialSuccess":{}}`。
 
-span 选取按 `(service.name, 规则)` 白名单：Claude Code 按 span 名 `claude_code.llm_request`，OMP 按 `gen_ai.operation.name='chat'`；白名单外的 span 只落原始层。OTLP 行不参与三路合并，独立建 `request`（`via='otlp'`，`have` 第 4 位）。同一会话双通道并存时每笔调用出现两行，行上来源可区分；跨通道精确锚点（`gen_ai.response.id` 等）已实测存在，合并策略另评。
+span 选取按 `(service.name, 规则)` 白名单：Claude Code 按 span 名 `claude_code.llm_request`，OMP 按 `gen_ai.operation.name='chat'`，Codex CLI（`codex_cli_rs`）按 span 名 `session_task.turn`（用量键是自有 `codex.turn.token_usage.*` 族，无正文与回复侧模型）；白名单外的 span 只落原始层。OTLP 行不参与三路合并，独立建 `request`（`via='otlp'`，`have` 第 4 位）。同一会话双通道并存时每笔调用出现两行，行上来源可区分；跨通道精确锚点（`gen_ai.response.id` 等）已实测存在，合并策略另评。
 
 写操作全部走一个 writer，避免 SQLite 的 `database is locked`。实测第二个连接在写事务期间写会被拒绝，读不受影响。查询用独立只读连接。
 

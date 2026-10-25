@@ -1,18 +1,21 @@
 /**
- * OTLP span → request 行的选取与映射（映射层，第一版）。
+ * OTLP span → request 行的选取与映射（映射层）。
  *
  * 选取键是 `(service.name, 选取规则)`：OMP 的 span 名拼了模型名，按名会漏，
- * 按 `gen_ai.operation.name='chat'` 选；Claude Code 的 span 名带稳定前缀，按名选。
- * 白名单外的 span 不建行；服务在白名单、形状却像 LLM 调用的不猜，进未知桶。
+ * 按 `gen_ai.operation.name='chat'` 选；Claude Code 与 Codex 的 span 名是稳定
+ * 任务名，按名选。白名单外的 span 不建行；服务在白名单、形状却像 LLM 调用的
+ * 不猜，进未知桶。
  *
- * 键名以 2026-10-26 抓样实测为准，不以语义约定文档为准：Claude Code 的用量
- * 键是平铺的 `input_tokens` 一族（不是 `gen_ai.usage.*`），OMP 用
- * `gen_ai.usage.*`。两套差异全部收在这张表里，改表即升 OTLP_MAPPING_VERSION。
+ * 键名以抓样实测或固定提交源码考察为准，不以语义约定文档为准：Claude Code 的
+ * 用量键是平铺的 `input_tokens` 一族（不是 `gen_ai.usage.*`，实测），OMP 用
+ * `gen_ai.usage.*`（实测），Codex 用自有 `codex.turn.token_usage.*`（源码
+ * 考察，真实流量验收单独一轮）。方言差异全部收在这张表里，改表即升
+ * OTLP_MAPPING_VERSION。
  */
 
 import type { OtlpAttrs, OtlpSpan } from './decode';
 
-export const OTLP_MAPPING_VERSION = 1;
+export const OTLP_MAPPING_VERSION = 2;
 
 /** 属性键按序回退取值；空数组表示该列本版不映射（保持 NULL）。 */
 type AttrKeys = {
@@ -29,7 +32,7 @@ type AttrKeys = {
 export type SpanRule = {
   /** service.name 精确匹配；白名单外的服务不建行。 */
   service: string;
-  /** request.agent 标签，与 magpie 行同值域（claude-code→claude、oh-my-pi→omp）。 */
+  /** request.agent 标签（claude-code→claude、oh-my-pi→omp、codex_cli_rs→codex）。 */
   agent: string;
   /** 选取规则名，随 OTLP_MAPPING_VERSION 一起版本化。 */
   ruleId: string;
@@ -68,6 +71,24 @@ export const SPAN_RULES: readonly SpanRule[] = [
       outTok: ['gen_ai.usage.output_tokens'],
       cacheRead: ['gen_ai.usage.cache_read.input_tokens'],
       cacheWrite: ['gen_ai.usage.cache_creation.input_tokens'],
+    },
+  },
+  {
+    service: 'codex_cli_rs',
+    agent: 'codex',
+    ruleId: 'span_name',
+    matches: span => span.name === 'session_task.turn',
+    keys: {
+      session: ['thread.id'],
+      modelRequested: ['model'],
+      // Codex 无回复侧模型与终止原因字段；七项用量里 non_cached/reasoning/total
+      // 三项不进既有列，留原始层。
+      modelServed: [],
+      stop: [],
+      inTok: ['codex.turn.token_usage.input_tokens'],
+      outTok: ['codex.turn.token_usage.output_tokens'],
+      cacheRead: ['codex.turn.token_usage.cached_input_tokens'],
+      cacheWrite: ['codex.turn.token_usage.cache_write_input_tokens'],
     },
   },
 ];
