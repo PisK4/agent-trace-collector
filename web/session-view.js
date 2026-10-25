@@ -8,7 +8,8 @@
  * @typedef {import('../src/queries/session-summary').SessionSummary} SessionSummary
  */
 
-import { esc, toolTint } from './body-view.js';
+import { toolTint } from './body-view.js';
+import { esc } from './html.js';
 import { kk, secs } from './rail-facts.js';
 import { pairStateText } from './trace-pair.js';
 
@@ -205,6 +206,7 @@ export function sessionHead(input) {
     <div class="session-facts">
       ${row && row.agents.length > 0 ? row.agents.map((/** @type {string} */ a) => `<span><b title="${esc(a)}">${esc(agentLabel(a))}</b></span>`).join('') : '<span class="muted">归属未知</span>'}
       <span class="mono" title="${esc(sessionKey ?? '')}">${esc(sessionKey === null ? '' : sessionKeyLabel(sessionKey))}</span>
+      ${sessionKey !== null ? '<button class="fact-copy" id="copy-session" aria-label="复制当前会话 ID" title="复制当前会话 ID">⧉</button>' : ''}
       <span>已加载 <b>${rows.length}</b> 笔 Request</span>
       ${first && latest ? `<span>${esc(dayTime(first.started_ms))}–${esc(clock(latest.started_ms))}</span>` : ''}
       ${timingParts.length > 0 ? `<span class="sum">${timingParts.join(' · ')}</span>` : ''}

@@ -1,9 +1,14 @@
 import { expect, test } from 'bun:test';
 import {
-  bodyNotice, deltaOrdinals, displayRoleOf, messageCopyText, messageEntries, partColor, partLabel,
-  renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderReply,
-  renderReplyDetail, renderTools, replyView, roleClass, roleTag, toolEntries, topSystemText,
+  bodyNotice, renderCapabilities, renderMessageDetail, renderMessages, renderReply,
+  renderReplyDetail, renderTools, roleClass, roleTag, toolTint,
 } from '../web/body-view.js';
+import {
+  deltaOrdinals, displayRoleOf, messageCopyText, messageEntries, replyView, toolEntries,
+  topSystemText,
+} from '../web/body-model.js';
+import { partColor, partLabel, renderAttemptChain } from '../web/rail-facts.js';
+import { esc, mdToHtml } from '../web/html.js';
 import type { BodyPage } from '../src/protocols';
 import type { CapabilityView } from '../src/capabilities';
 import type { AttemptChain } from '../src/queries/routes';

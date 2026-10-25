@@ -1,5 +1,7 @@
 // @ts-check
-import { deltaOrdinals, replyView, toolTint } from './body-view.js';
+import { deltaOrdinals, replyView } from './body-model.js';
+import { toolTint } from './body-view.js';
+import { esc } from './html.js';
 
 /**
  * 步骤投影：把可信输入与实际回复变成单行轨迹步骤。纯函数、无 DOM、无网络；
@@ -42,11 +44,6 @@ import { deltaOrdinals, replyView, toolTint } from './body-view.js';
  * changed 为 null 表示没有可比较的前驱（首个已加载、前驱不在窗口或正文不可读）。
  * @typedef {{text: string, changed: boolean | null} | null} SystemContext
  */
-
-/** @param {unknown} value @returns {string} */
-const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (/** @param {string} c */ c) => (
-  { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c] ?? c
-));
 
 const LENGTH_FINISH = new Set(['length', 'max_tokens']);
 const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use']);

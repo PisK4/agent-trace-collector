@@ -1,5 +1,5 @@
 // @ts-check
-import { deltaOrdinals, messageEntries } from './body-view.js';
+import { deltaOrdinals, messageEntries } from './body-model.js';
 
 /**
  * 生产阅读的读取协调：网络、区间缓存、inflight 去重、失效与异步代次都在这里，
