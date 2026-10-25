@@ -48,6 +48,15 @@ import { esc } from './html.js';
 const LENGTH_FINISH = new Set(['length', 'max_tokens']);
 const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use']);
 
+/** 压缩归档的预算丢弃量读数：basis 由派生写，缺字段不冒充 0。 @param {string | null} basis */
+function droppedCharsOf(basis) {
+  if (basis === null || basis === undefined) return null;
+  try {
+    const value = /** @type {Record<string, unknown>} */ (JSON.parse(basis));
+    return typeof value.dropped_chars === 'number' ? value.dropped_chars : null;
+  } catch { return null; }
+}
+
 /* ---------- 工具行摘要：按工具分派，路径折算成 basename，行区间是显示锚点不是事实 ---------- */
 
 /** 悬停 title 属性的超长护栏：预览文本不按字符截断，属性仍要防大参数撑爆。 */
@@ -301,6 +310,14 @@ export function projectSteps(row, read, systemContext = null) {
   }
   if (row.chain_role === 'branch') {
     record('branch', null, '分支链请求 · 归属来自派生记录，不按时间推断父子');
+  }
+  // 上下文压缩事件位：只有本笔确定增量新增归档（或 branch 按输入归因）才标记，
+  // 归档消息在后续请求重发时不再是事件。丢弃量按字符数展示，不是 token。
+  if (detail !== null && detail.context_event === 'omp_compaction') {
+    const dropped = droppedCharsOf(detail.summary_basis);
+    record('compaction', null, dropped !== null
+      ? `上下文压缩归档 · 旧史进归档消息，丢弃约 ${dropped.toLocaleString('en-US')} 字符（字符数，非 token）`
+      : '上下文压缩归档 · 归档消息在本笔新增');
   }
   // 读取未完成时是加载/状态记录，不能把请求级 input_preview 拆成确定用户步骤。
   // 作废与失败不是读取中：缺口原因来自快照 status，文案如实区分；点击行是

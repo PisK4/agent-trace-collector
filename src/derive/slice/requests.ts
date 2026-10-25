@@ -46,6 +46,7 @@ type RequestFact = {
   body_state: string; title: string | null; title_source: string | null;
   input_preview: string | null; input_preview_kind: string | null;
   reply_preview: string | null; reply_shape: string | null; interrupt_count: number | null;
+  context_event: string | null;
   purpose_revision: number; purpose_version: number | null;
   purpose_chain: string;
 };
@@ -73,7 +74,7 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
   const page = db.query<RequestFact, [string, string, number, number]>(`
     SELECT req_id,input_epoch,input_revision,sort_source,sort_key,started_ms,body_state,
       title,title_source,input_preview,input_preview_kind,reply_preview,reply_shape,
-      interrupt_count,purpose_revision,purpose_version,purpose_chain
+      interrupt_count,context_event,purpose_revision,purpose_version,purpose_chain
     FROM request WHERE conv_key=? AND actor=? AND actor_state='known' AND req_id>?
     ORDER BY req_id LIMIT ?`)
     .all(gen.conv_key, gen.actor, gen.cursor_req_id,
@@ -102,8 +103,8 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
     db.run(`INSERT INTO derive_request_result(
       generation,req_id,input_epoch,input_revision,sort_source,sort_key,started_ms,
       title,title_source,input_preview,input_preview_kind,reply_preview,reply_shape,
-      interrupt_count,purpose_revision,purpose_version,purpose_chain,algorithm,retention_state,basis_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'{}')`, [
+      interrupt_count,context_event,purpose_revision,purpose_version,purpose_chain,algorithm,retention_state,basis_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'{}')`, [
       generation, row.req_id, row.input_epoch, row.input_revision, row.sort_source,
       row.sort_key, row.started_ms,
       // 可读时留空，由摘要阶段写本次重算的值；不可读时原样保留旧列。
@@ -116,6 +117,8 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
       body === null ? row.reply_shape : replyShapeOf(body.reply),
       // 中断计数先暂存旧值：摘要阶段 delta 在手才按本次增量重算并覆盖。
       row.interrupt_count,
+      // 上下文事件位同批暂存旧值：摘要阶段关系在手才按本次判定并覆盖。
+      row.context_event,
       row.purpose_revision, row.purpose_version, row.purpose_chain,
       DERIVE_ALGORITHM, readable ? 'recomputed' : 'retained',
     ]);

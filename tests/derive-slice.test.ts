@@ -586,12 +586,12 @@ test('确定增量的工具结果被配成resolved', () => {
 // ---------------------------------------------------------------------------
 
 const PRESENTATION_COLUMNS =
-  'title,title_source,input_preview,input_preview_kind,reply_preview';
+  'title,title_source,input_preview,input_preview_kind,reply_preview,context_event';
 
 type PresentationRow = {
   req_id: number; title: string | null; title_source: string | null;
   input_preview: string | null; input_preview_kind: string | null;
-  reply_preview: string | null;
+  reply_preview: string | null; context_event: string | null;
 };
 
 function sliceRuntime(f: ReturnType<typeof fixture>,

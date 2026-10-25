@@ -148,6 +148,10 @@ CREATE TABLE request (
   -- 已识别用户中断：派生解释确定增量里的用户消息时按开头前缀计数。
   -- 正文回收后保留派生时的值；NULL 表示从未判定（正文不可读或派生先于本列）。
   interrupt_count  INTEGER,
+  -- 上下文事件位：omp_compaction 表示本笔确定增量新增了 OMP 压缩归档消息
+  -- （branch 关系按输入含归档判定）。丢弃量记在 summary_basis 的 dropped_chars。
+  -- 正文回收后保留派生时的值；NULL 表示从未判定。
+  context_event    TEXT,
   derive_version   INTEGER NOT NULL,
   have             INTEGER NOT NULL,
   miss_reason      TEXT,

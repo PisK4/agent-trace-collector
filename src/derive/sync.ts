@@ -11,10 +11,10 @@ import {
 } from './decision';
 import type { PredecessorMatch, ResolvedTool } from './decision';
 import {
-  compareLogicalOrder, compareTraversalOrder, fingerprintsOf, interruptCountTx, presentationPortsOf,
-  replyInfoOf, uncertainOrderIds,
+  compareLogicalOrder, compareTraversalOrder, contextEventTx, fingerprintsOf, interruptCountTx,
+  presentationPortsOf, replyInfoOf, uncertainOrderIds,
 } from './read';
-import type { DeriveScope, LogicalRow, ReplyInfo } from './read';
+import type { ContextEventFacts, DeriveScope, LogicalRow, ReplyInfo } from './read';
 
 /** 派生范围由共享读取层持有；两条路径与维护入口共用同一个形状。 */
 export type { DeriveScope } from './read';
@@ -50,7 +50,7 @@ type ChainRow = {
   title_source: string | null; title: string | null; model_served: string | null;
   req_kind: string | null; model_title: string | null; purpose_chain: string;
   input_preview: string | null; input_preview_kind: string | null; reply_preview: string | null;
-  reply_shape: string | null; interrupt_count: number | null;
+  reply_shape: string | null; interrupt_count: number | null; context_event: string | null;
 };
 
 /** 链阶段为摘要准备的输入：本轮关系、当前可读序列与用途结论。 */
@@ -60,6 +60,8 @@ type PresentationInput = {
   match: PredecessorMatch;
   /** 本笔确定增量的中断计数；delta 为 null 时沿用旧行值，不冒充 0。 */
   interrupts: number | null;
+  /** 本笔上下文事件位；null 表示这次判不出来，沿用旧行值。 */
+  context: ContextEventFacts | null;
 };
 
 /**
@@ -74,7 +76,7 @@ type PresentationInput = {
  */
 function writePresentationTx(db: Database, input: PresentationInput,
   associations: readonly ResolvedTool[], group: QueuedGroup): void {
-  const { row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts } = input;
+  const { row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts, context } = input;
   const decision = presentationDecision(presentationPortsOf(db), {
     reqId: row.req_id,
     agent: row.agent,
@@ -102,6 +104,8 @@ function writePresentationTx(db: Database, input: PresentationInput,
   const basis = JSON.stringify({
     epoch: inputRow?.input_epoch ?? '', input_revision: inputRow?.input_revision ?? 0,
     group_epoch: group.group_epoch, algorithm: GROUP_ALGORITHM,
+    ...(context !== null && context.event !== null
+      ? { context_event: context.event, dropped_chars: context.droppedChars } : {}),
   });
   const comparable = current !== null;
   // 形状位与摘要同一套保留语义：正文可读时按本次 reply 重算，不可读时保留
@@ -109,15 +113,17 @@ function writePresentationTx(db: Database, input: PresentationInput,
   const replyShape = replyInfo.shape ?? row.reply_shape;
   // 中断计数同一套保留语义：delta 在手时按本次增量计，其余场合沿用旧值。
   const interruptCount = interrupts ?? row.interrupt_count;
+  // 上下文事件位同一套保留语义：判定在手时按本次写，判不出来沿用旧值。
+  const contextEvent = context?.event ?? row.context_event;
   db.run(`UPDATE request SET title=?,title_source=?,input_preview=?,
-    input_preview_kind=?,reply_preview=?,reply_shape=?,interrupt_count=?,
+    input_preview_kind=?,reply_preview=?,reply_shape=?,interrupt_count=?,context_event=?,
     derive_version=derive_version+1,
     summary_algorithm=CASE WHEN ?=1 THEN ? ELSE summary_algorithm END,
     summary_basis=CASE WHEN ?=1 THEN ? ELSE summary_basis END,
     summary_state=CASE WHEN ?=1 THEN 'recomputed' ELSE 'retained' END
     WHERE req_id=?`, [
     decision.title, decision.titleSource, decision.inputPreview, decision.inputKind,
-    decision.replyPreview, replyShape, interruptCount,
+    decision.replyPreview, replyShape, interruptCount, contextEvent,
     comparable ? 1 : 0, GROUP_ALGORITHM, comparable ? 1 : 0, basis, comparable ? 1 : 0,
     row.req_id,
   ]);
@@ -263,7 +269,7 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
     const rows = db.query<ChainRow, [string, string]>(`
       SELECT req_id, actor, agent, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
              title_source, title, model_served, req_kind, model_title, purpose_chain,
-             input_preview, input_preview_kind, reply_preview, reply_shape, interrupt_count
+             input_preview, input_preview_kind, reply_preview, reply_shape, interrupt_count, context_event
       FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
     const ordered = [...rows].sort(compareTraversalOrder);
     // 同毫秒且没有来源位置证据的请求：可以遍历，但不能用来证明先后。
@@ -325,7 +331,11 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
       // 关系未知与分支没有"新增"可言，保留旧值，不冒充 0。
       const interrupts = isAux ? 0
         : delta === null ? null : interruptCountTx(db, row.req_id, delta);
-      presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts });
+      // 上下文事件位：排除用途判 none（标题请求不压缩）；正文可读时按关系与
+      // 增量判定，其余场合 null 保留旧值。
+      const context = current === null ? null
+        : contextEventTx(db, row.req_id, match.relation, match.delta);
+      presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts, context });
       if (current === null) retained += 1;
       else recomputed += 1;
       if (!isAux && current !== null && !uncertain.has(row.req_id)) {
