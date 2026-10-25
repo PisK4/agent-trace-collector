@@ -9,7 +9,7 @@ type Result = ReturnType<typeof applyIntent>;
 function base(overrides: Partial<SelectionState> = {}): SelectionState {
   return {
     session: '["session","k1"]', reqId: 7, selectedStep: '7:call:1', toolOrd: 1, toolOwner: 7,
-    toolPage: 'pair', railTab: 'tools', missingReqId: null, offPageReqId: null,
+    toolPage: 'pair', railTab: 'tools', missingReqId: null, offPageReqId: null, turn: null,
     ...overrides,
   } as SelectionState;
 }
@@ -226,4 +226,52 @@ test('nav-settled 是路由读取的唯一接线点之一：只在路由页且�
 
   const noTab = applyIntent(base({ railTab: 'facts' }), { kind: 'nav-settled' });
   expect(noTab.effects).toEqual([]);
+});
+
+test('select-turn 进轮次态并带两端补读效果，请求侧选择保持', () => {
+  const row = { turn: 2, start_req: 7, ordinals: [4, 5], reply_req: 9 };
+  const result = applyIntent(base({ turn: 1 }), { kind: 'select-turn', row });
+  expect(result.state.turn).toBe(2);
+  expect(result.state.reqId).toBe(7); // 请求侧选择不动：轨迹高亮保持，回来还在
+  expect(result.state.toolOrd).toBeNull(); // 过期工具选择清掉
+  expect(result.state.toolOwner).toBeNull();
+  expect(result.effects).toEqual([
+    { kind: 'render-main' }, { kind: 'render-rail' },
+    { kind: 'ensure-turn', startReq: 7, replyReq: 9, ords: [4, 5] },
+  ]);
+});
+
+test('点轨迹任意行与导航意图清轮次：select-step、select-message、locate、open-session、刷新', () => {
+  const row = { turn: 2, start_req: 7, ordinals: [4, 5], reply_req: 9 };
+  const step = applyIntent(base({ turn: 2 }), {
+    kind: 'select-step', reqId: 8, stepKey: '8:message:2',
+    source: { side: 'request', target: 'message' },
+  });
+  expect(step.state.turn).toBeNull();
+
+  const message = applyIntent(base({ turn: 2 }), { kind: 'select-message', reqId: 8, stepKey: '8:message:2', bodyTab: true });
+  expect(message.state.turn).toBeNull();
+
+  const locate = applyIntent(base({ turn: 2 }), { kind: 'locate', reqId: 9 });
+  expect(locate.state.turn).toBeNull();
+
+  const session = applyIntent(base({ turn: 2 }), { kind: 'open-session', sessionKey: 'k2', wantedTrace: null });
+  expect(session.state.turn).toBeNull();
+
+  const refresh = applyIntent(base({ turn: 2 }), { kind: 'select-latest', latestReqId: 42 });
+  expect(refresh.state.turn).toBeNull();
+
+  // 选中不落 URL 的对立面核实：select-turn 不发 update-url。
+  expect(kinds(applyIntent(base(), { kind: 'select-turn', row }))).not.toContain('update-url');
+});
+
+test('turn-gone 只清轮次；tool-gone 是清理不是选择，轮次态保持', () => {
+  const gone = applyIntent(base({ turn: 5 }), { kind: 'turn-gone' });
+  expect(gone.state.turn).toBeNull();
+  expect(gone.effects).toEqual([]);
+
+  const toolGone = applyIntent(base({ turn: 5 }), { kind: 'tool-gone' });
+  expect(toolGone.state.turn).toBe(5);
+  expect(toolGone.state.toolOrd).toBeNull();
+  expect(toolGone.state.toolOwner).toBeNull();
 });

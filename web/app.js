@@ -23,6 +23,7 @@ import { bodyLabelText, bodyStateText, replyCompleteness } from './row-summary.j
 import { applyIntent } from './selection.js';
 import { renderTracePair } from './trace-pair.js';
 import { projectSteps, renderTraceRows } from './trace-view.js';
+import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
 import { railTabFromParam, railTabParam, resolveTraceTarget } from './url-route.js';
 
 /**
@@ -61,7 +62,9 @@ if (typeof document !== 'undefined') {
   // store 是唯一的读取缓存：页面同步渲染经 peek* 消费，副本不作第二份真相。
   const store = createReaderStore((/** @type {string} */ url) => fetch(url),
     // 记录快照异步变化（409 作废、自动重读换新或失败）时重绘两栏；迟到响应不进来。
-    () => { renderMain(); renderRail(); });
+    () => { renderMain(); renderRail(); },
+    // 轮次快照落地（带的出现/消失、选中轮失效）同样重绘两栏。
+    { onTurnsChanged: () => { renderMain(); renderRail(); } });
   /** @type {Map<string, boolean>} 折叠开合按稳定键保存（键含 req id），重绘后恢复。 */
   const folds = new Map();
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
@@ -75,6 +78,8 @@ if (typeof document !== 'undefined') {
     missingReqId: /** @type {number | null} */ (null),
     /** URL 指定的请求存在，但落在当前窗口外（更早的历史）。 */
     offPageReqId: /** @type {number | null} */ (null),
+    /** 选中的轮次（会话内已结算轮序号）；null 表示请求态。 */
+    turn: /** @type {number | null} */ (null),
     selectedStep: /** @type {string | null} */ (null),
     toolOrd: /** @type {number | null} */ (null),
     /** 配对页描述的调用属于哪笔请求：从结果步骤进入时可能与当前请求不同；null 表示当前请求。 */
@@ -99,7 +104,7 @@ if (typeof document !== 'undefined') {
   let navEpoch = 0;
 
   /* ---------------- 选择状态：唯一写者与效果执行器 ---------------- */
-  const SELECTION_KEYS = ['session', 'reqId', 'selectedStep', 'toolOrd', 'toolOwner', 'toolPage', 'railTab', 'missingReqId', 'offPageReqId'];
+  const SELECTION_KEYS = ['session', 'reqId', 'selectedStep', 'toolOrd', 'toolOwner', 'toolPage', 'railTab', 'missingReqId', 'offPageReqId', 'turn'];
   /**
    * 发意图经纯转换改写选择元组并执行效果：所有选择写入都走这里，
    * 渲染函数不再改 state；规则与效果清单在 selection.js。
@@ -142,6 +147,7 @@ if (typeof document !== 'undefined') {
           break;
         case 'ensure-read': void ensureRead(Number(fx.reqId)); break;
         case 'ensure-pair': void ensurePair(Number(fx.owner), Number(fx.callOrd)); break;
+        case 'ensure-turn': void ensureTurnReads(Number(fx.startReq), Number(fx.replyReq), fx.ords ?? []); break;
         case 'resume-delta': void resumeDelta(Number(fx.reqId)); break;
         case 'read-route': void ensureRoute(Number(fx.reqId)); break;
       }
@@ -471,8 +477,8 @@ if (typeof document !== 'undefined') {
     <p class="note" style="margin-top:8px">只显示已记录的决策与尝试。窗口过滤不保证完整留痕；用量条目数量也不等于尝试次数。</p>`;
   }
 
-  /** 单一轨迹：每请求一个组，点击步骤在右栏阅读；顶部提供历史入口。 */
-  function traceHtml() {
+  /** 单一轨迹：每请求一个组，点击步骤在右栏阅读；顶部提供历史入口。 @param {boolean} withBand 轮次带在场时挂让位标记类 */
+  function traceHtml(withBand) {
     const window = store.getWindow();
     const rows = currentRows();
     // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载更早
@@ -485,7 +491,8 @@ if (typeof document !== 'undefined') {
       const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
       return call === null ? null : { name: call.name, inputText: call.inputText };
     };
-    let html = `<div class="step-list" style="--ord-digits:${ordDigits}">`;
+    // 轮次带吸顶后滚动定位要让它出带的高度：给步骤列表挂标记类，由 CSS 取让位值。
+    let html = `<div class="step-list${withBand ? ' band-above' : ''}" style="--ord-digits:${ordDigits}">`;
     // 历史入口只在有更早记录或正在读取时出现；序号口径在数字本身的悬停说明里。
     if (window.loading || window.olderCursor !== null) {
       html += '<div class="history-loader">';
@@ -527,6 +534,41 @@ if (typeof document !== 'undefined') {
     }
   }
 
+  /** 选中轮次的轮次行；列表未就绪或该轮已不在时为 null。 @param {number} n */
+  function turnOf(n) {
+    return store.peekTurns().items.find(item => item.turn === n) ?? null;
+  }
+
+  /** 轮次带：会话头与轨迹之间的一条目录层；无就绪轮次整条不渲染。 */
+  function turnBandHtml() {
+    const turns = store.peekTurns();
+    if (turns.status !== 'ready') return '';
+    return renderTurnBand(turns.items, state.turn, currentRows());
+  }
+
+  /** 轮次带吸顶位置贴 session-head 下沿：头部高度由内容决定，重绘与视口变化后同步。 */
+  function syncBandTop() {
+    const band = document.getElementById('turn-band');
+    const head = /** @type {HTMLElement | null} */ (document.querySelector('.session-head'));
+    if (band === null || head === null) return;
+    band.style.top = `${head.offsetHeight}px`;
+  }
+
+  /**
+   * 选中的块要带内可见：点靠后的轮、或重绘重建了带（横滚位置归零）之后，
+   * 把选中块滚回视野。已在视野内不动，不跟用户的横向浏览抢滚动。
+   */
+  function revealSelectedChip() {
+    const chip = /** @type {HTMLElement | null} */ (document.querySelector('.turn-chip[aria-pressed="true"]'));
+    const band = document.getElementById('turn-band');
+    if (chip === null || band === null) return;
+    const left = chip.offsetLeft;
+    const right = left + chip.offsetWidth;
+    if (left < band.scrollLeft || right > band.scrollLeft + band.clientWidth) {
+      chip.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }
+
   function renderMain() {
     const main = el('main');
     const keep = main.scrollTop;
@@ -535,9 +577,12 @@ if (typeof document !== 'undefined') {
       restoreScroll(main, keep);
       return;
     }
-    main.innerHTML = sessionHead() + traceHtml();
+    const band = turnBandHtml();
+    main.innerHTML = sessionHead() + band + traceHtml(band !== '');
     restoreFolds(main);
     restoreScroll(main, keep);
+    syncBandTop();
+    revealSelectedChip();
   }
 
   /* ---------------- 右栏 ---------------- */
@@ -553,6 +598,11 @@ if (typeof document !== 'undefined') {
   }
 
   function railHead() {
+    // 轮次态：身份行换成轮次身份，页签行隐藏——页签是请求作用域。
+    if (state.turn !== null) {
+      const turn = turnOf(state.turn);
+      if (turn !== null) return renderTurnRailHead(turn);
+    }
     const r = currentRow();
     if (r === null) {
       if (state.offPageReqId !== null) {
@@ -745,6 +795,20 @@ if (typeof document !== 'undefined') {
   }
 
   function railBody() {
+    // 轮次态：命令组与最终回复两个面板，两端默认展开；点轨迹任意行经选择转换回请求态。
+    if (state.turn !== null) {
+      const turn = turnOf(state.turn);
+      if (turn !== null) {
+        return renderTurnRail({
+          turn,
+          startRead: store.peekRequest(turn.start_req),
+          replyRead: store.peekRequest(turn.reply_req),
+          startRow: currentRows().find(row => row.req_id === turn.start_req) ?? null,
+          replyRow: currentRows().find(row => row.req_id === turn.reply_req) ?? null,
+        });
+      }
+      return '<div class="rail-empty"><b>轮次不可用</b>重新结算后这一轮不在列表里；点击轨迹任意行返回请求态。</div>';
+    }
     const r = currentRow();
     if (r === null) {
       if (state.offPageReqId !== null) {
@@ -829,10 +893,13 @@ if (typeof document !== 'undefined') {
         dispatch({ kind: 'tool-gone' });
       }
     }
+    // 轮次列表重算后选中的轮不在了：先清再渲染，同 tool-gone 的立场。
+    if (state.turn !== null && turnOf(state.turn) === null) dispatch({ kind: 'turn-gone' });
     el('rail-head').innerHTML = railHead();
     const rail = el('rail-body');
     // 滚动只在「同请求同页签的重绘」里保持；页签切换与换请求都回到顶部，行为可预期。
-    const key = `${state.reqId}:${state.railTab}`;
+    // 轮次态的键带轮号：逐轮翻阅时滚动回顶，不把上一轮的阅读位置带过去。
+    const key = `${state.turn ?? ''}:${state.reqId}:${state.railTab}`;
     const keep = key === lastRailKey ? rail.scrollTop : 0;
     rail.innerHTML = railBody();
     restoreFolds(rail);
@@ -980,6 +1047,23 @@ if (typeof document !== 'undefined') {
     }
   }
 
+  /**
+   * 轮次两端就绪：起点与终点请求各做一次与手动选中同深的读取，命令组里
+   * 分片未到的消息按 ord 定点补读，不为此扩量读整条增量。
+   * @param {number} startReq @param {number} replyReq @param {number[]} ords
+   */
+  async function ensureTurnReads(startReq, replyReq, ords) {
+    await Promise.all([ensureRead(startReq), ensureRead(replyReq)]);
+    const read = store.peekRequest(startReq);
+    for (const ord of ords) {
+      if (read !== null && !read.entries.some(entry => entry.ord === ord)) {
+        await ensureMessageOrd(startReq, ord);
+      }
+    }
+    renderMain();
+    renderRail();
+  }
+
   /** @param {number} id @param {string|null} key */
   async function selectRequest(id, key) {
     const row = currentRows().find(row => row.req_id === id);
@@ -1101,6 +1185,13 @@ if (typeof document !== 'undefined') {
     if (t.closest('#load-earlier')) { void loadEarlier(); return; }
     if (t.closest('#refresh-window')) { void refreshWindow(); return; }
     if (t.closest('#jump-latest')) { void jumpLatest(); return; }
+    // 轮次带点选：轮次行随意图带入，转换层不做查找。
+    const turnChip = /** @type {HTMLElement | null} */ (t.closest('[data-turn]'));
+    if (turnChip !== null) {
+      const turn = turnOf(Number(turnChip.dataset.turn));
+      if (turn !== null) dispatch({ kind: 'select-turn', row: turn });
+      return;
+    }
     const structureMore = /** @type {HTMLElement | null} */ (t.closest('[data-structure-more]'));
     if (structureMore !== null) { void loadStructure(Number(structureMore.dataset.structureMore)); return; }
     const deltaMore = /** @type {HTMLElement | null} */ (t.closest('[data-delta-more]'));
@@ -1160,7 +1251,9 @@ if (typeof document !== 'undefined') {
     const copyMsg = /** @type {HTMLElement | null} */ (t.closest('[data-copy-msg]'));
     if (copyMsg !== null) {
       const ord = Number(copyMsg.dataset.copyMsg);
-      const read = state.reqId === null ? null : store.peekRequest(state.reqId);
+      // 轮次态的命令面板带 owner：复制走起点请求的读取，不用当前选中请求。
+      const owner = copyMsg.dataset.copyOwner !== undefined ? Number(copyMsg.dataset.copyOwner) : state.reqId;
+      const read = owner === null ? null : store.peekRequest(owner);
       const entry = read === null ? null : read.entries.find((/** @type {{ord: number}} */ item) => item.ord === ord) ?? null;
       if (entry !== null && navigator.clipboard !== undefined) {
         void navigator.clipboard.writeText(messageCopyText(entry)).then(() => {
@@ -1321,6 +1414,8 @@ if (typeof document !== 'undefined') {
     }
   });
   window.addEventListener('resize', fitRail);
+  // 视口宽度变化会改变会话头的换行高度：吸顶的轮次带跟着重贴。
+  window.addEventListener('resize', syncBandTop);
   /** 折叠按钮的 aria 状态与 body 类同步。 */
   function syncPanelButtons() {
     for (const [id, cls, name] of [['sidebar-toggle', 'sidebar-collapsed', '会话栏'], ['rail-toggle', 'rail-collapsed', '详情栏']]) {

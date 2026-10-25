@@ -733,3 +733,58 @@ test('共享网络队列并发不超过 4', async () => {
   await Promise.all(Array.from({ length: 10 }, (_, i) => store.readRange(1, i * 5 + 1, i * 5 + 6)));
   expect(h.maxInflight()).toBeLessThanOrEqual(4);
 });
+
+test('轮次快照：按累计窗口下界请求，失败与 404 落 absent，加载更早后按下界重取', async () => {
+  let turnsStatus = 200;
+  const changed: number[] = [];
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) {
+      const key = decodeURIComponent(url.split('/api/sessions/')[1]?.split('/requests')[0] ?? '');
+      if (key === 'empty') return respond({ items: [], next_cursor: null });
+      if (!url.includes('cursor=')) return respond({ items: [{ req_id: 10, started_ms: 10 }], next_cursor: 'c1' });
+      return respond({ items: [{ req_id: 5, started_ms: 5 }], next_cursor: null });
+    }
+    if (url.includes('/turns?from=')) {
+      if (turnsStatus !== 200) return respond({ error: 'x' }, turnsStatus);
+      const from = Number(/from=(\d+)/.exec(url)?.[1] ?? 0);
+      return respond({ items: [
+        { turn: 1, start_req: 7, ordinals: [2], reply_req: 8 },
+        { turn: 2, start_req: 12, ordinals: [2], reply_req: 12 },
+      ].filter(t => t.start_req >= from) });
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher, undefined, { onTurnsChanged: () => changed.push(1) });
+  // 选会话后自动取一次，下界取窗口最早请求。
+  await store.selectSession('k', 30);
+  await store.loadTurns();
+  expect(h.urls.some(u => u.includes('/turns?from=10'))).toBe(true);
+  expect(store.peekTurns().status).toBe('ready');
+  // 起点 7 在下界 10 之前：服务端不返回，快照里只有轮 2。
+  expect(store.peekTurns().items.map(t => t.turn)).toEqual([2]);
+  // 加载更早：下界降到 5，重取后两轮都在。
+  await store.loadEarlier();
+  await store.loadTurns();
+  expect(h.urls.some(u => u.includes('/turns?from=5'))).toBe(true);
+  expect(store.peekTurns().items.map(t => t.turn)).toEqual([1, 2]);
+  // 读取失败落 absent：带不渲染，不占位；恢复后下次触发重取。
+  turnsStatus = 503;
+  await store.loadTurns();
+  expect(store.peekTurns().status).toBe('absent');
+  expect(store.peekTurns().items).toEqual([]);
+  turnsStatus = 200;
+  await store.loadTurns();
+  expect(store.peekTurns().status).toBe('ready');
+  // 后端未部署（404）同样 absent。
+  turnsStatus = 404;
+  await store.loadTurns();
+  expect(store.peekTurns().status).toBe('absent');
+  // 空窗口不发轮次请求，直接落 absent。
+  const turnsCalls = h.urls.filter(u => u.includes('/turns')).length;
+  await store.selectSession('empty', 30);
+  await store.loadTurns();
+  expect(store.peekTurns().status).toBe('absent');
+  expect(h.urls.filter(u => u.includes('/turns')).length).toBe(turnsCalls);
+  // 每次落地都通知页面重绘。
+  expect(changed.length).toBeGreaterThan(0);
+});

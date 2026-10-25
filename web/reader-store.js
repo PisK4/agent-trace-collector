@@ -44,6 +44,8 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * @property {(id: number) => RequestRead | null} peekRequest 同步读取当前快照，不发网络；记录存在即返回（含作废、失败与读取中的半成品），null 只表示本会话没有这笔记录。
  * @property {(id: number, ord: number) => import('../src/reading').ToolResultReading | null} peekToolResult 同步读取工具结果缓存，失败占位也算可用。
  * @property {(id: number) => {state: string, summary: unknown} | null} peekRoute 同步读取路由缓存；未读到或读取失败返回 null。
+ * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries').TurnPairRow[]}} peekTurns 同步读取轮次快照；absent 覆盖 404、读取失败与无窗口三种不可呈现态。
+ * @property {() => Promise<void>} loadTurns 按当前会话与窗口下界取轮次列表；换窗后的重取排在前一次之后。
  * @property {(id: number) => void} clearUpdated 清除自动重读的「已更新」标记。
  * @property {(id: number) => void} invalidate 原地清空一笔记录的缓存并落作废态；不通知、不排自动重读，测试与强制失效用。
  */
@@ -78,12 +80,13 @@ function createLanes(limit, fetcher) {
  * @param {(url: string) => Promise<Response>} fetcher
  * @param {(id: number) => void} [onReadChanged] 记录快照异步变化（作废、自动重读
  *   换新或失败）时通知页面重绘；迟到响应与会话切换后的旧任务不通知。
- * @param {{ autoRereadCooldownMs?: number }} [options] 自动重读的冷却窗口，默认
- *   10 秒；测试可注入短窗。
+ * @param {{ autoRereadCooldownMs?: number, onTurnsChanged?: () => void }} [options]
+ *   自动重读的冷却窗口，默认 10 秒；轮次快照落地（ready 或 absent）时通知，测试可注入短窗。
  * @returns {ReaderStore}
  */
 export function createReaderStore(fetcher, onReadChanged, options) {
   const autoRereadCooldownMs = options?.autoRereadCooldownMs ?? 10000;
+  const onTurnsChanged = options?.onTurnsChanged ?? null;
   const lane = createLanes(4, fetcher);
   let epoch = 0;
 
@@ -98,6 +101,10 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   let windowLoading = false;
   /** @type {string | null} */
   let windowError = null;
+  /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries').TurnPairRow[]}} */
+  let turns = { status: 'idle', items: [] };
+  /** @type {Promise<void> | null} 轮次读取串行化：加载更早触发的重取排在前一次之后，后到先得。 */
+  let turnsInflight = null;
 
   /**
    * 请求读取缓存，按 canonical id 归属。rec 的字段在运行期由各读取路径填充，
@@ -232,12 +239,48 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return response.json();
   }
 
+  /**
+   * 按当前会话与窗口下界取轮次列表。结算单位是累计窗口：下界取已加载窗口的
+   * 最早请求，服务端只返回起点在下界之后的轮。404（后端未部署）与读取失败都
+   * 落 absent——带不渲染、不占位、不留错误态，下次触发（选会话、刷新、加载更早）重取。
+   * 换会话代次变更后，迟到响应不写入。
+   */
+  async function loadTurns() {
+    if (turnsInflight !== null) await turnsInflight.catch(() => {});
+    const myEpoch = epoch;
+    const key = sessionKey;
+    const rows = windowRows;
+    if (key === null || rows.length === 0) {
+      turns = { status: 'absent', items: [] };
+      onTurnsChanged?.();
+      return;
+    }
+    const from = Math.min(...rows.map(row => row.req_id));
+    const task = (async () => {
+      turns = { status: 'loading', items: turns.items };
+      try {
+        const page = /** @type {import('../src/queries').TurnsPage} */ (
+          await getJson(`/api/sessions/${encodeURIComponent(key)}/turns?from=${from}`));
+        if (myEpoch !== epoch) return;
+        turns = { status: 'ready', items: page.items };
+      } catch {
+        if (myEpoch !== epoch) return;
+        turns = { status: 'absent', items: [] };
+      } finally {
+        if (myEpoch === epoch) onTurnsChanged?.();
+      }
+    })();
+    turnsInflight = task;
+    try { await task; } finally { if (turnsInflight === task) turnsInflight = null; }
+  }
+
   /** @param {string} key @param {number} limit */
   async function selectSession(key, limit = 30) {
     const myEpoch = ++epoch;
     sessionKey = key;
     windowLoading = true;
     windowError = null;
+    turns = { status: 'idle', items: [] };
     reads.clear();
     routes.clear();
     routeValues.clear();
@@ -252,7 +295,10 @@ export function createReaderStore(fetcher, onReadChanged, options) {
       olderCursor = null;
       windowError = error instanceof Error ? error.message : 'window_failed';
     } finally {
-      if (myEpoch === epoch) windowLoading = false;
+      if (myEpoch === epoch) {
+        windowLoading = false;
+        void loadTurns();
+      }
     }
   }
 
@@ -271,6 +317,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
       windowRows = [...page.items.filter((/** @type {{req_id: number}} */ row) => !seen.has(row.req_id)), ...windowRows]
         .sort((a, b) => a.started_ms - b.started_ms || a.req_id - b.req_id);
       olderCursor = page.next_cursor;
+      // 窗口下界前移：按新的累计范围重取轮次，更早的轮补进带里。
+      void loadTurns();
     } catch (error) {
       if (myEpoch !== epoch) return;
       windowError = error instanceof Error ? error.message : 'window_failed';
@@ -572,6 +620,11 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return routeValues.get(id) ?? null;
   }
 
+  /** @returns {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries').TurnPairRow[]}} */
+  function peekTurns() {
+    return turns;
+  }
+
   /** @param {number} id 页面交互清除自动重读的「已更新」标记。 */
   function clearUpdated(id) {
     const rec = reads.get(id);
@@ -601,6 +654,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     peekRequest,
     peekToolResult,
     peekRoute,
+    peekTurns,
+    loadTurns,
     clearUpdated,
     invalidate,
   };

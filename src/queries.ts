@@ -60,6 +60,23 @@ export type ToolCallRow = {
 /** 反向配对：本请求承载的结果块指向的调用，owner_req 是发起调用的请求。 */
 export type ToolResultIndexRow = ToolCallRow & { owner_req: number };
 
+/**
+ * 已结算轮的目录身份：一条用户命令与它的最终回复。turn 是会话内已结算轮的
+ * 全序序号（从会话头数起、只数已结算轮），加载更早历史不重号。
+ */
+export type TurnPairRow = {
+  turn: number;
+  /** 起点请求：命令组所在笔。 */
+  start_req: number;
+  /** 起点请求内用户主动文本的消息序号列表（命令组，按序）。 */
+  ordinals: number[];
+  /** 终点请求：最终回复所在笔。 */
+  reply_req: number;
+};
+
+/** 轮次列表响应：按累计窗口结算，不做跨页增量合并。 */
+export type TurnsPage = { items: TurnPairRow[] };
+
 export type RequestDetail = RequestRow & {
   prev_req_id: number | null;
   prev_relation: 'confirmed' | 'unknown' | 'first' | 'branch' | 'aux' | null;
