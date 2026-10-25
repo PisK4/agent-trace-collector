@@ -15,6 +15,7 @@ import {
   replyView, toolEntries, toolTint,
 } from './body-view.js';
 import { createReaderStore } from './reader-store.js';
+import { initLayout, openRail } from './layout.js';
 import {
   ledgerRowsHtml, railFactsHtml, readingChangedNote, resolveSelectedSource, secs,
   structureFoldHtml, systemContextOf, toolOverviewHtml, toolSchemaSection, usageFoldHtml,
@@ -111,10 +112,7 @@ if (typeof document !== 'undefined') {
   function runEffects(effects) {
     for (const fx of effects) {
       switch (fx.kind) {
-        case 'open-rail':
-          document.body.classList.remove('rail-collapsed');
-          syncPanelButtons();
-          break;
+        case 'open-rail': openRail(); break;
         case 'render-crumb': renderCrumb(); break;
         case 'render-main': renderMain(); break;
         case 'render-rail': renderRail(); break;
@@ -140,9 +138,6 @@ if (typeof document !== 'undefined') {
       }
     }
   }
-  let themePref = 'system';
-  try { themePref = localStorage.getItem('tc.theme') || 'system'; } catch { /* storage may be blocked */ }
-
   /** @param {string} key */
   function shortSession(key) {
     try {
@@ -1013,8 +1008,7 @@ if (typeof document !== 'undefined') {
    */
   async function openSummaryList(query, label) {
     summaryList = { kind: query.kind, param: label, label, loading: true, error: null, data: null };
-    document.body.classList.remove('rail-collapsed');
-    syncPanelButtons();
+    openRail();
     renderRail();
     try {
       const data = await store.loadSummaryEntries(query);
@@ -1127,14 +1121,6 @@ if (typeof document !== 'undefined') {
     }
   }
 
-  function applyTheme() {
-    if (themePref === 'system') delete document.documentElement.dataset.theme;
-    else document.documentElement.dataset.theme = themePref;
-    const btn = el('theme-toggle');
-    btn.textContent = themePref === 'dark' ? '☾' : themePref === 'light' ? '☀' : '◐';
-    btn.title = `主题：${themePref === 'system' ? '跟随系统' : themePref === 'dark' ? '深色' : '浅色'}（点击切换）`;
-  }
-
   document.addEventListener('click', (e) => {
     const t = /** @type {HTMLElement} */ (e.target);
     // 收起行里的失败数在 <summary> 内：先于 summary 早退处理，阻止折叠开合，
@@ -1150,8 +1136,7 @@ if (typeof document !== 'undefined') {
         loading: false, error: null,
         data: { items: failures.map(f => ({ ...f, state: 'resolved' })), truncated: false },
       };
-      document.body.classList.remove('rail-collapsed');
-      syncPanelButtons();
+      openRail();
       renderRail();
       return;
     }
@@ -1373,91 +1358,12 @@ if (typeof document !== 'undefined') {
     }
   });
 
-  el('theme-toggle').addEventListener('click', () => {
-    const order = ['system', 'light', 'dark'];
-    const next = order[(order.indexOf(themePref) + 1) % order.length] ?? 'system';
-    try { localStorage.setItem('tc.theme', next); } catch { /* storage may be blocked */ }
-    themePref = next;
-    applyTheme();
-  });
-
   // 品牌回主页即整页重载：落地到无参数初始态（重读会话列表、选最新会话），
   // 比在页面里重置全部选择字段与在途导航更直接，「刷新」语义也是字面义。
   el('brand-home').addEventListener('click', () => { location.href = location.pathname; });
 
-  /* ---------------- 布局控制：折叠与详情栏调宽 ---------------- */
-  const RAIL_MIN = 280, RAIL_MAX = 640, MAIN_MIN = 320;
-  /**
-   * 详情栏宽度夹取：范围 280..640，且给中栏保留至少 320px。
-   * @param {number} wanted @param {number} viewport @param {number} sidebar
-   */
-  const clampWidth = (wanted, viewport, sidebar) =>
-    Math.max(RAIL_MIN, Math.min(wanted, RAIL_MAX, Math.max(RAIL_MIN, viewport - sidebar - 6 - MAIN_MIN)));
-  /** 折叠中的会话栏宽度按 0 计。 */
-  function sidebarWidth() {
-    if (document.body.classList.contains('sidebar-collapsed')) return 0;
-    return document.querySelector('.col-sessions')?.getBoundingClientRect().width ?? 0;
-  }
-  const resizer = el('rail-resize');
-  /** @type {number | null} 按住中的 pointerId；move 只在按住时生效。 */
-  let draggingPointer = null;
-  /** @param {number} wanted */
-  function resizeRail(wanted) {
-    const limit = Math.round(clampWidth(RAIL_MAX, window.innerWidth, sidebarWidth()));
-    const value = Math.round(clampWidth(wanted, window.innerWidth, sidebarWidth()));
-    document.documentElement.style.setProperty('--rail-width', `${value}px`);
-    resizer.setAttribute('aria-valuenow', String(value));
-    resizer.setAttribute('aria-valuemax', String(limit));
-  }
-  resizer.addEventListener('pointerdown', e => {
-    draggingPointer = e.pointerId;
-    try { resizer.setPointerCapture(e.pointerId); } catch { /* 合成指针没有 capture；按住标记已生效 */ }
-  });
-  resizer.addEventListener('pointermove', e => {
-    if (draggingPointer === e.pointerId) {
-      preferredRailWidth = Math.max(RAIL_MIN, Math.min(RAIL_MAX, window.innerWidth - e.clientX));
-      fitRail();
-    }
-  });
-  /** @param {PointerEvent} e */
-  const releasePointer = e => {
-    if (draggingPointer === e.pointerId) draggingPointer = null;
-    try { if (resizer.hasPointerCapture(e.pointerId)) resizer.releasePointerCapture(e.pointerId); } catch { /* 已释放 */ }
-  };
-  resizer.addEventListener('pointerup', releasePointer);
-  resizer.addEventListener('pointercancel', releasePointer);
-  let preferredRailWidth = RAIL_MAX;
-  function fitRail() {
-    if (window.innerWidth > 1000) resizeRail(preferredRailWidth);
-  }
-  fitRail();
-  resizer.addEventListener('dblclick', () => {
-    preferredRailWidth = RAIL_MAX;
-    fitRail();
-  });
-  resizer.addEventListener('keydown', e => {
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      e.preventDefault();
-      const current = document.querySelector('.col-rail')?.getBoundingClientRect().width ?? RAIL_MAX;
-      preferredRailWidth = Math.max(RAIL_MIN, Math.min(RAIL_MAX, current + (e.key === 'ArrowLeft' ? 20 : -20)));
-      fitRail();
-    }
-  });
-  window.addEventListener('resize', fitRail);
   // 视口宽度变化会改变会话头的换行高度：吸顶的轮次带跟着重贴。
   window.addEventListener('resize', syncBandTop);
-  /** 折叠按钮的 aria 状态与 body 类同步。 */
-  function syncPanelButtons() {
-    for (const [id, cls, name] of [['sidebar-toggle', 'sidebar-collapsed', '会话栏'], ['rail-toggle', 'rail-collapsed', '详情栏']]) {
-      const button = el(id);
-      const closed = document.body.classList.contains(cls);
-      button.setAttribute('aria-expanded', String(!closed));
-      button.setAttribute('aria-label', `${closed ? '展开' : '收起'}${name}`);
-      button.title = button.getAttribute('aria-label') ?? '';
-    }
-  }
-  el('sidebar-toggle').addEventListener('click', () => { document.body.classList.toggle('sidebar-collapsed'); syncPanelButtons(); fitRail(); });
-  el('rail-toggle').addEventListener('click', () => { document.body.classList.toggle('rail-collapsed'); syncPanelButtons(); });
 
   /* ---------------- Session ID 复制 ---------------- */
   /** @param {string} text */
@@ -1512,7 +1418,7 @@ if (typeof document !== 'undefined') {
     if (state.session !== null) void selectSession(state.session, state.reqId);
   });
 
-  applyTheme();
+  initLayout();
   void (async () => {
     try {
       await store.loadSessions();
