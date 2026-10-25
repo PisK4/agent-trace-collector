@@ -103,16 +103,14 @@ code,pre,.mono{font-family:var(--mono)}
   padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line);
   position:relative;z-index:5;
 }
-.brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;white-space:nowrap}
+/* 品牌是回主页的按钮：内距与负外距让 hover 底色外扩一圈，不挤动相邻元素。 */
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;white-space:nowrap;border-radius:4px;padding:4px 7px;margin:-4px -7px}
+.brand:hover{background:var(--hover)}
 .brand svg{color:var(--accent);flex:none}
 .crumb{display:flex;align-items:center;gap:7px;min-width:0;font-size:12px;color:var(--text-2)}
 .crumb b{font-weight:550;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:34ch}
 .grow{flex:1;min-width:8px}
 .toolbar-right{display:flex;align-items:center;gap:6px}
-.demo-tag{
-  font:500 10px/1 var(--ui);letter-spacing:.07em;color:var(--accent);
-  border:1px solid var(--accent);border-radius:3px;padding:3px 5px;white-space:nowrap;
-}
 .icon-btn{
   height:28px;min-width:28px;border:1px solid var(--line);border-radius:4px;background:var(--surface);
   display:inline-flex;align-items:center;justify-content:center;color:var(--text-2);font-size:12px;padding:0 8px;
@@ -139,9 +137,10 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 
 /* ---------- 左栏：会话 ---------- */
 .sessions-head{padding:12px 12px 8px;display:flex;flex-direction:column;gap:8px;flex:none}
-.sessions-title{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.sessions-title{display:flex;align-items:center;gap:5px}
 .sessions-title h2{font-size:12.5px;font-weight:600;letter-spacing:.02em}
-.sessions-title span{font-size:11px;color:var(--muted)}
+.sessions-title span{font-size:11px;color:var(--muted);margin-left:auto}
+.sessions-title .icon-btn{height:20px;min-width:20px;padding:0 4px;font-size:11px;color:var(--muted)}
 .search{position:relative}
 .search input{
   width:100%;height:30px;border:1px solid var(--line);border-radius:4px;background:var(--surface);
@@ -622,15 +621,13 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 <body>
 
 <header class="topbar">
-  <div class="brand">
+  <button class="brand" id="brand-home" title="回到主页并刷新">
     <svg width="20" height="22" viewBox="0 0 30 32" fill="none" aria-hidden="true"><path d="M5 4v24M5 9h12l8 7-8 7H5" stroke="currentColor" stroke-width="2.4"/><circle cx="5" cy="9" r="2.6" fill="currentColor"/><circle cx="25" cy="16" r="2.6" fill="currentColor"/><circle cx="5" cy="23" r="2.6" fill="currentColor"/></svg>
     <span>Trace Collector</span>
-  </div>
+  </button>
   <div class="crumb" id="crumb"></div>
   <div class="grow"></div>
   <div class="toolbar-right">
-    <span class="demo-tag" id="source-tag">本地库</span>
-    <button class="icon-btn" id="copy-session" aria-label="复制当前会话 ID" title="复制当前会话 ID">⧉</button>
     <button class="icon-btn" id="sidebar-toggle" aria-controls="sessions-col" aria-expanded="true" aria-label="收起会话栏" title="收起会话栏">☷</button>
     <button class="icon-btn" id="rail-toggle" aria-controls="rail-col" aria-expanded="true" aria-label="收起详情栏" title="收起详情栏">◨</button>
     <button class="icon-btn" id="theme-toggle" aria-label="切换主题" title="切换主题">◐</button>
@@ -640,7 +637,7 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 <div class="app">
   <aside class="col col-sessions" id="sessions-col" aria-label="会话列表">
     <div class="sessions-head">
-      <div class="sessions-title"><h2>会话</h2><span id="sess-count"></span></div>
+      <div class="sessions-title"><h2>会话</h2><button class="icon-btn" id="copy-session" aria-label="复制当前会话 ID" title="复制当前会话 ID">⧉</button><span id="sess-count"></span></div>
       <div class="search">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.5"/></svg>
         <input id="sess-search" type="search" placeholder="搜索已加载会话、请求或 ID" aria-label="搜索已加载会话">

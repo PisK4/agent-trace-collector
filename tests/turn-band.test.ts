@@ -66,11 +66,10 @@ test('轮次带：摘要 32 字截断、悬停给全文、内容一律转义', (
   expect(evil).toContain('&lt;img');
 });
 
-test('身份行：轮号与两端请求号是文本，不是跳转', () => {
+test('身份行：只留轮号文本，不带请求号也不是跳转', () => {
   const head = renderTurnRailHead({ turn: 3, start_req: 7, ordinals: [2], reply_req: 9 });
   expect(head).toContain('轮 3');
-  expect(head).toContain('命令 req 7');
-  expect(head).toContain('回复 req 9');
+  expect(head).not.toContain('req');
   expect(head).not.toContain('data-locate');
   expect(head).not.toContain('data-trace');
 });

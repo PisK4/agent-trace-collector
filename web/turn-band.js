@@ -45,11 +45,12 @@ export function renderTurnBand(items, selected, rows) {
 }
 
 /**
- * 右栏轮次态的身份行：上下文靠请求号手动定位，不做跳转，沿配对页的既有立场。
+ * 右栏轮次态的身份行：只留轮号。两端请求号曾是手动定位的锚点，但轮次态里
+ * 没有「跳到那笔请求」的动作可发起，号本身不可操作，阅读路径用不到它。
  * @param {TurnPairRow} turn
  */
 export function renderTurnRailHead(turn) {
-  return `<div class="rail-id"><span>轮 ${turn.turn}</span><span class="muted">·</span><span>命令 req ${turn.start_req}</span><span class="muted">·</span><span>回复 req ${turn.reply_req}</span></div>`;
+  return `<div class="rail-id"><span>轮 ${turn.turn}</span></div>`;
 }
 
 /**
