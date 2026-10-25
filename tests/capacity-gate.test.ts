@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { countPublishedGenerations, derivedHashSlice, parseArgs, scenarioPlan } from '../scripts/capacity';
+import { countPublishedGenerations, derivedHash, derivedHashSlice, parseArgs, scenarioPlan } from '../scripts/capacity';
 import { SEED_GROUP, fixture, seedChain } from './fixtures';
 import {
   deriveBudget, deriveScenarioBudget, evaluateGate, evaluateReports, evaluateSliceBasis,
@@ -496,6 +496,37 @@ test('切片读数只认已发布的代际与它的 result 行', () => {
     // 退下来的代不再计入发布：指针之外的副本不是"这一轮发布的东西"。
     f.store.write(db => db.run("UPDATE derive_generation SET state='retired'"));
     expect(countPublishedGenerations(f.store, convKey, actor)).toBe(0);
+  } finally { f.close(); }
+});
+
+test('同步与切片指纹共享同一份有序列清单', () => {
+  // 两条取源路径对同一组派生值必须给出同一指纹：清单、顺序或 fact/derived
+  // 归属有一处分叉，指纹就分开，long-10000 与 long-10000-slice 的对照随之失效。
+  const f = fixture();
+  try {
+    const { convKey, actor } = SEED_GROUP;
+    seedChain(f.store, [{ texts: ['S'] }]);
+    f.store.write(db => {
+      db.run(`INSERT INTO derive_generation(generation,conv_key,actor,group_epoch,input_revision,
+        algorithm,state,stage,created_at)
+        VALUES ('gen-00000000000000',?,?,'g1',1,5,'published','done',1)`, [convKey, actor]);
+      db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,input_revision,
+        published_revision,target_algorithm,published_algorithm,state,published_generation)
+        VALUES (?,?,'','g1',1,1,5,5,'clean','gen-00000000000000')
+        ON CONFLICT(conv_key,actor) DO UPDATE SET published_generation='gen-00000000000000',
+          published_revision=input_revision, published_algorithm=target_algorithm, state='clean'`,
+      [convKey, actor]);
+      db.run(`UPDATE request SET prev_req_id=NULL,prev_relation=NULL,delta_ordinals=NULL,
+        chain_role='main',title='t',title_source='user_delta',input_preview='p',
+        input_preview_kind='delta',reply_preview='r',model_title='mt',req_kind='chat',
+        purpose_chain='participate' WHERE conv_key=?`, [convKey]);
+      db.run(`INSERT INTO derive_request_result(generation,req_id,started_ms,purpose_revision,
+        algorithm,retention_state,chain_role,title,title_source,input_preview,input_preview_kind,
+        reply_preview,purpose_chain)
+        VALUES ('gen-00000000000000',1,1000,0,5,'recomputed','main','t','user_delta','p','delta',
+        'r','participate')`);
+    });
+    expect(derivedHash(f.store, convKey)).toBe(derivedHashSlice(f.store, convKey, actor));
   } finally { f.close(); }
 });
 

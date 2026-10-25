@@ -3,6 +3,7 @@ import { getBodyPage } from './protocols';
 import type { BodyPage } from './protocols';
 import { getRequest } from './queries';
 import type { RequestDetail } from './queries';
+import { deriveJoinSql } from './derive-state';
 import { resolveRequestId, type Store } from './store';
 
 /**
@@ -82,6 +83,8 @@ function identityOf(row: IdentityRow): string {
   ]);
 }
 
+// 身份槽位语义（组不存在时的固定 null 槽、两条取源列并读）在本文件；
+// 与行查询共享的 join 形状来自 derive-state，发布代按队列指针取。
 const IDENTITY_SQL = `
   SELECT r.req_id, r.conv_key, r.actor, r.actor_state, r.input_epoch, r.input_revision,
          r.purpose_pending, r.purpose_revision, r.purpose_target, r.purpose_version,
@@ -94,8 +97,7 @@ const IDENTITY_SQL = `
          d.retention_state AS d_retention_state, d.basis_json AS d_basis_json,
          r.summary_state, r.summary_algorithm, r.summary_basis
   FROM request r
-  LEFT JOIN derive_queue g ON g.conv_key = r.conv_key AND g.actor = r.actor
-  LEFT JOIN derive_request_result d ON d.generation = g.published_generation AND d.req_id = r.req_id
+  ${deriveJoinSql('g', 'd', 'r')}
   WHERE r.req_id = ?`;
 
 export function getReadingDetail(store: Store, id: number): ReadingDetail | null {

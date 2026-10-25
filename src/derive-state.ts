@@ -39,6 +39,26 @@ export function groupIsCurrent(row: {
 }
 
 /**
+ * 队列与发布代结果行的一对 join；发布代按队列指针取，不跨代。
+ * 行读取与读取身份共用这一对 join：选哪张表、判不判 current 由调用方的
+ * 查询决定，join 的形状只在这里写一遍。
+ */
+export function deriveJoinSql(g: string, d: string, r: string): string {
+  return `LEFT JOIN derive_queue ${g} ON ${g}.conv_key=${r}.conv_key AND ${g}.actor=${r}.actor
+  LEFT JOIN derive_request_result ${d} ON ${d}.generation=${g}.published_generation AND ${d}.req_id=${r}.req_id`;
+}
+
+/**
+ * 派生列的取值来源：发布代行优先，否则同步旧列。
+ * 这里只决定列从哪张表读——同步列同时是「上一次完成值」的家，dirty 组的
+ * historical 仍要从它取旧值；当前与否的屏蔽闸门在 queries 的 `projectRow`。
+ * 同步可用性判据唯一落在 `groupCurrentSql`，不在查询里另立第二套口径。
+ */
+export function derivedColSql(g: string, d: string, r: string, col: string): string {
+  return `CASE WHEN ${g}.published_generation IS NOT NULL THEN ${d}.${col} ELSE ${r}.${col} END`;
+}
+
+/**
  * 组内还有未判定用途的成员：`request` 行应满足的谓词片段。
  *
  * 两条派生路径共用一个判据：切片选组时用它做外层过滤（NOT EXISTS），
