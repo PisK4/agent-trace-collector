@@ -3,8 +3,6 @@ import { chmodSync, lstatSync, mkdirSync, symlinkSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { loadLocalSecret } from '../src/config';
-import { ingestLedger } from '../src/reconcile';
-import type { FileBatch } from '../src/sources/files';
 import {
   assertCostPagePeriod,
   classifyLedger,
@@ -81,20 +79,6 @@ test('路由首字时间按 firstText 读取，旧键名不兜底', () => {
   const legacy = mapRouteRow({ id: 2, time: '2026-10-20T00:00:00Z', first_text: 2603 })!;
   expect(legacy.firstText).toBeNull();
 });
-
-function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): FileBatch {
-  let offset = startOffset;
-  const lines = rows.map(row => {
-    const text = JSON.stringify(row);
-    const start = offset;
-    offset += Buffer.byteLength(text) + 1;
-    return { offset: start, end: offset, text };
-  });
-  return {
-    generation, rewriteEpoch: 0, lines, committedOff: offset, observedOff: offset,
-    seenSize: offset, headLen: 0, headHash: null, issues: [],
-  };
-}
 
 test('费用窗口只接受真实日历范围', () => {
   for (const period of [

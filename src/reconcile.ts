@@ -5,12 +5,11 @@ import type { FileBatch, SourceCursor, SourceIssue, SourceRead } from './sources
 import { redact } from './privacy';
 import {
   isRecord,
-  localDay,
   mapLedgerRow,
   mapRouteRow,
-  modelTimeTitle,
   optionalNumber,
 } from './sources/magpie';
+import { localDay, modelTimeTitle } from './format';
 import type { LedgerFields, RouteFields } from './sources/magpie';
 import { insertPreparedLedgerTx, isPurgedEvidence, upsertPreparedRouteTx } from './sources/raw';
 import type { LedgerPhysicalRef } from './sources/raw';
@@ -24,9 +23,6 @@ import { HAVE_LEDGER, HAVE_ROUTE, insertEvidenceTx, ledgerConv, routeConv, sessi
 export type SourceIngestResult = {
   accepted: number; invalid: number; duplicate: number; purged_skip: number;
 };
-
-/** 兼容旧入口的返回类型。 */
-export type IngestLedgerResult = SourceIngestResult;
 
 function evidenceRef(generation: string, offset: number): string {
   return JSON.stringify(['file', generation, offset]);
@@ -501,39 +497,6 @@ function mergeLedgerRow(
   applyLedgerOwnershipTx(db, reqId, fields, projection, now);
 }
 
-/**
- * 兼容入口：账本批次交给同一个 ingestSource。
- *
- * 调用方已经持有读取器批次；SourceRead 与测试构造的 FileBatch 都满足这里的
- * 形状。新代码直接调 ingestSource，让读取结果本身充当游标。
- */
-export function ingestLedger(
-  store: Store,
-  sourceName: string,
-  batch: FileBatch,
-  now: number,
-  salt: Uint8Array,
-): IngestLedgerResult {
-  return ingestSource(store, {
-    sourceKind: 'ledger',
-    name: sourceName,
-    mode: 'appendable',
-    state: 'decoded',
-    generation: batch.generation,
-    rewriteEpoch: batch.rewriteEpoch,
-    committedOff: batch.committedOff,
-    observedOff: batch.observedOff,
-    seenSize: batch.seenSize,
-    headLen: batch.headLen,
-    headHash: batch.headHash,
-    fingerprint: null,
-    lines: batch.lines,
-    issues: batch.issues,
-    startOff: 0,
-    error: null,
-  }, salt, now);
-}
-
 /** 账本记录级摄入；调用方负责把它放进已有事务。 */
 function ingestLedgerRowsTx(
   db: Database,
@@ -710,22 +673,4 @@ function ingestRouteRecordsTx(
     accepted += 1;
   }
   return { accepted, invalid, duplicate, purged_skip: 0 };
-}
-
-/**
- * 兼容入口：只有记录、没有文件位置的调用走这里，游标由调用方另行维护。
- *
- * 文件入口 ingestSource 复用同一个记录级内核，坏行引用键由来源适配器给出。
- */
-export function ingestRoute(
-  store: Store,
-  records: unknown[],
-  now: number,
-  salt: Uint8Array,
-  refBase?: string,
-): SourceIngestResult {
-  const issueKey = (value: number) => JSON.stringify(refBase === undefined
-    ? ['route-invalid', value]
-    : ['route-invalid', refBase, value]);
-  return store.write(db => ingestRouteRecordsTx(db, records, now, salt, issueKey));
 }

@@ -18,7 +18,7 @@ Status: implemented
 
 只有 `state = decoded` 的读取结果能进 `ingestSource`，其余状态直接抛错。读取失败的来源根本没有游标可写，未变来源由读取器返回 `unchanged`。
 
-在线调度直接调用 `ingestSource`，没有调用方的 `ingestDecodedRouteFile` 包装随之删除。`ingestLedger` 和 `ingestRoute` 为现有测试保留：前者接收测试构造的账本批次，后者接收没有文件坐标的记录列表，两者复用摄入内核，不复制事务内规则。
+在线调度直接调用 `ingestSource`，没有调用方的 `ingestDecodedRouteFile` 包装随之删除。`ingestLedger` 和 `ingestRoute` 为现有测试保留：前者接收测试构造的账本批次，后者接收没有文件坐标的记录列表，两者复用摄入内核，不复制事务内规则。[清仓](../simplification/2026-10-25-cleanup-dead-exits-and-single-homes.md)把这两个兼容出口也退役了：测试迁到 `ingestSource` 直调，摄入内核与本 note 的决定不变。
 
 不做 schema 变更，不引依赖。`source_cursor` 现有列同时容纳两种文件形态，封口 gz 的偏移字段只记解压后长度，不参与定位。
 

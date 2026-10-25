@@ -1,45 +1,8 @@
 // @ts-check
 /**
- * 单行呈现的纯函数：用途标签、辅助行摘要、正文状态文案与回复完整性。
+ * 单行呈现的纯函数：正文状态文案与回复完整性。
  * 无 DOM、无网络，测试直接断言输出。
  */
-
-/** 用途标签；未知类别原样显示，不猜成对话。 @param {string|null|undefined} kind */
-export function purposeLabel(kind) {
-  if (kind === 'title') return '标题生成';
-  if (kind === 'auto-mode-classifier') return '自动模式分类';
-  if (kind === 'chat') return '对话';
-  return kind ?? '未知用途';
-}
-
-/**
- * 辅助行只由派生用途决定：排除用途，或组阶段给出的 aux 角色。
- * 摘要文本里的任何字样都不参与判断。
- * @param {{purpose_chain?: string|null, chain_role?: string|null, [key: string]: unknown}} row
- * @returns {boolean}
- */
-export function isAuxRow(row) {
-  return row.purpose_chain === 'exclude' || row.chain_role === 'aux';
-}
-
-/** @param {{req_kind?: string|null, reply_preview?: string|null, model_title?: string|null}} row @returns {string} */
-export function auxSummary(row) {
-  const label = purposeLabel(row.req_kind);
-  if (reqKindOf(row) === 'auto-mode-classifier') {
-    const match = /<block>\s*(yes|no)\s*(?:<\/block>)?/i.exec(row.reply_preview ?? '');
-    const verdict = match?.[1]?.toLowerCase();
-    if (verdict === 'no') return `${label} · 放行`;
-    if (verdict === 'yes') return `${label} · 拦截`;
-    return `${label} · 判定未知`;
-  }
-  if (reqKindOf(row) === 'title') {
-    return row.model_title === null || row.model_title === undefined
-      ? label : `${label} · ${row.model_title}`;
-  }
-  return label;
-}
-/** @param {{req_kind?: string|null}} row @returns {string|null} */
-const reqKindOf = (row) => row.req_kind ?? null;
 
 /** @param {{body_state: string}} r @returns {string} */
 export function bodyStateText(r) {

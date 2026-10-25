@@ -22,6 +22,7 @@ import { drainDeriveEntry } from '../src/derive-unit';
 import type { SliceRuntime } from '../src/config';
 import { PAGE_MAX } from '../src/protocols';
 import type { StorageUsage } from '../src/retention';
+import { RAW_TTL_MS } from '../src/retention';
 import { openStore } from '../src/store';
 import type { Store } from '../src/store';
 import {
@@ -1274,8 +1275,6 @@ export function countPublishedGenerations(store: Store, convKey: string, actor: 
     "SELECT COUNT(*) AS n FROM derive_generation WHERE conv_key=? AND actor=? AND state='published'",
     [convKey, actor]);
 }
-
-const RAW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** 回收场景开跑前预置 8 天前的 raw 行；采集器启动后由周期任务清理。 */
 function prepareRetention(root: string): void {

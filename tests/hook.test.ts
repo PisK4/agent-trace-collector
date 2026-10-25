@@ -12,8 +12,8 @@ import { onRequest, onResponse } from '../plugins/collector.hooks';
 import type { HookContext } from '../plugins/collector.hooks';
 import { restoreBody } from '../src/body';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
-import { ingestLedger } from '../src/reconcile';
-import type { FileBatch } from '../src/sources/files';
+import { ingestSource } from '../src/reconcile';
+import type { SourceRead } from '../src/sources/files';
 
 const salt = new Uint8Array(32).fill(3);
 
@@ -606,7 +606,7 @@ test('准入恢复后同一请求可以补上正文', () => {
   }
 });
 
-function ledgerBatch(rows: unknown[]): FileBatch {
+function ledgerBatch(rows: unknown[]): SourceRead {
   let offset = 0;
   const lines = rows.map(row => {
     const text = JSON.stringify(row);
@@ -615,8 +615,10 @@ function ledgerBatch(rows: unknown[]): FileBatch {
     return { offset: start, end: offset, text };
   });
   return {
+    sourceKind: 'ledger', name: 'usage.jsonl', mode: 'appendable', state: 'decoded',
     generation: '1:2:3:1', rewriteEpoch: 0, lines, committedOff: offset,
-    observedOff: offset, seenSize: offset, headLen: 0, headHash: null, issues: [],
+    observedOff: offset, seenSize: offset, headLen: 0, headHash: null, fingerprint: null,
+    issues: [], startOff: 0, error: null,
   };
 }
 
@@ -643,10 +645,10 @@ test('hook-only不合成HTTP状态也不写账本模型列', () => {
 test('账本缺req时hook报告独立保留且不写账本模型', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', ledgerBatch([{
+    ingestSource(f.store, ledgerBatch([{
       t: '2026-10-20T00:00:00Z', route_id: 7, response_id: 'msg_synthetic_1',
       agent: 'demo', session: 'synthetic-session', model: 'provider-model', provider: 'p', status: 200, in: 10,
-    }]), 1, salt);
+    }]), salt, 1);
     const accepted = acceptHook(f.store, envelope({ model: 'hook-model', success: true }), 2, salt);
     expect(accepted.req_id).toBe(1);
     const projection = f.store.write(db => projectRequestTx(db, accepted.req_id, {

@@ -28,7 +28,8 @@ let ingesting = false;
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
-const STATIC_FILES: Record<string, { file: string; type: string }> = {
+/** 静态白名单是 web/ 目录的唯一发布面；测试用目录内容核对它的覆盖。 */
+export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/body-view.js': { file: 'body-view.js', type: 'text/javascript; charset=utf-8' },

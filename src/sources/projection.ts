@@ -1,10 +1,10 @@
 import type { Database } from 'bun:sqlite';
 import {
   isRecord,
-  localDay,
   mapLedgerRow,
   mapRouteRow,
 } from './magpie';
+import { localDay } from '../format';
 import type { LedgerFields, RouteFields } from './magpie';
 import { HAVE_LEDGER } from '../evidence';
 import {

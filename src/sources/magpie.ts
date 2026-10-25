@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import type { Database } from 'bun:sqlite';
 import type { Store } from '../store';
 import { commitUnit } from '../store';
+import { localDay } from '../format';
 import { redact } from '../privacy';
 
 export type ProbeResult = { version: string | null; verified: boolean; reason: string | null };
@@ -219,16 +220,6 @@ export function parseTimestamp(value: unknown): number | null {
   if (typeof value !== 'string') return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
-}
-
-export function localDay(ms: number): string {
-  const date = new Date(ms);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-export function modelTimeTitle(model: string | null, ms: number): string {
-  const date = new Date(ms);
-  return `${model ?? 'unknown'} · ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
 const RESPONSE_PREFIXES = ['chatcmpl-', 'msg_resp_', 'msg_', 'resp_'];

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { restoreScroll } from '../web/app.js';
-import { auxSummary, isAuxRow, purposeLabel, replyCompleteness } from '../web/row-summary.js';
+import { replyCompleteness } from '../web/row-summary.js';
 import {
   ledgerParts, ledgerRowsHtml, railFactsHtml, readingChangedNote,
   structureFoldHtml, systemContextOf, toolOverviewHtml, toolSchemaSection, usageFoldHtml,
@@ -17,27 +17,6 @@ test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', (
   // canonical 不在窗口里：它存在，只是更早，不判缺失。
   expect(resolveTraceTarget(rows, 9, { req_id: 40 })).toEqual({ kind: 'off-page', reqId: null });
   expect(resolveTraceTarget(rows, 9, null)).toEqual({ kind: 'missing', reqId: null });
-});
-
-test('辅助行只由派生用途决定', () => {
-  expect(isAuxRow({ purpose_chain: 'exclude', chain_role: 'main' })).toBe(true);
-  expect(isAuxRow({ purpose_chain: 'participate', chain_role: 'aux' })).toBe(true);
-  expect(isAuxRow({ purpose_chain: 'participate', chain_role: 'main' })).toBe(false);
-  // 摘要文本里的字样不参与判断。
-  expect(isAuxRow({ purpose_chain: 'participate', chain_role: 'main', reply_preview: '辅助请求' })).toBe(false);
-});
-
-test('未知用途保留原始 ID', () => {
-  expect(purposeLabel('synthetic_probe')).toBe('synthetic_probe');
-  expect(purposeLabel(null)).toBe('未知用途');
-  expect(purposeLabel('title')).toBe('标题生成');
-});
-
-test('分类器摘要显示判定', () => {
-  expect(auxSummary({ req_kind: 'auto-mode-classifier', reply_preview: '<block>no</block>' })).toContain('放行');
-  expect(auxSummary({ req_kind: 'auto-mode-classifier', reply_preview: '<block>yes</block>' })).toContain('拦截');
-  expect(auxSummary({ req_kind: 'auto-mode-classifier', reply_preview: 'garbage' })).toContain('判定未知');
-  expect(auxSummary({ req_kind: 'title', model_title: '空状态排查' })).toContain('空状态排查');
 });
 
 test('滚动恢复夹在可滚动范围内', () => {

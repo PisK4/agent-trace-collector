@@ -17,7 +17,7 @@ Status: implemented
 ## Alternatives considered
 
 **把「内容按脱敏后的原文保存」上移为页面级说明。** 脱敏是写入口径，[架构设计](../../../../../docs/architecture-design.md)是它的家，界面按面板逐条复述只会失修。
-**同步删除 `renderRaw`。** 它仍被测试断言使用；本轮只清理用户可见的失效引用，函数本身不动。
+**同步删除 `renderRaw`。** 它仍被测试断言使用；本轮只清理用户可见的失效引用，函数本身不动。该缓期在[清仓](2026-10-25-cleanup-dead-exits-and-single-homes.md)兑现：连同测试一并删除。
 **保留「回复与请求上下文分开保存」。** 读者要回答的是「结果正文为什么不在回复里」，保留的后半句已完整回答。
 
 ## Consequences

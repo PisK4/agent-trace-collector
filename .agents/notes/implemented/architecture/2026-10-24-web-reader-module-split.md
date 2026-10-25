@@ -10,11 +10,11 @@ Status: implemented
 
 按概念拆出三个无状态模块，`app.js` 只留 DOM 辅助与编排：
 
-- **`web/row-summary.js`**：用途标签（`purposeLabel`）、辅助行判定与摘要（`isAuxRow`、`auxSummary`）、正文状态文案（`bodyStateText`、`bodyLabelText`）与回复完整性（`replyCompleteness`）。
+- **`web/row-summary.js`**：用途标签（`purposeLabel`）、辅助行判定与摘要（`isAuxRow`、`auxSummary`）、正文状态文案（`bodyStateText`、`bodyLabelText`）与回复完整性（`replyCompleteness`）。前三组出口零生产调用，已在[清仓](../simplification/2026-10-25-cleanup-dead-exits-and-single-homes.md)删除；模块现为正文状态文案与回复完整性的家。
 - **`web/rail-facts.js`**：右栏事实页（`railFactsHtml`）、结构折叠（`structureFoldHtml`）、工具概览与 Schema（`toolOverviewHtml`、`toolSchemaSection`）、阅读版本说明（`readingChangedNote`）、system 上下文（`systemContextOf`）、选中来源解析（`resolveSelectedSource`）、用量读数与折叠行（`ledgerParts`、`ledgerRowsHtml`、`usageFoldHtml`）；四个格式化函数（`n`/`kk`/`secs`/`fmtCost`）随用量读数留在模块内部。
 - **`web/url-route.js`**：trace 目标解析（`resolveTraceTarget`）、页签参数与声明（`railTabFromParam`、`railTabParam`）、路由读取目标（`routeReadTarget`）。
 
-`restoreScroll` 留在 `app.js`：它直接读写元素的滚动位置，属于渲染编排而非纯呈现。三个新模块登记 `src/http.ts` 的 `STATIC_FILES`，`tests/http.test.ts` 的白名单用例同步扩展。漏登记会让页面整块加载失败。测试从符号的新家导入：`tests/web.test.ts` 从三个模块取符号，`restoreScroll` 仍从 `app.js` 取；`tests/trace-view.test.ts` 的 `resolveSelectedSource` 改从 `rail-facts.js` 取。
+`restoreScroll` 留在 `app.js`：它直接读写元素的滚动位置，属于渲染编排而非纯呈现。三个新模块登记 `src/http.ts` 的 `STATIC_FILES`，`tests/http.test.ts` 的白名单用例同步扩展。漏登记会让页面整块加载失败。[清仓](../simplification/2026-10-25-cleanup-dead-exits-and-single-homes.md)之后白名单测试消费导出的 `STATIC_FILES` 并对 `web/` 目录断言互相覆盖，登记遗漏在测试期暴露。测试从符号的新家导入：`tests/web.test.ts` 从三个模块取符号，`restoreScroll` 仍从 `app.js` 取；`tests/trace-view.test.ts` 的 `resolveSelectedSource` 改从 `rail-facts.js` 取。
 
 ## Alternatives considered
 
