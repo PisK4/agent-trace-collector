@@ -485,6 +485,10 @@ test('多 choice 回复保留原始对象并说明限制', () => {
   const steps = projectSteps(row(), read(detail(), [], reply));
   expect(steps.some(s => s.kind === 'assistant')).toBe(false);
   expect(steps.some(s => s.text.includes('多 choice'))).toBe(true);
+  // choice 结构损坏时同样先声明多 choice 限制，不把半份 choice0 拆成正文行。
+  const malformed = projectSteps(row(), read(detail(), [], { choices: [{}, {}] }));
+  expect(malformed.some(s => s.text.includes('多 choice 回复（2 项）'))).toBe(true);
+  expect(malformed.some(s => s.kind === 'assistant')).toBe(false);
 });
 
 test('选中来源解析：回复四块各自定位，两个文本不再共享整份回复', () => {
