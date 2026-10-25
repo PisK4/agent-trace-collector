@@ -1,12 +1,13 @@
 # agent-trace-collector 文档
 
-这个目录存放 trace 工具的调研与设计文档。另有[可交互的界面原型](../prototypes/README.md)，用于比较阅读结构；采集与查询后端已实现，实现依据见[收敛型技术架构设计](architecture-design.md)。
+这个目录存放 trace 工具的调研与设计文档。另有[可交互的界面原型](../prototypes/README.md)，用于比较阅读结构；采集与查询后端已实现，实现依据见[收敛型技术架构设计](architecture-design.md)。数据形状的现状说明在 [ATC trace 格式](trace-format.md)，各轮验收结果在[验收记录](acceptance.md)。
 
 ## 索引
 
 | 文档 | 内容 |
 | --- | --- |
 | [project-overview.md](project-overview.md) | 项目定位：按请求保存、按对话导航，右侧读Response参数；顶部注明版本/direct/实时trace三处旧约定，实施以架构与计划为准 |
+| [trace-format.md](trace-format.md) | ATC trace 格式（内部读模型 v0）：主实体与身份、三路证据、正文切块与两个哈希、派生结论、`derived_state` 置信度、阅读版本与版本字段；明确不是对外交换格式 |
 | [magpie-integration-research.md](magpie-integration-research.md) | magpie 0.1.1294 的 Agent 识别、session 与 conv 两套会话标识、四条可接入面及原采集结果；新增研究补充了部分机制边界，见文首说明 |
 | [magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 模型、路由与上下文容量的真实控制流，现成 prompt 分解、classifier、缓存亲和性、尝试与账本、会话续写判定与语义指纹、插件形态及直接集成或借鉴的取舍 |
 | [auto-mode-classifier-research.md](auto-mode-classifier-research.md) | Claude Code auto mode 分类器请求：两条拼接消息、`<block>` 判定、出现频率、页面折叠与派生错位；附未决的识别与呈现选项 |
@@ -17,6 +18,7 @@
 | [architecture-design.md](architecture-design.md) | 收敛型架构设计：账本物理记录身份与增量读取协议、三路证据收敛、SQLite 表结构与正文状态、内容去重与语义指纹、乱序重算、查询接口、正文预算与总磁盘硬上限、版本与形状探针、访问控制、AVA 下线顺序与分步落地判据；文末附两轮评审的逐条对照 |
 | [architecture-review.md](architecture-review.md) | 基于设计提交的落地前评审：账本身份、持久化与恢复、正文预算和回收、乱序派生、协议与费用来源、安全边界及合成验收条件；文末两轮结论已逐条落进设计文档 |
 | [operations.md](operations.md) | 运维手册：维护命令与错误码、备份与恢复流程、维护锁、掉电边界、费用时钟冲突诊断、容量门槛、切换核对与 AVA 下线/回滚步骤 |
+| [acceptance.md](acceptance.md) | 各轮验收记录：单一轨迹界面的合成验收、历史双视图验收、真实流量暴露的问题、标题与主链、保留与容量、维护与恢复、切换核对 |
 | [AGENTS.md](AGENTS.md) | 文档分层、写作规则与文风禁区；note 与架构文档的接缝 |
 | [架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md) | A—F 批次依赖、跨计划验收、执行导航与交付记录 |
 | [同步派生正确性](superpowers/plans/2026-10-22-atc-derive-correctness.md) | 正文可比较性、统一顺序、当前工具关联、摘要与事务完成；含调用者迁移、故障恢复和历史对齐验收 |
@@ -33,7 +35,7 @@
 | [正文与关联派生](superpowers/plans/2026-10-20-collector-body.md) | B1–B5：脱敏内容库、协议适配、薄 hook、证据关联、乱序派生与正文阅读 |
 | [保留恢复与切换](superpowers/plans/2026-10-20-collector-retention.md) | C1–C3：预算回收、暂停与补采、备份恢复、并行核对、AVA 切换与回滚 |
 
-实施进度以计划里的复选框为准：A1–A5、B1–B5、C1 已完成；C2 与 C3 的脚本、测试与文档已完成，但 C3 里的真实并行观察、停 AVA 与回滚演练尚未执行，需要单独授权。页面的合成验收记录见[项目 README](../README.md)。
+实施进度以计划里的复选框为准：A1–A5、B1–B5、C1 已完成；C2 与 C3 的脚本、测试与文档已完成，但 C3 里的真实并行观察、停 AVA 与回滚演练尚未执行，需要单独授权。页面的合成验收记录见[验收记录](acceptance.md)。
 
 ## 调研文档回答了什么
 

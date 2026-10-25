@@ -26,7 +26,7 @@ bun run verify:notes   # 提交前
 - **报告忠实**：不把重试、跳过、未执行描述为通过；合成数据验收与真实流量验收分开写。
 - 测试只用合成数据；真实请求正文、账号、令牌与用户配置不进 fixture、日志或提交。
 - **不装本地 git hook**：闸门是 `.agents/KIT-VERSION` 基线下显式执行的 `verify:notes`，kit 升级也是显式动作，见[接入 agent-kit](.agents/notes/implemented/process/2026-10-21-adopt-agent-kit-notes.md)。
-- **一个事实一个家**：架构与存储形状归[架构设计](docs/architecture-design.md)，运维步骤归[运维手册](docs/operations.md)，术语归 [CONTEXT.md](CONTEXT.md)；note 只写为什么这样定、否决了什么、代价是什么。文档分层与文风归[文档标准](docs/AGENTS.md)。
+- **一个事实一个家**：架构与存储形状归[架构设计](docs/architecture-design.md)，运维步骤归[运维手册](docs/operations.md)，术语归 [CONTEXT.md](CONTEXT.md)，对外介绍归 [README](README.md)，验收结果归[验收记录](docs/acceptance.md)；note 只写为什么这样定、否决了什么、代价是什么。文档分层与文风归[文档标准](docs/AGENTS.md)。
 
 ## 栈特有约定
 
