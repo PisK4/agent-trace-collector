@@ -466,33 +466,45 @@ test('维护命令能产出并恢复bundle', async () => {
   }
 });
 
-test('v6库备份写实际版本，白名单外的版本两侧都拒', () => {
+test('v7库备份写实际版本；v6包恢复后原地升级，白名单外两侧都拒', () => {
   const f = fixture();
   try {
     f.store.write(db => loadBoundSaltTx(db, f.dir));
     f.store.close();
-    const bundle = join(f.dir, 'bundle-v6');
+    const bundle = join(f.dir, 'bundle-v7');
     backupBundle(f.dir, bundle);
     const manifestPath = join(bundle, 'manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
-    expect(manifest.schema).toBe(6);
-    const restored = join(f.dir, 'restored-v6');
+    expect(manifest.schema).toBe(7);
+    const restored = join(f.dir, 'restored-v7');
     restoreBundle(bundle, restored);
     const store = openStore(join(restored, 'trace.db'));
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 6 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 7 });
     } finally { store.close(); }
 
-    // 白名单只有当前版本：低版本没有升级路径，搬回来也打不开。
+    // v6 包仍在白名单：恢复后首次打开按 v6→v7 原地升级（纯新增表）。
+    const db6 = new Database(join(f.dir, 'trace.db'));
+    db6.run('PRAGMA user_version=6');
+    db6.close();
+    const bundle6 = join(f.dir, 'bundle-v6');
+    backupBundle(f.dir, bundle6);
+    const manifest6 = JSON.parse(readFileSync(join(bundle6, 'manifest.json'), 'utf8')) as Record<string, unknown>;
+    expect(manifest6.schema).toBe(6);
+    const restored6 = join(f.dir, 'restored-v6');
+    restoreBundle(bundle6, restored6);
+    const store6 = openStore(join(restored6, 'trace.db'));
+    try {
+      expect(store6.read.query('PRAGMA user_version').get()).toEqual({ user_version: 7 });
+    } finally { store6.close(); }
+
+    // 白名单外的版本两侧都拒：低版本没有升级路径，搬回来也打不开。
     const db = new Database(join(f.dir, 'trace.db'));
     db.run('PRAGMA user_version=5');
     db.close();
     expect(() => backupBundle(f.dir, join(f.dir, 'bundle-v5')))
       .toThrow('backup_schema_unsupported');
 
-    const db6 = new Database(join(f.dir, 'trace.db'));
-    db6.run('PRAGMA user_version=6');
-    db6.close();
     writeFileSync(manifestPath, JSON.stringify({ ...manifest, schema: 5 }));
     expect(() => restoreBundle(bundle, join(f.dir, 'bad-version')))
       .toThrow('restore_bundle_invalid');

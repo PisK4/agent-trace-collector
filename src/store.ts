@@ -9,7 +9,7 @@ export type WriteStats = { count: number; total_ms: number; max_ms: number };
  * 正文当前能否读取。`body_state` 与 `have` 分开：`have` 表示收到过哪几路证据，
  * 回收不能把收到过改写成没收到；这个值表示正文现在还在不在。
  */
-export type BodyState = 'pending' | 'available' | 'partial' | 'evicted' | 'unsupported';
+export type BodyState = 'pending' | 'available' | 'partial' | 'evicted' | 'unsupported' | 'summary';
 
 /**
  * 请求身份的别名解析：旧 id 沿 `request_alias` 走到没有别名为止，再确认存在。
@@ -64,7 +64,8 @@ export function commitUnit<T>(store: Store, name: string,
 
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
 const SCHEMA_V6 = readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 6;
+const SCHEMA_V7 = readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8');
+const SCHEMA_VERSION = 7;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -86,15 +87,23 @@ function migrate(db: Database): void {
     db.transaction(() => {
       db.exec(SCHEMA);
       db.exec(SCHEMA_V6);
+      db.exec(SCHEMA_V7);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
     return;
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
-  // 低版本没有升级路径：普通启动不做 ALTER，也不搬旧数据。旧库由运维显式删除后重建，
-  // 这条拒绝是唯一的处理方式，不提供半迁移状态。
-  if (version < SCHEMA_VERSION) throw new Error('schema_rebuild_required');
+  // v6→v7 是纯新增（OTLP 原始层表），原地执行即可；更低的库没有升级路径：
+  // 普通启动不做 ALTER，也不搬旧数据，旧库由运维显式删除后重建。
+  if (version === 6) {
+    db.transaction(() => {
+      db.exec(SCHEMA_V7);
+      db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+    }).immediate();
+  } else if (version < SCHEMA_VERSION) {
+    throw new Error('schema_rebuild_required');
+  }
   if (pragmaNumber(db, 'auto_vacuum') !== 2) throw new Error('auto_vacuum_requires_migration');
 }
 

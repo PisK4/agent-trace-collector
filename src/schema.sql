@@ -222,6 +222,26 @@ CREATE TABLE pending_hook (
   candidates  TEXT
 );
 
+-- OTLP 第四通道的 span 原始层：物理身份 (trace_id, span_id)，重发不产生第二行。
+-- attributes_json 是脱敏后的属性表；白名单外的 span（agent 层、工具层）只落这里。
+CREATE TABLE raw_otlp_span (
+  trace_id   BLOB NOT NULL,
+  span_id    BLOB NOT NULL,
+  received_at INTEGER NOT NULL,
+  service    TEXT,
+  scope_name TEXT,
+  name       TEXT NOT NULL,
+  kind       INTEGER,
+  start_ms   INTEGER NOT NULL,
+  end_ms     INTEGER,
+  status_code INTEGER,
+  attributes_json TEXT NOT NULL,
+  mapping_version INTEGER NOT NULL,
+  privacy_version INTEGER NOT NULL,
+  PRIMARY KEY (trace_id, span_id)
+) WITHOUT ROWID;
+CREATE INDEX i_raw_otlp_span_time ON raw_otlp_span(start_ms);
+
 CREATE TABLE block (
   id       INTEGER PRIMARY KEY,
   hash     BLOB NOT NULL UNIQUE,
