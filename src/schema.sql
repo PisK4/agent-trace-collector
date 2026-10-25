@@ -242,6 +242,36 @@ CREATE TABLE raw_otlp_span (
 ) WITHOUT ROWID;
 CREATE INDEX i_raw_otlp_span_time ON raw_otlp_span(start_ms);
 
+-- OTLP logs 原始层：记录按内容哈希判重（OTLP 记录没有内生 id，导出重发字节相同）。
+-- 第一批 logs 只接收与 body_ref 接线；OMP 的 run 级汇总也只落这里。
+CREATE TABLE raw_otlp_log (
+  record_hash     BLOB PRIMARY KEY,
+  received_at     INTEGER NOT NULL,
+  service         TEXT,
+  trace_id        BLOB,
+  span_id         BLOB,
+  time_ms         INTEGER,
+  body            TEXT,
+  attributes_json TEXT NOT NULL,
+  privacy_version INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX i_raw_otlp_log_trace ON raw_otlp_log(trace_id);
+
+-- Claude Code body_ref 接线状态：一次 Messages 调用的 request/response 文件指针
+-- 与关联进度。span 先到或 logs 先成都能收敛；state 见 ingest 注释。
+CREATE TABLE otlp_body_ref (
+  request_body_id TEXT PRIMARY KEY,
+  trace_id        BLOB NOT NULL,
+  req_id          INTEGER,
+  request_ref     TEXT,
+  response_ref    TEXT,
+  message_id      TEXT,
+  state           TEXT NOT NULL,
+  detail          TEXT,
+  updated_at      INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX i_otlp_body_ref_pending ON otlp_body_ref(trace_id) WHERE state='pending_span';
+
 CREATE TABLE block (
   id       INTEGER PRIMARY KEY,
   hash     BLOB NOT NULL UNIQUE,
