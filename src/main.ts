@@ -71,6 +71,8 @@ export async function startCollector(
   }
   const readToken = loadReadToken(config.dataDir);
   const hookToken = Buffer.from(loadLocalSecret(config.dataDir, 'hook.token')).toString('base64url');
+  // OTLP 令牌与 hook 令牌各自独立：一份密钥不进两份上游配置。
+  const otlpToken = Buffer.from(loadLocalSecret(config.dataDir, 'otlp.token')).toString('base64url');
   const deriveUnit = createDeriveUnit(store);
   // 观测只依赖进程：拒绝计数、写事务与事件循环样本都从启动时刻重新开始。
   const metrics = createCapacityMetrics(store, config.dataDir, Date.now());
@@ -206,7 +208,11 @@ export async function startCollector(
     token: hookToken,
     salt,
     admission: () => gate.check(0),
-  }, metrics);
+  }, metrics, {
+    token: otlpToken,
+    salt,
+    admission: () => gate.check(0),
+  });
 
   timers.push(setInterval(ledgerTick, intervalOf(config, 'ledger', LEDGER_INTERVAL_MS)));
   timers.push(setInterval(routeTick, intervalOf(config, 'route', ROUTE_INTERVAL_MS)));

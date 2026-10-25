@@ -17,6 +17,7 @@ export const REJECT_REASONS = [
   'hook_unavailable', 'host', 'origin', 'unauthorized', 'method_not_allowed',
   'busy', 'envelope_too_large', 'invalid_json', 'missing_hook_id',
   'origin_not_local', 'insufficient_storage', 'writer_failed',
+  'otlp_unavailable', 'unsupported_media_type', 'invalid_otlp',
 ] as const;
 export type RejectReason = typeof REJECT_REASONS[number];
 
