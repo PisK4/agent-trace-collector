@@ -16,6 +16,7 @@ import { modelTimeTitle } from '../src/format';
 import { messageFingerprint } from '../src/fingerprint';
 import { interpretMessage } from '../src/input-interpretation';
 import { persistBody } from '../src/body';
+import { evictOldestBodyBatch } from '../src/retention';
 import type { BodyInput } from '../src/body';
 
 test('重复消息仍按位置计新增', () => {
@@ -1487,4 +1488,45 @@ test('多 choice 回复不发布工具行，组照常完成且原回复可读', 
     const body = readBodyTx(f.store.read, 1);
     expect((body?.reply as { choices: unknown[] }).choices).toHaveLength(2);
   } finally { f.close(); }
+});
+
+test('派生写回复形状位：可读按 reply 重算，正文回收后保留旧值', () => {
+  const f = fixture();
+  try {
+    const key = JSON.stringify(['session', 'reply-shape']);
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,sort_source,sort_key)
+         VALUES (1,?,'session','a','known',1000,'2026-10-22','hook','pending',0,1,1,1,'ledger','ledger|0001'),
+                (2,?,'session','a','known',2000,'2026-10-22','hook','pending',0,1,1,1,'ledger','ledger|0002')`,
+        [key, key],
+      );
+    });
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: '问' }] }] },
+      reply: { id: 'm1', stop_reason: 'end_turn', content: [{ type: 'text', text: '答' }] },
+      redact_version: 1,
+    });
+    persistBody(f.store, 2, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: '问' }] }] },
+      reply: { id: 'm2', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't1', name: 'read', input: {} }] },
+      redact_version: 1,
+    });
+    enqueueDerive(f.store, key, 'a', '');
+    drainDerive(f.store);
+    const shapes = () => f.store.read.query<{ req_id: number; reply_shape: string | null }, []>(
+      'SELECT req_id, reply_shape FROM request ORDER BY req_id').all();
+    expect(shapes()).toEqual([{ req_id: 1, reply_shape: 'final' }, { req_id: 2, reply_shape: 'tools' }]);
+    // 正文回收后重派生：形状位保留派生时的值，不清除也不改判。
+    expect(evictOldestBodyBatch(f.store, 3000, 1).requests).toBe(1);
+    enqueueDerive(f.store, key, 'a', '');
+    drainDerive(f.store);
+    expect(shapes()).toEqual([{ req_id: 1, reply_shape: 'final' }, { req_id: 2, reply_shape: 'tools' }]);
+    expect(f.store.read.query<{ reply_shape: string | null }, [number]>(
+      'SELECT reply_shape FROM request WHERE req_id=1').get(1)?.reply_shape).toBe('final');
+  } finally {
+    f.close();
+  }
 });

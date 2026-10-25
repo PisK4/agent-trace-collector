@@ -4,6 +4,7 @@
 // 未知停止原因、resolved 未读取、pending、ambiguous、辅助请求、分支请求、
 // 能力五态、同名工具、路由 absent/expired 与尝试链。
 import type { CapabilityView, ToolCapability } from '../src/capabilities';
+import { replyShapeOf } from '../src/derive-decision';
 import type { BodyCoverage, BodyPage, MessageInterpretation } from '../src/protocols';
 import type { AttemptChain, PromptReading, RequestRow, RouteSummaryReading, SessionRow, ToolResultIndexRow, TurnPairRow } from '../src/queries';
 import type { ReadingDetail } from '../src/reading';
@@ -576,6 +577,7 @@ function rowOf(r: SynthRequest): RequestRow {
     ms: r.timing.ms, ttft_ms: r.timing.ttft, flow_ms: r.timing.flow,
     body_state: r.bodyState, miss_reason: r.bodyReason,
     input_preview: r.title, input_preview_kind: 'delta', reply_preview: null,
+    reply_shape: r.reply === null ? null : replyShapeOf(r.reply),
     req_kind: r.reqKind, chain_role: r.chainRole, model_title: r.modelTitle,
     purpose_status: 'selected', purpose_version: 1, purpose_rule: null, purpose_chain: r.purposeChain,
     derived_state: 'current',
@@ -599,6 +601,7 @@ function detailOf(r: SynthRequest): ReadingDetail {
     ms:r.timing.ms, ttft_ms:r.timing.ttft, flow_ms:r.timing.flow,
     body_state:r.bodyState, miss_reason:r.bodyState === 'available' ? null : r.bodyReason,
     input_preview:r.title, input_preview_kind:'delta', reply_preview:null,
+    reply_shape:r.reply === null ? null : replyShapeOf(r.reply),
     req_kind:r.reqKind, chain_role:r.chainRole, model_title:r.modelTitle,
     purpose_status:'selected', purpose_version:1, purpose_rule:null, purpose_chain:r.purposeChain,
     derived_state:'current',

@@ -33,6 +33,8 @@ export type RequestRow = {
   input_preview: string | null;
   input_preview_kind: 'delta' | 'tail' | 'tool_result' | 'title' | null;
   reply_preview: string | null;
+  /** 回复形状位：final 才能当轮次终点；NULL 表示从未判定（升级窗口期）。 */
+  reply_shape: 'final' | 'tools' | 'unknown' | null;
   /** 用途阶段写下的请求类别；未知值原样返回，查询不折叠成 chat。 */
   req_kind: string;
   /** main 主链、branch 次链、aux 辅助请求（排除用途）；unknown 表示组未完成，角色不可确认。 */
@@ -324,6 +326,7 @@ type DerivedColumns = {
   prev_req_id: number | null; prev_relation: string | null; delta_ordinals: string | null;
   chain_role: string | null; title: string | null; title_source: string | null;
   input_preview: string | null; input_preview_kind: string | null;
+  reply_shape: string | null;
 };
 
 type StateColumns = {
@@ -413,6 +416,7 @@ function projectRow(row: ProjectableRow): {
     input_preview_kind: current
       ? row.input_preview_kind as RequestRow['input_preview_kind'] : null,
     reply_preview: row.reply_preview,
+    reply_shape: current ? row.reply_shape as RequestRow['reply_shape'] : null,
     req_kind: row.req_kind ?? 'unknown',
     chain_role: current ? (row.chain_role ?? 'unknown') : 'unknown',
     model_title: row.model_title,
@@ -439,6 +443,7 @@ const REQUEST_COLUMNS = `r.req_id, r.conv_key, r.actor, r.agent, r.actor_state, 
   ${derivedColSql('g', 'd', 'r', 'input_preview')} AS input_preview,
   ${derivedColSql('g', 'd', 'r', 'input_preview_kind')} AS input_preview_kind,
   ${derivedColSql('g', 'd', 'r', 'reply_preview')} AS reply_preview,
+  ${derivedColSql('g', 'd', 'r', 'reply_shape')} AS reply_shape,
   r.purpose_pending,
   ${SUMMARY_STATE_COL('g', 'd', 'r')} AS summary_state,
   ${SUMMARY_ALGO_COL('g', 'd', 'r')} AS summary_algorithm`;
@@ -567,6 +572,7 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
              ${derivedColSql('g', 'd', 'r', 'input_preview')} AS input_preview,
              ${derivedColSql('g', 'd', 'r', 'input_preview_kind')} AS input_preview_kind,
              ${derivedColSql('g', 'd', 'r', 'reply_preview')} AS reply_preview,
+             ${derivedColSql('g', 'd', 'r', 'reply_shape')} AS reply_shape,
              ${derivedColSql('g', 'd', 'r', 'prev_req_id')} AS prev_req_id,
              ${derivedColSql('g', 'd', 'r', 'prev_relation')} AS prev_relation,
              ${derivedColSql('g', 'd', 'r', 'delta_ordinals')} AS delta_ordinals,

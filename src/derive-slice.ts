@@ -9,7 +9,7 @@ import {
 import {
   anthropicReplyCalls, anthropicRequestResults, chainTrunk, chainTrunkRoot, commonPrefix,
   confirmedDeltaOf, flattenToolContent, initialPairState, pairOutcome, presentationDecision,
-  settleRelation,
+  replyShapeOf, settleRelation,
 } from './derive-decision';
 import type { ResolvedTool } from './derive-decision';
 import type { DeriveBudget, SliceRuntime } from './config';
@@ -255,7 +255,8 @@ type RequestFact = {
   sort_source: string | null; sort_key: string | null; started_ms: number;
   body_state: string; title: string | null; title_source: string | null;
   input_preview: string | null; input_preview_kind: string | null;
-  reply_preview: string | null; purpose_revision: number; purpose_version: number | null;
+  reply_preview: string | null; reply_shape: string | null;
+  purpose_revision: number; purpose_version: number | null;
   purpose_chain: string;
 };
 
@@ -298,7 +299,7 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
   if (!assertQueueRevision(db, gen)) throw new Error('slice_group_revision_changed');
   const page = db.query<RequestFact, [string, string, number, number]>(`
     SELECT req_id,input_epoch,input_revision,sort_source,sort_key,started_ms,body_state,
-      title,title_source,input_preview,input_preview_kind,reply_preview,
+      title,title_source,input_preview,input_preview_kind,reply_preview,reply_shape,
       purpose_revision,purpose_version,purpose_chain
     FROM request WHERE conv_key=? AND actor=? AND actor_state='known' AND req_id>?
     ORDER BY req_id LIMIT ?`)
@@ -327,17 +328,19 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
     }
     db.run(`INSERT INTO derive_request_result(
       generation,req_id,input_epoch,input_revision,sort_source,sort_key,started_ms,
-      title,title_source,input_preview,input_preview_kind,reply_preview,
+      title,title_source,input_preview,input_preview_kind,reply_preview,reply_shape,
       purpose_revision,purpose_version,purpose_chain,algorithm,retention_state,basis_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'{}')`, [
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'{}')`, [
       generation, row.req_id, row.input_epoch, row.input_revision, row.sort_source,
       row.sort_key, row.started_ms,
       // 可读时留空，由摘要阶段写本次重算的值；不可读时原样保留旧列。
+      // 形状位不进摘要阶段：正文在手时当场判定，不可读时保留旧值。
       readable ? null : row.title,
       readable ? null : row.title_source,
       readable ? null : row.input_preview,
       readable ? null : row.input_preview_kind,
       readable ? null : row.reply_preview,
+      body === null ? row.reply_shape : replyShapeOf(body.reply),
       row.purpose_revision, row.purpose_version, row.purpose_chain,
       DERIVE_ALGORITHM, readable ? 'recomputed' : 'retained',
     ]);
