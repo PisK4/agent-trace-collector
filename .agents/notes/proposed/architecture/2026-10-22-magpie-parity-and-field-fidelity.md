@@ -40,7 +40,7 @@ Status: proposed
 | vendor 错误文本 | `magpie.ts:194` 只映射 `err_type` | `Error json:"err"`（`usage.go:136`）与 `ErrType json:"err_type"`（`:137`）是两个字段 | `raw_ledger.err_type` 非空 0 / 1703，而 vendor 原话在 payload 的 `err` 里 | 版本锁定 + 实测 |
 | 列表状态标记 | `src/queries.ts:167` 恒返回 `[]` | — | 页面的失败/缺正文/待确认三个状态点已写好（`web/app.js:414-417`），永远不亮 | 实测 |
 
-键名读错的后果不止「少一个字段」，**「请求模型 vs 实际去向」这条主线因此失真**：`model_requested` 现在实际取自账本的 `model`（`src/reconcile.ts:275-300` 的兜底链 `final?.model ?? final?.requested`），等于把「实际服务的模型」当成「请求的模型」，中间的改写、换模型、分组路由全部看不见。
+键名读错的后果不止「少一个字段」，**「请求模型 vs 实际去向」这条主线因此失真**。`model_requested` 现在实际取自账本的 `model`（`src/reconcile.ts:275-300` 的兜底链 `final?.model ?? final?.requested`），等于把「实际服务的模型」当成「请求的模型」，中间的改写、换模型、分组路由全部看不见。
 
 `err` 的补映射必须取**已脱敏**的那份 payload：账本落库前已过 `redact`（`src/reconcile.ts:467`），从改写后的 payload 取才不会引入新的泄漏路径。
 
@@ -67,7 +67,7 @@ Status: proposed
 
 ### 页面与账本的口径不一致
 
-折叠行的上下文组成用 `web/app.js:175-176` 的 `PART_NAME`/`PARTS_ORDER`（system/tools/history/user/files/other）给颜色，magpie 报的是 system/tools/memory/files/results/chat（`internal/gateway/prompt.go:31-40`）。`partColor` 对不认识的键算出 `var(--p0)`，而调色板只有 `--p1…--p6`（`web/index.html:25`）——条带拿到未定义的变量，图例退回原始英文键名。本机 parts token 分布：files 44.8M、results 39.1M、system 35.1M、chat 34.6M、tools 14.0M、memory 1.15M，占比最大的三类恰好都在映射之外。
+折叠行的上下文组成用 `web/app.js:175-176` 的 `PART_NAME`/`PARTS_ORDER`（system/tools/history/user/files/other）给颜色，magpie 报的是 system/tools/memory/files/results/chat（`internal/gateway/prompt.go:31-40`）。`partColor` 对不认识的键算出 `var(--p0)`，而调色板只有 `--p1…--p6`（`web/index.html:25`）——条带拿到未定义的变量，图例退回原始英文键名。本机 parts token 分布：files 44.8M、results 39.1M、system 35.1M、chat 34.6M、tools 14.0M、memory 1.15M。占比最大的三类恰好都在映射之外。
 
 分页方向与文案相反（**已由[最近请求窗口与向前分页](../../implemented/feature/2026-10-24-older-window-pagination.md)解决**，本文保留当时的观察）：`src/queries.ts` 是 `ORDER BY started_ms ASC` 加 `(started_ms, req_id) > (?, ?)` 游标，按钮写「加载更早请求」，注释也写反。现在接口按 `direction` 分成两个固定分支，`older` 反向走同一索引。
 
@@ -91,9 +91,9 @@ magpie 的 Agent 层里，`Field`/`Option` 表单模型（`internal/agent/agent.
 
 ### 批 1：一次 schema 升版把已采字段上浮
 
-把 `effort`、`native_session`、`host`、`account`、`tier_served`（未来 `tier_asked`/`tier_sent`）与 vendor 错误文本一次加进 `request`，并把 `raw_route` 里已有的 route 决策字段（`error`、`folder`、`kind`、`effort`）并入 `route_summary` 的派生列。走仓库既定的「拒绝而非就地升级」路径，不为这一次加字段开就地改写的口子。
+把 `effort`、`native_session`、`host`、`account`、`tier_served`（未来 `tier_asked`/`tier_sent`）与 vendor 错误文本一次加进 `request`。`raw_route` 里已有的 route 决策字段（`error`、`folder`、`kind`、`effort`）并入 `route_summary` 的派生列。走仓库既定的「拒绝而非就地升级」路径，不为这一次加字段开就地改写的口子。
 
-为什么不按字段分多次升版：升版与重算的成本主要来自每次都要重跑核对。一次把同一族字段（身份、档位、来源、失败）定完，后续只做展示。代价是 `request` 与 `route_summary` 每行变大——后者是**永不回收**的元数据（见 [2026-10-20-retention-three-gates.md](../../implemented/architecture/2026-10-20-retention-three-gates.md) 的 16 GB 上限与每行约 2 KB 的估算），加列前先按真实行字节估一次年增长，超过预算就先只加 `request` 侧。
+为什么不按字段分多次升版：升版与重算的成本主要来自每次都要重跑核对。一次把同一族字段（身份、档位、来源、失败）定完，后续只做展示。代价是 `request` 与 `route_summary` 每行变大。后者是**永不回收**的元数据（见 [2026-10-20-retention-three-gates.md](../../implemented/architecture/2026-10-20-retention-three-gates.md) 的 16 GB 上限与每行约 2 KB 的估算）；加列前先按真实行字节估一次年增长，超过预算就先只加 `request` 侧。
 
 `account` 与 `err` 都带身份与正文性质，上浮前按 [2026-10-20-privacy-and-local-access-boundary.md](../../implemented/architecture/2026-10-20-privacy-and-local-access-boundary.md) 的口径确认：只从已脱敏的 payload 取，不新增未脱敏路径，不进测试与提交。
 
@@ -101,17 +101,23 @@ magpie 的 Agent 层里，`Field`/`Option` 表单模型（`internal/agent/agent.
 
 用已在库的 `fail` 码与 vendor 原话把尝试链变成可读文本：失败原因、间隔、最终去向、候选顺序，不再打印原始 JSON。magpie 侧的分类表（`internal/gui/assets/plugins/routing/client.js` 的 `FAIL`）可以照抄语义，不必照抄实现。
 
-同时补三件读者侧的缺口：上下文占用率与健康阈值（`prompt_tokens / prompt_window`，magpie 用 75%/90% 两档，`internal/gui/assets/context.js`）、切换 tab 与选中请求时的滚动位置保持、请求 ID 与正文的一键复制。搜索从「只在已加载的会话里匹配」改成服务端全文搜索并给出命中片段。
+同时补三件读者侧的缺口：
+
+- 上下文占用率与健康阈值（`prompt_tokens / prompt_window`，magpie 用 75%/90% 两档，`internal/gui/assets/context.js`）
+- 切换 tab 与选中请求时的滚动位置保持
+- 请求 ID 与正文的一键复制
+
+搜索从「只在已加载的会话里匹配」改成服务端全文搜索并给出命中片段。
 
 不做实时动画流图、不做回放：ATC 是历史阅读器，动画不增加信息量。
 
 ### 批 3：direct 行另立提案
 
-direct 只能经 API 拿，且要以 `native_session` 作为软身份键才不会把同一个调用记两次——magpie 自己在配对问题上已经表明了立场（`internal/usage/ledger.go:367-372` 的「ID 先行，其次 native session、等 token、2s 内」，以及 `calls_dsh.go`、`calls_workbuddy.go` 里明知会双计就**放弃配对**）。因此批 3 排在批 1 之后，第一版只做「读进来、不合并」的观测态，配对规则与取消配对的判据单独评审。批 3 最重的证据来自 zcode：30 天 6,365 次调用对 ATC 库里的 56 笔，量级与实测见[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)。
+direct 只能经 API 拿，且要以 `native_session` 作为软身份键才不会把同一个调用记两次。magpie 自己在配对问题上已经表明了立场：`internal/usage/ledger.go:367-372` 是「ID 先行，其次 native session、等 token、2s 内」，`calls_dsh.go`、`calls_workbuddy.go` 里明知会双计就**放弃配对**。因此批 3 排在批 1 之后：第一版只做「读进来、不合并」的观测态，配对规则与取消配对的判据单独评审。批 3 最重的证据来自 zcode：30 天 6,365 次调用对 ATC 库里的 56 笔，量级与实测见[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)。
 
 ## 与现有记录的关系
 
-**交付现状。** 批 0 的字段读法已交付：映射层按 magpie 的真实键读，`counted` 按布尔三态处理，折叠行的 part 颜色与列表标志接上了真实值，形状见[来源投影与字段保真](../../implemented/architecture/2026-10-22-source-projection-and-field-fidelity.md)与[账本读数溢出](../../archived/bug-fix/2026-10-21-ledger-readings-overflow.md)。批 1 没有按本文的加列清单落地：`effort`、`native_session`、`host`、`account`、`tier_asked`／`tier_sent`／`tier_served` 与 vendor 错误文本仍只在 `raw_ledger` 行上，route 决策字段也没有并进 `route_summary`——投影改用 `source_facts_json` 承载，见[有界来源事实与来源依据](../../implemented/architecture/2026-10-22-bounded-source-facts-and-provenance.md)。批 2 与批 3 未做。
+**交付现状。** 批 0 的字段读法已交付：映射层按 magpie 的真实键读，`counted` 按布尔三态处理，折叠行的 part 颜色与列表标志接上了真实值，形状见[来源投影与字段保真](../../implemented/architecture/2026-10-22-source-projection-and-field-fidelity.md)与[账本读数溢出](../../archived/bug-fix/2026-10-21-ledger-readings-overflow.md)。批 1 没有按本文的加列清单落地：`effort`、`native_session`、`host`、`account`、`tier_asked`／`tier_sent`／`tier_served` 与 vendor 错误文本仍只在 `raw_ledger` 行上，route 决策字段也没有并进 `route_summary`。投影改用 `source_facts_json` 承载，见[有界来源事实与来源依据](../../implemented/architecture/2026-10-22-bounded-source-facts-and-provenance.md)。批 2 与批 3 未做。
 
 本文与[Agent Profile 与请求类别注册表](2026-10-22-agent-request-kind-registry.md)的分工不变：agent 语义缝（`req_kind`/`chain_role` 的注册机制、保留未知值）归它管，本文不重写它，只要求批 1 的列集合与它的验收项不冲突。
 
