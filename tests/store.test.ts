@@ -19,14 +19,14 @@ test('事务失败不留下证据或游标', () => {
   }
 });
 
-test('建库包含26个业务表且使用AUTOINCREMENT', () => {
+test('建库包含27个业务表且使用AUTOINCREMENT', () => {
   const f = fixture();
   try {
     const names = (f.store.read.query(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
     ).all() as { name: string }[]).map(row => row.name);
     expect(names).toEqual([
-      'block', 'collector_state', 'cost_observation',
+      'bg_job', 'block', 'collector_state', 'cost_observation',
       'derive_call_work', 'derive_chain_work', 'derive_generation', 'derive_queue',
       'derive_request_result', 'derive_result_work', 'derive_role_work', 'derive_tool_result',
       'ingest_issue', 'pending_hook', 'purged_evidence', 'raw_hook', 'raw_ledger', 'raw_route',

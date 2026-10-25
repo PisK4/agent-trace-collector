@@ -628,3 +628,38 @@ test('增量未完成或失败出现事件记录，完成时不出现', () => {
   const done = { ...base, delta: { next: 3, done: true, loading: false, error: null, unconfirmed: false } };
   expect(projectSteps(row(), done as ProjectableRead).some(s => s.key === '7:delta')).toBe(false);
 });
+
+test('背景作业配对标注：发起结果行带配对读数，完成通知出 Event 步骤', () => {
+  const r = row();
+  const resultBlock = { kind: 'result', text: 'Backgrounded as job bg_1 (sleep 2)', index: 0, failed: false, path: 'content[0]', raw: null };
+  const noticeBlock = { kind: 'text', text: '<system-notice>Background job bg_1 has completed.</system-notice>', index: 0, raw: null };
+  const entries = [
+    { ord: 2, role: 'user', rawRole: 'user', blocks: [resultBlock], preview: '', input: null, isInput: false },
+    { ord: 3, role: 'user', rawRole: 'user', blocks: [noticeBlock], preview: '', input: null, isInput: false },
+  ];
+  const jobs = [
+    // 跨两笔：发起在 7，通知在 9，时延按两笔 started_ms 差。
+    { job_id: 'bg_1', spawn_req: 7, spawn_ord: 2, notice_req: 9, notice_ord: 1,
+      state: 'resolved', spawn_ms: 1000, notice_ms: 3310 },
+    // 通知缺失与同笔完成各一条，覆盖三种读数。
+    { job_id: 'bg_2', spawn_req: 7, spawn_ord: 2, notice_req: null, notice_ord: null,
+      state: 'pending', spawn_ms: 1000, notice_ms: null },
+    { job_id: 'bg_3', spawn_req: 7, spawn_ord: 2, notice_req: 7, notice_ord: 3,
+      state: 'resolved', spawn_ms: 1000, notice_ms: 1000 },
+  ];
+  const steps = projectSteps(r, read(detail(), entries, { stop_reason: 'end_turn', content: [] }), null, jobs);
+  const spawn = steps.find(s => s.kind === 'tool_result');
+  expect(spawn?.bgNote).toContain('bg_1 已配对 · 2.31 s');
+  expect(spawn?.bgNote).toContain('bg_2 等待完成通知');
+  expect(spawn?.bgNote).toContain('bg_3 已配对 · 同一请求内');
+  const notice = steps.find(s => s.kind === 'record' && s.key.endsWith(':bg'));
+  expect(notice?.text).toBe('后台作业完成 · bg_3');
+  expect(notice?.bgNote).toContain('bg_3 已配对 · 同一请求内');
+  const html = renderTraceRows(r, steps, 4, null);
+  expect(html).toContain('bg-note');
+  expect(html).toContain('已配对 · 同一请求内');
+  // 没有配对数据时不画标注，行为与此前一致。
+  const plain = projectSteps(r, read(detail(), entries, { stop_reason: 'end_turn', content: [] }));
+  expect(plain.find(s => s.kind === 'tool_result')?.bgNote).toBeUndefined();
+  expect(plain.find(s => s.key === '7:message:3:bg')).toBeUndefined();
+});

@@ -46,6 +46,8 @@ import { deltaOrdinals, messageEntries } from './body-model.js';
  * @property {(id: number) => {state: string, summary: unknown} | null} peekRoute 同步读取路由缓存；未读到或读取失败返回 null。
  * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/turns').TurnPairRow[]}} peekTurns 同步读取轮次快照；absent 覆盖 404、读取失败与无窗口三种不可呈现态。
  * @property {() => Promise<void>} loadTurns 按当前会话与窗口下界取轮次列表；换窗后的重取排在前一次之后。
+ * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/bg-jobs').BgJobRow[]}} peekBgJobs 同步读取背景作业配对快照；absent 覆盖 404、读取失败与无会话。
+ * @property {() => Promise<void>} loadBgJobs 按当前会话取 bg_job 结算行；选会话与刷新时重取。
  * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} peekSummary 同步读取会话汇总快照；absent 覆盖 404、读取失败与无会话三种不可呈现态。
  * @property {(key: string) => Promise<void>} loadSummary 打开会话即拉一次汇总，不懒加载；换会话代次变更后迟到响应不写入。
  * @property {(query: import('../src/queries/session-summary').SummaryEntriesQuery) => Promise<import('../src/queries/session-summary').SummaryEntries>} loadSummaryEntries 汇总条目点击后的按组查询；无缓存，每次点击现查。
@@ -109,6 +111,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   let turns = { status: 'idle', items: [] };
   /** @type {Promise<void> | null} 轮次读取串行化：加载更早触发的重取排在前一次之后，后到先得。 */
   let turnsInflight = null;
+  /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/bg-jobs').BgJobRow[]}} */
+  let bgJobs = { status: 'idle', items: [] };
   /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} */
   let summary = { status: 'idle', data: null };
 
@@ -281,6 +285,29 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   }
 
   /**
+   * 取当前会话的背景作业配对。bg_job 是派生结算表、会话级口径，不随窗口下界
+   * 变化：选会话与刷新各拉一次即可。404（后端未部署）与读取失败落 absent，
+   * 轨迹就不画配对标注，下次触发重取。
+   */
+  async function loadBgJobs() {
+    const myEpoch = epoch;
+    const key = sessionKey;
+    if (key === null) {
+      bgJobs = { status: 'absent', items: [] };
+      return;
+    }
+    try {
+      const items = /** @type {import('../src/queries/bg-jobs').BgJobRow[]} */ (
+        await getJson(`/api/sessions/${encodeURIComponent(key)}/bg-jobs`));
+      if (myEpoch !== epoch) return;
+      bgJobs = { status: 'ready', items };
+    } catch {
+      if (myEpoch !== epoch) return;
+      bgJobs = { status: 'absent', items: [] };
+    }
+  }
+
+  /**
    * 打开会话即拉一次汇总：session-head 的合计行与折叠区都吃这份快照。
    * 404（后端未部署）与读取失败都落 absent——合计行回退窗口口径、折叠区不渲染，
    * 下次触发（选会话、刷新）重取。换会话代次变更后，迟到响应不写入。
@@ -319,6 +346,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     windowLoading = true;
     windowError = null;
     turns = { status: 'idle', items: [] };
+    bgJobs = { status: 'idle', items: [] };
     summary = { status: 'idle', data: null };
     reads.clear();
     routes.clear();
@@ -337,6 +365,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
       if (myEpoch === epoch) {
         windowLoading = false;
         void loadTurns();
+        void loadBgJobs();
         void loadSummary(key);
       }
     }
@@ -665,6 +694,11 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return turns;
   }
 
+  /** @returns {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/bg-jobs').BgJobRow[]}} */
+  function peekBgJobs() {
+    return bgJobs;
+  }
+
   /** @returns {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} */
   function peekSummary() {
     return summary;
@@ -701,6 +735,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     peekRoute,
     peekTurns,
     loadTurns,
+    peekBgJobs,
+    loadBgJobs,
     peekSummary,
     loadSummary,
     loadSummaryEntries,

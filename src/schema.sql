@@ -247,7 +247,7 @@ CREATE TABLE tool_call (
   req_id     INTEGER NOT NULL,
   ord        INTEGER NOT NULL,
   tool_name  TEXT,
-  -- 调用参数的两个事实：Edit/Write/Read 的 file_path 与 Skill 的 skill。
+  -- 调用参数的两个事实：Edit/Write/Read 的 file_path 与 OMP 同族工具的 path。
   -- 键缺失落 NULL，不猜近邻键；正文回收后随配对行保留。
   arg_path   TEXT,
   arg_skill  TEXT,
@@ -265,6 +265,21 @@ CREATE TABLE tool_call (
   PRIMARY KEY (req_id, ord)
 ) WITHOUT ROWID;
 CREATE INDEX i_tool_call_id ON tool_call(call_id, req_id);
+
+-- OMP bash 后台作业的发起→通知配对，纯派生结算表、可整体重建。
+-- spawn/notice 各记最早出现的（请求, 消息序号）；主键带 conv_key：
+-- OMP 重启后 bg_ 编号从头开始，单以 job_id 为主键会跨 conv 撞键。
+-- 时延按两笔请求的 started_ms 差；state: resolved=两端齐、pending=缺通知或缺发起。
+CREATE TABLE bg_job (
+  job_id       TEXT NOT NULL,
+  conv_key     TEXT NOT NULL,
+  spawn_req    INTEGER,
+  spawn_ord    INTEGER,
+  notice_req   INTEGER,
+  notice_ord   INTEGER,
+  state        TEXT NOT NULL,
+  PRIMARY KEY (conv_key, job_id)
+) WITHOUT ROWID;
 
 CREATE TABLE collector_state (
   key TEXT PRIMARY KEY,
