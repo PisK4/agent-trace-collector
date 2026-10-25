@@ -140,6 +140,7 @@ harness 面的文档级扫描（同日）：Codex 原生三信号 OTLP，默认�
 - 2026-10-26 HTTP 端点已交付。`POST /v1/traces` 与 `POST /v1/logs`：Host/Origin 边界与 hook 共用同一段，Bearer 用独立 `otlp.token`（`loadLocalSecret` 同一机制、常量时间比较），content-type 只收 `application/x-protobuf` 与 `application/json`（`text/plain` 等简单请求形态 415——浏览器防线三件套的第三条落地），方法错 405、单飞守卫与 hook 共用（429）、64 MiB 整批 413、解码失败 400 带原因码、95% 档 507。成功回 OTLP 规范的 `{"partialSuccess":{}}`。二进制载荷走 `readBoundedBytes`（新增字节形态，原 `readBounded` 变其 UTF-8 包装）。拒绝原因码进容量观测（`otlp_unavailable`/`unsupported_media_type`/`invalid_otlp` 三个新值）。
 - 2026-10-26 读模型与页面已交付。`via` 进列表与详情投影（`RequestRow` 新增、详情 `r.*` 自然带出），行摘要按通道标「OTLP 通道」；`body_state='summary'` 的文案明示「OTLP 摘要」，不冒充正文可读。会话 `missing_body` 改按期望位图算：through 期望三路齐、rejected 只期望账本、otlp 只期望第 4 位——OTLP 行不因缺 magpie 证据被标成采集失败，通过/拒绝通道的现行语义不变。合成服务器（prototypes）的行构造同步补 `via='through'`。
 - 2026-10-26 文档收口已交付，本文迁入 implemented。按 Supersession 表同步上位文档：README 受众边界改为「magpie 或已适配 harness」、数据来源表补第四行并写明与 magpie 自带导出器的区分；项目定位改写「不做通用摄入协议」为「OTLP 是唯一受控通用入口」；架构设计扩为四通道（位义 1/2/4/8、`via='otlp'`、`body_state='summary'`、OTLP 三表 DDL、端点安全行、容量梯度行为、schema v7 与 v6 原地升级）；trace 格式与 CONTEXT 的通道、via、body_state 条目同步；运维手册补 `otlp.token`、OTLP 接入一节与 95% 档拒收。
+- 2026-10-26 README 接入路径重写。接真实流量一节按两条进路重构：公共启动与令牌生成（补 `otlp.token`）置顶，「走 magpie 三路证据」与「走 OTLP 不装 magpie」各自成小节；OTLP 小节给外部用户可照抄的最短路径——base64url 令牌取值（裸二进制直接 `cat` 会判畸形请求，重启实测踩到后写明成因）、两个标准环境变量、按 harness 的差异（Claude Code 加 `OTEL_LOG_RAW_API_BODIES=file` 得逐笔正文、OMP 只到摘要）、双通道并存两行的提示。错误码表与磁盘档位仍以运维手册为家。
 
 ## Alternatives considered
 
