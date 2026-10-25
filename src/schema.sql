@@ -142,6 +142,9 @@ CREATE TABLE request (
   input_preview    TEXT,
   input_preview_kind TEXT,
   reply_preview    TEXT,
+  -- 回复形状位：final / tools / unknown，轮次结算的收尾判定在派生期落这里。
+  -- 正文回收后保留派生时的值；NULL 表示从未判定（升级窗口期，回填收口为 unknown）。
+  reply_shape      TEXT,
   derive_version   INTEGER NOT NULL,
   have             INTEGER NOT NULL,
   miss_reason      TEXT,

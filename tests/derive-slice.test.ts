@@ -938,3 +938,39 @@ test('多 choice 回复经切片派生也不发布工具行，组照常发布', 
       .get(String(queue.published_generation))).toEqual({ n: 0 });
   } finally { f.close(); }
 });
+
+test('请求切片物化回复形状位：可读按内核判定，不可读保留旧列', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, [
+      { req_id: 1, started_ms: 100, sort_source: null, sort_key: null },
+      { req_id: 2, started_ms: 200, sort_source: null, sort_key: null },
+      { req_id: 3, started_ms: 300, sort_source: null, sort_key: null },
+    ]);
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [] },
+      reply: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] },
+      redact_version: 1,
+    });
+    persistBody(f.store, 2, {
+      protocol: 'anthropic',
+      request: { messages: [] },
+      reply: { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't1', name: 'read' }] },
+      redact_version: 1,
+    });
+    // req 3 无正文：暂存行保留旧列。预先种一个旧形状，模拟升级前已判过的行。
+    f.store.write(db => db.run(`UPDATE request SET reply_shape='unknown' WHERE req_id=3`));
+    switchToSliceAlgorithm(f);
+    const generation = beginGeneration(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    runStage(f, generation, sliceRequestsStage);
+    const rows = f.store.read.query<{ req_id: number; reply_shape: string | null;
+      retention_state: string }, [string]>(`SELECT req_id, reply_shape, retention_state
+      FROM derive_request_result WHERE generation=? ORDER BY req_id`).all(generation);
+    expect(rows).toEqual([
+      { req_id: 1, reply_shape: 'final', retention_state: 'recomputed' },
+      { req_id: 2, reply_shape: 'tools', retention_state: 'recomputed' },
+      { req_id: 3, reply_shape: 'unknown', retention_state: 'retained' },
+    ]);
+  } finally { f.close(); }
+});

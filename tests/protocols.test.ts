@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { anthropicReplyCalls } from '../src/derive-decision';
+import { anthropicReplyCalls, replyShapeOf } from '../src/derive-decision';
 import { parseProtocol } from '../src/protocols';
 
 test('请求有效而回复缺失仍可阅读请求', () => {
@@ -110,4 +110,52 @@ test('多 choice 不发布只有 ord 的确定调用身份', () => {
   const single = { choices: [reply.choices[0]] };
   expect(parseProtocol('chat', { messages: [] }, single).calls.map(call => call.ord)).toEqual([0]);
   expect(anthropicReplyCalls(single)).toEqual([{ id: 'left', name: 'read', ord: 0 }]);
+});
+
+test('回复形状：可识别形状、无有效调用且完整收尾判 final', () => {
+  expect(replyShapeOf({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] })).toBe('final');
+  expect(replyShapeOf({ stop_reason: 'stop_sequence', content: [] })).toBe('final');
+  expect(replyShapeOf({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }] })).toBe('final');
+});
+
+test('回复形状：识别到有效调用判 tools，停止原因未报告也按调用证据判', () => {
+  expect(replyShapeOf({
+    stop_reason: 'tool_use',
+    content: [{ type: 'tool_use', id: 't1', name: 'read', input: {} }],
+  })).toBe('tools');
+  expect(replyShapeOf({
+    choices: [{ message: { role: 'assistant', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] } }],
+  })).toBe('tools');
+  // 停止原因缺失：调用本身是工具循环的证据。
+  expect(replyShapeOf({ content: [{ type: 'tool_use', id: 't1', name: 'read', input: {} }] })).toBe('tools');
+});
+
+test('回复形状：缺失、不识别、多 choice、缺 ID 工具块、截断都判 unknown', () => {
+  expect(replyShapeOf(null)).toBe('unknown');
+  expect(replyShapeOf('text')).toBe('unknown');
+  expect(replyShapeOf({})).toBe('unknown');
+  // content 不是块数组：形状不识别。
+  expect(replyShapeOf({ stop_reason: 'end_turn', content: 'str' })).toBe('unknown');
+  expect(replyShapeOf({ choices: [] })).toBe('unknown');
+  expect(replyShapeOf({ choices: [{}, {}] })).toBe('unknown');
+  expect(replyShapeOf({ choices: [{ finish_reason: 'stop' }] })).toBe('unknown');
+  // 缺 ID 的 tool_use：其余再完整也不能下结论。
+  expect(replyShapeOf({
+    stop_reason: 'end_turn',
+    content: [{ type: 'text', text: 'x' }, { type: 'tool_use', name: 'read', input: {} }],
+  })).toBe('unknown');
+  // chat 缺 function 的 tool_calls 同理。
+  expect(replyShapeOf({
+    choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [{ id: 'c1', type: 'function' }] } }],
+  })).toBe('unknown');
+  // 截断：max_tokens / length，带不带调用都不是收尾。
+  expect(replyShapeOf({ stop_reason: 'max_tokens', content: [{ type: 'text', text: 'half' }] })).toBe('unknown');
+  expect(replyShapeOf({ choices: [{ finish_reason: 'length', message: { content: 'half' } }] })).toBe('unknown');
+  expect(replyShapeOf({
+    stop_reason: 'max_tokens',
+    content: [{ type: 'tool_use', id: 't1', name: 'read', input: {} }],
+  })).toBe('unknown');
+  // 未知停止原因不冒充收尾；停止原因缺失的无调用回复也不冒充。
+  expect(replyShapeOf({ stop_reason: 'refusal', content: [{ type: 'text', text: 'x' }] })).toBe('unknown');
+  expect(replyShapeOf({ content: [{ type: 'text', text: 'x' }] })).toBe('unknown');
 });

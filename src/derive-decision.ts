@@ -54,9 +54,86 @@ export function anthropicReplyCalls(reply: unknown): { id: string; name: string;
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// 回复形状：轮次结算的收尾判定，三态。
+// ---------------------------------------------------------------------------
+
+/** 回复形状三态。只有 `final` 能当轮次终点；`tools` 是识别到有效调用；其余一律 `unknown`。 */
+export type ReplyShape = 'final' | 'tools' | 'unknown';
+
+/** 正常收尾的停止原因：无工具调用且停止原因在此，回复才算完整收尾。 */
+const REPLY_FINISH_FINAL = new Set(['end_turn', 'stop_sequence', 'stop']);
+/** 截断类停止原因：半截话不是收尾，也不因带调用就改判 tools。 */
+const REPLY_FINISH_TRUNCATED = new Set(['length', 'max_tokens']);
+
+/**
+ * 形状不识别的回复里，被调用抽取跳过的工具块：缺 ID 的 tool_use、缺 function
+ * 的 chat tool_calls。存在即说明回复形状介于可识别与损坏之间，不能下结论。
+ */
+function hasRejectedToolBlock(reply: Record<string, unknown>): boolean {
+  const content = reply.content;
+  if (Array.isArray(content)) {
+    return content.some(block => {
+      if (block === null || typeof block !== 'object') return false;
+      const record = block as Record<string, unknown>;
+      return record.type === 'tool_use' && typeof record.id !== 'string';
+    });
+  }
+  const choices = reply.choices;
+  if (!Array.isArray(choices) || choices.length !== 1) return false;
+  const choice = choices[0];
+  if (choice === null || typeof choice !== 'object') return false;
+  const message = (choice as Record<string, unknown>).message;
+  if (message === null || typeof message !== 'object') return false;
+  const calls = (message as Record<string, unknown>).tool_calls;
+  if (!Array.isArray(calls)) return false;
+  return calls.some(call => {
+    if (call === null || typeof call !== 'object') return true;
+    const record = call as Record<string, unknown>;
+    return typeof record.id !== 'string' || record.function === null
+      || typeof record.function !== 'object';
+  });
+}
+
+/**
+ * 回复形状判定，轮次结算收尾信号的唯一实现。
+ *
+ * 零工具计数不等于收尾：缺失回复、不识别的形状、多 choice、缺 ID 的工具块、
+ * 截断的回复在这里全部落 `unknown`，不冒充最终答复。调用抽取与配对共用
+ * `anthropicReplyCalls` 一份判据；被它跳过的工具块单独侦测，不让损坏形状
+ * 混进 `final`。
+ */
+export function replyShapeOf(reply: unknown): ReplyShape {
+  if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return 'unknown';
+  const record = reply as Record<string, unknown>;
+  // 多 choice 无法确定哪一份是回复；choices 形状异常同理。
+  if (Array.isArray(record.choices) && record.choices.length !== 1) return 'unknown';
+  // 消息块两种落点：anthropic 的 content 数组；chat 单 choice 的 message。
+  const hasBlocks = Array.isArray(record.content)
+    || (Array.isArray(record.choices) && record.choices.length === 1
+      && record.choices[0] !== null && typeof record.choices[0] === 'object'
+      && (record.choices[0] as Record<string, unknown>).message !== null
+      && typeof (record.choices[0] as Record<string, unknown>).message === 'object');
+  if (!hasBlocks) return 'unknown';
+  const finishValue = Array.isArray(record.choices)
+    ? record.choices.length === 1 && record.choices[0] !== null && typeof record.choices[0] === 'object'
+      ? (record.choices[0] as Record<string, unknown>).finish_reason
+      : null
+    : record.stop_reason;
+  const finish = typeof finishValue === 'string' && finishValue !== '' ? finishValue : null;
+  if (hasRejectedToolBlock(record)) return 'unknown';
+  const calls = anthropicReplyCalls(reply);
+  if (calls.length > 0) {
+    // 调用本身是工具循环的证据，停止原因未报告也判 tools；截断的半截调用除外。
+    return finish !== null && REPLY_FINISH_TRUNCATED.has(finish) ? 'unknown' : 'tools';
+  }
+  if (finish === null) return 'unknown';
+  if (REPLY_FINISH_TRUNCATED.has(finish)) return 'unknown';
+  return REPLY_FINISH_FINAL.has(finish) ? 'final' : 'unknown';
+}
+
 /** 从请求里取工具结果；Anthropic 的 tool_result 与 chat 的 role=tool。 */
-export function anthropicRequestResults(request: unknown): { id: string; ord: number; path: string; value: unknown }[] {
-  if (request === null || typeof request !== 'object' || Array.isArray(request)) return [];
+export function anthropicRequestResults(request: unknown): { id: string; ord: number; path: string; value: unknown }[] {  if (request === null || typeof request !== 'object' || Array.isArray(request)) return [];
   const messages = (request as Record<string, unknown>).messages;
   if (!Array.isArray(messages)) return [];
   const out: { id: string; ord: number; path: string; value: unknown }[] = [];

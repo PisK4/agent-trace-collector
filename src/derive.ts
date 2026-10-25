@@ -50,6 +50,7 @@ type ChainRow = {
   title_source: string | null; title: string | null; model_served: string | null;
   req_kind: string | null; model_title: string | null; purpose_chain: string;
   input_preview: string | null; input_preview_kind: string | null; reply_preview: string | null;
+  reply_shape: string | null;
 };
 
 /** 链阶段为摘要准备的输入：本轮关系、当前可读序列与用途结论。 */
@@ -101,14 +102,17 @@ function writePresentationTx(db: Database, input: PresentationInput,
     group_epoch: group.group_epoch, algorithm: GROUP_ALGORITHM,
   });
   const comparable = current !== null;
+  // 形状位与摘要同一套保留语义：正文可读时按本次 reply 重算，不可读时保留
+  // 派生时的旧值（回收不清除不重算；升级前从未算过的行保持 NULL，由回填收口）。
+  const replyShape = replyInfo.shape ?? row.reply_shape;
   db.run(`UPDATE request SET title=?,title_source=?,input_preview=?,
-    input_preview_kind=?,reply_preview=?,derive_version=derive_version+1,
+    input_preview_kind=?,reply_preview=?,reply_shape=?,derive_version=derive_version+1,
     summary_algorithm=CASE WHEN ?=1 THEN ? ELSE summary_algorithm END,
     summary_basis=CASE WHEN ?=1 THEN ? ELSE summary_basis END,
     summary_state=CASE WHEN ?=1 THEN 'recomputed' ELSE 'retained' END
     WHERE req_id=?`, [
     decision.title, decision.titleSource, decision.inputPreview, decision.inputKind,
-    decision.replyPreview,
+    decision.replyPreview, replyShape,
     comparable ? 1 : 0, GROUP_ALGORITHM, comparable ? 1 : 0, basis, comparable ? 1 : 0,
     row.req_id,
   ]);
@@ -254,7 +258,7 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
     const rows = db.query<ChainRow, [string, string]>(`
       SELECT req_id, actor, agent, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
              title_source, title, model_served, req_kind, model_title, purpose_chain,
-             input_preview, input_preview_kind, reply_preview
+             input_preview, input_preview_kind, reply_preview, reply_shape
       FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
     const ordered = [...rows].sort(compareTraversalOrder);
     // 同毫秒且没有来源位置证据的请求：可以遍历，但不能用来证明先后。
@@ -272,7 +276,7 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
     for (const row of ordered) {
       const current = fingerprintsOf(db, row.req_id);
       const replyInfo = current === null
-        ? { preview: row.reply_preview, modelTitle: null }
+        ? { preview: row.reply_preview, shape: null }
         : replyInfoOf(db, row.req_id);
       // 用途已在请求阶段定下来：组阶段只消费 purpose_chain 与 req_kind，
       // 不再自己认一遍标题或分类器请求。两处各认一次就会出现"用途说是 chat、

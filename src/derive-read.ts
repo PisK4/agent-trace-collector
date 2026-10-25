@@ -3,8 +3,8 @@ import { zstdDecompressSync } from 'node:zlib';
 import { readBodyTx } from './body';
 import { assistantText } from './protocols';
 import { interpretMessage } from './input-interpretation';
-import { clip, replyToolSummary, toolResultPreviewOf } from './derive-decision';
-import type { PresentationPorts, ResolvedTool } from './derive-decision';
+import { clip, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './derive-decision';
+import type { PresentationPorts, ResolvedTool, ReplyShape } from './derive-decision';
 
 /**
  * 两条派生路径共用的读取层：逻辑顺序、指纹序列、用户文本预览与消息定位。
@@ -150,14 +150,17 @@ export function firstUserPreview(db: Database, reqId: number): string | null {
   return userPreview(db, reqId, 'first');
 }
 
-/** 折叠行摘要：回复文本首段；没有文本时退到工具调用名。 */
-export type ReplyInfo = { preview: string | null };
+/**
+ * 折叠行摘要与回复形状：都从本笔可读的 reply 一次读出。
+ * `shape` 为 null 只表示正文不可读、没有本次重算值，调用方保留旧列。
+ */
+export type ReplyInfo = { preview: string | null; shape: ReplyShape | null };
 
 export function replyInfoOf(db: Database, reqId: number): ReplyInfo {
   const body = readBodyTx(db, reqId);
-  if (body === null) return { preview: null };
+  if (body === null) return { preview: null, shape: null };
   const text = assistantText(body.reply) ?? replyToolSummary(body.reply);
-  return { preview: text === null ? null : clip(text) };
+  return { preview: text === null ? null : clip(text), shape: replyShapeOf(body.reply) };
 }
 
 /** 按消息位置取一行正文消息；缺失或解压失败返回 null。导出给切片摘要阶段复用。 */
