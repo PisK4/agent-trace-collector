@@ -22,9 +22,9 @@
   --tool-skill:#8f7408; --tool-skill-bg:rgba(143,116,8,.13);
   --tool-agent:#187a52; --tool-agent-bg:rgba(24,122,82,.11);
   --tool-other:#566b7a; --tool-other-bg:rgba(86,107,122,.11);
-  /* 六类上下文：固定槽位，不按大小重排；顺序即调色板校验过的相邻顺序 */
+  /* 上下文类别槽位：固定不按大小重排，skills 落第七槽；类别按 parts 数据动态渲染，未知 kind 落 --p-unknown */
   --p1:#2a78d6; --p2:#eb6834; --p3:#1baf7a; --p4:#eda100; --p5:#e87ba4; --p6:#008300;
-  --p-unknown:#7a8794;
+  --p7:#30287e; --p-unknown:#7a8794;
   --shadow:0 1px 2px rgba(16,32,48,.06);
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -49,7 +49,7 @@
     --tool-agent:#6fd0a0; --tool-agent-bg:rgba(111,208,160,.13);
     --tool-other:#93a5b3; --tool-other-bg:rgba(147,165,179,.13);
     --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
-    --p-unknown:#93a5b3;
+    --p7:#3d3480; --p-unknown:#93a5b3;
     --shadow:0 1px 2px rgba(0,0,0,.35);
   }
 }
@@ -65,7 +65,7 @@
   --k-system-bg:rgba(182,163,240,.13); --k-user-bg:rgba(143,216,174,.12); --k-assistant-bg:rgba(230,192,122,.13);
   --k-tool-bg:rgba(127,212,217,.12); --k-field-bg:rgba(147,165,179,.12);
   --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
-  --p-unknown:#93a5b3;
+  --p7:#3d3480; --p-unknown:#93a5b3;
   --shadow:0 1px 2px rgba(0,0,0,.35);
 }
 
