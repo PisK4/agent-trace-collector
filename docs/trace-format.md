@@ -24,6 +24,8 @@
 
 `have` 是这三路的位图（1 hook、2 账本、4 路由），回答「收到过哪几路证据」。它与 `body_state` 分开：回收正文不会把收到过的证据改写成没收到。
 
+magpie 另有 OTLP 导出，不作为第四路证据。它只发 `gen_ai.*`、`magpie.*` 与 `langfuse.*` 三类属性键，其中没有 `response_id`、`conv`、`subagent`、`archive`（`开源源码@magpie-2374ffe`，`internal/otlp/otel_wire.go`）；正文以 `langfuse.observation.input` / `output` 两段文本发出。这几项正是三路证据的连接点，缺了就合并不起来。
+
 ## 身份与归属
 
 | 字段 | 含义 | 边界 |
