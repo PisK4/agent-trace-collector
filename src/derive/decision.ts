@@ -19,7 +19,7 @@ import { interpretMessage, isUserInterruptMessage } from '../input-interpretatio
 
 /** 一次调用携带的参数事实：两个键之外的东西不提取。 */
 export type CallArgs = {
-  /** Edit/Write/Read 的 `file_path`；键缺失、非字符串或空串为 null。 */
+  /** Edit/Write/Read 的 `file_path` 与 OMP 同族工具的 `path`；键缺失、非字符串或空串为 null。 */
   argPath: string | null;
   /** Skill 的 `skill`；键缺失、非字符串或空串为 null。 */
   argSkill: string | null;
@@ -50,7 +50,12 @@ function argKeyOf(args: Record<string, unknown> | null, key: string): string | n
 
 function argsOf(rawInput: unknown): CallArgs {
   const args = argsObjectOf(rawInput);
-  return { argPath: argKeyOf(args, 'file_path'), argSkill: argKeyOf(args, 'skill') };
+  // OMP 的 read/write/edit/grep 用 `path` 声明目标文件；`command`/`pattern` 之类
+  // 近邻键仍不提取。`path` 在 grep/glob 里是搜索范围，落到 arg_path 语义不变形。
+  return {
+    argPath: argKeyOf(args, 'file_path') ?? argKeyOf(args, 'path'),
+    argSkill: argKeyOf(args, 'skill'),
+  };
 }
 
 /** 从回复里取工具调用。导出理由：候选抽取只有这一处，切片与同步不能各有一套判据。 */

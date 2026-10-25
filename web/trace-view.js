@@ -101,12 +101,18 @@ const byteSize = (text) => {
 /**
  * 逐工具参数段：核心键齐才分派，缺核心键返回 null 走通用回退链。
  * 区间折算与字节读数只服务扫读，原始键值始终在悬停与右栏。
+ *
+ * 文件目标键有两个来源：Claude Code 用 `file_path`，OMP（oh-my-pi）的同族
+ * 小写工具 read/write/edit/grep/glob 用 `path`；两个键同权接受，缺的键走
+ * 另一个。大小写变体共用同一分支：工具名只分派一次，别名不重复摘要逻辑。
+ *
  * @param {string} name @param {Record<string, unknown>} args @returns {string | null}
  */
 function dispatchSummary(name, args) {
   switch (name) {
-    case 'Read': {
-      const file = fileBase(args.file_path);
+    case 'Read':
+    case 'read': {
+      const file = fileBase(args.file_path) ?? fileBase(args.path);
       if (file === null) return null;
       const offset = asNum(args.offset);
       const limit = asNum(args.limit);
@@ -115,8 +121,9 @@ function dispatchSummary(name, args) {
           : offset !== null ? `${offset} 行起` : '';
       return range === '' ? file : `${file} · ${range}`;
     }
-    case 'Edit': {
-      const file = fileBase(args.file_path);
+    case 'Edit':
+    case 'edit': {
+      const file = fileBase(args.file_path) ?? fileBase(args.path);
       if (file === null) return null;
       const oldS = typeof args.old_string === 'string' ? args.old_string : null;
       const newS = typeof args.new_string === 'string' ? args.new_string : null;
@@ -125,8 +132,9 @@ function dispatchSummary(name, args) {
       if (args.replace_all === true) parts.push('全部替换');
       return parts.join(' · ');
     }
-    case 'Write': {
-      const file = fileBase(args.file_path);
+    case 'Write':
+    case 'write': {
+      const file = fileBase(args.file_path) ?? fileBase(args.path);
       if (file === null) return null;
       const content = typeof args.content === 'string' ? args.content : null;
       return content !== null ? `${file} · ${byteSize(content)}` : file;
@@ -169,6 +177,42 @@ function dispatchSummary(name, args) {
     }
     case 'ToolSearch': {
       return typeof args.query === 'string' && args.query.trim() !== '' ? args.query.trim() : null;
+    }
+    // —— OMP 内置工具：参数键以 18.0.10 源码 schema 为准，锚点失配走回退链 ——
+    case 'grep': {
+      const pattern = nonEmpty(args.pattern);
+      return pattern === null ? null : clipChars(pattern, 120);
+    }
+    case 'glob': {
+      // glob 的 pattern 本身就是 path 键的值（"src/**/*.ts"），basename 化会丢语义。
+      return nonEmpty(args.path);
+    }
+    case 'todo': {
+      const op = nonEmpty(args.op);
+      if (op === null) return null;
+      const detail = nonEmpty(args.task)
+        ?? (Array.isArray(args.items) ? nonEmpty(args.items[0]) : null);
+      const phase = nonEmpty(args.phase);
+      const bits = [op];
+      if (phase !== null) bits.push(phase);
+      if (detail !== null) bits.push(firstNonEmptyLine(detail));
+      return bits.join(' · ');
+    }
+    case 'task': {
+      const agent = nonEmpty(args.agent) ?? 'task';
+      const brief = typeof args.task === 'string' ? firstNonEmptyLine(args.task) : '';
+      return brief !== '' ? `${agent} · ${brief}` : agent;
+    }
+    case 'web_search': {
+      const query = typeof args.query === 'string' && args.query.trim() !== '' ? args.query.trim() : null;
+      return query === null ? null : clipChars(query, 120);
+    }
+    case 'ask': {
+      const questions = Array.isArray(args.questions) ? args.questions : [];
+      const first = questions.find(item => item !== null && typeof item === 'object'
+        && nonEmpty((/** @type {Record<string, unknown>} */ (item)).question)) ?? null;
+      if (first === null) return null;
+      return clipChars(nonEmpty((/** @type {Record<string, unknown>} */ (first)).question) ?? '', 120);
     }
     default:
       return null;

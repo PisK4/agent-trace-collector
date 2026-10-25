@@ -456,6 +456,34 @@ test('工具摘要按工具分派：Skill、Agent、协作与查询工具', () =
     .toBe('ToolSearch · select:SendMessage');
 });
 
+test('OMP 小写工具：read/write/edit 认 path 键，grep/glob/todo/task/web_search/ask 各显参数要点', () => {
+  expect(toolSummary('read', JSON.stringify({ path: 'README.md', i: 'Reading README' })))
+    .toBe('read · README.md');
+  expect(toolSummary('write', JSON.stringify({ path: 'docs/x.md', content: 'y'.repeat(2048) })))
+    .toBe('write · x.md · 2.0 KB');
+  expect(toolSummary('edit', JSON.stringify({ path: 'src/a.ts', old_string: 'a\nb', new_string: 'c' })))
+    .toBe('edit · a.ts · 2→1 行');
+  // 大写工具带 path 键也接受：OMP 混用两种客户端时不漏。
+  expect(toolSummary('Read', JSON.stringify({ path: 'lib/b.py' }))).toBe('Read · b.py');
+  expect(toolSummary('grep', JSON.stringify({ pattern: 'derive_version', path: 'src' })))
+    .toBe('grep · derive_version');
+  expect(toolSummary('glob', JSON.stringify({ path: 'src/**/*.ts' })))
+    .toBe('glob · src/**/*.ts');
+  expect(toolSummary('todo', JSON.stringify({ op: 'append', task: '补 bg 配对测试\n第二行' })))
+    .toBe('todo · append · 补 bg 配对测试');
+  expect(toolSummary('todo', JSON.stringify({ op: 'view' }))).toBe('todo · view');
+  expect(toolSummary('task', JSON.stringify({ agent: 'explore', task: '找齐调用点\n细节' })))
+    .toBe('task · explore · 找齐调用点');
+  expect(toolSummary('web_search', JSON.stringify({ query: 'bun sqlite wal' })))
+    .toBe('web_search · bun sqlite wal');
+  expect(toolSummary('ask', JSON.stringify({ questions: [{ question: '先做哪个?' }] })))
+    .toBe('ask · 先做哪个?');
+  // 核心键缺失走回退链，不冒充分派结果。
+  expect(toolSummary('grep', '{"path":"src"}')).toBe('grep · src');
+  expect(toolSummary('ask', '{"questions":[{"options":["a"]}]}'))
+    .toBe('ask · {"questions":[{"options":["a"]}]}');
+});
+
 test('工具摘要回退：非 JSON 参数原文、未知工具回退链、超长不做字符截断', () => {
   expect(toolSummary('mcp__srv__do', 'not json')).toBe('mcp__srv__do · not json');
   expect(toolSummary('x', '{"command":"ls","cmd":"fallback-cmd"}')).toBe('x · ls');
@@ -480,6 +508,11 @@ test('工具身份色类：六个核心工具各一色，其余统一中性', ()
   expect(toolTint('SendMessage')).toBe('tint-other');
   expect(toolTint('mcp__server__method')).toBe('tint-other');
   expect(toolTint('')).toBe('tint-other');
+  // OMP 小写同族工具与大写各归同色，不扩新色类。
+  expect(toolTint('read')).toBe('tint-read');
+  expect(toolTint('edit')).toBe('tint-edit');
+  expect(toolTint('write')).toBe('tint-write');
+  expect(toolTint('grep')).toBe('tint-other');
 });
 
 test('多 choice 回复保留原始对象并说明限制', () => {

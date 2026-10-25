@@ -248,13 +248,17 @@ export function renderReplyDetail(view, tools = [], foldKey = '') {
 /**
  * 工具名 → 色类。行内 chip、面板头 bp-kind 与正文 tool-chip 共用这一套类名，
  * 颜色只承载工具身份一个语义；新工具（含 MCP）落中性色，无需改代码。
+ * 小写别名是 OMP（oh-my-pi）的同族工具：read/write/edit/bash 与大写各归同色。
  * @param {string} name
  */
 export function toolTint(name) {
   switch (name) {
-    case 'Read': return 'tint-read';
-    case 'Edit': return 'tint-edit';
-    case 'Write': return 'tint-write';
+    case 'Read':
+    case 'read': return 'tint-read';
+    case 'Edit':
+    case 'edit': return 'tint-edit';
+    case 'Write':
+    case 'write': return 'tint-write';
     case 'Bash':
     case 'bash': return 'tint-bash';
     case 'Skill': return 'tint-skill';

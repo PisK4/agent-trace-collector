@@ -146,8 +146,11 @@ export function getSessionSummary(store: Store, key: string): SessionSummary {
       }
       toolCounts.set(name, tool);
       if (row.arg_path !== null) {
-        if (name === 'Edit' || name === 'Write') written.set(row.arg_path, (written.get(row.arg_path) ?? 0) + 1);
-        else if (name === 'Read') read.set(row.arg_path, (read.get(row.arg_path) ?? 0) + 1);
+        // 大小写两族同归一组：Claude Code 的 Edit/Write/Read 与 OMP 的
+        // edit/write/read 是同一件事的两个客户端写法。
+        const lower = name.toLowerCase();
+        if (lower === 'edit' || lower === 'write') written.set(row.arg_path, (written.get(row.arg_path) ?? 0) + 1);
+        else if (lower === 'read') read.set(row.arg_path, (read.get(row.arg_path) ?? 0) + 1);
       }
       if (row.arg_skill !== null) skills.set(row.arg_skill, (skills.get(row.arg_skill) ?? 0) + 1);
       // 事实是否在本算法下真实提取过：发布代行看代际算法号（实验路径的旧代
@@ -265,9 +268,9 @@ export function getSummaryEntries(store: Store, key: string, query: SummaryEntri
     const extra = query.kind === 'tool'
       ? 'AND COALESCE(tool_name, \'\') = ?'
       : query.kind === 'written'
-        ? "AND tool_name IN ('Edit','Write') AND arg_path = ?"
+        ? "AND LOWER(COALESCE(tool_name, '')) IN ('edit','write') AND arg_path = ?"
         : query.kind === 'read'
-          ? "AND tool_name = 'Read' AND arg_path = ?"
+          ? "AND LOWER(COALESCE(tool_name, '')) = 'read' AND arg_path = ?"
           : 'AND arg_skill = ?';
     const param = query.kind === 'tool' || query.kind === 'skill' ? query.name : query.path;
     // extra 拼进 UNION 的两个分支，参数按占位符顺序各绑一次：conv_key、筛选值、conv_key、筛选值。

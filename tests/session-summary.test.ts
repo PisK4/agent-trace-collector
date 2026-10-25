@@ -52,21 +52,24 @@ function rebuild(store: ReturnType<typeof fixture>['store']): void {
 // 提取层：参数键、失败位与中断前缀各只有一份实现。
 // ---------------------------------------------------------------------------
 
-test('调用提取认 file_path 与 skill 两个键，缺键落 NULL 不猜近邻键', () => {
+test('调用提取认 file_path/path 与 skill 键，其余近邻键落 NULL 不猜', () => {
   const reply = { content: [
     { type: 'tool_use', id: 'c1', name: 'Edit', input: { file_path: '/a/b.ts', other: 'x' } },
     { type: 'tool_use', id: 'c2', name: 'Skill', input: { skill: 'ponytail', args: {} } },
-    { type: 'tool_use', id: 'c3', name: 'Bash', input: { command: 'ls', path: '/nope' } },
+    { type: 'tool_use', id: 'c3', name: 'Bash', input: { command: 'ls', pattern: '/nope' } },
     { type: 'tool_use', id: 'c4', name: 'Read', input: { file_path: 42 } },
     { type: 'tool_use', id: 'c5', name: 'Write', input: {} },
+    { type: 'tool_use', id: 'c6', name: 'read', input: { path: 'README.md', i: 'Reading' } },
   ] };
   expect(anthropicReplyCalls(reply)).toEqual([
     { id: 'c1', name: 'Edit', ord: 0, argPath: '/a/b.ts', argSkill: null },
     { id: 'c2', name: 'Skill', ord: 1, argPath: null, argSkill: 'ponytail' },
-    // path 是近邻键，不是提取词汇；非字符串与缺键同样是 NULL。
+    // command/pattern 之类仍不是提取词汇；file_path 优先于 path。
     { id: 'c3', name: 'Bash', ord: 2, argPath: null, argSkill: null },
     { id: 'c4', name: 'Read', ord: 3, argPath: null, argSkill: null },
     { id: 'c5', name: 'Write', ord: 4, argPath: null, argSkill: null },
+    // OMP 的 read/write/edit/grep 用 path 声明目标，补进提取词汇。
+    { id: 'c6', name: 'read', ord: 5, argPath: 'README.md', argSkill: null },
   ]);
 });
 
@@ -249,6 +252,46 @@ test('点击定位按组查支撑记录', () => {
       .toEqual({ items: [{ req_id: 2, ord: 0, tool_name: 'Read', state: 'resolved' }], truncated: false });
     expect(getSummaryEntries(f.store, GROUP, { kind: 'interrupts' }))
       .toEqual({ requests: [{ req_id: 2, count: 1 }] });
+  } finally { f.close(); }
+});
+
+test('OMP 小写工具的 path 参数进写入/读取分组，点击定位同认小写', () => {
+  const f = fixture();
+  try {
+    const userHello = { role: 'user', content: [{ type: 'text', text: '写一下' }] };
+    const writeCall = { type: 'tool_use', id: 'w1', name: 'write',
+      input: { path: 'docs/x.md', content: '正文' } };
+    const readCall = { type: 'tool_use', id: 'r1', name: 'read', input: { path: 'docs/x.md' } };
+    seedToolRound(f.store, 1, {
+      startedMs: 1000, messages: [userHello],
+      reply: { content: [writeCall] },
+    });
+    seedToolRound(f.store, 2, {
+      startedMs: 2000,
+      messages: [userHello,
+        { role: 'assistant', content: [writeCall] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'w1', content: 'ok' }] }],
+      reply: { content: [readCall] },
+    });
+    seedToolRound(f.store, 3, {
+      startedMs: 3000,
+      messages: [userHello,
+        { role: 'assistant', content: [writeCall] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'w1', content: 'ok' }] },
+        { role: 'assistant', content: [readCall] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: '文件正文' }] }],
+      reply: { content: [] },
+    });
+    rebuild(f.store);
+    const summary = getSessionSummary(f.store, GROUP);
+    expect(summary.paths).toEqual({
+      written: [{ path: 'docs/x.md', count: 1 }],
+      read: [{ path: 'docs/x.md', count: 1 }],
+    });
+    expect(getSummaryEntries(f.store, GROUP, { kind: 'written', path: 'docs/x.md' }))
+      .toEqual({ items: [{ req_id: 1, ord: 0, tool_name: 'write', state: 'resolved' }], truncated: false });
+    expect(getSummaryEntries(f.store, GROUP, { kind: 'read', path: 'docs/x.md' }))
+      .toEqual({ items: [{ req_id: 2, ord: 0, tool_name: 'read', state: 'resolved' }], truncated: false });
   } finally { f.close(); }
 });
 
