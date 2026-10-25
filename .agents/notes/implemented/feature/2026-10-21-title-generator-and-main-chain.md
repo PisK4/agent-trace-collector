@@ -12,7 +12,7 @@ Claude Code 的 Title Generator 是会话旁路请求，输入是单个 `<sessio
 
 每个 `(conv_key, actor)` 组在派生末尾重算链角色：时间最早的一笔真实请求是主链根，其余互不相接的根及其后继标 `branch`；正文不可读的请求保持中性。字段与现行规则见[架构设计的标题一节](../../../../docs/architecture-design.md#标题)。
 
-清洗名单补了 `<local-command-caveat>` 与插话前缀 `The user sent a new message while you were working:` 及其尾部说明，避免它们进入标题与摘要。清洗名单与包装剥离的现行实现见 [src/input-interpretation.ts](../../../../src/input-interpretation.ts)，链角色重算见 [src/derive.ts](../../../../src/derive.ts)，标题推导见 [src/queries.ts](../../../../src/queries.ts)。
+清洗名单补了 `<local-command-caveat>` 与插话前缀 `The user sent a new message while you were working:` 及其尾部说明，避免它们进入标题与摘要。清洗名单与包装剥离的现行实现见 [src/input-interpretation.ts](../../../../src/input-interpretation.ts)，链角色重算见 [src/derive.ts](../../../../src/derive.ts)，标题推导见 [src/queries/sessions.ts](../../../../src/queries/sessions.ts)。
 
 ## Alternatives considered
 

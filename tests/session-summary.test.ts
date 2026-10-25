@@ -10,7 +10,7 @@ import { GROUP_ALGORITHM } from '../src/derive-state';
 import { migrateSummaryFacts } from '../scripts/backfill-summary-facts';
 import {
   getSummaryEntries, getSessionSummary,
-} from '../src/queries';
+} from '../src/queries/session-summary';
 import type { Database } from 'bun:sqlite';
 
 const GROUP = JSON.stringify(['session', 'summary']);

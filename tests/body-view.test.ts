@@ -6,8 +6,8 @@ import {
 } from '../web/body-view.js';
 import type { BodyPage } from '../src/protocols';
 import type { CapabilityView } from '../src/capabilities';
-import type { AttemptChain } from '../src/queries';
-import type { RequestDetail } from '../src/queries';
+import type { AttemptChain } from '../src/queries/routes';
+import type { RequestDetail } from '../src/queries/requests';
 
 const missingCapabilities: CapabilityView = {
   tools: { state: 'missing', items: [], reason: 'body_unavailable' },

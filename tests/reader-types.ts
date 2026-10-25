@@ -2,7 +2,7 @@
 // 网络读取的契约从 app.js 的 createReader 迁到 reader-store；本文件随之改锚。
 import { createReaderStore } from '../web/reader-store.js';
 import { projectSteps, renderTraceRows, toolSummary } from '../web/trace-view.js';
-import type { RequestRow } from '../src/queries';
+import type { RequestRow } from '../src/queries/projection';
 
 const store = createReaderStore(fetch);
 

@@ -6,7 +6,12 @@
 import type { CapabilityView, ToolCapability } from '../src/capabilities';
 import { replyShapeOf } from '../src/derive-decision';
 import type { BodyCoverage, BodyPage, MessageInterpretation } from '../src/protocols';
-import type { AttemptChain, PromptReading, RequestRow, RouteSummaryReading, SessionRow, ToolResultIndexRow, TurnPairRow } from '../src/queries';
+import type { RequestRow } from '../src/queries/projection';
+import type { ToolResultIndexRow } from '../src/queries/requests';
+import type { AttemptChain, RouteSummaryReading } from '../src/queries/routes';
+import type { PromptReading } from '../src/queries/readings';
+import type { SessionRow } from '../src/queries/sessions';
+import type { TurnPairRow } from '../src/queries/turns';
 import type { ReadingDetail } from '../src/reading';
 import { WEB_HEADERS, serveWeb } from './static-web';
 
