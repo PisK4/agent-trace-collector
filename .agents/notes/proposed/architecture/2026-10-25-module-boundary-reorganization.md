@@ -223,6 +223,8 @@ web/
 按四个小步交付，每步单独可回退。第 1 步（session-view.js）已交付：
 十个会话级展示函数与四个格式化辅助搬出，函数签名改显式输入，
 openSummaryList 的网络与状态更新留在控制器。
+第 2 步（layout.js）已交付：主题偏好、首选宽度与拖拽指针由模块持有，
+暴露 initLayout 与 openRail；syncBandTop 留在控制器。
 
 
 1. **`session-view.js`**：搬出 `sessionTotalsHtml`、`coverageHoverText`、`pathLabel`、`summaryToolChips`、`summaryPathFlow`、`summarySkills`、`summaryStructure`、`sessionSummaryFold`、`sessionHead`、`railSummaryListHtml`。函数签名改为显式输入；`openSummaryList` 的网络与状态更新留在控制器。
