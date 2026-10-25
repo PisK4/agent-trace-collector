@@ -38,7 +38,6 @@ export type RequestDetail = RequestRow & {
   prompt_counted: number | null;
   prompt_window: number | null;
   prompt_turns: number | null;
-  parts: unknown;
   attempt_count: number | null;
   attempt_billed: number | null;
   attempt_in: number | null;
@@ -285,7 +284,6 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     prompt_counted: row.prompt_counted,
     prompt_window: row.prompt_window,
     prompt_turns: row.prompt_turns,
-    parts: parseJsonOrNull(row.parts_json),
     attempt_count: row.attempt_count,
     attempt_billed: row.attempt_billed,
     attempt_in: row.attempt_in,

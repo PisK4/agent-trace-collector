@@ -509,12 +509,12 @@ const PARTS_WEIGHT = [0.06, 0.12, 0.18, 0.10, 0.18, 0.36];
 function promptOf(r: SynthRequest): PromptReading {
   if (r.bodyState !== 'available') {
     return {state:'missing', reason:'legacy_unknown', actual_version:null, tokens:null, counted:null,
-      window:null, held:null, parts:[], ratio:null, legacy:false, note:null};
+      window:null, held:null, turns:null, parts:[], ratio:null, legacy:false, note:null};
   }
   const tokens = (r.usage.in ?? 0) + (r.usage.read ?? 0) + (r.usage.write ?? 0);
   const window = r.protocol === 'chat' ? 128000 : 200000;
   const parts = PARTS_ORDER.map((kind, index) => ({kind, tokens: Math.round(tokens * (PARTS_WEIGHT[index] ?? 0))}));
-  return {state:'recomputed', reason:'complete', actual_version:1, tokens, counted:true, window, held:null,
+  return {state:'recomputed', reason:'complete', actual_version:1, tokens, counted:true, window, held:null, turns:null,
     parts, ratio: window > 0 ? tokens / window : null, legacy:false, note:null};
 }
 
@@ -537,7 +537,7 @@ function routeOf(r: SynthRequest): {state: 'available' | 'absent' | 'expired'; s
     model:'synth-group', served:r.protocol === 'chat' ? 'synth-c' : 'synth-a', provider:'relay-synth',
     status:r.status, ms:r.timing.ms, ttft:r.timing.ttft, flow:r.timing.flow, first_text:r.timing.firstText,
     kind:null, folder:null, effort:null,
-    prompt:prompt.tokens === null ? null : {tokens:prompt.tokens, counted:true, window:prompt.window, held:null, parts:prompt.parts},
+    prompt:prompt.tokens === null ? null : {tokens:prompt.tokens, counted:true, window:prompt.window, held:null, turns:null, parts:prompt.parts},
     error:null,
     order:[{model:'synth-group'}, {model:r.protocol === 'chat' ? 'synth-c' : 'synth-a'}],
     attempts:attemptsOf(r), affinity:null,
@@ -619,7 +619,7 @@ function detailOf(r: SynthRequest): ReadingDetail {
     reply_state:r.bodyState === 'available' || r.bodyState === 'partial' ? (r.reply === null ? 'absent' : 'ok') : null,
     first_text_ms:r.timing.firstText, reasoning:null,
     prompt_tokens:prompt.tokens, prompt_counted:prompt.counted === null ? null : prompt.counted ? 1 : 0,
-    prompt_window:prompt.window, prompt_turns:null, parts:prompt.parts,
+    prompt_window:prompt.window, prompt_turns:null,
     attempt_count:r.attempts?.length ?? 1, attempt_billed:null, attempt_in:null, attempt_out:null,
     attempt_cache_read:null, attempt_cache_write:null, attempt_reasoning:null,
     attempt_cost:null, attempt_cost_state:'absent',

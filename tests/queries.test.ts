@@ -353,15 +353,57 @@ test('format 2 读取 kind、folder、effort、prompt 与 error', () => {
     format: 2, route_id: 100, time_ms: 1000, model: 'm', served: 's', provider: 'p',
     status: 200, ms: 10, ttft: 2, flow: 8, first_text: 3,
     kind: 'chat', folder: '/tmp/project', effort: 'high',
-    prompt: { tokens: 100, counted: true, window: 1000, held: false, parts: [{ kind: 'chat', tokens: 60 }] },
+    prompt: { tokens: 100, counted: true, window: 1000, held: false, turns: 4, parts: [{ kind: 'chat', tokens: 60 }] },
     error: 'synthetic error', order: [], tries: [], affinity: null, saved_at: 1,
   }, routeColumns);
   expect(reading.format).toBe(2);
   expect(reading.kind).toBe('chat');
   expect(reading.folder).toBe('/tmp/project');
   expect(reading.effort).toBe('high');
-  expect(reading.prompt).toEqual({ tokens: 100, counted: true, window: 1000, held: false, parts: [{ kind: 'chat', tokens: 60 }] });
+  expect(reading.prompt).toEqual({
+    tokens: 100, counted: true, window: 1000, held: false, turns: 4, parts: [{ kind: 'chat', tokens: 60 }],
+  });
   expect(reading.error).toBe('synthetic error');
+});
+
+test('prompt parts 白名单携带 item 标量，非法项剔除、未知键不透出', () => {
+  const reading = routeSummaryReading({
+    format: 2, route_id: 100, time_ms: 1000, model: 'm', served: 's', provider: 'p',
+    status: 200, ms: 10, ttft: 2, flow: 8, first_text: 3,
+    kind: null, folder: null, effort: null,
+    prompt: {
+      tokens: 900, counted: false, window: 1000, held: null, turns: null,
+      parts: [
+        {
+          kind: 'files', tokens: 400,
+          items: [
+            { name: 'src/http.ts', tag: 'read', n: 1, tokens: 300, content: '正文不进白名单' },
+            { name: 'fixture.json', tag: 'shell', n: 3, tokens: 100 },
+            { name: 'bad-item', tag: 'read', tokens: null },
+            { tokens: 50 },
+            'not-a-record',
+          ],
+        },
+        { kind: 'chat', tokens: 500, items: [{ name: '1', tag: 'turn', tokens: 500 }] },
+        { kind: 'bogus', tokens: null },
+      ],
+    },
+    error: null, order: [], tries: [], affinity: null, saved_at: 1,
+  }, routeColumns);
+  expect(reading.prompt?.parts).toEqual([
+    {
+      kind: 'files', tokens: 400,
+      items: [
+        { name: 'src/http.ts', tag: 'read', n: 1, tokens: 300 },
+        { name: 'fixture.json', tag: 'shell', n: 3, tokens: 100 },
+      ],
+    },
+    { kind: 'chat', tokens: 500, items: [{ name: '1', tag: 'turn', n: null, tokens: 500 }] },
+  ]);
+  const text = JSON.stringify(reading.prompt);
+  expect(text).not.toContain('正文不进白名单');
+  expect(text).not.toContain('bad-item');
+  expect(text).not.toContain('bogus');
 });
 
 test('安全挑选去掉 account、host、who 与 id', () => {

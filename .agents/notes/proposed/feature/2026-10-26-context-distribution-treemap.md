@@ -73,6 +73,7 @@ magpie 自 10-24 起在其 Routing 页提供了成熟的对应物：每个请求
 ## 交付记录
 
 - 2026-10-26 P0 已交付：`web/rail-facts.js` 的 `PARTS` 降级为 kind→标签+色槽的元数据映射（`partColor` 按槽位名取色，不再按数组下标），`skills` 补入映射落 `--p7`，`memory` 标签改「记忆」；`web/app.css` 三处主题块加 `--p7`（亮 `#30287e`、暗 `#3d3480`）。构成条与图例本就遍历 parts 数据渲染，六类旧行与七类新行自此同屏各自正确。实现时确认 `web/index.html` 并无内联调色板变量（方案写作时的笔误），`--p7` 只落在 app.css 三处。
+- 2026-10-26 P1 后端已交付：`safePrompt` 扩为携带 `turns` 与 item 级白名单（`name/tag/n/tokens` 四标量，非法项剔除），`parts` 投影抽成 `safePromptParts` 供 route_summary 的 `z` 与 request 落列 `parts_json` 共用；`PromptReading` 同步加 `turns` 与 `items`。**Acceptance criteria 第 6 条的决断：详情接口的原始 `parts` 字段移除**——前端与 prototypes 均无消费者，保留只会把非白名单口径继续固化，调用方全走 `prompt.parts`；`parts_json` 列本身不动，仍是投影落列与 legacy fallback 的输入。
 
 ## Alternatives considered
 

@@ -1,7 +1,7 @@
 /** 来源事实展示：source_facts、projection_meta、上下文与派生状态的阅读视图。 */
 
 import { finite, isRecord, stringOrNull } from './projection';
-import { safePrompt } from './routes';
+import { safePrompt, safePromptParts, type RoutePromptPart } from './routes';
 
 export type BoundedReading = {
   values: string[];
@@ -44,7 +44,8 @@ export type PromptReading = {
   counted: boolean | null;
   window: number | null;
   held: boolean | null;
-  parts: { kind: string; tokens: number }[];
+  turns: number | null;
+  parts: RoutePromptPart[];
   ratio: number | null;
   legacy: boolean;
   note: string | null;
@@ -174,21 +175,13 @@ type PromptUse = {
   counted: boolean;
   window: number | null;
   held: boolean | null;
-  parts: { kind: string; tokens: number }[];
+  turns: number | null;
+  parts: RoutePromptPart[];
 };
 
 function legacyPrompt(parts: unknown, tokens: number | null): PromptUse | null {
   if (!Array.isArray(parts) && tokens === null) return null;
-  const picked: { kind: string; tokens: number }[] = [];
-  if (Array.isArray(parts)) {
-    for (const part of parts) {
-      if (!isRecord(part) || typeof part.kind !== 'string') continue;
-      const count = finite(part.tokens);
-      if (count === null) continue;
-      picked.push({ kind: part.kind, tokens: count });
-    }
-  }
-  return { tokens, counted: false, window: null, held: null, parts: picked };
+  return { tokens, counted: false, window: null, held: null, turns: null, parts: safePromptParts(parts) };
 }
 
 /**
@@ -215,6 +208,7 @@ export function promptReadingOf(
     counted: use?.counted ?? null,
     window: use?.window ?? null,
     held: use?.held ?? null,
+    turns: use?.turns ?? null,
     parts: use?.parts ?? [],
     ratio,
     legacy: normalized !== 'recomputed' && use !== null && current === null,
