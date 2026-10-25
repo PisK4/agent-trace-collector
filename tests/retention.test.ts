@@ -256,7 +256,7 @@ test('原始层过期先标证据再删原文，长期读数不动', () => {
       db.run(`INSERT INTO raw_hook(hook_id,received_at,parse_state) VALUES ('hook-old',10,'ok'),('hook-new',1000,'ok')`);
     });
     const pruned = pruneRaw(f.store, 100, 100);
-    expect(pruned).toEqual({ ledger: 1, route: 1, hook: 1 });
+    expect(pruned).toEqual({ ledger: 1, route: 1, hook: 1, otlpSpan: 0, otlpLog: 0 });
     expect(f.store.read.query('SELECT route_id FROM raw_ledger ORDER BY route_id').all()).toEqual([{ route_id: 7 }]);
     expect(f.store.read.query('SELECT route_id FROM raw_route ORDER BY route_id').all()).toEqual([{ route_id: 8 }]);
     expect(f.store.read.query('SELECT hook_id FROM raw_hook ORDER BY hook_id').all()).toEqual([{ hook_id: 'hook-new' }]);
@@ -301,7 +301,7 @@ test('原始层过期在同一事务推进修订，证据族转expired', () => {
     // 先把请求的待处理标记清掉：过期本身必须重新把它置位。
     f.store.write(db => db.run('UPDATE request SET purpose_pending=0'));
 
-    expect(pruneRaw(f.store, 100, 100)).toEqual({ ledger: 1, route: 0, hook: 0 });
+    expect(pruneRaw(f.store, 100, 100)).toEqual({ ledger: 1, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0 });
     const after = f.store.write(db => projectRequestTx(db, 1, {
       now: 3, mappingVersion: SOURCE_PROJECTION_VERSION,
     }));
@@ -309,6 +309,45 @@ test('原始层过期在同一事务推进修订，证据族转expired', () => {
     expect(after.families.selected).toMatchObject({ state: 'expired', current: false });
     expect(after.reasons).toContain('ledger_expired');
     expect(revision()).toEqual({ input_revision: beforeRevision.input_revision + 1, purpose_pending: 1 });
+  } finally {
+    f.close();
+  }
+});
+
+test('OTLP 原始层同受 TTL：span 证据转 expired，log 直接删，请求行不动', () => {
+  const f = fixture();
+  try {
+    const traceId = new Uint8Array(16).fill(0xab);
+    const spanId = new Uint8Array(8).fill(0xcd);
+    const refKey = `${Buffer.from(traceId).toString('hex')}/${Buffer.from(spanId).toString('hex')}`;
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,sort_source,sort_key)
+         VALUES (1,10,'2026-10-01','otlp','summary',0,8,10,10,'otlp_span',?)`,
+        [refKey],
+      );
+      db.run(`INSERT INTO request_evidence(req_id,source_kind,ref_key,merge_state,added_at)
+              VALUES (1,'otlp_span',?,'merged',10)`, [refKey]);
+      db.run(
+        `INSERT INTO raw_otlp_span(trace_id,span_id,received_at,service,name,start_ms,attributes_json,mapping_version,privacy_version)
+         VALUES (?,?,10,'oh-my-pi','chat synth',10,'{}',1,1)`,
+        [traceId, spanId],
+      );
+      db.run(
+        `INSERT INTO raw_otlp_log(record_hash,received_at,service,time_ms,body,attributes_json,privacy_version)
+         VALUES (?,?,?,?,?,?,1)`,
+        [new Uint8Array(32).fill(0x11), 10, 'oh-my-pi', 10, 'omp.log', '{}'],
+      );
+    });
+    const pruned = pruneRaw(f.store, 100, 100);
+    expect(pruned).toEqual({ ledger: 0, route: 0, hook: 0, otlpSpan: 1, otlpLog: 1 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_log').get()).toEqual({ n: 0 });
+    // 证据行保留但转 expired；请求行身份（sort_key）与 have 不因原文删除改写。
+    expect(f.store.read.query('SELECT ref_key,payload_state FROM request_evidence').all())
+      .toEqual([{ ref_key: refKey, payload_state: 'expired' }]);
+    expect(f.store.read.query('SELECT via,have,body_state,sort_key FROM request').get())
+      .toEqual({ via: 'otlp', have: 8, body_state: 'summary', sort_key: refKey });
   } finally {
     f.close();
   }
@@ -322,7 +361,7 @@ test('带正文且无法迁移的hook原文不被过期规则删掉', () => {
         new Uint8Array([1, 2, 3]),
       ]);
     });
-    expect(pruneRaw(f.store, 100, 100)).toEqual({ ledger: 0, route: 0, hook: 0 });
+    expect(pruneRaw(f.store, 100, 100)).toEqual({ ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0 });
     expect(f.store.read.query("SELECT hook_id FROM raw_hook WHERE hook_id='hook-body'").get()).toEqual({ hook_id: 'hook-body' });
     expect(f.store.read.query('SELECT reason FROM ingest_issue').all()).toEqual([{ reason: 'raw_hook_body_unlinked' }]);
     // 再跑一次不重复记录。

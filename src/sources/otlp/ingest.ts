@@ -20,15 +20,21 @@ import { localDay, modelTimeTitle } from '../../format';
 import { HAVE_OTLP, MATCH_BY_SPAN_IDENTITY, insertEvidenceTx, otlpConv } from '../../evidence';
 import { markRequestInputTx } from '../../derive/state';
 import type { HookAdmission } from '../../hook';
-import type { OtlpTracesPayload } from './decode';
+import type { Database } from 'bun:sqlite';
+import { createHash } from 'node:crypto';
+import { lstatSync, readFileSync } from 'node:fs';
+import type { Stats } from 'node:fs';
+import type { OtlpLogRecord, OtlpLogsPayload, OtlpTracesPayload } from './decode';
 import { idHex, nanoToMs } from './decode';
 import { OTLP_MAPPING_VERSION, classifySpan, mapSpan } from './mapping';
+import { persistBodyTx } from '../../body';
 
 export type AcceptOtlpTracesResult = {
   spans: number;
   spanDuplicates: number;
   requestsCreated: number;
   unknownShape: number;
+  bodiesWired: number;
 };
 
 export type OtlpAcceptOptions = {
@@ -52,7 +58,7 @@ export function acceptOtlpTraces(
   // 暂停时拒绝整批：收下却写不进只会多一条误导性的"成功"记录。
   if (admission.mode === 'paused') throw new Error('disk_full');
 
-  const result: AcceptOtlpTracesResult = { spans: 0, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0 };
+  const result: AcceptOtlpTracesResult = { spans: 0, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0, bodiesWired: 0 };
 
   store.write(db => {
     const existingStmt = db.prepare(
@@ -120,9 +126,219 @@ export function acceptOtlpTraces(
         // 有会话 id 才进派生组；没带的行不进 derive_queue，也不伪造归属。
         if (conv !== null) markRequestInputTx(db, reqId);
         result.requestsCreated += 1;
+        // logs 可能先到：span 行一落，回头接等待中的 body_ref 指针。
+        for (const pending of db.query<{ request_body_id: string }, [Uint8Array]>(
+          "SELECT request_body_id FROM otlp_body_ref WHERE trace_id=? AND state='pending_span'",
+        ).all(span.traceId)) {
+          if (attemptBodyWireTx(db, pending.request_body_id, now, salt, admission)) {
+            result.bodiesWired += 1;
+          }
+        }
       }
     }
   }, 'otlp_traces');
+
+  return result;
+}
+
+// ——— logs：接收 + body_ref 接线 ——————————————————————————
+
+export type AcceptOtlpLogsResult = {
+  records: number;
+  duplicates: number;
+  bodyEvents: number;
+  bodiesWired: number;
+};
+
+/** 记录哈希：OTLP 记录没有内生 id，同一记录重发的字节相同，内容哈希即判重键。 */
+function recordHash(record: OtlpLogRecord): Buffer {
+  const canonical = JSON.stringify({
+    t: record.timeNano?.toString() ?? null,
+    b: record.body,
+    tr: record.traceId === null ? null : idHex(record.traceId),
+    sp: record.spanId === null ? null : idHex(record.spanId),
+    a: record.attrs,
+  });
+  return createHash('sha256').update(canonical).digest();
+}
+
+type BodyEventKind = 'request' | 'response';
+
+function bodyEventOf(record: OtlpLogRecord): BodyEventKind | null {
+  if (record.body === 'claude_code.api_request_body') return 'request';
+  if (record.body === 'claude_code.api_response_body') return 'response';
+  return null;
+}
+
+/** 指针读取边界：只读事件指到的那一个文件，普通文件、非符号链接、≤32 MiB。 */
+const BODY_FILE_MAX_BYTES = 32 * 1024 * 1024;
+
+function readBodyFile(path: string): { ok: true; value: Record<string, unknown> } | { ok: false; code: string } {
+  let info: Stats;
+  try {
+    info = lstatSync(path);
+  } catch (error) {
+    return { ok: false, code: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'not_found' : 'stat_failed' };
+  }
+  if (info.isSymbolicLink() || !info.isFile()) return { ok: false, code: 'not_regular' };
+  if (info.size > BODY_FILE_MAX_BYTES) return { ok: false, code: 'too_large' };
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return { ok: false, code: 'read_failed' };
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, code: 'not_object' };
+    }
+    return { ok: true, value: parsed as Record<string, unknown> };
+  } catch {
+    return { ok: false, code: 'invalid_json' };
+  }
+}
+
+/**
+ * 一次 body_ref 的接线尝试（幂等，状态记在 otlp_body_ref）：
+ * - span 未到：pending_span（traces 侧创建行后回接）。
+ * - span 撞出多个候选：span_ambiguous——attempt 区分不了，不猜。
+ * - 双指针未齐：awaiting_response（response 事件随调用结束到达）。
+ * - 读文件失败/解析失败：read_failed / parse_failed，行降级原因跟着记，
+ *   读不到不算解析失败（提案边界）。
+ * - 成功：脱敏后走既有 persistBodyTx，body_state 转 available。
+ * 返回本次是否真正完成接线。
+ */
+function attemptBodyWireTx(
+  db: Database,
+  requestBodyId: string,
+  now: number,
+  salt: Uint8Array,
+  admission: HookAdmission,
+): boolean {
+  const row = db.query<
+    { trace_id: Uint8Array; req_id: number | null; request_ref: string | null; response_ref: string | null; state: string },
+    [string]
+  >('SELECT trace_id, req_id, request_ref, response_ref, state FROM otlp_body_ref WHERE request_body_id=?')
+    .get(requestBodyId);
+  if (row === null || row.state === 'wired') return false;
+
+  const setState = (state: string, detail: string | null): void => {
+    db.run('UPDATE otlp_body_ref SET state=?, detail=?, updated_at=? WHERE request_body_id=?',
+      [state, detail, now, requestBodyId]);
+  };
+
+  let reqId = row.req_id;
+  if (reqId === null) {
+    const prefix = `${idHex(row.trace_id)}/`;
+    const candidates = db.query<{ req_id: number }, [string]>(
+      "SELECT req_id FROM request_evidence WHERE source_kind='otlp_span' AND ref_key LIKE ?",
+    ).all(prefix + '%');
+    if (candidates.length === 0) { setState('pending_span', null); return false; }
+    if (candidates.length > 1) { setState('span_ambiguous', `candidates=${candidates.length}`); return false; }
+    reqId = candidates[0]!.req_id;
+    db.run('UPDATE otlp_body_ref SET req_id=? WHERE request_body_id=?', [reqId, requestBodyId]);
+  }
+  if (row.request_ref === null || row.response_ref === null) {
+    setState('awaiting_response', null);
+    return false;
+  }
+  if (admission.mode === 'metadata_only') {
+    // 80% 档停正文：指针留着，接线状态记档，等下一轮证据再试。
+    setState('metadata_only', admission.reason);
+    return false;
+  }
+
+  const requestFile = readBodyFile(row.request_ref);
+  if (!requestFile.ok) {
+    setState('read_failed', `${row.request_ref}:${requestFile.code}`);
+    db.run("UPDATE request SET miss_reason='body_ref_read_failed', updated_at=? WHERE req_id=? AND body_state='summary'", [now, reqId]);
+    return false;
+  }
+  const responseFile = readBodyFile(row.response_ref);
+  if (!responseFile.ok) {
+    setState('read_failed', `${row.response_ref}:${responseFile.code}`);
+    db.run("UPDATE request SET miss_reason='body_ref_read_failed', updated_at=? WHERE req_id=? AND body_state='summary'", [now, reqId]);
+    return false;
+  }
+
+  // 形态已实测：request 文件是 Messages API 请求体原样，response 是裸 Message 对象。
+  persistBodyTx(db, reqId, {
+    protocol: 'anthropic',
+    request: redact(requestFile.value, salt),
+    reply: redact(responseFile.value, salt),
+    redact_version: 1,
+  });
+  db.run('UPDATE request SET miss_reason=NULL WHERE req_id=?', [reqId]);
+  setState('wired', null);
+  return true;
+}
+
+export function acceptOtlpLogs(
+  store: Store,
+  payload: OtlpLogsPayload,
+  now: number,
+  salt: Uint8Array,
+  options: OtlpAcceptOptions = {},
+): AcceptOtlpLogsResult {
+  const admission = options.admission?.() ?? { mode: 'normal', reason: null };
+  if (admission.mode === 'paused') throw new Error('disk_full');
+
+  const result: AcceptOtlpLogsResult = { records: 0, duplicates: 0, bodyEvents: 0, bodiesWired: 0 };
+
+  store.write(db => {
+    const rawStmt = db.prepare(
+      `INSERT OR IGNORE INTO raw_otlp_log(
+         record_hash,received_at,service,trace_id,span_id,time_ms,body,attributes_json,privacy_version)
+       VALUES (?,?,?,?,?,?,?,?,?)`);
+    const issueStmt = db.prepare(
+      'INSERT OR IGNORE INTO ingest_issue(source_kind,ref_key,reason,observed_at,byte_length) VALUES (?,?,?,?,NULL)');
+
+    for (const scope of payload.resourceLogs) {
+      for (const record of scope.items) {
+        result.records += 1;
+        const hash = recordHash(record);
+        const refKey = idHex(new Uint8Array(hash));
+        const redactedBody = record.body === null ? null : redact(record.body, salt);
+        const inserted = rawStmt.run(
+          hash, now, scope.service, record.traceId, record.spanId,
+          record.timeNano === null ? null : nanoToMs(record.timeNano),
+          typeof redactedBody === 'string' ? redactedBody : null,
+          JSON.stringify(redact(record.attrs, salt)), PRIVACY_TRANSFORM_VERSION,
+        );
+        if (inserted.changes === 0) result.duplicates += 1;
+
+        const eventKind = bodyEventOf(record);
+        if (eventKind === null) continue;
+        result.bodyEvents += 1;
+        const attrs = record.attrs as Record<string, unknown>;
+        const requestBodyId = typeof attrs['request_body_id'] === 'string' ? attrs['request_body_id'] as string : null;
+        const bodyRef = typeof attrs['body_ref'] === 'string' ? attrs['body_ref'] as string : null;
+        const messageId = typeof attrs['message.id'] === 'string' ? attrs['message.id'] as string : null;
+        if (requestBodyId === null || bodyRef === null || record.traceId === null) {
+          issueStmt.run('otlp_log', refKey, 'body_event_incomplete', now);
+          continue;
+        }
+        db.run(
+          `INSERT INTO otlp_body_ref(request_body_id,trace_id,request_ref,response_ref,message_id,state,updated_at)
+           VALUES (?,?,?,?,?,'pending_span',?)
+           ON CONFLICT(request_body_id) DO UPDATE SET
+             request_ref=COALESCE(excluded.request_ref,request_ref),
+             response_ref=COALESCE(excluded.response_ref,response_ref),
+             message_id=COALESCE(excluded.message_id,message_id),
+             updated_at=excluded.updated_at
+             WHERE otlp_body_ref.state<>'wired'`,
+          [requestBodyId, record.traceId,
+            eventKind === 'request' ? bodyRef : null,
+            eventKind === 'response' ? bodyRef : null,
+            messageId, now],
+        );
+        if (attemptBodyWireTx(db, requestBodyId, now, salt, admission)) {
+          result.bodiesWired += 1;
+        }
+      }
+    }
+  }, 'otlp_logs');
 
   return result;
 }

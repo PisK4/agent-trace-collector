@@ -20,3 +20,29 @@ CREATE TABLE IF NOT EXISTS raw_otlp_span (
   PRIMARY KEY (trace_id, span_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS i_raw_otlp_span_time ON raw_otlp_span(start_ms);
+
+CREATE TABLE IF NOT EXISTS raw_otlp_log (
+  record_hash     BLOB PRIMARY KEY,
+  received_at     INTEGER NOT NULL,
+  service         TEXT,
+  trace_id        BLOB,
+  span_id         BLOB,
+  time_ms         INTEGER,
+  body            TEXT,
+  attributes_json TEXT NOT NULL,
+  privacy_version INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS i_raw_otlp_log_trace ON raw_otlp_log(trace_id);
+
+CREATE TABLE IF NOT EXISTS otlp_body_ref (
+  request_body_id TEXT PRIMARY KEY,
+  trace_id        BLOB NOT NULL,
+  req_id          INTEGER,
+  request_ref     TEXT,
+  response_ref    TEXT,
+  message_id      TEXT,
+  state           TEXT NOT NULL,
+  detail          TEXT,
+  updated_at      INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS i_otlp_body_ref_pending ON otlp_body_ref(trace_id) WHERE state='pending_span';

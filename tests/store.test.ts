@@ -19,7 +19,7 @@ test('事务失败不留下证据或游标', () => {
   }
 });
 
-test('建库包含28个业务表且使用AUTOINCREMENT', () => {
+test('建库包含30个业务表且使用AUTOINCREMENT', () => {
   const f = fixture();
   try {
     const names = (f.store.read.query(
@@ -29,8 +29,8 @@ test('建库包含28个业务表且使用AUTOINCREMENT', () => {
       'bg_job', 'block', 'collector_state', 'cost_observation',
       'derive_call_work', 'derive_chain_work', 'derive_generation', 'derive_queue',
       'derive_request_result', 'derive_result_work', 'derive_role_work', 'derive_tool_result',
-      'ingest_issue', 'pending_hook', 'purged_evidence', 'raw_hook', 'raw_ledger',
-      'raw_otlp_span', 'raw_route',
+      'ingest_issue', 'otlp_body_ref', 'pending_hook', 'purged_evidence', 'raw_hook', 'raw_ledger',
+      'raw_otlp_log', 'raw_otlp_span', 'raw_route',
       'request', 'request_alias', 'request_block', 'request_evidence', 'retention_event',
       'route_summary', 'source_cursor', 'source_gap', 'tool_call',
     ]);

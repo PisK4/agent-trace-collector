@@ -178,7 +178,7 @@ export async function startCollector(
   const rawPruneTick = guard('raw_prune', () => {
     const now = Date.now();
     const pruned = pruneRaw(store, now - RAW_TTL_MS);
-    if (pruned.ledger + pruned.route + pruned.hook > 0) shrinkStorage(store);
+    if (pruned.ledger + pruned.route + pruned.hook + pruned.otlpSpan + pruned.otlpLog > 0) shrinkStorage(store);
   });
 
   const gapTick = guard('gap', () => {

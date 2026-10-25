@@ -49,7 +49,7 @@ export type Admission = { mode: AdmissionMode; reason: string | null };
 export type AdmissionLimits = { bodyBudget: number; diskLimit: number };
 
 export type EvictResult = { requests: number; blocks: number; releasedLogicalBytes: number; day: string | null };
-export type PruneResult = { ledger: number; route: number; hook: number };
+export type PruneResult = { ledger: number; route: number; hook: number; otlpSpan: number; otlpLog: number };
 export type ResumeResult = { recoverable: number; unrecoverable: number };
 
 const MiB = 1024 * 1024;
@@ -370,8 +370,10 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
             WHERE e.source_kind='hook' AND e.ref_key=h.hook_id AND q.skeleton_z IS NOT NULL)
           OR NOT EXISTS (SELECT 1 FROM ingest_issue i WHERE i.source_kind='hook'
             AND i.ref_key=h.hook_id AND i.reason='raw_hook_body_unlinked')))
-  `).get(beforeMs, beforeMs, beforeMs);
-  if (candidate === null) return { ledger: 0, route: 0, hook: 0 };
+      OR EXISTS (SELECT 1 FROM raw_otlp_span WHERE received_at<?)
+      OR EXISTS (SELECT 1 FROM raw_otlp_log WHERE received_at<?)
+  `).get(beforeMs, beforeMs, beforeMs, beforeMs, beforeMs);
+  if (candidate === null) return { ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0 };
   return store.write(db => {
     const ledgerRows = db.query<{ source_kind: string; file_generation: string; byte_offset: number }, [number, number]>(`
       SELECT source_kind, file_generation, byte_offset FROM raw_ledger
@@ -439,12 +441,29 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
     }
     ledger = ledgerRows.length;
     route = routeRows.length;
+
+    // OTLP 原始层同受 TTL 约束：span 删除时把 otlp_span 证据标 expired
+    // （行身份在 request.sort_key 里，长期不依赖 raw）；log 记录无证据联动，直接删。
+    const otlpSpanRows = db.query<{ trace_id: Uint8Array; span_id: Uint8Array }, [number, number]>(`
+      SELECT trace_id, span_id FROM raw_otlp_span WHERE received_at < ? ORDER BY received_at LIMIT ?`)
+      .all(beforeMs, limit);
+    const deleteOtlpSpan = db.prepare('DELETE FROM raw_otlp_span WHERE trace_id=? AND span_id=?');
+    for (const row of otlpSpanRows) {
+      deleteOtlpSpan.run(row.trace_id, row.span_id);
+      expireEvidence('otlp_span', `${Buffer.from(row.trace_id).toString('hex')}/${Buffer.from(row.span_id).toString('hex')}`);
+    }
+    const otlpLogRows = db.query<{ record_hash: Uint8Array }, [number, number]>(`
+      SELECT record_hash FROM raw_otlp_log WHERE received_at < ? ORDER BY received_at LIMIT ?`)
+      .all(beforeMs, limit);
+    const deleteOtlpLog = db.prepare('DELETE FROM raw_otlp_log WHERE record_hash=?');
+    for (const row of otlpLogRows) deleteOtlpLog.run(row.record_hash);
+
     // 过期证据的归属请求要重算：投影与派生输入都变了。
     for (const reqId of expiredOwners) {
       projectRequestTx(db, reqId, { now: beforeMs, mappingVersion: SOURCE_PROJECTION_VERSION });
       markRequestInputTx(db, reqId);
     }
-    return { ledger, route, hook };
+    return { ledger, route, hook, otlpSpan: otlpSpanRows.length, otlpLog: otlpLogRows.length };
   }, 'raw_prune');
 }
 
