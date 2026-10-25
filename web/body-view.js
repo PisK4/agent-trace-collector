@@ -13,7 +13,7 @@
  * @typedef {import('../src/input-interpretation').UserInputView} UserInputView
  * @typedef {{ord: number, role: Role, rawRole: string | null, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
  * @typedef {{id: string, name: string, inputText: string, ord: number, path: string}} ToolCallView
- * @typedef {{state: 'ok' | 'absent' | 'invalid', text: string, thinking: string[], calls: ToolCallView[], finish: string | null, model: string | null, raw: unknown}} ReplyView
+ * @typedef {{state: 'ok' | 'absent' | 'invalid', text: string, thinking: string[], calls: ToolCallView[], blocks: Block[], choiceCount: number | null, finish: string | null, model: string | null, raw: unknown}} ReplyView
  * @typedef {{call_id: string, name: string, inputText: string, ord: number, path: string, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null, result_label?: string | null}} ToolEntry
  * @typedef {{delta: Set<number> | null, limit?: number, selectedOrd?: number | null, gaps?: {from: number, to: number}[]}} MessageOptions
  */
@@ -333,7 +333,10 @@ function textOrNull(value) {
 }
 
 /**
- * 回复归一化。anthropic 读 content 块数组，chat 读 choices[0].message。
+ * 回复归一化，是回复协议形状的唯一拆分点。anthropic 读 content 块数组，chat 读
+ * choices[0].message。blocks 按协议原始顺序给出，路径从回复根算起
+ * （reply.content[i] / reply.choices[0].message.*），序号沿用协议内位置。
+ * 多 choice 不在拆分点隐瞒：choiceCount 声明原始项数，调用方自行决定是否拆行。
  * 空回复与无法结构化分开报，不能都读成"没有内容"。
  * @param {BodyPage | null} page
  * @returns {ReplyView}
@@ -341,19 +344,26 @@ function textOrNull(value) {
 export function replyView(page) {
   const reply = page === null || page === undefined ? null : page.reply;
   if (reply === null || reply === undefined) {
-    return { state: 'absent', text: '', thinking: [], calls: [], finish: null, model: null, raw: null };
+    return { state: 'absent', text: '', thinking: [], calls: [], blocks: [], choiceCount: null, finish: null, model: null, raw: null };
   }
   if (!isRecord(reply)) {
-    return { state: 'invalid', text: '', thinking: [], calls: [], finish: null, model: null, raw: reply };
+    return { state: 'invalid', text: '', thinking: [], calls: [], blocks: [], choiceCount: null, finish: null, model: null, raw: reply };
   }
   const model = textOrNull(reply.model);
-  /** @param {Block[]} blocks @param {string | null} finish @param {string} callBase 调用块的协议前缀 @returns {ReplyView} */
-  const fromBlocks = (blocks, finish, callBase) => {
+  const choiceCount = Array.isArray(reply.choices) ? reply.choices.length : null;
+  /**
+   * @param {Block[]} blocks 块内路径相对所属消息（content[i] / tool_calls[i]）
+   * @param {string} base 回复根到所属消息的前缀（reply / reply.choices[0].message）
+   * @param {string | null} finish
+   * @returns {ReplyView}
+   */
+  const fromBlocks = (blocks, base, finish) => {
     const texts = [];
     const thinking = [];
     /** @type {ToolCallView[]} */
     const calls = [];
-    for (const block of blocks) {
+    const full = blocks.map(block => ({ ...block, path: `${base}.${block.path}` }));
+    for (const block of full) {
       if (block.kind === 'text' && block.text.length > 0) texts.push(block.text);
       if (block.kind === 'thinking' && block.text.length > 0) thinking.push(block.text);
       if (block.kind === 'call') {
@@ -366,25 +376,25 @@ export function replyView(page) {
             : typeof fn.arguments === 'string' ? fn.arguments
               : JSON.stringify(fn.input ?? fn.arguments ?? null) ?? '',
           ord: block.index,
-          path: `${callBase}[${block.index}]`,
+          path: block.path,
         });
       }
     }
-    return { state: 'ok', text: texts.join('\n\n'), thinking, calls, finish, model, raw: reply };
+    return { state: 'ok', text: texts.join('\n\n'), thinking, calls, blocks: full, choiceCount, finish, model, raw: reply };
   };
 
   if (Array.isArray(reply.content)) {
     const blocks = reply.content.map((block, index) => blockView(block, index, `content[${index}]`));
-    return fromBlocks(blocks, textOrNull(reply.stop_reason), 'reply.content');
+    return fromBlocks(blocks, 'reply', textOrNull(reply.stop_reason));
   }
   const choices = Array.isArray(reply.choices) ? reply.choices : [];
   const first = isRecord(choices[0]) ? choices[0] : null;
   const message = first !== null && isRecord(first.message) ? first.message : null;
   if (message !== null) {
-    return fromBlocks(messageBlocks(message), first !== null ? textOrNull(first.finish_reason) : null,
-      'reply.choices[0].message.tool_calls');
+    return fromBlocks(messageBlocks(message), 'reply.choices[0].message',
+      first !== null ? textOrNull(first.finish_reason) : null);
   }
-  return { state: 'invalid', text: '', thinking: [], calls: [], finish: null, model, raw: reply };
+  return { state: 'invalid', text: '', thinking: [], calls: [], blocks: [], choiceCount, finish: null, model, raw: reply };
 }
 
 /**

@@ -1,5 +1,5 @@
 // @ts-check
-import { deltaOrdinals, messageBlocks, replyView, toolTint } from './body-view.js';
+import { deltaOrdinals, replyView, toolTint } from './body-view.js';
 
 /**
  * 步骤投影：把可信输入与实际回复变成单行轨迹步骤。纯函数、无 DOM、无网络；
@@ -341,61 +341,41 @@ export function projectSteps(row, read, systemContext = null) {
       ? `新增读取失败 · 已消费 ${Math.min(deltaState.next, total)} / ${total} · ${deltaState.error}`
       : `还有 ${total - deltaState.next} 条新增未读取 · 点击续读`);
   }
-  // 回复块按协议原始顺序；thinking 不常驻，多 choice 不结构化拆行。
+  // 回复块只经 replyView 归一化：块序号沿用协议内位置，路径从回复根算起；
+  // thinking 不常驻，多 choice 不结构化拆行，只出一条保留原始对象的记录。
   const meta = read?.meta ?? null;
   const view = meta === null ? null : replyView(meta);
   if (view === null || view.state === 'absent') {
     record('reply', 'missing_reply', '未收到回复');
-  } else if (meta !== null) {
-    const reply = /** @type {{content?: unknown, choices?: {message: unknown}[]} | null} */ (meta.reply ?? null);
-    const choices = Array.isArray(reply?.choices) ? reply.choices : null;
-    const multi = choices !== null && choices.length > 1;
-    if (multi) {
-      record('choices', null, `多 choice 回复（${choices.length} 项）：保留原始对象，不按冲突序号提供工具定位`);
-    } else {
-      // 两类协议统一经 messageBlocks 归一化：Anthropic 读 content 数组，
-      // Chat 的 tool_calls 在消息层，提升为 call 块；块序号沿用协议内位置。
-      const replyBase = choices !== null && choices.length === 1
-        ? 'reply.choices[0].message' : 'reply';
-      const blocks = reply !== null && Array.isArray(reply.content)
-        ? messageBlocks({ role: 'assistant', content: reply.content })
-        : choices !== null && choices.length === 1
-          ? messageBlocks(choices[0]?.message ?? {})
-          : [];
-      for (const block of blocks) {
-        const index = block.index;
-        if (block.kind === 'text' && block.text.length > 0) {
-          steps.push({ key:`${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
-            text: block.text, messageOrd: null, callOrd: null,
-            source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
-            raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null });
-        } else if (block.kind === 'call') {
-          const call = view.calls.find(item => item.ord === index) ?? null;
-          const pair = detail.tool_calls?.find(item => item.ord === index) ?? null;
-          const parts = summaryParts(call?.name ?? '', call?.inputText ?? '');
-          steps.push({ key: `${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
-            text: `${parts.label} · ${parts.args}`,
-            toolName: call?.name ?? null, toolArgs: parts.args, toolInput: call?.inputText ?? '',
-            messageOrd: null, callOrd: index,
-            source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
-            raw: block.raw,
-            unrecognized: false, status: null,
-            result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
-            pairOwner: null });
-        } else if (block.kind !== 'thinking') {
-          // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
-          steps.push({ key: `${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
-            text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
-            source: { side: 'reply', path: `${replyBase}.${block.path}`, messageOrd: null, blockIndex: index },
-            raw: block.raw, unrecognized: true, status: null, result: null, pairOwner: null });
-        }
-      }
-      if (blocks.length === 0 && view.text.length > 0) {
-        steps.push({ key: `${row.req_id}:reply:text:0`, reqId: row.req_id, kind: 'assistant',
-          text: view.text, messageOrd: null, callOrd: null,
-          source: { side: 'reply', path: `${replyBase}.content`, messageOrd: null, blockIndex: null },
-          raw: view.text,
-          unrecognized: false, status: null, result: null, pairOwner: null });
+  } else if (view.choiceCount !== null && view.choiceCount > 1) {
+    record('choices', null, `多 choice 回复（${view.choiceCount} 项）：保留原始对象，不按冲突序号提供工具定位`);
+  } else {
+    for (const block of view.blocks) {
+      const index = block.index;
+      if (block.kind === 'text' && block.text.length > 0) {
+        steps.push({ key:`${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
+          text: block.text, messageOrd: null, callOrd: null,
+          source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
+          raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null });
+      } else if (block.kind === 'call') {
+        const call = view.calls.find(item => item.ord === index) ?? null;
+        const pair = detail.tool_calls?.find(item => item.ord === index) ?? null;
+        const parts = summaryParts(call?.name ?? '', call?.inputText ?? '');
+        steps.push({ key: `${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
+          text: `${parts.label} · ${parts.args}`,
+          toolName: call?.name ?? null, toolArgs: parts.args, toolInput: call?.inputText ?? '',
+          messageOrd: null, callOrd: index,
+          source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
+          raw: block.raw,
+          unrecognized: false, status: null,
+          result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
+          pairOwner: null });
+      } else if (block.kind !== 'thinking') {
+        // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
+        steps.push({ key: `${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
+          text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
+          source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
+          raw: block.raw, unrecognized: true, status: null, result: null, pairOwner: null });
       }
     }
   }

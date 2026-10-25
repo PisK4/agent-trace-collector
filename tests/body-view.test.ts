@@ -167,6 +167,14 @@ test('回复两种协议都能读出文本、推理与调用', () => {
   expect(anthropic.thinking).toEqual(['先看文件']);
   expect(anthropic.calls.map(call => call.name)).toEqual(['read']);
   expect(anthropic.finish).toBe('tool_use');
+  // 有序块带从回复根算起的路径与协议内序号；anthropic 无 choice 概念。
+  expect(anthropic.blocks.map(block => [block.kind, block.path, block.index])).toEqual([
+    ['thinking', 'reply.content[0]', 0],
+    ['text', 'reply.content[1]', 1],
+    ['call', 'reply.content[2]', 2],
+  ]);
+  expect(anthropic.choiceCount).toBeNull();
+  expect(anthropic.calls[0]?.path).toBe('reply.content[2]');
 
   const chat = replyView(page({
     reply: {
@@ -185,6 +193,27 @@ test('回复两种协议都能读出文本、推理与调用', () => {
   expect(chat.text).toBe('完成了。');
   expect(chat.calls.map(call => call.name)).toEqual(['run']);
   expect(chat.finish).toBe('stop');
+  expect(chat.blocks.map(block => [block.kind, block.path])).toEqual([
+    ['text', 'reply.choices[0].message.content'],
+    ['call', 'reply.choices[0].message.tool_calls[0]'],
+  ]);
+  expect(chat.choiceCount).toBe(1);
+});
+
+test('多 choice 由 choiceCount 声明，不结构化隐瞒；无效回复不带块', () => {
+  const multi = replyView(page({ reply: { choices: [
+    { finish_reason: 'stop', message: { role: 'assistant', content: 'a' } },
+    { finish_reason: 'stop', message: { role: 'assistant', content: 'b' } },
+  ] } }));
+  expect(multi.state).toBe('ok');
+  expect(multi.choiceCount).toBe(2);
+  // 右栏现状：仍按 choice[0] 提供文本；中栏不拆行的限制由调用方按 choiceCount 判定。
+  expect(multi.text).toBe('a');
+  const invalid = replyView(page({ reply: { id: 'x', choices: [{}] } }));
+  expect(invalid.state).toBe('invalid');
+  expect(invalid.blocks).toEqual([]);
+  expect(invalid.choiceCount).toBe(1);
+  expect(replyView(page({ reply: null })).choiceCount).toBeNull();
 });
 
 test('空回复与无法结构化的回复分开报', () => {

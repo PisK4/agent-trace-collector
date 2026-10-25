@@ -14,6 +14,8 @@ Status: implemented
 
 [阅读角色与步骤定位修复](../../implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md)扩展了本 note 原来仅用户输入进入轨迹的范围，并统一英文角色标签；稳定键、调用身份与纯投影的决定继续有效，部分取代关系随修复实施同步。
 
+[回复协议拆分收敛进 replyView 单点](../architecture/2026-10-25-reply-single-protocol-split.md)之后，本 note 描述的回复步骤语义不变，但 `projectSteps` 不再自行解析 `meta.reply`：有序块、全路径与 choiceCount 都来自 `replyView`，协议分叉只有那一个家。
+
 ## Alternatives considered
 
 **把投影写进 app.js。** 无法脱离 DOM 测试顺序、键与 XSS；投影必须是纯函数。
