@@ -38,7 +38,7 @@ ATC 需要持续接入外部与自研 Harness。对已支持协议和证据通�
 
 ### interface 的约束
 
-沿用现有调用者能提供的已读取事实；先看 [PurposeView 与 classifyPurpose](../../../../src/semantics.ts)、[用途取数与结算](../../../../src/request-purpose.ts)、[消息解释](../../../../src/input-interpretation.ts)、[能力提取](../../../../src/capabilities.ts)及 [正文分页](../../../../src/protocols.ts)。不预建任意 Feature 生命周期，不把所有输入拼成一个巨大的上下文对象。
+沿用现有调用者能提供的已读取事实；先看 [PurposeView](../../../../src/semantics.ts) 与 [classifyPurpose 编排](../../../../src/harness/purpose.ts)、[用途取数与结算](../../../../src/request-purpose.ts)、[消息解释](../../../../src/input-interpretation.ts)、[能力提取](../../../../src/capabilities.ts)及 [正文分页](../../../../src/protocols.ts)。不预建任意 Feature 生命周期，不把所有输入拼成一个巨大的上下文对象。
 
 - agent 是上游标签，用于选择已知规则，不是身份凭证；未知标签与空标签沿用明确的共享回退，不根据正文猜客户端身份。
 - adapter 不读数据库、文件或网络，不写派生列、不推进修订、不调度任务、不提供任意 HTML。

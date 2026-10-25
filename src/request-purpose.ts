@@ -2,11 +2,11 @@ import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import { readBodyMetaTx } from './body';
 import { markGroupDirtyTx } from './derive/state';
+import { classifyPurpose } from './harness/purpose';
 import { parseProtocol } from './protocols';
 import { readSourceFacts } from './sources/facts';
 import {
   PURPOSE_VERSION,
-  classifyPurpose,
   replyTextsOf,
   stopSequencesOf,
   systemTextsOf,

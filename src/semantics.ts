@@ -1,3 +1,8 @@
+/**
+ * 用途视图的共享事实与通用判定：类型、从已解析请求读字段的提取器、标题回复
+ * 形状解析，以及跨 Harness 复用的来源 kind、标题兼容与正文不可读保留。Harness
+ * 专属强指纹及其编排归 [harness/purpose](./harness/purpose.ts)。
+ */
 export const PURPOSE_VERSION = 4;
 
 export type PurposeStatus =
@@ -146,79 +151,13 @@ export function titleFromReply(text: string | null): string | null {
   return parseTitleReply(text)?.title ?? null;
 }
 
-const SECURITY_MONITOR = 'security monitor for autonomous ai coding agents';
-const BLOCK_STOP = '</block>';
-const BLOCK_VERDICT = /<block>\s*(yes|no)\s*(?:<\/block>)?/gi;
-
-/** OMP skill 描述压缩管线的旁路指纹：一次性的模板调用，块首命中即认。 */
-const OMP_SKILL_HINT = 'Compress into one routing hint of at most 12 words:';
-
-/**
- * OMP skill 描述压缩调用的强指纹。
- *
- * 生产实测这类请求各自带着随机 session id 成会话（20:59:56 一秒四个），消息
- * 是 harness 生成的压缩模板；判据是 omp + 任一 user 文本块块首命中模板前缀。
- * 按块首不按消息首行：归档类消息的块 0 常是 system-reminder，正文在后面的块。
- * 锚点失配时规则静默不命中，退回 participate——降噪失效只是回到现状。
- */
-function skillHintDecision(view: PurposeView): PurposeDecision | null {
-  if (view.agent !== 'omp') return null;
-  if (!view.userBlockHeads.some(head => head.startsWith(OMP_SKILL_HINT))) return null;
-  const signals = ['skill-hint.agent.omp', 'skill-hint.block-head'];
-  return {
-    status: 'recognized',
-    version: PURPOSE_VERSION,
-    rule: 'omp.skill-hint.v1',
-    signals,
-    chain: 'exclude',
-    kind: 'skill_hint',
-    modelTitle: null,
-  };
-}
-
-/**
- * Claude auto mode 分类器的强指纹。
- *
- * agent、system 文本与 stop_sequences 三者缺一不可；消息数与工具数只写信号，
- * 不作为门槛——上游改形状时仍应认出这是分类器，而不是退回普通对话。
- */
-function classifierDecision(view: PurposeView): PurposeDecision | null {
-  if (view.agent !== 'claude') return null;
-  if (!view.systemTexts.some(text => text.toLowerCase().includes(SECURITY_MONITOR))) return null;
-  if (!view.stopSequences.includes(BLOCK_STOP)) return null;
-  const signals = [
-    'classifier.agent.claude',
-    'classifier.system.security-monitor',
-    'classifier.stop.block',
-  ];
-  if (view.messageCount === 2) signals.push('classifier.shape.messages2');
-  if (view.toolCount === 0) signals.push('classifier.shape.tools0');
-  let verdict: 'pass' | 'block' | 'unknown' = 'unknown';
-  if (view.replyText !== null) {
-    const matches = [...view.replyText.matchAll(BLOCK_VERDICT)];
-    const last = matches[matches.length - 1]?.[1]?.toLowerCase();
-    if (last === 'no') verdict = 'pass';
-    else if (last === 'yes') verdict = 'block';
-  }
-  signals.push(`classifier.verdict.${verdict}`);
-  return {
-    status: 'recognized',
-    version: PURPOSE_VERSION,
-    rule: 'claude.auto-mode-classifier.v1',
-    signals,
-    chain: 'exclude',
-    kind: 'auto-mode-classifier',
-    modelTitle: null,
-  };
-}
-
 /**
  * 来源 kind：只有精确的 `title` 才排除链。
  *
  * 其它值保留成 `source:<value>` 并参与链；来源冲突或缺值时这里不出结论，
  * 交给标题兼容兜底，而不是拿一个不可靠的值猜类别。
  */
-function sourceDecision(view: PurposeView): PurposeDecision | null {
+export function sourceDecision(view: PurposeView): PurposeDecision | null {
   const { state, value } = view.source;
   if (state !== 'single' && state !== 'agree') return null;
   if (value === null || value.trim().length === 0) return null;
@@ -253,7 +192,7 @@ function sourceDecision(view: PurposeView): PurposeDecision | null {
  * 已存 title 的行即使回复不再像标题也继续排除链，并保留旧标题；把一笔曾确认的
  * 标题请求重新算成主链，会让链前驱与摘要随一次上游改形漂移。
  */
-function titleDecision(view: PurposeView): PurposeDecision | null {
+export function titleDecision(view: PurposeView): PurposeDecision | null {
   const parsed = parseTitleReply(view.replyText);
   if (view.stored.kind === 'title') {
     const signals = ['title.stored'];
@@ -285,7 +224,7 @@ function titleDecision(view: PurposeView): PurposeDecision | null {
  *
  * retained 不更新 version；保留行说明的是它当时按哪一版算出来的。
  */
-function unavailableDecision(view: PurposeView): PurposeDecision {
+export function unavailableDecision(view: PurposeView): PurposeDecision {
   if (view.stored.version !== null) {
     return {
       status: 'retained',
@@ -307,39 +246,4 @@ function unavailableDecision(view: PurposeView): PurposeDecision {
     kind: view.stored.kind,
     modelTitle: null,
   };
-}
-
-/**
- * 一条请求的用途判定。
- *
- * 规则优先级固定为：分类器强指纹 > skill 描述压缩 > 来源 kind > 标题兼容 > 兜底。
- * 正文不可读时先保留旧解释，来源 kind 只对没有旧解释的行生效；否则正文回收后，
- * 一条普通来源 kind 会覆盖此前识别出的分类器或标题。
- */
-export function classifyPurpose(view: PurposeView): PurposeDecision {
-  if (view.parse !== 'ok' && view.stored.version !== null) {
-    return unavailableDecision(view);
-  }
-  if (view.parse === 'ok') {
-    const classifier = classifierDecision(view);
-    if (classifier !== null) return classifier;
-    const skillHint = skillHintDecision(view);
-    if (skillHint !== null) return skillHint;
-  }
-  const source = sourceDecision(view);
-  if (source !== null) return source;
-  if (view.parse === 'ok') {
-    const title = titleDecision(view);
-    if (title !== null) return title;
-    return {
-      status: 'unrecognized',
-      version: PURPOSE_VERSION,
-      rule: null,
-      signals: [],
-      chain: 'participate',
-      kind: 'chat',
-      modelTitle: null,
-    };
-  }
-  return unavailableDecision(view);
 }

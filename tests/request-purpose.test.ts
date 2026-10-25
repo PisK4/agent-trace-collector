@@ -7,7 +7,8 @@ import {
   readPurposeTaskTx, upgradePurposeTargetTx,
   type PurposeDrainResult, type PurposeTask,
 } from '../src/request-purpose';
-import { classifyPurpose, PURPOSE_VERSION, type PurposeDecision } from '../src/semantics';
+import { classifyPurpose } from '../src/harness/purpose';
+import { PURPOSE_VERSION, type PurposeDecision } from '../src/semantics';
 import { fixture, seedPurposeRequest } from './fixtures';
 
 function drainPurposes(store: Store, limit = 100): PurposeDrainResult {
