@@ -635,7 +635,7 @@ if (typeof document !== 'undefined') {
     return railFactsHtml({
       replyHtml, structureHtml,
       capabilitiesHtml: meta !== null ? renderCapabilities(meta) : '',
-      usageHtml: usageFoldHtml(r, detail),
+      usageHtml: usageFoldHtml(r, detail, meta),
       completenessHtml: completenessSection(r),
     });
   }
