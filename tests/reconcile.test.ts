@@ -3,7 +3,7 @@ import { zstdDecompressSync } from 'node:zlib';
 import { fixture } from './fixtures';
 import type { SourceRead } from '../src/sources/files';
 import { ingestSource, observeSourceOffset, readFileCursor, resumePausedLedger } from '../src/reconcile';
-import { purgeMetadata } from '../src/maintenance';
+import { purgeMetadata } from '../src/maintenance/purge';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
 import { readSourceFacts } from '../src/sources/facts';
 import { PRIVACY_TRANSFORM_VERSION } from '../src/privacy';

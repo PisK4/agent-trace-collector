@@ -1,0 +1,174 @@
+/** 维护 CLI：参数解析、锁获取与命令分派。所有命令要求 collector 已停止。 */
+
+import { dirname } from 'node:path';
+import { openStore } from '../store';
+import type { Store } from '../store';
+import { backupBundle, backupDatabase, restoreBundle } from './backup';
+import { acquireMaintenanceLock, type LockHandle } from './lock';
+import { previewMetadataPurge, purgeMetadata } from './purge';
+import { rebuildSession } from './rebuild';
+import { verifyDatabase } from './verify';
+
+function parseArgs(argv: string[]): Map<string, string | true> {
+  const flags = new Map<string, string | true>();
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index]!;
+    if (!token.startsWith('--')) continue;
+    const next = argv[index + 1];
+    if (next === undefined || next.startsWith('--')) {
+      flags.set(token.slice(2), true);
+    } else {
+      flags.set(token.slice(2), next);
+      index += 1;
+    }
+  }
+  return flags;
+}
+
+function stringFlag(flags: Map<string, string | true>, name: string): string | null {
+  const value = flags.get(name);
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+const USAGE = `usage:
+  maintain verify --db <path>
+  maintain backup --db <path> --out <new-path>
+  maintain bundle --dir <dataDir> --out <new-dir>
+  maintain restore --bundle <bundleDir> --out <new-dir>
+  maintain rebuild --db <path> --session <conv_key>
+  maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --approval-id <id>]
+`;
+
+/**
+ * CLI 入口。退出码：0 成功，1 失败，2 用法错误。
+ * 所有命令先取维护锁；取不到就退出，不猜是不是自己上一次留下的。
+ */
+export async function runMaintenance(argv: string[], io: {
+  out?: (line: string) => void;
+  err?: (line: string) => void;
+} = {}): Promise<number> {
+  const out = io.out ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const err = io.err ?? ((line: string) => process.stderr.write(`${line}\n`));
+  const [command, ...rest] = argv;
+  const flags = parseArgs(rest);
+
+  // bundle 与 restore 的路径参数是数据目录，不是库文件；单独解析，避免把 --db 的语义混进来。
+  if (command === 'bundle' || command === 'restore') {
+    const source = stringFlag(flags, command === 'bundle' ? 'dir' : 'bundle');
+    const destination = stringFlag(flags, 'out');
+    if (source === null || destination === null) {
+      err(USAGE.trimEnd());
+      return 2;
+    }
+    try {
+      if (command === 'bundle') {
+        backupBundle(source, destination);
+        out(JSON.stringify({ ok: true, bundle: destination }));
+      } else {
+        restoreBundle(source, destination);
+        out(JSON.stringify({ ok: true, restored: destination }));
+      }
+      return 0;
+    } catch (error) {
+      err(`${command}_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
+    }
+  }
+
+  const dbPath = stringFlag(flags, 'db');
+  if (command === undefined || dbPath === null) {
+    err(USAGE.trimEnd());
+    return 2;
+  }
+
+  if (command === 'backup') {
+    const destination = stringFlag(flags, 'out');
+    if (destination === null) {
+      err(USAGE.trimEnd());
+      return 2;
+    }
+    const lock = acquireMaintenanceLock(dirname(dbPath), `backup:${process.pid}`);
+    if (lock === null) {
+      err('maintenance_lock_held');
+      return 1;
+    }
+    try {
+      const result = backupDatabase(dbPath, destination);
+      // 只含数据库：没有盐，恢复不了占位符连续性。别让调用方把这个结果当成可恢复快照。
+      out(JSON.stringify({ ok: true, ...result, ingestion_restorable: false }));
+      return 0;
+    } catch (error) {
+      err(`backup_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
+    } finally {
+      lock.release();
+    }
+  }
+
+  if (command === 'verify' || command === 'purge-metadata' || command === 'rebuild') {
+    // verify 只读，不需要锁；purge 与 rebuild 写库，必须有。
+    let store: Store | null = null;
+    let lock: LockHandle | null = null;
+    try {
+      if (command === 'verify') {
+        out(JSON.stringify({ ok: true, ...verifyDatabase(dbPath) }));
+        return 0;
+      }
+      if (command === 'rebuild') {
+        const session = stringFlag(flags, 'session');
+        if (session === null) {
+          err(USAGE.trimEnd());
+          return 2;
+        }
+        lock = acquireMaintenanceLock(dirname(dbPath), `rebuild:${process.pid}`);
+        if (lock === null) {
+          err('maintenance_lock_held');
+          return 1;
+        }
+        store = openStore(dbPath);
+        const report = rebuildSession(store, session);
+        out(JSON.stringify({ ok: true, session, ...report }));
+        return 0;
+      }
+      const before = stringFlag(flags, 'before');
+      if (before === null || !/^\d{4}-\d{2}-\d{2}$/.test(before)) {
+        err(USAGE.trimEnd());
+        return 2;
+      }
+      lock = acquireMaintenanceLock(dirname(dbPath), `purge:${process.pid}`);
+      if (lock === null) {
+        err('maintenance_lock_held');
+        return 1;
+      }
+      // 维护期间 collector 必须已停：写连接拿不到才说明没有别的进程在写。
+      store = openStore(dbPath);
+      const preview = previewMetadataPurge(store, before);
+      if (flags.get('apply') !== true) {
+        out(JSON.stringify({ ok: true, applied: false, before, ...preview }));
+        return 0;
+      }
+      const approvalId = stringFlag(flags, 'approval-id');
+      if (approvalId === null) {
+        out(JSON.stringify({ ok: false, error: 'approval_id_required', before, ...preview }));
+        return 1;
+      }
+      const result = purgeMetadata(store, before, approvalId);
+      out(JSON.stringify({ ok: true, applied: true, before, approval_id: approvalId, ...result }));
+      return 0;
+    } catch (error) {
+      err(`${command}_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
+    } finally {
+      store?.close();
+      lock?.release();
+    }
+  }
+
+  err(USAGE.trimEnd());
+  return 2;
+}
+
+if (import.meta.main) {
+  const code = await runMaintenance(process.argv.slice(2));
+  process.exit(code);
+}

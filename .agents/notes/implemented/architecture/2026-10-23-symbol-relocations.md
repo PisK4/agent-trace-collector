@@ -13,7 +13,7 @@ Status: implemented
 - `DeriveBudget`、`DEFAULT_DERIVE_BUDGET`、`SliceRuntime` 移到 `config.ts`：预算与运行模式是配置词汇，`Config.deriveBudget`、`store.deriveRuntime` 与切片引擎从同一处导入类型；容量脚本的预算文件键映射（`capacity-gate.ts`）跟着改 import，`SnakeCase` 类型映射不受影响。
 - `resolveRequestId` 移到 `store.ts`：`request_alias` 是 schema 层的表，别名读写统一归存储层。`hook.ts` 的写入与 `queries.ts`/`http.ts` 的读取此前分在两层，这个分裂随这次移动消失。
 - `BodyState` 类型移到 `store.ts`：正文状态是 schema 词汇，`protocols.ts` 与 `queries.ts` 改从存储层取。
-- `isPurgedEvidence` 移到 `sources/raw.ts`：`purged_evidence` 是 raw 层的墓碑表，在线热路径每行都要问一次，判定放在 raw 层；`maintenance.ts` 保留 `purgeMetadata` 的墓碑写入。
+- `isPurgedEvidence` 移到 `sources/raw.ts`：`purged_evidence` 是 raw 层的墓碑表，在线热路径每行都要问一次，判定放在 raw 层；维护侧（现 `maintenance/purge.ts`）保留 `purgeMetadata` 的墓碑写入。
 - `loadBoundSalt` 包装函数删除：它存在的唯一理由是把 `Store` 类型带进 `config.ts`。调用方（`main.ts` 与三个测试文件）直接 `store.write(db => loadBoundSaltTx(db, dir))`，`config.ts` 变成不依赖仓库内其他模块的叶子。
 
 ## Alternatives considered

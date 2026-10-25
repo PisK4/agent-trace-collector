@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture, seedPurposeRequest } from './fixtures';
 import { openStore } from '../src/store';
-import { runMaintenance } from '../src/maintenance';
+import { runMaintenance } from '../src/maintenance/cli';
 import type { Store } from '../src/store';
 import { confirmedDeltaOf, deriveTitle, matchPredecessor } from '../src/derive-decision';
 import { drainDerive, drainDeriveTx, enqueueDerive } from '../src/derive';

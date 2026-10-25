@@ -22,7 +22,7 @@ import {
   resumeSourceGaps,
   shrinkStorage,
 } from './retention';
-import { maintenanceLockPresent } from './maintenance';
+import { maintenanceLockPresent } from './maintenance/lock';
 
 const LEDGER_INTERVAL_MS = 5000;
 const ROUTE_INTERVAL_MS = 2000;

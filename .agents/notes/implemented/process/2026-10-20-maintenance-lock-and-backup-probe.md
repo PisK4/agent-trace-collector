@@ -14,7 +14,7 @@ Status: implemented
 
 `purge-metadata` 默认只预览，`--apply` 必须带 `--approval-id`。一个事务里按顺序删费用观测、写墓碑、删工具链接、删块引用与孤儿块、删证据与别名、删请求、清无引用的路由摘要；外键是 `NO ACTION`，顺序错了整体回滚。墓碑按证据键记录，同一天只淘汰一部分也能精确处理。来源回放命中墓碑时计 `purged_skip`，已删的证据不会复活。
 
-实现见 [src/maintenance.ts](../../../../src/maintenance.ts)，操作步骤与错误码见[运维手册](../../../../docs/operations.md)。
+实现见 [src/maintenance/lock.ts](../../../../src/maintenance/lock.ts)（锁）与 [src/maintenance/backup.ts](../../../../src/maintenance/backup.ts)（备份探测），命令入口在 [src/maintenance/cli.ts](../../../../src/maintenance/cli.ts)，操作步骤与错误码见[运维手册](../../../../docs/operations.md)。
 
 ## Alternatives considered
 

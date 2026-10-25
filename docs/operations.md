@@ -20,7 +20,7 @@
 
 ## 维护命令
 
-这些命令都在 `src/maintenance.ts`，通过 `bun run maintain` 调用。退出码：`0` 成功，`1` 失败，`2` 用法错误。失败时 stderr 写 `<命令>_failed:<原因码>`。
+这些命令都在 `src/maintenance/cli.ts`，通过 `bun run maintain` 调用。退出码：`0` 成功，`1` 失败，`2` 用法错误。失败时 stderr 写 `<命令>_failed:<原因码>`。
 
 ```bash
 # 只读校验：完整性与三类容易悄悄积累的结构问题

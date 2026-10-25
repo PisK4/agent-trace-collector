@@ -5,18 +5,11 @@ import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeF
 import { join } from 'node:path';
 import { fixture, seedPurposeRequest } from './fixtures';
 import { openStore } from '../src/store';
-import {
-  acquireMaintenanceLock,
-  lockPath,
-  maintenanceLockPresent,
-  backupBundle,
-  backupDatabase,
-  previewMetadataPurge,
-  purgeMetadata,
-  restoreBundle,
-  runMaintenance,
-  verifyDatabase,
-} from '../src/maintenance';
+import { acquireMaintenanceLock, lockPath, maintenanceLockPresent } from '../src/maintenance/lock';
+import { backupBundle, backupDatabase, restoreBundle } from '../src/maintenance/backup';
+import { previewMetadataPurge, purgeMetadata } from '../src/maintenance/purge';
+import { runMaintenance } from '../src/maintenance/cli';
+import { verifyDatabase } from '../src/maintenance/verify';
 import { loadBoundSaltTx, loadConfig } from '../src/config';
 import { redact } from '../src/privacy';
 import { startCollector } from '../src/main';
