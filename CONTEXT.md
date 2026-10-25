@@ -5,7 +5,7 @@
 ## 证据的坐标
 
 **证据通道**：
-一条逻辑请求由哪几路证据合成，取值 hook / ledger / route / api，落在 request_evidence.source_kind。have 位图（1 hook、2 账本、4 路由）是它的读侧影子。
+一条逻辑请求由哪几路证据合成，取值 hook / ledger / route / api / otlp_span，落在 request_evidence.source_kind。have 位图（1 hook、2 账本、4 路由、8 OTLP span）是它的读侧影子。
 _Avoid_: 来源（单独说「来源」时指代不明）
 
 **物理来源**：
@@ -17,7 +17,7 @@ _Avoid_: 与证据通道共用同一个 source_kind 词形
 _Avoid_: via
 
 **出生通路（via）**：
-创建该 request 行的通路，取值 through / hook / direct / rejected，回答这一行从哪条通路生出来。via='hook' 是暂存行：hook 先到且未对上账本时的行，合并成功即被删除，存活的是账本建的行。
+创建该 request 行的通路，取值 through / hook / direct / rejected / otlp，回答这一行从哪条通路生出来。via='hook' 是暂存行：hook 先到且未对上账本时的行，合并成功即被删除，存活的是账本建的行。via='otlp' 是终态行：harness 侧 span 建的行，独立存在，不与 magpie 行合并。
 _Avoid_: 当作流量种类读
 
 **关联**：

@@ -1,10 +1,12 @@
 # agent-trace-collector 是什么
 
 > 实施范围更新（2026-10-21）：本文仍保留早期方案中的三处旧约定：版本越界拒绝启动、第一版摄入 direct、实时 trace 作为补充。这三项已由[当前架构](architecture-design.md)调整为 `>=0.1.1294 <0.2.0` 外降级启动、direct 默认关闭、只使用 hook/账本文件/路由文件三路证据；through 费用另由 API 补齐。开工以架构和[实施总入口](superpowers/plans/2026-10-20-collector-implementation.md)为准，下文对应旧表述不作为实现要求。其余产品定位继续有效。
+>
+> 输入面更新（2026-10-26）：在 magpie 三路之外增加了 harness 侧 OTLP 接收（`/v1/traces`、`/v1/logs`），已实测 Claude Code 与 OMP。「不设计通用的 trace 摄入协议」一条因此改写为：OTLP 是唯一一条受控的通用入口，其余通用协议仍不做。取舍见[OTLP 接收器提案](../.agents/notes/implemented/feature/2026-10-25-otlp-receiver.md)。
 
 ## 一句话
 
-一个只服务 magpie 的本机 LLM 请求记录器：每经过 magpie 网关的一笔请求，在这里留一条记录，详情页展示的就是那笔请求本身。
+一个本机 LLM 请求记录器：主力输入是 magpie 网关的三路证据，另收 harness 侧 OTLP；每笔请求在这里留一条记录，详情页展示的就是那笔请求本身。
 
 ## 它挂在什么位置
 
@@ -56,6 +58,8 @@ ATA 是另一个未完成的轨迹项目，定位接近，卡在展示格式上�
 
 当前方案由 hook 拿客户端协议的请求对象与合并回复，账本补权威元数据，路由历史补决策与上下文分析。实时 `/v1/magpie/trace` 也有路由结构，但环形缓冲很短。magpie 另有可选的归一化会话录制、OTLP 正文导出与 S3 归档，各有内容、保留和部署限制，不能把当前三路方案解释成 magpie 只有这三种能力。详见 [机制与复用边界](magpie-mechanisms-research.md)。
 
+三路之外还有第四条输入：harness 侧 OTLP。Claude Code 与 OMP 的 exporter 把 LLM span 发到本机端点，带模型、用量、耗时与会话 id；Claude Code 另在 logs 事件里带正文文件指针，采集器按指针读文件落正文。OTLP 行独立建行、不与 magpie 行合并，形状与取舍见[架构设计](architecture-design.md)。它把受众从「装 magpie 的人」放宽到「装 magpie 或用已适配 harness 的人」。
+
 连接靠两个键：
 
 - `response_id` 把 hook 记录接到账本行。实测一千六百余条带 response_id 的 hook 记录全部命中，其中约 2.4% 要去掉一侧的 `chatcmpl-` 前缀才算同一个值。
@@ -73,7 +77,7 @@ ATA 是另一个未完成的轨迹项目，定位接近，卡在展示格式上�
 
 身份判定采用 magpie 已经输出的结果。agent、session、conv、subagent 从实际提供它们的通道补入；hook 的上下文不含 conv 和 subagent，不能把空字段当作没有会话或没有子代理。本项目不解析 User-Agent，不实现 conv 哈希，不维护 Agent 名单。magpie 的 agent 归属来自字符串匹配，任何客户端都能用自定义 token 把自己命名成一个新名字，所以这个字段按标签用，不当身份凭证。字段接入面的源码依据见 [机制与复用边界](magpie-mechanisms-research.md)。
 
-hook 的九个上下文字段、请求体、合并回复与 success 是正文通道的输入；账本与路由结构提供关联、用量和决策。不设计通用的 trace 摄入协议，不预留接别的网关的适配层。
+hook 的九个上下文字段、请求体、合并回复与 success 是正文通道的输入；账本与路由结构提供关联、用量和决策。通用入口只有 OTLP 一条：`/v1/traces` 与 `/v1/logs` 接 harness 自己的 exporter，不预留接别的网关的适配层，其余通用 trace 协议不做。
 
 代价是 magpie 升级可能改载荷形状、改账本字段、改路由历史格式。应对办法有三条：
 

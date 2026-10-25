@@ -181,8 +181,11 @@ magpie gateway
   ├─ hook POST ─────────────> /hook/ingest ──┐
   ├─ 账本文件（只读）───────> ledger tailer ─┤
   ├─ 路由文件（只读）───────> route tailer ──┼─> reconciler ─> SQLite（WAL）
-  └─ 用量接口（只读）───────> direct 回填 ───┘        │
-                                                      │
+  └─ 用量接口（只读）───────> direct 回填 ───┘                   ▲
+                                                                │
+harness OTLP exporter（Claude Code / OMP）
+  └─ POST /v1/traces、/v1/logs ─────────────────────────────────┘
+
 浏览器 ─────────────────────────────────────────> /api/*
 ```
 
@@ -190,10 +193,14 @@ magpie gateway
 
 | 职责 | 触发方式 | 作用 |
 | --- | --- | --- |
-| ingest | HTTP 请求 | 脱敏、分块、入块库、写 `raw_hook` 头与 `request`，事务提交后返回 |
+| ingest | HTTP 请求 | 脱敏、分块、入块库、写 `raw_hook` 头与 `request`，事务提交后返回；OTLP 端点同走这里：解码、映射、落 `raw_otlp_*` 与 `otlp_body_ref` |
 | tailer | 定时（账本 5 秒，路由 2 秒） | 按文件代际与完整行偏移增量读两个来源 |
 | reconciler | 定时（1 秒）加 ingest 完成事件 | 合并证据、补前驱、重算受影响派生 |
 | query | HTTP 请求 | 只读查询 |
+
+两个摄入端点 `POST /v1/traces` 与 `POST /v1/logs` 收 harness 侧 OTLP。Bearer 认证用独立的 `otlp.token`，与 `hook.token` 分开——一份密钥不进两份上游配置。content-type 只收 `application/x-protobuf` 与 `application/json`，非白名单的简单请求形态直接 415：浏览器防线三件套（预检、Host 校验、显式拒绝非白名单 content-type）与 hook 共用同一段。解码失败 400 带原因码，单飞守卫共用（429），整批上限 64 MiB（413），95% 磁盘档整批拒绝（507），成功回 OTLP 规范的 `{"partialSuccess":{}}`。
+
+span 选取按 `(service.name, 规则)` 白名单：Claude Code 按 span 名 `claude_code.llm_request`，OMP 按 `gen_ai.operation.name='chat'`；白名单外的 span 只落原始层。OTLP 行不参与三路合并，独立建 `request`（`via='otlp'`，`have` 第 4 位）。同一会话双通道并存时每笔调用出现两行，行上来源可区分；跨通道精确锚点（`gen_ai.response.id` 等）已实测存在，合并策略另评。
 
 写操作全部走一个 writer，避免 SQLite 的 `database is locked`。实测第二个连接在写事务期间写会被拒绝，读不受影响。查询用独立只读连接。
 
@@ -374,13 +381,16 @@ CREATE TABLE source_cursor (
 
 ### 合并规则
 
-每个 `req_id` 维护一个来源位图 `have`：1 为 hook，2 为账本，4 为路由。
+每个 `req_id` 维护一个来源位图 `have`：1 为 hook，2 为账本，4 为路由，8 为 OTLP span。
 
 ```text
 through 请求：期望 1|2|4
 rejected：    期望 2（永远不会有 1 和 4）
 hook 独有：   只有 1，超时未对上账本则停在 1，标记为待关联
+otlp：        只有 8，独立建行，不参与上面三种的合并
 ```
+
+OTLP 行不走加法合并：它没有 `response_id` / `route_id` 可挂，物理身份是 `(trace_id, span_id)`，落到 `request_evidence` 的 `source_kind='otlp_span'`。会话缺正文的判定按期望位图算——otlp 行只期望第 4 位，不因缺 magpie 三路证据被标采集失败。
 
 合并只做加法，从不覆盖已有证据。字段级来源优先级：
 
@@ -427,11 +437,11 @@ SQLite，WAL，单文件，放仓库外。默认路径 `~/Library/Application Su
 
 ### 版本与破坏式替换
 
-当前结构版本是 v6。普通 `openStore` 从不做 `ALTER`：空库在同一个事务里建到 v6（v5 基础结构加代际结构，一次提交）；低版本报 `schema_rebuild_required`；高版本报 `schema_version_unsupported`。
+当前结构版本是 v7。空库在同一个事务里建到 v7。存量库只有一条升级路径：v6 打开时在单个事务里原地升到 v7（纯新增表与索引，不动旧行），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
 
-首版发布前不提供跨结构升级。旧库的处理是停采集器、把数据目录整体移走或删除，让新版本建新库；旧库里的正文与派生结果一起丢弃。因此不存在"结构已升级、数据未迁移"的中间态，也没有完成标记或续跑入口。
+首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6→v7 不走这条路，原因是仓库已有本机真实数据且 v7 变更纯新增，原地升级可执行、可验证。备份白名单随之收两版：v6 与 v7 的 bundle 都可恢复，v6 包恢复后首次打开时同样原地升级。
 
-v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，切片模式不写它们，同步模式照旧写。
+v7 在 v6 之上加的是 OTLP 三张表：`raw_otlp_span`（span 原始层，主键 `(trace_id, span_id)`）、`raw_otlp_log`（logs 原始层，按记录内容哈希判重）与 `otlp_body_ref`（Claude Code 正文指针状态机）。v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，切片模式不写它们，同步模式照旧写。
 
 ### 脱敏盐绑定与可恢复快照
 
@@ -441,7 +451,7 @@ v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行
 
 ### 原始层
 
-三张表，互不覆盖。`payload_json` 保留整行原文，应对 magpie 改字段：不用提前把所有字段解析成列，出现新字段时先从原始载荷补，再改表。
+magpie 三张表，互不覆盖。`payload_json` 保留整行原文，应对 magpie 改字段：不用提前把所有字段解析成列，出现新字段时先从原始载荷补，再改表。
 
 结构化列、`payload_json` 与路由长期摘要都来自同一个已脱敏对象：先 `redact` 再 `mapLedgerRow` / `mapRouteRow`。否则列与载荷会各说一套，而载荷里会留着未脱敏副本。
 
@@ -513,6 +523,42 @@ CREATE TABLE raw_hook (
 
 `raw_hook` 的正文副本只在解析成功后短暂保留：块与骨架提交完成的同一事务里把它清空（置 NULL，保留行），作为可重放的重放层，按独立上限滚动。它不参与正文预算的重复计数。
 
+OTLP 通道另有三张表。span 与 log 的原始层同样脱敏先于落盘（`attributes_json` 与 `body` 是脱敏后的），TTL 与 magpie 原始层同等生效：
+
+```sql
+CREATE TABLE raw_otlp_span (
+  trace_id   BLOB NOT NULL,
+  span_id    BLOB NOT NULL,
+  received_at INTEGER NOT NULL,
+  service    TEXT, scope_name TEXT,
+  name       TEXT NOT NULL, kind INTEGER,
+  start_ms   INTEGER NOT NULL, end_ms INTEGER, status_code INTEGER,
+  attributes_json TEXT NOT NULL,          -- 脱敏后的属性表
+  mapping_version INTEGER NOT NULL, privacy_version INTEGER NOT NULL,
+  PRIMARY KEY (trace_id, span_id)
+) WITHOUT ROWID;
+
+CREATE TABLE raw_otlp_log (               -- 记录无内生 id，按内容哈希判重
+  record_hash     BLOB PRIMARY KEY,
+  received_at     INTEGER NOT NULL,
+  service TEXT, trace_id BLOB, span_id BLOB, time_ms INTEGER,
+  body TEXT, attributes_json TEXT NOT NULL,
+  privacy_version INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE otlp_body_ref (              -- Claude Code 正文指针状态机
+  request_body_id TEXT PRIMARY KEY,
+  trace_id        BLOB NOT NULL,
+  req_id          INTEGER,                -- 关联到的 otlp 行；未关联为 NULL
+  request_ref     TEXT, response_ref TEXT, message_id TEXT,
+  state           TEXT NOT NULL,          -- pending_span / awaiting_response / wired / …
+  detail          TEXT,
+  updated_at      INTEGER NOT NULL
+) WITHOUT ROWID;
+```
+
+白名单外的 span（agent 层、工具层）只落 `raw_otlp_span`，不建 `request` 行。`otlp_body_ref` 按 `request_body_id` 聚 Claude Code 的 `api_request_body` / `api_response_body` 事件，traces 先到或 logs 先到都能收敛：span 行落库时回接 pending 指针，双指针齐后读文件、脱敏、走既有 `persistBodyTx` 落正文，`body_state` 从 `summary` 转 `available`。同 trace 多 attempt 撞出多候选时记 `span_ambiguous`，不猜。指针读取只认事件指到的单个普通文件，非普通文件、符号链接、超 32 MiB 或读不到分别记因，读失败行保持 `summary` 并写 `miss_reason='body_ref_read_failed'`。
+
 ### 路由摘要长期层
 
 原始路由 7 天滚动，但 `/api/requests/:id/route` 需要长期可查，清理原始层后历史路由不能跟着消失。所以另存一张摘要表，只保留展示需要的字段，去掉 `prompt`、`for`、`nested` 与 `order` 的完整结构：
@@ -549,7 +595,7 @@ CREATE TABLE request (
   subagent TEXT, parent_agent TEXT,
   started_ms       INTEGER NOT NULL,
   day              TEXT NOT NULL,
-  via              TEXT NOT NULL,       -- through / hook / direct / rejected
+  via              TEXT NOT NULL,       -- through / hook / direct / rejected / otlp
   -- 身份与状态
   status INTEGER, stop TEXT,
   model_requested TEXT, model_served TEXT, provider TEXT,
@@ -569,7 +615,7 @@ CREATE TABLE request (
   prompt_tokens INTEGER, prompt_counted INTEGER,
   prompt_window INTEGER, prompt_turns INTEGER, parts_json TEXT,
   -- 正文
-  body_state       TEXT NOT NULL,       -- pending / available / partial / evicted / unsupported
+  body_state       TEXT NOT NULL,       -- pending / available / partial / evicted / unsupported / summary
   body_prev_state  TEXT,                -- 回收前的状态，保留原状
   body_evicted_at  INTEGER, body_evict_reason TEXT,
   archive TEXT,                         -- magpie 归档定位键，正文缺失时可回源
@@ -587,7 +633,7 @@ CREATE TABLE request (
   title TEXT, title_source TEXT,
   derive_version   INTEGER NOT NULL,
   -- 完整性
-  have             INTEGER NOT NULL,    -- 位：1 hook 2 账本 4 路由
+  have             INTEGER NOT NULL,    -- 位：1 hook 2 账本 4 路由 8 OTLP span
   miss_reason      TEXT,
   magpie_version   TEXT,
   created_at INTEGER NOT NULL,
@@ -989,6 +1035,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | `partial` | 正文存在但被截断 |
 | `evicted` | 正文已按预算回收 |
 | `unsupported` | 已保存原对象，暂无适配器解析 |
+| `summary` | OTLP 行只有 span 摘要；body_ref 接线成功后转 `available` |
 
 `miss_reason` 只记 collector 真能观测到的事实：
 
@@ -1000,6 +1047,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | `unsupported_protocol` | hook 到了，`parse_state = unsupported` |
 | `origin_not_local` | hook 到了，`origin` 不是 `local`，按配置不接收 |
 | `evicted` | 曾经可用，已按预算回收 |
+| `body_ref_read_failed` | OTLP 行的 body_ref 指针读不到（文件缺失、非普通文件、超 32 MiB）；行保持 `summary` |
 
 `hook_absent` 由 pending 定时器里的老化守卫（`src/hook.ts` 的 `markHookAbsent`）在每轮合并重试之后写入，只写 `miss_reason`，不改 `body_state`。它断言的是"没有已关联的 hook 证据"，不是"hook 从未发生"：reply 缺失的回调没有 response ID 可关联，会长期留在等待队列里，对这些行 hook 其实到过。迟到的 hook 由两条路径解除标注：直接命中在落正文时清掉原因；后台合并按合并后的正文现实对账，正文完整即清空，降级原因随源行正文走。
 
@@ -1049,7 +1097,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | `GET /api/requests/:id/route` | 路由决策与尝试链，来自 `route_summary` | 无 |
 | `GET /api/stats` | 体积、覆盖位统计、健康状态、探针结果 | 无 |
 
-列表接口不返回骨架。会话内 1,825 笔的列表，每笔骨架 9.5 KB，全取就是 17 MB，列表只返回 `req_id`、时间、状态、模型、四个读数、标题、`have`、`body_state`。
+列表接口不返回骨架。会话内 1,825 笔的列表，每笔骨架 9.5 KB，全取就是 17 MB，列表只返回 `req_id`、时间、状态、模型、四个读数、标题、`have`、`body_state`、`via`。
 
 列表与详情都带 `derived_state`，并只在该值为 `current` 时把关系、增量与折叠行摘要放在顶层。详情另带 `historical`（旧派生结论连同状态）、摘要的算法三列与 `tool_results` 反向配对；列表不携带这几项。`tool_results` 是本请求承载的结果块指向的已发布调用（调用方请求加既有工具行）：与 `tool_calls` 同源同闸门，发布代表先、非空不回退，同步回退用同组请求（conv_key/actor）的 IN 子查询驱动 `(req_id, ord)` 主键，候选规模是组内请求数，不全局扫描，也不外露跨组脏行；非 current 为空数组。判定的具体规则见[读模型里的派生状态](#读模型里的派生状态)。
 
@@ -1103,6 +1151,8 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | 达到正文预算 | 按天回收正文，正常运转 |
 | 达到总磁盘 80%（12.8 GB） | 停止接收新正文，只记元数据，告警 |
 | 达到总磁盘 95%（15.2 GB） | 停止写入新证据行，只推进游标与健康计数，健康页与接口明确报告采集缺口 |
+
+OTLP 摄入走同一梯度：80% 档 span 与摘要照收，body_ref 停止读文件、状态记 `metadata_only`（指针保留，腾出空间后不补读）；95% 档 `/v1/traces` 与 `/v1/logs` 整批拒绝，回 507，不产生半批入库。
 
 第二级必须在 16 GB 之前落地，否则硬上限只是一句承诺。停止写证据时要留一条可查记录：从哪个偏移开始没有入库，等空间恢复后能从那个偏移补上，不做静默丢弃。
 
@@ -1175,14 +1225,15 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 | 约束 | 做法 |
 | --- | --- |
 | 监听地址 | 写死 `127.0.0.1`，不读环境变量覆盖 |
-| Host 校验 | 只接受 `127.0.0.1:<port>` 与 `localhost:<port>`，其余 403 |
+| Host 校验 | 只接受 `127.0.0.1:<port>` 与 `localhost:<port>`，其余 403；hook 与 OTLP 端点共用 |
 | 页面 API 来源 | 限同源；拒绝跨站与 `Origin: null`；无 Origin 的非浏览器访问走独立规则 |
 | hook 认证 | 薄 hook 持本地随机令牌，写在 `plugins.json` 的 options 里，不暴露给前端 |
+| OTLP 认证 | Bearer 独立 `otlp.token`，与 `hook.token` 分开；content-type 非白名单的简单请求 415，不给跨站浏览器留下无预检写入口 |
 | `origin` 过滤 | 在认证之后执行，`origin=local` 只是来源标签，不是认证 |
 | 渲染 | 正文与路由内容一律转义，不直接插 HTML |
 | 账号字段 | `providerAccount`、`providerKeyId`、`host` 只在本地库，接口默认不返回 |
 | 运行数据 | 库、日志都在用户目录，`.gitignore` 再加一层 |
-| 不扫描 Agent 会话文件 | 只读 magpie 自己写的来源 |
+| 不扫描 Agent 会话文件 | 只读 magpie 自己写的来源；OTLP 的 body_ref 只读事件显式指到的单个文件 |
 
 ### 脱敏
 

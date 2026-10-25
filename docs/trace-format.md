@@ -1,12 +1,12 @@
 # ATC trace 格式（内部读模型 v0）
 
-本文件描述 ATC 把一次 LLM 请求结构化成什么样：主实体、它的身份与读数、正文怎么切块、派生结论有哪些、每条结论的置信度怎么表达。它描述的是当前代码与 schema v6 的现状，不是对外承诺的稳定协议。
+本文件描述 ATC 把一次 LLM 请求结构化成什么样：主实体、它的身份与读数、正文怎么切块、派生结论有哪些、每条结论的置信度怎么表达。它描述的是当前代码与 schema v7 的现状，不是对外承诺的稳定协议。
 
 三个限定先说清楚：
 
 - **不是交换格式。** 目前没有导出、没有版本化的对外 schema、没有跨工具互操作。本文件描述的是本库自己的读模型，外部读者可以据此理解数据形状，但接口只服务本机页面。
-- **一个源。** 记录的对象是经过 magpie 网关的请求。`agent` 是 magpie 给出的客户端标签（`claude`、`omp` 等），不是 ATC 定义的 harness 抽象；派生规则是 harness 通用的，识别某个 harness 的 wire 痕迹是个别规则，不是插件体系。
-- **版本会变。** schema 升级不提供原地迁移，旧库拒绝启动、由操作者重建；派生算法号变化会让旧结论标成 `legacy` 或 `retained`，不冒充新结论。
+- **两个进路。** 记录的对象主要是经过 magpie 网关的请求；harness 侧 OTLP 导出的 LLM span 也建行（`via='otlp'`），独立存在、不与 magpie 行合并。`agent` 标签对 magpie 行来自 magpie（`claude`、`omp` 等），对 OTLP 行按 `service.name` 映射到同一值域；派生规则是 harness 通用的，识别某个 harness 的 wire 痕迹是个别规则，不是插件体系。
+- **版本会变。** v6 库打开时原地升到 v7，更早的 schema 拒绝启动、由操作者重建；派生算法号变化会让旧结论标成 `legacy` 或 `retained`，不冒充新结论。
 
 字段清单、值域细节与默认值的权威在[架构设计](architecture-design.md)；术语定义与边界在 [CONTEXT.md](../CONTEXT.md)。
 
@@ -14,17 +14,18 @@
 
 记录单位是 LLM request：客户端发给 magpie 的一笔请求，带请求体、回复、agent、会话、模型、状态、用量、耗时与路由去向。magpie 内部对 provider 的多次尝试不增加顶层请求数，作为这笔请求的明细保存。
 
-会话、Agent、模型、日期都是查询出来的视图，不存聚合行。一笔请求至少由三路证据中的一路证明存在：
+会话、Agent、模型、日期都是查询出来的视图，不存聚合行。一笔请求至少由一路证据证明存在：
 
 | 证据通道 | 给什么 | 缺什么 |
 | --- | --- | --- |
 | hook | 客户端协议的请求对象与合并回复、success、agent、session、model | 请求头、流内事件、provider 尝试、`route_id`；回调可能丢失 |
 | 账本 | 状态、用量、`route_id`、`response_id`、provider、账户 | 请求与回复正文 |
 | 路由历史 | 候选顺序、尝试、规则、亲和性、prompt 结构 | 窗口过滤不全部留痕；只读盘、30 天滚动 |
+| OTLP span | 模型、用量、耗时、会话 id；Claude Code 另带正文文件指针 | 请求头、provider 尝试；OMP 只到摘要 |
 
-`have` 是这三路的位图（1 hook、2 账本、4 路由），回答「收到过哪几路证据」。它与 `body_state` 分开：回收正文不会把收到过的证据改写成没收到。
+`have` 是这些通道的位图（1 hook、2 账本、4 路由、8 OTLP span），回答「收到过哪几路证据」。它与 `body_state` 分开：回收正文不会把收到过的证据改写成没收到。OTLP 行只有第 4 位，会话的缺正文判定对它只期望这一位。
 
-magpie 另有 OTLP 导出，不作为第四路证据。它只发 `gen_ai.*`、`magpie.*` 与 `langfuse.*` 三类属性键，其中没有 `response_id`、`conv`、`subagent`、`archive`（`开源源码@magpie-2374ffe`，`internal/otlp/otel_wire.go`）；正文以 `langfuse.observation.input` / `output` 两段文本发出。这几项正是三路证据的连接点，缺了就合并不起来。
+magpie 另有 OTLP 导出，不作为证据源。它只发 `gen_ai.*`、`magpie.*` 与 `langfuse.*` 三类属性键，其中没有 `response_id`、`conv`、`subagent`、`archive`（`开源源码@magpie-2374ffe`，`internal/otlp/otel_wire.go`）；正文以 `langfuse.observation.input` / `output` 两段文本发出。这几项正是三路证据的连接点，缺了就合并不起来。表里的第四行接的是 harness 进程自己的 exporter，属性键齐全，与 magpie 网关侧那套导出是两个东西。
 
 ## 身份与归属
 
@@ -36,7 +37,7 @@ magpie 另有 OTLP 导出，不作为第四路证据。它只发 `gen_ai.*`、`m
 | `conv_key` | 归属键，JSON 数组形状，来源见 `conv_source` | 优先 `session`，缺失时依次退到 `conv`、hook 自身或账本行引用 |
 | `actor` | 组身份：`subagent` 优先，否则等于会话 | 同一 `conv_key` 下的子代理按 actor 各自成组 |
 | `actor_state` | `known` / `unknown` | 未知归属的请求不进派生队列，不产生关系结论 |
-| `via` | 出生通路：`through` / `hook` / `rejected` | 回答这一行从哪条通路生出来，不是流量种类；账本 `direct` 行的摄入当前未启用 |
+| `via` | 出生通路：`through` / `hook` / `rejected` / `otlp` | 回答这一行从哪条通路生出来，不是流量种类；账本 `direct` 行的摄入当前未启用。`otlp` 行独立存在，不参与 magpie 三路合并 |
 
 归属未知的请求照样保存、照样能在页面读到，只是没有前驱关系、增量与链角色。这是设计选择：缺归属不等于缺记录。
 
@@ -62,7 +63,7 @@ magpie 另有 OTLP 导出，不作为第四路证据。它只发 `gen_ai.*`、`m
 
 两个哈希分工明确。`hash` 只在字节完全相同时复用块；`fingerprint` 去掉 `cache_control`、`signature` 这类传输标记、键排序、统一消息片段形状后取 sha256，用来判断「这一笔是不是上一笔的续写」。拿 `hash` 做比对会把整条链读断：缓存断点移动、`content` 从数组换成字符串、harness 重新包装都会换掉字节。
 
-`body_state` 四态：`pending`（等 hook）、`available`（可读）、`partial`（只拿到部分，原因在 `miss_reason`）、`evicted`（按预算回收，原状态留在 `body_prev_state`）。类型里还声明了第五个值 `unsupported`，当前没有写入方；协议认不出的正文照样保存，`parse_state` 记 `unsupported`。`msg_count` 为 NULL 或块引用不连续的正文不可比较，派生记 `unknown` 而不是猜。
+`body_state` 四态：`pending`（等 hook）、`available`（可读）、`partial`（只拿到部分，原因在 `miss_reason`）、`evicted`（按预算回收，原状态留在 `body_prev_state`）。类型里还声明了第五个值 `unsupported`，当前没有写入方；协议认不出的正文照样保存，`parse_state` 记 `unsupported`。OTLP 行出生时是 `summary`：只有 span 摘要，Claude Code 的 body_ref 接线成功后转 `available`，读不到指针则停在 `summary` 并记 `body_ref_read_failed`。`msg_count` 为 NULL 或块引用不连续的正文不可比较，派生记 `unknown` 而不是猜。
 
 ## 派生结论
 

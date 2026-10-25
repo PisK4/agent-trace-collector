@@ -1,6 +1,6 @@
 # Agent Note: OTLP 接收端——把 ATC 从 magpie 的证据阅读器扩成 harness 无关的会话阅读器
 
-Status: proposed
+Status: implemented
 
 ## Problem
 
@@ -17,16 +17,16 @@ OTLP 本身是稳定标准：规范到 1.11.1，trace / metric / log 三个信�
 
 这个提案选后者，但把范围压到最小：只接收，不替代，不改三路证据的既有语义。
 
-## Proposal
+## Decision
 
-新增一条与三路证据平行的**第四通道**，不并入、不覆盖、不参与三路合并。
+第四通道与三路证据平行，不并入、不覆盖、不参与三路合并。
 
 ```text
-现在：  agent ──> magpie ──> hook / 账本 / 路由 ──> ATC
-拟加：  agent ──────────────────── OTLP ──────> ATC
+原来：  agent ──> magpie ──> hook / 账本 / 路由 ──> ATC
+现在：  agent ──────────────────── OTLP ──────> ATC
 ```
 
-分三层落地，每层单独可验收：
+分三层落地，每层单独验收：
 
 1. **协议层**：`POST /v1/traces` 与 `POST /v1/logs`，解 OTLP/HTTP protobuf，同时接受 `application/json` 的等价载荷。两个端点都要求 Bearer 令牌，边界见[端点认证、脱敏与资源边界](#端点认证脱敏与资源边界)。
 2. **证据层**：OTLP 行以 `(trace_id, span_id)` 为物理身份落库，登记为独立的证据通道，`have` 位图新增第 4 位（值 `8`），`via` 新增取值 `otlp`。不与 hook / 账本 / 路由自动合并。
@@ -36,7 +36,7 @@ OTLP 本身是稳定标准：规范到 1.11.1，trace / metric / log 三个信�
 
 ### 传输层必须做 protobuf
 
-这是本提案最大的工程成本，也是范围判断的关键。
+这是本 note 最大的工程成本，也是范围判断的关键。
 
 两个 harness 支持的协议不一样：
 
@@ -91,8 +91,8 @@ OTLP 本身是稳定标准：规范到 1.11.1，trace / metric / log 三个信�
 
 1. **不合并**。OTLP 行与 magpie 行各自建 `request`，即使它们其实是同一笔调用。合并的锚点已实测存在（见「证据身份」），但合并策略与字段优先级单独评审，第一批不做。强行按时间与模型配对会把两笔不同请求拼成一条不存在的记录——这正是 [架构设计](../../../../docs/architecture-design.md) 里否决过的那类错误。并存的形态分两种：不同 session id 是两套记录分开显示；**同一个 session id**（Claude Code 同时开 magpie 与 OTLP 时，`gen_ai.conversation.id` 与 magpie 侧 session 实测就是同一个值，两个 harness 均命中）会落进同一个 `conv_key`——会话列表不翻倍，但会话时间线里每笔调用出现两次，一次 magpie 行一次 OTLP 行。第一批接受这种并存，行上来源可区分；会话内按来源过滤的展示另评（见 Deferred），不在第一批假装解决。
 2. **不抢字段**。OTLP 行只写与既有列语义严格一致的映射：`started_ms`（span 起始）、`model_requested` / `model_served`、`stop`、`in_tok` / `out_tok` / `cache_read` / `cache_write`（取 `gen_ai.usage.*`）、`agent` 标签。写不进既有列的 OTLP 独有事实全部留原始层：`query_source_safe`（无列）、Claude Code 的 `attempt`（`attempt_count` 是 magpie tries 的计费语义，不同物，不能顶替）、`agent_id` / `parent_agent_id`（UUID 身份，不是 magpie `subagent` 那样的名称标签，写进 `actor` / `subagent` 会拆派生组）、工具 span 的精确起止（无列）。它们进读模型需要单独评审。有 magpie 时，状态、用量、费用仍以 magpie 账本为准。
-3. **magpie 自己的 OTLP 优先级最低**。它的导出器是为 Langfuse 定制的白名单，不含 `response_id`、`conv`、`subagent`、`archive`，正文默认截 256 KiB。同样一条信息，账本与路由已经给了更完整的版本。接它只增加一条降级副本，不增加事实。**本提案不为 magpie 的 OTLP 做适配**，仅在实现上兼容它的 `http/json` 载荷，不投入额外工作。
-4. **缺失判定按期望位图算**。`through` 期望 `1|2|4`、`rejected` 期望 `2`、`otlp` 期望 `8`；会话列表的缺正文标志按「期望位缺失」计算，OTLP 行不因没有 hook 位被标成采集失败。现行 `has_missing`（`src/queries/sessions.ts`）看的是全局第 1 位，这一处随本提案改，`web/app.js` 的位义注释同步扩到 8。
+3. **magpie 自己的 OTLP 优先级最低**。它的导出器是为 Langfuse 定制的白名单，不含 `response_id`、`conv`、`subagent`、`archive`，正文默认截 256 KiB。同样一条信息，账本与路由已经给了更完整的版本。接它只增加一条降级副本，不增加事实。**不为 magpie 的 OTLP 做适配**，仅在实现上兼容它的 `http/json` 载荷，不投入额外工作。
+4. **缺失判定按期望位图算**。`through` 期望 `1|2|4`、`rejected` 期望 `2`、`otlp` 期望 `8`；会话列表的缺正文标志按「期望位缺失」计算，OTLP 行不因没有 hook 位被标成采集失败。`has_missing`（`src/queries/sessions.ts`）已按此改写，`web/app.js` 的位义注释同步扩到 8。
 
 ### 落到哪一层
 
@@ -100,11 +100,11 @@ OTLP 通道的行**不参与**派生组的 `conv_key` 归组，除非 span 里�
 
 理由与「未知归属的请求也要完成用途」那条一致：归属是这一行自己的事实，但推不出时不猜。
 
-派生层的 `purpose` / 链 / 工具配对**不在本提案范围**。第一批只做摄入与查询可见，派生接入单独评估——工具配对能不能用 span 的 `tool_use_id` 替代正文推断，需要先看真实数据里的配对成功率。
+派生层的 `purpose` / 链 / 工具配对**不在本 note 范围**。第一批只做摄入与查询可见，派生接入单独评估——工具配对能不能用 span 的 `tool_use_id` 替代正文推断，需要先看真实数据里的配对成功率。
 
 ## Supersession 与既有提案的关系
 
-按 note 规则做过 supersession check。本提案**部分取代**以下现行表述，实施同一变更里同步改，proposed 期间不动文档：
+按 note 规则做过 supersession check。本 note **部分取代**以下现行表述，实施同一变更里同步改，proposed 期间不动文档：
 
 | 现行表述 | 位置 | 改法 |
 | --- | --- | --- |
@@ -114,9 +114,9 @@ OTLP 通道的行**不参与**派生组的 `conv_key` 归组，除非 span 里�
 | 「不设计通用的 trace 摄入协议，不预留接别的网关的适配层」 | [项目定位](../../../../docs/project-overview.md) | 同上改写 |
 | 三路证据模型（`have` 位义 1/2/4、合并规则、系统边界图） | [架构设计](../../../../docs/architecture-design.md) | 扩为四通道，位义 1/2/4/8，OTLP 通道不参与合并 |
 
-**不被取代、但要补一句区分的**：README 数据来源节与 [trace 格式](../../../../docs/trace-format.md) 证据节记录的「magpie OTLP 不能当第四路」针对 magpie 自己的导出器，本提案「与 magpie 通路的关系」第 3 条与之同向；实施时补一句说明本提案接的是 harness 侧 OTLP，避免读者把两句读成矛盾。
+**不被取代、但要补一句区分的**：README 数据来源节与 [trace 格式](../../../../docs/trace-format.md) 证据节记录的「magpie OTLP 不能当第四路」针对 magpie 自己的导出器，本 note「与 magpie 通路的关系」第 3 条与之同向；实施时补一句说明本提案接的是 harness 侧 OTLP，避免读者把两句读成矛盾。
 
-[OMP harness 集成](2026-10-25-omp-harness-integration.md) 的「wire-first」原则把 OTel 列为边界外的新证据源，其边界外清单里的「OTel 旁路采集」决策项由本提案作答，两文互链、不冲突：那份提案用现有三路证据派生 OMP 的 feature 语义，本提案打开一条新的输入面。OMP 的 `session_id` 归组问题在那份提案里被定性为「上游证据形状，接受不处理」；OTLP 的 `gen_ai.conversation.id` 可能改变这个结论，但需要实测确认 OMP 是否真把它写进 span。
+[OMP harness 集成](2026-10-25-omp-harness-integration.md) 的「wire-first」原则把 OTel 列为边界外的新证据源，其边界外清单里的「OTel 旁路采集」决策项由本 note 作答，两文互链、不冲突：那份提案用现有三路证据派生 OMP 的 feature 语义，本提案打开一条新的输入面。OMP 的 `session_id` 归组问题在那份提案里被定性为「上游证据形状，接受不处理」；OTLP 的 `gen_ai.conversation.id` 可能改变这个结论，但需要实测确认 OMP 是否真把它写进 span。
 
 ## 实测记录（2026-10-26 抓样）
 
@@ -139,6 +139,7 @@ harness 面的文档级扫描（同日）：Codex 原生三信号 OTLP，默认�
 - 2026-10-26 logs 接收与 `body_ref` 接线已交付。logs 第一批只接收（`raw_otlp_log` 按记录内容哈希判重，重发幂等）与 body_ref 关联：`claude_code.api_request_body`/`api_response_body` 事件按 `request_body_id` 聚进 `otlp_body_ref` 状态机（pending_span → 关联 span → 双指针齐 → 读文件 → wired），logs 先到或 traces 先到都能收敛（span 行落库时回接 pending 指针）。接线判据是事件自带的 traceId 找同 trace 的唯一 llm_request 行；同 trace 多 attempt span 撞出多候选时记 `span_ambiguous` 不猜。指针读取边界：只读事件指到的单个文件，非普通文件/符号链接/超 32 MiB 拒读；读不到记 `body_ref_read_failed`（行保持 summary），与解析失败分开。读取成功→脱敏→既有 `persistBodyTx`，`body_state` 转 `available`。80% 档停正文：状态记 `metadata_only`、指针保留。原始层 TTL 对两张新表同等生效（span 删除时证据转 expired，行身份在 sort_key 里不依赖 raw）。
 - 2026-10-26 HTTP 端点已交付。`POST /v1/traces` 与 `POST /v1/logs`：Host/Origin 边界与 hook 共用同一段，Bearer 用独立 `otlp.token`（`loadLocalSecret` 同一机制、常量时间比较），content-type 只收 `application/x-protobuf` 与 `application/json`（`text/plain` 等简单请求形态 415——浏览器防线三件套的第三条落地），方法错 405、单飞守卫与 hook 共用（429）、64 MiB 整批 413、解码失败 400 带原因码、95% 档 507。成功回 OTLP 规范的 `{"partialSuccess":{}}`。二进制载荷走 `readBoundedBytes`（新增字节形态，原 `readBounded` 变其 UTF-8 包装）。拒绝原因码进容量观测（`otlp_unavailable`/`unsupported_media_type`/`invalid_otlp` 三个新值）。
 - 2026-10-26 读模型与页面已交付。`via` 进列表与详情投影（`RequestRow` 新增、详情 `r.*` 自然带出），行摘要按通道标「OTLP 通道」；`body_state='summary'` 的文案明示「OTLP 摘要」，不冒充正文可读。会话 `missing_body` 改按期望位图算：through 期望三路齐、rejected 只期望账本、otlp 只期望第 4 位——OTLP 行不因缺 magpie 证据被标成采集失败，通过/拒绝通道的现行语义不变。合成服务器（prototypes）的行构造同步补 `via='through'`。
+- 2026-10-26 文档收口已交付，本文迁入 implemented。按 Supersession 表同步上位文档：README 受众边界改为「magpie 或已适配 harness」、数据来源表补第四行并写明与 magpie 自带导出器的区分；项目定位改写「不做通用摄入协议」为「OTLP 是唯一受控通用入口」；架构设计扩为四通道（位义 1/2/4/8、`via='otlp'`、`body_state='summary'`、OTLP 三表 DDL、端点安全行、容量梯度行为、schema v7 与 v6 原地升级）；trace 格式与 CONTEXT 的通道、via、body_state 条目同步；运维手册补 `otlp.token`、OTLP 接入一节与 95% 档拒收。
 
 ## Alternatives considered
 
@@ -154,16 +155,23 @@ harness 面的文档级扫描（同日）：Codex 原生三信号 OTLP，默认�
 
 **把 OTLP 行与 magpie 行自动合并。** 落选原因：没有可信锚点。`gen_ai.response.id` 与 `response_id` 是两套 ID；按时间与模型配对会在一秒多次调用时出错。合并错误的代价高于并存带来的重复行。
 
-## Acceptance criteria
+## Testing
 
-1. `POST /v1/traces` 与 `POST /v1/logs` 接受 `application/x-protobuf` 与 `application/json`，返回 OTLP 规范的 200 与 `{"partialSuccess":{}}`；非法载荷返回明确的 4xx 与原因码，其它 content-type 拒绝；未带或不匹配 Bearer 令牌返回 401；envelope 超 64 MiB 整批 413。不静默丢弃。
-2. 用 Claude Code 与 OMP 各跑一轮真实会话，两边的白名单 span 都落库为 `via='otlp'` 的 request 行，工具 span 与 agent 层 span 不出现在请求列表；同一批次重发两次，第二次不产生新行。
-3. 合成载荷覆盖：`gen_ai.input.messages` 完整、工具调用超 64 条、`body_ref` 指针、未知字段、超大 envelope、白名单外的 span 名、载荷含凭证形态（脱敏后落库为占位符，原始层与块库都不留明文）。每种都有对应测试。
-4. 落库的行能在页面上看到，来源标为 OTLP，与 magpie 行视觉可区分；同一 `conv_key` 下双通道行并存可区分，不冒充同一笔；`body_state='summary'` 的行显示「正文来自 OTLP 摘要」而非「正文可用」。
-5. `have` 位图第 4 位只在 OTLP 证据真的写入时为 1；会话列表缺正文标志按期望位图计算（`src/queries/sessions.ts` 的 `has_missing` 与 `web/app.js` 的位义注释随本提案改），OTLP 行不因缺 magpie 证据而被标成采集失败。
-6. 不引入第三方依赖：`bun.lock` 与 `package.json` 的 dependencies 保持为空。
+合成数据锁定以下行为，测试全在 `tests/otlp-*.test.ts`：
 
-## Risks
+1. 端点矩阵（`tests/otlp-http.test.ts`）：protobuf 与 JSON 两种载荷在两个端点都回 200 与 `{"partialSuccess":{}}`；401（令牌缺失/不匹配）、403（Host）、405、415（`text/plain` 等）、413（超 64 MiB）、400 带原因码（非法载荷）、429（单飞）、507（95% 档）各自就位，不静默丢弃。
+2. 解码器（`tests/otlp-decode.test.ts`）：未知字段跳过、group 编码判非法、十六进制 id 归一到字节、整数超 2^53 保十进制字符串、数组空位保 null；夹具是与解码器互为镜像的手写编码器，全部合成数据。
+3. 摄入与映射（`tests/otlp-ingest.test.ts`）：白名单 span 建 `via='otlp'` 行、白名单外只落原始层、LLM 形状但规则没认的进未知桶；同批重发第二次零新行；载荷含凭证形态时原始层与块库都不留明文。
+4. body_ref 接线（`tests/otlp-logs.test.ts`）：traces 先到与 logs 先到都收敛到 wired；文件缺失、符号链接、超 32 MiB、非 JSON 对象分别记因；多候选记 `span_ambiguous`；80% 档记 `metadata_only`；暂停档整批拒绝。
+5. 读模型（`tests/otlp-read.test.ts`）：`have` 第 4 位只在 OTLP 证据写入时为 1；会话缺正文按期望位图计算，OTLP 行不标；列表带 `via`；`summary` 文案明示摘要来源。
+6. schema 与保留：v6 库原地升 v7、v6 bundle 恢复后升级（`tests/store.test.ts`、`tests/maintenance.test.ts`）；OTLP 原始层 TTL 与 magpie 同等（`tests/retention.test.ts`）。
+7. 零依赖不破：`package.json` 的 dependencies 保持为空。
+
+真实流量验收未跑：上线后按[运维手册](../../../../docs/operations.md)的 OTLP 接入一节配置两个 harness，各跑一轮真实会话再对白名单选取、重发幂等与双通道并存做真实验收，结果记[验收记录](../../../../docs/acceptance.md)。在此之前，本页只有合成验收。
+
+## Consequences
+
+收益：受众从「装 magpie 的人」放宽到「装 magpie 或用已适配 harness 的人」；Claude Code 用户不经网关也能有逐笔正文（body_ref 文件是完整未截断的协议对象，比 hook 的回复捕获上限更宽）。代价与残留风险如下。
 
 **traces 是 beta。** Claude Code 的 span 明确写着「不是稳定 span schema」，属性可能改名或消失。应对：映射表集中在 `src/sources/otlp/mapping.ts` 一处，带 `mapping_version`；属性缺失时保持 NULL，不拿相邻字段顶替。logs 信号稳定，可作为兜底来源。
 
