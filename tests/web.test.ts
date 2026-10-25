@@ -189,11 +189,12 @@ test('同名工具逐项列出，不任选第一项', () => {
   expect(html).toContain('&quot;v&quot;: 2');
 });
 
-test('阅读版本变化说明只给显式重读入口，不自动重建', () => {
+test('阅读版本变化说明保留立即重读入口，自动重读在 store 内调度', () => {
   const note = readingChangedNote(7);
   expect(note).toContain('data-body-load="7"');
   expect(note).toContain('阅读版本已变化');
-  // 不挂自动重读的隐藏行为：说明里没有静默重建的脚本入口。
+  expect(note).toContain('自动重读');
+  // 页面里没有静默重建的脚本入口：重读走 store 与既有按钮。
   expect(note).not.toContain('script');
 });
 

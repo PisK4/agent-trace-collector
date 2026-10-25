@@ -20,9 +20,10 @@ import {
   structureFoldHtml, systemContextOf, toolOverviewHtml, toolSchemaSection, usageFoldHtml,
 } from './rail-facts.js';
 import { bodyLabelText, bodyStateText, replyCompleteness } from './row-summary.js';
+import { applyIntent } from './selection.js';
 import { renderTracePair } from './trace-pair.js';
 import { projectSteps, renderTraceRows } from './trace-view.js';
-import { railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget } from './url-route.js';
+import { railTabFromParam, railTabParam, resolveTraceTarget } from './url-route.js';
 
 /**
  * 重绘后把滚动位置放回去。内容变短时夹到新的可滚动上限内。
@@ -59,8 +60,8 @@ if (typeof document !== 'undefined') {
 
   // store 是唯一的读取缓存：页面同步渲染经 peek* 消费，副本不作第二份真相。
   const store = createReaderStore((/** @type {string} */ url) => fetch(url),
-    // store 真正作废当前记录时只标待重读；迟到响应与旧回调不进来。
-    id => { state.readingChanged.add(id); });
+    // 记录快照异步变化（409 作废、自动重读换新或失败）时重绘两栏；迟到响应不进来。
+    () => { renderMain(); renderRail(); });
   /** @type {Map<string, boolean>} 折叠开合按稳定键保存（键含 req id），重绘后恢复。 */
   const folds = new Map();
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
@@ -87,8 +88,6 @@ if (typeof document !== 'undefined') {
     pendingSession: /** @type {string | null} */ (null),
     /** 最近一次显式刷新时间；刷新会重建最近窗口并清掉旧阅读版本。 */
     refreshedAt: /** @type {number | null} */ (null),
-    /** 阅读版本已作废、等待显式重读的请求；重读成功后移除。 */
-    readingChanged: new Set(/** @type {number[]} */ ([])),
     /** 用户主动滚动后不再强制补偿过期锚点。 */
     userScrolled: false,
     /** 首载批次是否已把选中组带入可见区；加载更早不再重复居中。 */
@@ -98,6 +97,56 @@ if (typeof document !== 'undefined') {
   let loadEpoch = 0;
   /** 导航代次：换会话或显式刷新时自增，旧导航的 await 后续不再覆盖当前选择。 */
   let navEpoch = 0;
+
+  /* ---------------- 选择状态：唯一写者与效果执行器 ---------------- */
+  const SELECTION_KEYS = ['session', 'reqId', 'selectedStep', 'toolOrd', 'toolOwner', 'toolPage', 'railTab', 'missingReqId', 'offPageReqId'];
+  /**
+   * 发意图经纯转换改写选择元组并执行效果：所有选择写入都走这里，
+   * 渲染函数不再改 state；规则与效果清单在 selection.js。
+   * @param {import('./selection.js').Intent} intent
+   */
+  function dispatch(intent) {
+    const view = /** @type {Record<string, unknown>} */ (state);
+    /** @type {Record<string, unknown>} */
+    const before = {};
+    for (const key of SELECTION_KEYS) before[key] = view[key];
+    const applied = applyIntent(/** @type {import('./selection.js').SelectionState} */ (before), intent);
+    const next = /** @type {Record<string, unknown>} */ (applied.state);
+    for (const key of SELECTION_KEYS) view[key] = next[key];
+    runEffects(applied.effects);
+  }
+  /** @param {import('./selection.js').Effect[]} effects */
+  function runEffects(effects) {
+    for (const fx of effects) {
+      switch (fx.kind) {
+        case 'open-rail':
+          document.body.classList.remove('rail-collapsed');
+          syncPanelButtons();
+          break;
+        case 'render-crumb': renderCrumb(); break;
+        case 'render-main': renderMain(); break;
+        case 'render-rail': renderRail(); break;
+        case 'update-url': updateURL(); break;
+        case 'focus-step':
+          // 重绘会替换 DOM：把焦点放回当前步骤，键盘导航不中断。
+          requestAnimationFrame(() => {
+            const current = /** @type {HTMLElement | null} */ (document.querySelector('.compact-select[aria-current="true"]'));
+            if (current !== null && document.activeElement === document.body) current.focus();
+          });
+          break;
+        case 'scroll-group':
+          requestAnimationFrame(() => {
+            document.querySelector(`.trace-group[data-req="${CSS.escape(String(fx.reqId))}"]`)
+              ?.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+          });
+          break;
+        case 'ensure-read': void ensureRead(Number(fx.reqId)); break;
+        case 'ensure-pair': void ensurePair(Number(fx.owner), Number(fx.callOrd)); break;
+        case 'resume-delta': void resumeDelta(Number(fx.reqId)); break;
+        case 'read-route': void ensureRoute(Number(fx.reqId)); break;
+      }
+    }
+  }
   let themePref = 'system';
   try { themePref = localStorage.getItem('tc.theme') || 'system'; } catch { /* storage may be blocked */ }
 
@@ -167,7 +216,11 @@ if (typeof document !== 'undefined') {
   /** 批量载入窗口内请求的详情、元信息与最多两片可信增量；每批完成重绘一次。 */
   async function loadWindowReads() {
     const epoch = ++loadEpoch;
-    const wanted = currentRows().filter(row => store.peekRequest(row.req_id) === null);
+    // 作废项归 store 的自动重读管，批次不重复发起；失败项随批次重试（瞬时故障可自愈）。
+    const wanted = currentRows().filter(row => {
+      const read = store.peekRequest(row.req_id);
+      return read === null || read.status === 'failed';
+    });
     for (let index = 0; index < wanted.length; index += 4) {
       if (epoch !== loadEpoch) return;
       const chunk = wanted.slice(index, index + 4);
@@ -176,7 +229,7 @@ if (typeof document !== 'undefined') {
           const read = await store.readRequest(row.req_id);
           if (!read.delta.done) await store.loadDelta(row.req_id, 2);
         } catch {
-          /* reading_changed 的副本清理由 store 作废通知负责；其余单笔失败保留占位记录，刷新可重试 */
+          /* reading_changed 的作废与自动重读由 store 负责；其余单笔失败保留占位记录，刷新可重试 */
         }
       }));
       if (epoch !== loadEpoch) return;
@@ -308,13 +361,6 @@ if (typeof document !== 'undefined') {
     return '';
   }
 
-  /** read 为 null 时组记录行的原因：409 作废、详情读取失败，其余仍在读取。 @param {number} id @returns {import('./trace-view.js').ReadGap} */
-  function readGapOf(id) {
-    if (state.readingChanged.has(id)) return { reason: 'invalidated' };
-    const error = store.peekDetailError(id);
-    return error !== null ? { reason: 'failed', error } : null;
-  }
-
   function sessionHead() {
     const row = state.session === null ? null : sessionRow(state.session);
     const rows = currentRows();
@@ -362,7 +408,7 @@ if (typeof document !== 'undefined') {
 
   /**
    * 按调用位置读取结果。force 用于重试：store 的失败任务已释放，重发走网络。
-   * 409 的作废与副本清理由 store 通知负责；迟到 409 保留现有快照，这里只刷新展示。
+   * 409 的作废与自动重读由 store 负责；迟到 409 保留现有快照，这里只刷新展示。
    * @param {number} ownerId @param {number} callOrd @param {boolean} [force]
    */
   async function readToolResult(ownerId, callOrd, force = false) {
@@ -450,10 +496,13 @@ if (typeof document !== 'undefined') {
     }
     for (const r of rows) {
       const read = store.peekRequest(r.req_id);
-      const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
-        read === null ? readGapOf(r.req_id) : null);
+      const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)));
       const ordinal = ordinalOf(r.req_id);
       html += `<section class="trace-group" data-req="${r.req_id}" data-status="${r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success'}" aria-current="${r.req_id === state.reqId}">`;
+      // 自动重读换新后的组级「已更新」：点进组里即清除，正常态不出现。
+      if (read !== null && read.updatedSinceSeen) {
+        html += '<div class="group-flag"><span class="state-chip warn"><span class="d"></span>已更新 · 自动重读换新</span></div>';
+      }
       html += renderTraceRows(r, steps, ordinal, state.selectedStep, callOf);
       html += '</section>';
     }
@@ -567,7 +616,7 @@ if (typeof document !== 'undefined') {
       replyHtml = `<details class="rail-fold" data-fold="reply:${r.req_id}">
         <summary>本次回复${canLoad ? '' : `<span class="fold-count">${esc(bodyStateText(r))}</span>`}</summary>
         <div class="fold-body"><p class="note">${esc(bodyLabelText(r))}</p>
-          ${state.readingChanged.has(r.req_id) ? readingChangedNote(r.req_id) : ''}
+          ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
           ${canLoad ? `<div class="conv-tools"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>
       </details>`;
     } else {
@@ -627,7 +676,7 @@ if (typeof document !== 'undefined') {
     if (read === null || read.meta === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
-        ${state.readingChanged.has(r.req_id) ? readingChangedNote(r.req_id) : ''}
+        ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
         ${canLoad ? `<div style="margin-top:10px"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>`;
     }
     const detail = read.detail;
@@ -650,17 +699,16 @@ if (typeof document !== 'undefined') {
     const owner = state.toolOwner ?? r.req_id;
     const ownerRead = owner === r.req_id ? read : store.peekRequest(owner);
     if (ownerRead === null || ownerRead.meta === null) {
-      // 调用方读取未就绪：配对需要它的回复与配对状态；409 作废时给显式重读入口。
+      // 调用方读取未就绪：配对需要它的回复与配对状态；作废时自动重读在途，仍给立即重读入口。
       return `<div class="rail-empty"><b>正在读取调用方请求…</b>配对需要调用方的回复与配对状态，读取完成后自动展示两端。</div>
-        ${state.readingChanged.has(owner) ? readingChangedNote(owner) : ''}`;
+        ${ownerRead !== null && ownerRead.status === 'invalidated' ? readingChangedNote(owner) : ''}`;
     }
     const ownerDetail = ownerRead.detail;
     const ownerPage = ownerRead.meta;
     const tools = toolEntries(ownerDetail, ownerPage);
     const tool = tools.find(item => item.ord === state.toolOrd) ?? null;
     if (tool === null) {
-      state.toolOrd = null;
-      state.toolOwner = null;
+      // 选择清理已在 renderRail 入口经 tool-gone 意图完成；此处不应到达。
       return railTools();
     }
     const pair = ownerDetail === null ? null : ownerDetail.tool_calls.find(item => item.ord === tool.ord) ?? null;
@@ -715,7 +763,7 @@ if (typeof document !== 'undefined') {
     if (read === null || read.meta === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
-        ${state.readingChanged.has(r.req_id) ? readingChangedNote(r.req_id) : ''}
+        ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
         ${canLoad ? `<div style="margin-top:10px"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>`;
     }
     const page = read.meta;
@@ -771,6 +819,16 @@ if (typeof document !== 'undefined') {
   /** @type {string | null} */
   let lastRailKey = null;
   function renderRail() {
+    // 选定的工具在调用方读取里已不存在时先清选择再渲染：渲染函数不改 state。
+    // 调用方读取未就绪（meta 为空）不算消失，保留选择显示「正在读取」。
+    if (state.toolOrd !== null) {
+      const owner = state.toolOwner ?? state.reqId;
+      const ownerRead = owner !== null ? store.peekRequest(owner) : null;
+      if (ownerRead !== null && ownerRead.meta !== null
+        && !toolEntries(ownerRead.detail, ownerRead.meta).some(tool => tool.ord === state.toolOrd)) {
+        dispatch({ kind: 'tool-gone' });
+      }
+    }
     el('rail-head').innerHTML = railHead();
     const rail = el('rail-body');
     // 滚动只在「同请求同页签的重绘」里保持；页签切换与换请求都回到顶部，行为可预期。
@@ -833,27 +891,21 @@ if (typeof document !== 'undefined') {
     void loadWindowReads().then(() => compensateAnchor(before));
   }
 
-  /** 显式刷新：重建最近窗口、清掉旧展开与待重读标记，记录读取时间。 */
+  /** 显式刷新：重建最近窗口、清掉旧展开，记录读取时间；记录缓存随窗口重建。 */
   async function refreshWindow() {
     if (state.session === null) return;
     const myNav = ++navEpoch;
     state.requestOpen = new Set();
-    state.readingChanged.clear();
     state.refreshedAt = Date.now();
     state.revealed = false;
-    state.missingReqId = null;
-    state.offPageReqId = null;
+    dispatch({ kind: 'refresh-start' });
     await store.selectSession(state.session, windowLimit());
     if (myNav !== navEpoch) return;
     const rows = currentRows();
-    state.reqId = rows[rows.length - 1]?.req_id ?? null;
-    state.selectedStep = null;
-    state.toolOrd = null;
-    state.toolOwner = null;
+    dispatch({ kind: 'select-latest', latestReqId: rows[rows.length - 1]?.req_id ?? null });
     renderAll();
-    // 保留路由页的刷新路径：重建窗口后仍自动读取当前请求的路由。
-    const routeTarget = routeReadTarget(state.railTab, state.reqId);
-    if (routeTarget !== null) void ensureRoute(routeTarget);
+    // 导航完成：路由页随重建后的选中请求读取（效果经 nav-settled 统一发出）。
+    dispatch({ kind: 'nav-settled' });
     void loadWindowReads();
     void ensureSelectedVisible();
   }
@@ -863,28 +915,11 @@ if (typeof document !== 'undefined') {
     locateRequest(currentRows()[currentRows().length - 1]?.req_id ?? -1);
   }
 
-  /** 定位窗口内请求：选中并滚动进入可见区域。 @param {number} id */
+  /** 定位窗口内请求：选中并滚动进入可见区域（路由随导航完成读取、定点补读都走效果）。 @param {number} id */
   function locateRequest(id) {
     const rows = currentRows();
     if (!rows.some(row => row.req_id === id)) return;
-    state.reqId = id;
-    state.selectedStep = null;
-    state.toolOrd = null;
-    state.toolOwner = null;
-    state.missingReqId = null;
-    state.offPageReqId = null;
-    renderMain();
-    renderRail();
-    renderCrumb();
-    updateURL();
-    // 定位（回到最新等）也是导航完成处：保留路由页时随选中请求读取。
-    const routeTarget = routeReadTarget(state.railTab, state.reqId);
-    if (routeTarget !== null) void ensureRoute(routeTarget);
-    requestAnimationFrame(() => {
-      document.querySelector(`.trace-group[data-req="${CSS.escape(String(id))}"]`)
-        ?.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
-    });
-    void ensureRead(state.reqId);
+    dispatch({ kind: 'locate', reqId: id });
   }
 
   /** 默认选最新后必须让选中组进入可见区域。 */
@@ -909,15 +944,14 @@ if (typeof document !== 'undefined') {
     let read;
     try {
       read = await store.readRequest(id);
-      state.readingChanged.delete(id);
     } catch {
-      /* reading_changed 的副本清理由 store 作废通知负责 */
+      /* reading_changed 的作废与自动重读由 store 负责；失败态由快照如实渲染 */
       renderMain();
       renderRail();
       return;
     }
-    // 重读与初始装载同深：详情到手后补最多两片可信增量，
-    // 409 作废塌掉的组一次点击就恢复原行组成，不必再点续读。
+    // 重读与初始装载同深：详情到手后补最多两片可信增量；
+    // 409 作废塌掉的组由 store 自动重读恢复，这里只补选择所需的定点块。
     if (!read.delta.done) {
       try { read = await store.loadDelta(id, 2); } catch { /* 失败保留增量事件行，可再次续读 */ }
     }
@@ -952,52 +986,14 @@ if (typeof document !== 'undefined') {
     if (row === undefined) return;
     // 增量事件行是续读入口：打开读数页并再消费两片，不当作步骤选择。
     if (key === `${id}:delta`) {
-      state.reqId = id;
-      state.selectedStep = null;
-      state.toolOrd = null;
-      state.toolOwner = null;
-      state.toolPage = 'pair';
-      state.railTab = 'facts';
-      state.missingReqId = null;
-      state.offPageReqId = null;
-      document.body.classList.remove('rail-collapsed');
-      syncPanelButtons();
-      renderMain();
-      renderRail();
-      renderCrumb();
-      updateURL();
-      void resumeDelta(id);
+      dispatch({ kind: 'select-delta', reqId: id });
       return;
     }
     const step = projectSteps(row, store.peekRequest(id), systemContextOf(row, x => store.peekRequest(x)))
       .find(item => item.key === key) ?? null;
     const source = resolveSelectedSource(step);
-    // 调用步骤与已配对的结果步骤都进入配对页，右栏同屏阅读两端；
-    // 未配对的结果步骤保留正文定位，记录步骤打开请求读数。
-    const pairSource = source.side === 'pair' ? source
-      : source.side === 'reply' && source.target === 'call' ? source : null;
-    state.reqId = id;
-    state.selectedStep = key;
-    state.toolOrd = pairSource !== null ? pairSource.callOrd : null;
-    state.toolOwner = pairSource !== null ? pairSource.ownerReq : null;
-    state.toolPage = 'pair';
-    state.railTab = pairSource !== null ? 'tools'
-      : source.side === 'request' || source.side === 'reply' ? 'body' : 'facts';
-    state.missingReqId = null;
-    state.offPageReqId = null;
-    document.body.classList.remove('rail-collapsed');
-    syncPanelButtons();
-    renderMain();
-    renderRail();
-    renderCrumb();
-    updateURL();
-    // 重绘会替换 DOM：把焦点放回当前步骤，键盘导航不中断。
-    requestAnimationFrame(() => {
-      const current = /** @type {HTMLElement | null} */ (document.querySelector('.compact-select[aria-current="true"]'));
-      if (current !== null && document.activeElement === document.body) current.focus();
-    });
-    await ensureRead(id);
-    if (pairSource !== null) await ensurePair(pairSource.ownerReq, pairSource.callOrd);
+    // 配对判定与页签映射在选择转换里：这里只解析步骤来源。
+    dispatch({ kind: 'select-step', reqId: id, stepKey: String(key), source });
   }
 
   /** @param {number} id */
@@ -1005,7 +1001,7 @@ if (typeof document !== 'undefined') {
     try {
       await store.loadStructure(id);
     } catch {
-      /* reading_changed 的副本清理由 store 作废通知负责；其余结构失败保留 error 状态 */
+      /* reading_changed 的作废与自动重读由 store 负责；其余结构失败保留 error 状态 */
     }
     renderMain();
     renderRail();
@@ -1016,7 +1012,7 @@ if (typeof document !== 'undefined') {
     try {
       await store.loadDelta(id, 2);
     } catch {
-      /* reading_changed 的副本清理由 store 作废通知负责；其余失败保留未消费位置可重试 */
+      /* reading_changed 的作废与自动重读由 store 负责；其余失败保留未消费位置可重试 */
     }
     renderMain();
     renderRail();
@@ -1045,15 +1041,7 @@ if (typeof document !== 'undefined') {
       detail = read.detail;
     } catch { /* 读取失败按未找到处理 */ }
     const target = resolveTraceTarget(rows, state.reqId, detail);
-    if (target.kind === 'canonical' && target.reqId !== null) {
-      state.reqId = target.reqId;
-    } else if (target.kind === 'off-page') {
-      state.offPageReqId = state.reqId;
-      state.reqId = null;
-    } else if (target.kind === 'missing') {
-      state.missingReqId = state.reqId;
-      state.reqId = null;
-    }
+    dispatch({ kind: 'trace-resolved', result: target.kind, reqId: target.reqId });
   }
 
   /**
@@ -1062,36 +1050,26 @@ if (typeof document !== 'undefined') {
    */
   async function selectSession(key, wantedTrace = null) {
     const myNav = ++navEpoch;
-    state.session = key;
-    state.reqId = wantedTrace;
-    state.missingReqId = null;
-    state.offPageReqId = null;
-    state.selectedStep = null;
-    state.toolOrd = null;
-    state.toolOwner = null;
-    state.requestOpen = new Set();
     // 页签是显式声明或用户偏好：URL 直达、popstate 与手动切会话都保留当前
     // 顶层页签；请求内的步骤与工具选择仍清除。
+    dispatch({ kind: 'open-session', sessionKey: key, wantedTrace });
+    state.requestOpen = new Set();
     state.pendingSession = key;
     state.userScrolled = false;
     state.revealed = false;
-    state.readingChanged.clear();
     renderMain();
     await store.selectSession(key, windowLimit());
     if (myNav !== navEpoch) return;
     state.pendingSession = null;
     await resolveInitialTrace();
     if (myNav !== navEpoch) return;
-    if (state.reqId === null && state.offPageReqId === null) {
-      // 默认选最新一笔；窗口外 trace 保留其语义，不用最新顶替。
-      const rows = currentRows();
-      state.reqId = rows[rows.length - 1]?.req_id ?? null;
-    }
+    // 默认选最新一笔；窗口外 trace 保留其语义，不用最新顶替。
+    const rows = currentRows();
+    dispatch({ kind: 'session-default', latestReqId: rows[rows.length - 1]?.req_id ?? null });
     renderAll();
     void loadWindowReads();
     // 导航完成处补路由读取：URL 直达与切会话后路由页不要求再点一次页签。
-    const routeTarget = routeReadTarget(state.railTab, state.reqId);
-    if (routeTarget !== null) void ensureRoute(routeTarget);
+    dispatch({ kind: 'nav-settled' });
     if (state.offPageReqId !== null) {
       // 窗口外 trace：详情已在右栏说明，主列表停在最前面。
       el('main').scrollTop = 0;
@@ -1111,6 +1089,15 @@ if (typeof document !== 'undefined') {
   document.addEventListener('click', (e) => {
     const t = /** @type {HTMLElement} */ (e.target);
     if (t.closest('summary')) return;
+    // 组级「已更新」标记：点进组里即视为已看到，随后的选择处理照常重绘。
+    const flaggedGroup = /** @type {HTMLElement | null} */ (t.closest('.trace-group'));
+    if (flaggedGroup !== null) {
+      const flaggedId = Number(flaggedGroup.dataset.req);
+      if (store.peekRequest(flaggedId)?.updatedSinceSeen === true) {
+        store.clearUpdated(flaggedId);
+        renderMain();
+      }
+    }
     if (t.closest('#load-earlier')) { void loadEarlier(); return; }
     if (t.closest('#refresh-window')) { void refreshWindow(); return; }
     if (t.closest('#jump-latest')) { void jumpLatest(); return; }
@@ -1128,38 +1115,21 @@ if (typeof document !== 'undefined') {
     // 工具四页导航：所有身份都只用 owner/callOrd；选中同步到调用步骤，中栏高亮一致。
     const toolSelect = /** @type {HTMLElement | null} */ (t.closest('[data-tool-select]'));
     if (toolSelect !== null) {
-      state.toolOrd = Number(toolSelect.dataset.toolSelect);
-      state.toolOwner = state.reqId;
-      state.toolPage = 'pair';
-      if (state.reqId !== null) state.selectedStep = `${state.reqId}:call:${state.toolOrd}`;
-      renderMain();
-      renderRail();
-      updateURL();
-      if (state.reqId !== null) void ensurePair(state.reqId, state.toolOrd);
+      if (state.reqId !== null) {
+        dispatch({ kind: 'open-tool', reqId: state.reqId, callOrd: Number(toolSelect.dataset.toolSelect) });
+      }
       return;
     }
     if (t.closest('[data-tool-back]') !== null) {
-      state.toolOrd = null;
-      state.toolOwner = null;
-      renderRail();
-      updateURL();
+      dispatch({ kind: 'close-tool', andTab: false });
       return;
     }
     const toolPageBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-page]'));
-    if (toolPageBtn !== null) { state.toolPage = toolPageBtn.dataset.toolPage ?? 'overview'; renderRail(); return; }
+    if (toolPageBtn !== null) { dispatch({ kind: 'select-tool-page', page: toolPageBtn.dataset.toolPage ?? 'pair' }); return; }
     // 工具往返行的配对入口：在右栏打开配对页就地阅读，不跳转中栏选择。
     const toolOwnerBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-owner]'));
     if (toolOwnerBtn !== null) {
-      const owner = Number(toolOwnerBtn.dataset.toolOwner);
-      state.toolOrd = Number(toolOwnerBtn.dataset.callOrd);
-      state.toolOwner = owner;
-      state.toolPage = 'pair';
-      state.railTab = 'tools';
-      state.selectedStep = `${owner}:call:${state.toolOrd}`;
-      renderMain();
-      renderRail();
-      updateURL();
-      void ensurePair(owner, state.toolOrd);
+      dispatch({ kind: 'open-pair', owner: Number(toolOwnerBtn.dataset.toolOwner), callOrd: Number(toolOwnerBtn.dataset.callOrd) });
       return;
     }
     const toolRead = /** @type {HTMLElement | null} */ (t.closest('[data-tool-read]'));
@@ -1186,7 +1156,7 @@ if (typeof document !== 'undefined') {
       return;
     }
     const railReply = t.closest('[data-rail-reply]');
-    if (railReply !== null) { state.selectedStep = null; renderRail(); return; }
+    if (railReply !== null) { dispatch({ kind: 'clear-step' }); return; }
     const copyMsg = /** @type {HTMLElement | null} */ (t.closest('[data-copy-msg]'));
     if (copyMsg !== null) {
       const ord = Number(copyMsg.dataset.copyMsg);
@@ -1209,27 +1179,14 @@ if (typeof document !== 'undefined') {
         if (store.peekRequest(reqId) !== null) {
           structureSelected.set(reqId, Number(msg.dataset.msg));
           // 结构内再选消息同步当前选择；中栏高亮与右栏正文一致。
-          state.reqId = reqId;
-          state.selectedStep = `${reqId}:message:${msg.dataset.msg}`;
-          state.toolOrd = null;
-          state.toolOwner = null;
-          renderMain();
-          renderRail();
-          updateURL();
+          dispatch({ kind: 'select-message', reqId, stepKey: `${reqId}:message:${msg.dataset.msg}`, bodyTab: false });
         }
         return;
       }
       const group = msg.closest('.trace-group');
       const id = group !== null ? Number(/** @type {HTMLElement} */ (group).dataset.req) : state.reqId;
       if (id !== null && Number.isFinite(id)) {
-        state.reqId = id;
-        state.selectedStep = `${id}:message:${msg.dataset.msg}`;
-        state.toolOrd = null;
-        state.toolOwner = null;
-        state.railTab = 'body';
-        renderMain();
-        renderRail();
-        updateURL();
+        dispatch({ kind: 'select-message', reqId: id, stepKey: `${id}:message:${msg.dataset.msg}`, bodyTab: true });
       }
       return;
     }
@@ -1248,12 +1205,8 @@ if (typeof document !== 'undefined') {
     }
     const rail = /** @type {HTMLElement | null} */ (t.closest('[data-rail]'));
     if (rail) {
-      state.railTab = rail.dataset.rail === 'facts' ? 'facts' : rail.dataset.rail === 'route' ? 'route' : rail.dataset.rail === 'tools' ? 'tools' : 'body';
-      // 页签点击是明确的阅读动作：按需读取一次，失败保留未读，再次点击可重试。
-      const routeTarget = routeReadTarget(state.railTab, state.reqId);
-      if (routeTarget !== null) void ensureRoute(routeTarget);
-      renderRail();
-      updateURL();
+      // 页签点击是明确的阅读动作：路由读取经转换统一发出，失败保留未读可重试。
+      dispatch({ kind: 'select-tab', tab: String(rail.dataset.rail ?? '') });
       return;
     }
     if (t.closest('#load-more-sessions')) {
@@ -1265,12 +1218,7 @@ if (typeof document !== 'undefined') {
     const target = /** @type {HTMLSelectElement} */ (e.target);
     if (target.dataset.railMsg === undefined) return;
     const reqId = Number(target.dataset.railMsg);
-    state.reqId = reqId;
-    state.selectedStep = `${reqId}:message:${target.value}`;
-    state.toolOrd = null;
-    state.toolOwner = null;
-    renderRail();
-    updateURL();
+    dispatch({ kind: 'select-message', reqId, stepKey: `${reqId}:message:${target.value}`, bodyTab: false });
   });
 
   document.addEventListener('input', (e) => {
@@ -1294,7 +1242,6 @@ if (typeof document !== 'undefined') {
       // 首次展开才读取结构；已读或不完整读取中不重复发起。
       if (read !== null && read.structure.total === null && !read.structure.loading) void loadStructure(id);
     }
-    if (key !== undefined && key.startsWith('route:')) void ensureRoute(Number(key.slice(6)));
   }, true);
 
   // 用户主动滚动后，prepend 不再强行补偿旧锚点。
@@ -1304,7 +1251,7 @@ if (typeof document !== 'undefined') {
   document.addEventListener('keydown', (e) => {
     const target = /** @type {HTMLElement} */ (e.target);
     if (target.matches('input, textarea, summary')) return;
-    if (e.key === 'Escape') { state.railTab = 'facts'; state.toolOrd = null; state.toolOwner = null; renderRail(); updateURL(); }
+    if (e.key === 'Escape') { dispatch({ kind: 'close-tool', andTab: true }); }
   });
 
   el('theme-toggle').addEventListener('click', () => {
@@ -1432,17 +1379,12 @@ if (typeof document !== 'undefined') {
 
   window.addEventListener('popstate', () => {
     const p = new URLSearchParams(location.search);
-    state.session = p.get('session');
-    state.reqId = p.get('trace') ? Number(p.get('trace')) : null;
-    state.missingReqId = null;
-    state.offPageReqId = null;
-    state.railTab = railTabFromParam(p.get('tab'));
-    state.toolOrd = null;
-    state.toolOwner = null;
-    if (state.session !== null) {
-      const trace = p.get('trace');
-      void selectSession(state.session, trace === null ? null : Number(trace));
-    }
+    const trace = p.get('trace');
+    dispatch({
+      kind: 'restore-url', session: p.get('session'),
+      trace: trace ? Number(trace) : null, tab: railTabFromParam(p.get('tab')),
+    });
+    if (state.session !== null) void selectSession(state.session, state.reqId);
   });
 
   applyTheme();
@@ -1455,7 +1397,7 @@ if (typeof document !== 'undefined') {
     }
     if (state.session === null) {
       const first = /** @type {SessionRow | undefined} */ (store.getSessions().items[0]);
-      state.session = first ? first.conv_key : null;
+      if (first) dispatch({ kind: 'open-session', sessionKey: first.conv_key, wantedTrace: null });
     }
     if (state.session !== null) await selectSession(state.session, qp.get('trace') !== null ? Number(qp.get('trace')) : null);
     else renderAll();

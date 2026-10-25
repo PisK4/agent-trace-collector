@@ -14,11 +14,11 @@ System 的显示不完整：投影类型没有 system，输入循环只保留可
 
 角色标签统一使用英文参与角色：`System`、`User`、`Assistant`、`Tool`，辅助请求和事件记录用 `Aux`、`Event`；正文说明继续用中文。工具调用由 Assistant 发出，行内显示 Assistant 加内容类型 `Tool call`；工具结果显示 Tool 加 `Tool result`。消息级列表对纯结果消息显示 Tool 并在预览前标明内容类型；混合 user 消息保留 User，按内容块解释，不把整条消息改成 Tool。`roleTag` 只管显示文本，CSS 类名走稳定的 `roleClass`；`Entry` 保留 `rawRole`，详情单列原始协议角色（如 `role=developer`），未知 role 显示 Unknown。
 
-每个可读步骤携带 `source`：输入消息指向 `request.messages[N]`，顶层 System 指向 `request.system`，回复文本与未知块指向各自内容块（`reply.content[i]`、`reply.choices[0].message.tool_calls[i]`），消息内的工具结果按内容块拆键（`request.messages[N].content[M]`）。`reqId + stepKey` 是选中身份；`state.selectedStep` 是唯一选择，右栏正文按 `resolveSelectedSource` 的解析结果定位，不按时间跳相邻请求。点击调用步骤进入工具四页，输入与 System 步骤打开正文，记录或辅助步骤打开请求读数。调用步骤与已配对的结果步骤自配对页起直达工具配对页（两端同屏、就地阅读），未配对的结果步骤仍打开正文，见[Trace Pair 配对页与右栏就地阅读](../../implemented/feature/2026-10-24-trace-pair-rail-page.md)。请求组只保留轻微边界，选中高亮只落在当前步骤；输入选择的目标 ord 未缓存时定点补读一条并保留选择。
+每个可读步骤携带 `source`：输入消息指向 `request.messages[N]`，顶层 System 指向 `request.system`，回复文本与未知块指向各自内容块（`reply.content[i]`、`reply.choices[0].message.tool_calls[i]`），消息内的工具结果按内容块拆键（`request.messages[N].content[M]`）。`reqId + stepKey` 是选中身份；`state.selectedStep` 是唯一选择，右栏正文按 `resolveSelectedSource` 的解析结果定位，不按时间跳相邻请求。点击调用步骤进入工具四页，输入与 System 步骤打开正文，记录或辅助步骤打开请求读数。调用步骤与已配对的结果步骤自配对页起直达工具配对页（两端同屏、就地阅读），未配对的结果步骤仍打开正文，见[Trace Pair 配对页与右栏就地阅读](../../implemented/feature/2026-10-24-trace-pair-rail-page.md)。请求组只保留轻微边界，选中高亮只落在当前步骤；输入选择的目标 ord 未缓存时定点补读一条并保留选择。这些选择语义的写入机制 2026-10-25 起收拢为 `selection.js` 的纯转换（意图与效果清单），见[选择状态的唯一写者 selection.js](../../implemented/architecture/2026-10-25-selection-single-writer.md)。
 
 System 分两条路径：顶层 `request_fields.system` 由装配层按同 actor 的已确认前驱比较后作为 `systemContext` 传给投影。首个已加载主请求提供当前上下文，前驱可读且同值不重复，变化才标明；前驱不在窗口、未读或不可读时只声明当前上下文。可信 delta 内的 system/developer 消息按真实消息位置出 System 步骤。比较只在阅读层发生，不改变消息 ord、指纹或前驱关系；不按相邻时间跨 actor、跨分支比较。
 
-缓存失效在 `reader-store` 内统一：token 变化的 validate 读取重置整笔快照（含元信息与路由），并等在跑的详情读取结束后再拉一次；普通详情读取合并进在跑请求。每个异步读取在回写前校验会话代次、记录归属与捕获 token。409 只在失败读取仍是当前记录的当前版本时整笔作废，下一次普通读取重建；迟到 409 不能清除已重建的缓存，作废记录不再作为可用快照返回。页面侧统一走「清副本加显式重读」入口，不自动重建。
+缓存失效在 `reader-store` 内统一：token 变化的 validate 读取重置整笔快照（含元信息与路由），并等在跑的详情读取结束后再拉一次；普通详情读取合并进在跑请求。每个异步读取在回写前校验会话代次、记录归属与捕获 token。409 只在失败读取仍是当前记录的当前版本时整笔作废；迟到 409 不能清除已重建的缓存。作废的重建政策 2026-10-25 起改为记录原地重置、快照带作废态返回并按冷却自动重读，页面侧「清副本加显式重读」入口随之更新，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)。
 
 结构列表展示已缓存消息的有序并集，相邻序号之间的空洞标明未读取，连续历史上界仍由结构游标表达。增量每轮两片、可重复显式消费：每片返回后校验所需的 ord 都实际拿到，缺口抛 `delta_gap`、不推进消费位置、坏页不留在缓存；增量未完成或失败投影一条事件记录，点击续读两片，不做全会话自动排空。
 
@@ -42,7 +42,7 @@ System 分两条路径：顶层 `request_fields.system` 由装配层按同 actor
 
 展示层多了一种 System 行：每个 actor 的首个已加载主请求都会带一条当前上下文，重复受同值不重复与变化标明控制；不可读正文之间不推断未变化，前驱缺失时只显示当前值，长会话在锚点补偿后的首屏会多一行。角色归一化以原始值兜底：详情保留 `role=` 原文，未知值显示 Unknown，不按文本标签猜协议事实。多 choice 不提供确定调用位置是已接受的限制，原始对象仍可读。将来支持配对需要先设计带 choice 身份的调用身份，不能把全局编号交给仍按 choice0 读取的工具结果接口。
 
-增量续读把消费推进的义务交还给读者：两片之后需要点击才继续，事件记录承担可见性；`delta_gap` 的固定原因让缺口可报告，代价是坏页重试必须重新走网络。409 后的作废不再有自动恢复，读者需要点一次重读。
+增量续读把消费推进的义务交还给读者：两片之后需要点击才继续，事件记录承担可见性；`delta_gap` 的固定原因让缺口可报告，代价是坏页重试必须重新走网络。409 后的作废最初不做自动恢复（读者需要点一次重读），2026-10-25 起由自动重读接管，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)。
 
 没有长期步骤表，没有 schema 变更，消息位置与协议对象不动；真实库的历史用途与派生结论仍按旧版本存储，需要显式 `rebuild --session` 才按新算法重判。本轮只在合成库执行维护，真实库维护未运行。
 

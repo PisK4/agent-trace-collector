@@ -60,6 +60,16 @@ await store.loadStructure(1);
 await store.loadDelta(1, 2);
 await store.readRoute(1);
 store.invalidate(1);
+store.clearUpdated(1);
+
+const peeked = store.peekRequest(1);
+const readStatus: 'reading' | 'fresh' | 'invalidated' | 'failed' | null = peeked === null ? null : peeked.status;
+// @ts-expect-error status是四值联合或null；any退化时应报TS2578。
+const invalidStatus: number = peeked === null ? null : peeked.status;
+const updatedFlag: boolean = peeked === null ? false : peeked.updatedSinceSeen;
+void readStatus;
+void invalidStatus;
+void updatedFlag;
 
 const row = null as unknown as RequestRow;
 const steps = projectSteps(row, null);

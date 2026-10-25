@@ -10,9 +10,9 @@ Status: implemented
 
 `readRoute` 给路由任务加身份校验：成功与失败路径都核对捕获的任务仍是当前缓存条目（与 `routes.get(id)` 比对），被取代的旧任务抛 `reading_changed`，失败 catch 只在仍是当前条目时删键。
 
-`createReaderStore` 增加可选 `onInvalidated(id)` 通知，只在真正作废当前记录时触发：`invalidateIfCurrent` 判定通过、token 变化原地重置、详情迟到拒绝时当前记录被删。迟到响应与会话切换后的旧任务不作废、不通知。页面把回调接到 `handleReadingChanged`，各 catch 点不再按 `reading_changed` 自行清副本；`refreshWindow` 与 `selectSession` 补清 routes 副本。
+`createReaderStore` 增加可选 `onInvalidated(id)` 通知（2026-10-25 起扩义更名 `onReadChanged`，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)），只在真正作废当前记录时触发：`invalidateIfCurrent` 判定通过、token 变化原地重置、详情迟到拒绝时当前记录被删（删除后来改为原地重置落作废态）。迟到响应与会话切换后的旧任务不作废、不通知。页面把回调接到 `handleReadingChanged`，各 catch 点不再按 `reading_changed` 自行清副本；`refreshWindow` 与 `selectSession` 补清 routes 副本。
 
-[生产阅读缓存 reader-store](../../implemented/feature/2026-10-24-reader-store-cache.md) 的 4 并发、两套游标与显式重读决定不变；[阅读角色与步骤定位修复](../../implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md) 的「清副本加显式重读入口」仍成立，只是清副本改由 store 通知驱动。
+[生产阅读缓存 reader-store](../../implemented/feature/2026-10-24-reader-store-cache.md) 的 4 并发与两套游标不变；重读政策 2026-10-25 起演进为自动重读加立即重读，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)；[阅读角色与步骤定位修复](../../implemented/bug-fix/2026-10-24-reader-role-and-selection-consistency.md) 的「清副本加显式重读入口」仍成立，只是清副本改由 store 通知驱动。
 
 ## Alternatives considered
 
