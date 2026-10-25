@@ -4,6 +4,9 @@ import type { Database } from 'bun:sqlite';
 /** 组派生算法版本；与请求修订一起决定一次完成是否还能复用。 */
 export const GROUP_ALGORITHM = 3;
 
+/** 切片派生的算法号。与同步组的 `GROUP_ALGORITHM` 分开：两者算出的结果不能互相复用。 */
+export const DERIVE_ALGORITHM = 7;
+
 /**
  * 队列待办判定的 SQL 片段。待办查询一律用它拼条件，不再各处手写；
  * 语义（`clean` 行是持久完成记录，不是积压）由 durable-input note 持有。

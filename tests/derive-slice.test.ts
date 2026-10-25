@@ -4,13 +4,17 @@ import { fixture, seedChain, seedRequest, SEED_GROUP } from './fixtures';
 import type { ChainSeed } from './fixtures';
 import { persistBody } from '../src/body';
 import { drainDeriveTx, enqueueDerive } from '../src/derive/sync';
-import { GROUP_ALGORITHM } from '../src/derive/state';
+import { DERIVE_ALGORITHM, GROUP_ALGORITHM } from '../src/derive/state';
 import {
-  DERIVE_ALGORITHM, beginGeneration, discardGeneration,
-  publishGeneration, readEffectiveGroup, recoverSlice, sliceGroupStep,
-  sliceRequestsStage, sliceRolesStage, sliceSummaryStage, sliceToolsStage, sliceReadyStage,
-} from '../src/derive/slice';
-import type { SliceStep } from '../src/derive/slice';
+  beginGeneration, discardGeneration,
+  publishGeneration, readEffectiveGroup, recoverSlice, type SliceStep,
+} from '../src/derive/slice/generation';
+import { sliceGroupStep } from '../src/derive/slice/scheduler';
+import { sliceRequestsStage } from '../src/derive/slice/requests';
+import { sliceRolesStage } from '../src/derive/slice/roles';
+import { sliceSummaryStage } from '../src/derive/slice/summary';
+import { sliceToolsStage } from '../src/derive/slice/tools';
+import { sliceReadyStage } from '../src/derive/slice/ready';
 import { drainDeriveEntry } from '../src/derive/unit';
 import { DEFAULT_DERIVE_BUDGET } from '../src/config';
 import type { SliceRuntime } from '../src/config';
