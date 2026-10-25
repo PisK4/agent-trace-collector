@@ -18,6 +18,7 @@
 | [architecture-design.md](architecture-design.md) | 收敛型架构设计：账本物理记录身份与增量读取协议、三路证据收敛、SQLite 表结构与正文状态、内容去重与语义指纹、乱序重算、查询接口、正文预算与总磁盘硬上限、版本与形状探针、访问控制、AVA 下线顺序与分步落地判据；文末附两轮评审的逐条对照 |
 | [architecture-review.md](architecture-review.md) | 基于设计提交的落地前评审：账本身份、持久化与恢复、正文预算和回收、乱序派生、协议与费用来源、安全边界及合成验收条件；文末两轮结论已逐条落进设计文档 |
 | [operations.md](operations.md) | 运维手册：维护命令与错误码、备份与恢复流程、维护锁、掉电边界、费用时钟冲突诊断、容量门槛、切换核对与 AVA 下线/回滚步骤 |
+| [otlp-exporter-profile.md](otlp-exporter-profile.md) | 对外接入规范：harness 侧 OTLP exporter 的传输认证、属性 profile、登记要求与版本承诺 |
 | [acceptance.md](acceptance.md) | 各轮验收记录：单一轨迹界面的合成验收、历史双视图验收、真实流量暴露的问题、标题与主链、保留与容量、维护与恢复、切换核对 |
 | [AGENTS.md](AGENTS.md) | 文档分层、写作规则与文风禁区；note 与架构文档的接缝 |
 | [架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md) | A—F 批次依赖、跨计划验收、执行导航与交付记录 |

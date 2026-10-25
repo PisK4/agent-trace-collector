@@ -69,6 +69,8 @@ Claude Code 与 OMP 带这两个环境变量启动即可，都按 OTel 标准变
 
 同一会话同时开 magpie 与 OTLP 时，时间线里每笔调用会出现两行，一行 magpie 一行 OTLP，行上来源可区分；第一批不做自动合并。验证命令、错误码表与磁盘档位行为见[运维手册](docs/operations.md)的 OTLP 接入一节。
 
+harness 作者想让自己的工具被 ATC 直接读到：[OTLP exporter 接入 profile](docs/otlp-exporter-profile.md) 写明了导出键集与登记方式，登记成本是一个稳定的 `service.name` 加一行选取规则。
+
 ## 数据从哪来
 
 magpie 三路证据各自补别人的缺失，收敛进同一个 SQLite 库；OTLP 是第四条通道，独立建行，不参与三路合并：
@@ -149,6 +151,7 @@ bun run verify:notes     # 提交前
 - [ATC trace 格式](docs/trace-format.md)：主实体、正文切块、派生结论与置信度
 - [架构设计](docs/architecture-design.md)：证据身份、存储模型、派生、容量与安全边界
 - [运维手册](docs/operations.md)：维护命令、备份恢复、容量门槛、派生切片
+- [OTLP exporter 接入 profile](docs/otlp-exporter-profile.md)：harness 作者的对接规范与登记方式
 - [验收记录](docs/acceptance.md)：各轮合成与真实流量的验收结果
 - [项目定位](docs/project-overview.md)：记录单位与阅读入口的取舍
 - [运行词汇表](CONTEXT.md)：术语定义与边界
