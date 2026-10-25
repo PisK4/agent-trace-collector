@@ -241,6 +241,16 @@ reader-store 改依赖 body-model；esc 与 mdToHtml 单点，trace-view 删除
 
 ### 阶段 5：派生目录与测试归属
 
+已交付三步：六个模块搬进 `src/derive/`（sync.ts 即原 derive.ts）；切片
+实现按阶段拆进 `src/derive/slice/` 七文件，`DERIVE_ALGORITHM` 移到
+`derive/state.ts`；`tests/derive.test.ts` 的 69 个用例按行为归入
+derive-chain / derive-presentation / derive-tool-pairing / derive-purpose /
+derive-rebuild 五个文件，共享种子与快照辅助升入 fixtures.ts，
+queries.test 的端口/SIGTERM/启动任务三个进程级用例迁到 main.test。
+丢弃判定（SLICE_DISCARD_REASONS + sliceDiscardReason）随丢弃操作住在
+slice/generation.ts 而非 scheduler：阶段文件要用它，放 scheduler 会造出
+阶段→调度器的循环导入。
+
 1. 新建 `src/derive/`，先搬 `state.ts`、`read.ts`、`decision.ts`、`unit.ts`、`sync.ts`，改全部导入点。这一步只换路径。
 2. 再拆 `slice/`。`scheduler.ts` 保留 `sliceGroupStep` 与丢弃判定；`generation.ts` 保留开代、发布、丢弃、恢复与退役回收；其余按阶段拆。`derive/unit.ts` 只导入 `slice/scheduler.ts`。阶段文件之间可以互相导入，但不得让 `unit` 认识具体阶段。
 3. 测试按行为重新分组，文件名对应功能：链关系与增量、展示与标题、工具配对、用途协调、维护重建。跨模块一致性测试（同步与切片逐行等价、事务回滚、发布快照、缓存失效）保留在同一文件，不随源码拆分拆散。

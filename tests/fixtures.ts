@@ -5,6 +5,7 @@ import { openStore } from '../src/store';
 import type { Store } from '../src/store';
 import { persistBody, persistBodyTx } from '../src/body';
 import { PURPOSE_VERSION } from '../src/semantics';
+import { enqueueDerive, drainDerive } from '../src/derive/sync';
 
 export function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'collector-test-'));
@@ -211,5 +212,86 @@ export function seedChain(
       [session.purposeChain ?? 'participate', reqId]));
     ids.push(reqId);
   }
+  return ids;
+}
+
+// —— 派生同步路径的行为测试辅助：多种子、单轮快照与整组重算 ——
+
+export type TestStore = ReturnType<typeof fixture>['store'];
+export const DERIVE_GROUP = 'synthetic-derive';
+export const DERIVE_ACTOR = 'actor-synthetic';
+
+export function seedDeriveRound(store: TestStore, ids: readonly [number, number],
+  times: readonly [number, number] = [1000, 1000]): void {
+  store.write(db => {
+    for (const [i, id] of ids.entries()) {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,
+        started_ms,day,via,body_state,derive_version,have,created_at,
+        updated_at,sort_source,sort_key)
+        VALUES (?,?,?,'known',?,'2026-10-22','hook','pending',0,1,1,1,'ledger',?)`,
+        [id, DERIVE_GROUP, DERIVE_ACTOR, times[i]!, `1:2:3:0|${String(i * 100).padStart(20, '0')}`]);
+    }
+  });
+  const user = { role: 'user', content: [{ type: 'text', text: 'synthetic input' }] };
+  const call = { type: 'tool_use', id: 'synthetic_call', name: 'read_file', input: {} };
+  persistBody(store, ids[0], { protocol: 'anthropic',
+    request: { messages: [user] }, reply: { content: [call] }, redact_version: 1 });
+  persistBody(store, ids[1], { protocol: 'anthropic', request: { messages: [user,
+    { role: 'assistant', content: [call] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'synthetic_call',
+      content: 'synthetic output' }] }] }, reply: { content: [] }, redact_version: 1 });
+}
+
+export function deriveSnapshot(store: TestStore, ids: readonly [number, number]) {
+  const [first, second] = ids;
+  const requests = ids.map(id => store.read.query<{
+    prev_req_id: number | null; prev_relation: string; delta_ordinals: string | null;
+    chain_role: string; req_kind: string; title: string | null;
+    title_source: string | null; input_preview: string | null;
+    input_preview_kind: string | null; reply_preview: string | null;
+  }, [number]>(`SELECT prev_req_id,prev_relation,delta_ordinals,chain_role,
+    req_kind,title,title_source,input_preview,input_preview_kind,reply_preview
+    FROM request WHERE req_id=?`).get(id)!).map(row => ({ ...row,
+      prev_req_id: row.prev_req_id === first ? 'first'
+        : row.prev_req_id === second ? 'second' : row.prev_req_id,
+    }));
+  const tools = store.read.query<{
+    req_id: number; ord: number; call_id: string; tool_name: string | null;
+    result_req: number | null; result_ord: number | null; result_path: string | null; state: string;
+  }, [number, number]>(`SELECT req_id,ord,call_id,tool_name,result_req,
+    result_ord,result_path,state FROM tool_call WHERE req_id IN (?,?)
+    ORDER BY req_id,ord`).all(first, second).map(row => ({ ...row,
+      req_id: row.req_id === first ? 'first' : 'second',
+      result_req: row.result_req === first ? 'first'
+        : row.result_req === second ? 'second' : row.result_req,
+    })).sort((a, b) => String(a.req_id).localeCompare(String(b.req_id)) || a.ord - b.ord);
+  return { requests, tools };
+}
+
+export function rebuildDeriveGroup(store: TestStore): void {
+  enqueueDerive(store, DERIVE_GROUP, DERIVE_ACTOR, '');
+  drainDerive(store);
+}
+
+export function seedTextChain(store: ReturnType<typeof fixture>['store'], sessions: string[][]): number[] {
+  // sessions 是每笔请求的完整消息文本序列；返回 req_id 列表。
+  const ids: number[] = [];
+  store.write(db => {
+    for (const [index, texts] of sessions.entries()) {
+      const reqId = index + 1;
+      db.run(
+        `INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source,sort_source,sort_key)
+         VALUES (?,?,?,'actor-a','known',?,'2026-10-20','hook','pending',0,1,1,1,'seed','model_time','ledger',?)`,
+        [reqId, JSON.stringify(['session', 'chain']), 'session', 1000 + index, `ledger|${String(index).padStart(4, '0')}`],
+      );
+      persistBody(store, reqId, {
+        protocol: 'anthropic',
+        request: { messages: texts.map(text => ({ role: 'user', content: [{ type: 'text', text }] })) },
+        reply: { id: `msg_${reqId}`, content: [{ type: 'text', text: 'ok' }] },
+        redact_version: 1,
+      });
+      ids.push(reqId);
+    }
+  });
   return ids;
 }
