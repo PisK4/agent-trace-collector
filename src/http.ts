@@ -10,6 +10,7 @@ import {
   getStats,
   listRequests,
   listSessions,
+  listTurns,
 } from './queries';
 import { PAGE_MAX, bodyRangeError, getBodyPage } from './protocols';
 import {
@@ -307,6 +308,19 @@ export function createHandler(
           return json({ error: 'invalid_direction' }, 400);
         }
         return json(listRequests(store, key, limit, url.searchParams.get('cursor'), direction));
+      }
+
+      const turnsMatch = /^\/api\/sessions\/([^/]+)\/turns$/.exec(path);
+      if (turnsMatch !== null) {
+        const key = decodeURIComponent(turnsMatch[1]!);
+        // from 是累计窗口下界（浏览器已加载的最早请求）；缺参数按全会话结算。
+        const rawFrom = url.searchParams.get('from');
+        let from: number | null = null;
+        if (rawFrom !== null) {
+          if (!/^\d+$/.test(rawFrom)) return json({ error: 'invalid_from' }, 400);
+          from = Number(rawFrom);
+        }
+        return json(listTurns(store, key, from));
       }
 
       const requestMatch = /^\/api\/requests\/(\d+)$/.exec(path);
