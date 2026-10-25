@@ -33,13 +33,17 @@ bun prototypes/synthetic-server.ts
 
 ## 接真实流量
 
-前提是本机已经运行 magpie 网关（默认 `127.0.0.1:3425`），且已验证区间 `>=0.1.1294 <0.2.0`。超区间仍会启动，但采集的数据标未验证。
-
 ```sh
 bun run start        # 127.0.0.1:8320
 ```
 
-首次启动在数据目录生成 `read.token`、`hook.token` 与 `redaction.salt`，权限 0600，目录 0700。此时页面已经能读到账本与路由两路证据，但**没有正文**：请求体与回复只从 hook 来。
+首次启动在数据目录生成 `read.token`、`hook.token`、`otlp.token` 与 `redaction.salt`，权限 0600，目录 0700。默认数据目录是 `~/Library/Application Support/agent-trace-collector`。可覆盖的项：`ATC_DATA_DIR`、`ATC_PORT`、`ATC_LEDGER_PATH`、`ATC_ROUTING_DIR`、`ATC_MAGPIE_URL`、`ATC_BODY_BUDGET`、`ATC_DISK_LIMIT`。监听地址写死回环，不接受配置成通配地址。
+
+之后按数据进路选，两条也可以同时开。
+
+### 走 magpie：三路证据，正文最全
+
+前提是本机已经运行 magpie 网关（默认 `127.0.0.1:3425`），且已验证区间 `>=0.1.1294 <0.2.0`。超区间仍会启动，但采集的数据标未验证。不开 hook 时页面已经能读到账本与路由两路证据，但**没有正文**：请求体与回复只从 hook 来。
 
 拿到正文要把 `plugins/collector.hooks.ts` 注册进 magpie 的插件配置，把 `hook.token` 交给它。插件入口文件名必须带 `.hooks.ts`，由 magpie 侧加载，本仓库不自动安装。插件只做三件事：请求期生成 `hook_id`、完成期上报完整对象、按固定码记录投递结果；不改正文、不做关联、不做脱敏。
 
@@ -47,9 +51,22 @@ bun run start        # 127.0.0.1:8320
 
 没完成关联的 hook 请求留在 `pending_hook`，采集器每 5 秒按 response ID 重试一次；候选唯一才合并，多候选标 ambiguous。
 
-不装 magpie 也能收数据：harness 的 OTLP exporter 指到 `http://127.0.0.1:8320`，认证用数据目录里的 `otlp.token`（与 `hook.token` 各自独立）。端点、环境变量写法与容量档行为见[运维手册](docs/operations.md)的 OTLP 接入一节。
+### 走 OTLP：不装 magpie，harness 自己导出
 
-默认数据目录是 `~/Library/Application Support/agent-trace-collector`。可覆盖的项：`ATC_DATA_DIR`、`ATC_PORT`、`ATC_LEDGER_PATH`、`ATC_ROUTING_DIR`、`ATC_MAGPIE_URL`、`ATC_BODY_BUDGET`、`ATC_DISK_LIMIT`。监听地址写死回环，不接受配置成通配地址。
+已实测两个 harness：Claude Code 与 OMP。采集器收 `POST /v1/traces` 与 `POST /v1/logs`，认证用首次启动生成的 `otlp.token`。令牌文件是 32 字节裸二进制，环境变量里放它的 base64url 形式——直接 `cat` 文件会把非 ASCII 字节塞进 Authorization，请求在 HTTP 层就被判畸形：
+
+```sh
+ATC_TOKEN=$(base64 -i '<dataDir>/otlp.token' | tr '+/' '-_' | tr -d '\n=')
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8320
+export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $ATC_TOKEN"
+```
+
+带这两个环境变量启动 harness 即可，两个都按 OTel 标准变量读：
+
+- **Claude Code**：LLM span 落成请求行；要逐笔正文再加 `OTEL_LOG_RAW_API_BODIES=file`，harness 把完整请求与回复写成文件、事件里带指针，采集器按指针读入并落库，正文完整不截断。
+- **OMP**：span 落成请求行，正文一栏是结构化摘要（页面标「OTLP 摘要」）；它的 OTLP 不带逐笔正文通路。
+
+同一会话同时开 magpie 与 OTLP 时，时间线里每笔调用会出现两行，一行 magpie 一行 OTLP，行上来源可区分；第一批不做自动合并。验证命令、错误码表与磁盘档位行为见[运维手册](docs/operations.md)的 OTLP 接入一节。
 
 ## 数据从哪来
 
