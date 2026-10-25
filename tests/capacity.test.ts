@@ -9,9 +9,9 @@ import {
 import { intervalOf, loadConfig, type Config } from '../src/config';
 import {
   createPeakTracker, finalQueueMissing, offeredShortfall, requiresLongRunAck, scenarioPlan, scheduledTicks,
-} from '../scripts/capacity';
-import type { Args } from '../scripts/capacity';
-import { buildCapacityConfig, makeHookEnvelope, makeLedgerLine, mulberry32 } from '../scripts/capacity-support';
+} from '../scripts/capacity/capacity';
+import type { Args } from '../scripts/capacity/capacity';
+import { buildCapacityConfig, makeHookEnvelope, makeLedgerLine, mulberry32 } from '../scripts/capacity/capacity-support';
 import { fixture } from './fixtures';
 
 test('最近秩分位与空样本', () => {

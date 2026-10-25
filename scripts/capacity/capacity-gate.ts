@@ -11,8 +11,8 @@
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import type { DurationSummary } from '../src/capacity';
-import type { DeriveBudget } from '../src/config';
+import type { DurationSummary } from '../../src/capacity';
+import type { DeriveBudget } from '../../src/config';
 
 export type { DurationSummary };
 

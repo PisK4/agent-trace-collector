@@ -10,7 +10,7 @@ Status: implemented
 
 ## Decision
 
-生产启用路径加入结构化断言：`startCollector` 见到 `deriveBudget` 且调用方未声明容量实验身份（新参数 `options.capacityExperiment`）时，以 `slice_read_unmigrated` 拒绝启动，拒绝发生在开库之前、维护锁检查之后。容量采集器（`scripts/capacity-collector.ts`）是唯一豁免方：它的读数走 `readEffectiveGroup`，不消费 `request` 派生列，显式传 `capacityExperiment: true` 启动切片进程。`scripts/capacity.ts` 在自己的 store 上直接设 `deriveRuntime`，不经过 `startCollector`，不受影响。解除冻结需要读取完整性与容量同时满足，按发布代读取的接入本身不解除断言。当前接口与剩余验证范围见[架构设计](../../../../docs/architecture-design.md#派生代际与发布指针)。
+生产启用路径加入结构化断言：`startCollector` 见到 `deriveBudget` 且调用方未声明容量实验身份（新参数 `options.capacityExperiment`）时，以 `slice_read_unmigrated` 拒绝启动，拒绝发生在开库之前、维护锁检查之后。容量采集器（`scripts/capacity/capacity-collector.ts`）是唯一豁免方：它的读数走 `readEffectiveGroup`，不消费 `request` 派生列，显式传 `capacityExperiment: true` 启动切片进程。`scripts/capacity/capacity.ts` 在自己的 store 上直接设 `deriveRuntime`，不经过 `startCollector`，不受影响。解除冻结需要读取完整性与容量同时满足，按发布代读取的接入本身不解除断言。当前接口与剩余验证范围见[架构设计](../../../../docs/architecture-design.md#派生代际与发布指针)。
 
 ## Alternatives considered
 

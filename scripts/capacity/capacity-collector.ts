@@ -7,9 +7,9 @@
  * 退出，不退到 `DEFAULT_DERIVE_BUDGET`——那会把一条常量冒充成校准结果。
  */
 import { readFileSync } from 'node:fs';
-import type { DeriveBudget } from '../src/config';
-import { startCollector } from '../src/main';
-import { assertCapacityIsolation } from '../src/capacity';
+import type { DeriveBudget } from '../../src/config';
+import { startCollector } from '../../src/main';
+import { assertCapacityIsolation } from '../../src/capacity';
 import { buildCapacityConfig } from './capacity-support';
 import { loadSliceBudget } from './capacity-gate';
 

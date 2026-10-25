@@ -8,9 +8,9 @@ Status: implemented
 
 ## Decision
 
-`scripts/capacity-support.ts` 提供固定种子伪随机数、合成 hook envelope、账本行与路由行，以及只由临时根构造的 `Config`。共享历史逐字节固定，只有末尾用户消息随 hook id 变化，便于验证增量与指纹。请求与回复的字节数取序列化后的实际值，目标尺寸只作输入。
+`scripts/capacity/capacity-support.ts` 提供固定种子伪随机数、合成 hook envelope、账本行与路由行，以及只由临时根构造的 `Config`。共享历史逐字节固定，只有末尾用户消息随 hook id 变化，便于验证增量与指纹。请求与回复的字节数取序列化后的实际值，目标尺寸只作输入。
 
-`scripts/capacity-collector.ts` 是子进程入口：读取临时根里的 JSON 配置，先跑 `assertCapacityIsolation`，再调用 `startCollector`，打印 `collector_listening:<port>`。假上游只回答版本探针与空用量页，不做转发。`waitForCollector` 等待监听端口，超时或提前退出都显式失败。
+`scripts/capacity/capacity-collector.ts` 是子进程入口：读取临时根里的 JSON 配置，先跑 `assertCapacityIsolation`，再调用 `startCollector`，打印 `collector_listening:<port>`。假上游只回答版本探针与空用量页，不做转发。`waitForCollector` 等待监听端口，超时或提前退出都显式失败。
 
 ## Alternatives considered
 

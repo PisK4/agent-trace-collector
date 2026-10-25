@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { openStore } from '../src/store';
 import { persistBodyTx } from '../src/body';
-import { makeHookEnvelope, waitForCollector } from './capacity-support';
+import { makeHookEnvelope, waitForCollector } from './capacity/capacity-support';
 
 // 只使用独立子进程、合成正文和新临时根，负载端不占用采集器事件循环。
 const repository = dirname(import.meta.dir);
@@ -25,7 +25,7 @@ try {
   const configPath = join(root, 'config.json');
   writeFileSync(configPath, JSON.stringify({ root, upstream_port: upstream.port,
     body_budget: 1_000_000_000, disk_limit: 2_000_000_000 }));
-  child = Bun.spawn([process.execPath, join(repository, 'scripts/capacity-collector.ts'), configPath],
+  child = Bun.spawn([process.execPath, join(repository, 'scripts/capacity/capacity-collector.ts'), configPath],
     { cwd: repository, stdout: 'pipe', stderr: 'pipe' });
   const port = await waitForCollector(child);
   const readToken = readFileSync(join(root, 'data', 'read.token')).toString('base64url');

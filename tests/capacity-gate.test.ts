@@ -2,17 +2,17 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { countPublishedGenerations, derivedHash, derivedHashSlice, parseArgs, scenarioPlan } from '../scripts/capacity';
+import { countPublishedGenerations, derivedHash, derivedHashSlice, parseArgs, scenarioPlan } from '../scripts/capacity/capacity';
 import { SEED_GROUP, fixture, seedChain } from './fixtures';
 import {
   deriveBudget, deriveScenarioBudget, evaluateGate, evaluateReports, evaluateSliceBasis,
   evaluateSliceChecks, flattenReport, loadBudget, loadReport, loadScenarioReports,
   loadSliceBudget, loadSummary, sha256File, sliceDeriveBudget,
-} from '../scripts/capacity-gate';
-import { buildDecisionFile, decideCapacity } from '../scripts/capacity-decision';
+} from '../scripts/capacity/capacity-gate';
+import { buildDecisionFile, decideCapacity } from '../scripts/capacity/capacity-decision';
 import type {
   CapacityBudget, GateFailure, ScenarioReport, ScenarioSummary, SliceDeriveBudgetFile, ThresholdBasis,
-} from '../scripts/capacity-gate';
+} from '../scripts/capacity/capacity-gate';
 
 /** 全部为占位数字的合成报告：形状与负载端产出一致，不含任何真实测量值。 */
 function report(input: {
@@ -140,7 +140,7 @@ function sliceReport(input: {
 /** 门槛命令行：读两个文件、打印失败项、按退出码表态，别处没有更便宜的入口。 */
 function runGate(budgetPath: string, reportPath: string): { code: number | null; stderr: string } {
   const child = Bun.spawnSync({
-    cmd: ['bun', join(import.meta.dir, '..', 'scripts', 'capacity-gate.ts'),
+    cmd: ['bun', join(import.meta.dir, '..', 'scripts', 'capacity', 'capacity-gate.ts'),
       'gate', '--budget', budgetPath, '--report', reportPath],
     stdout: 'pipe', stderr: 'pipe',
   });
@@ -441,7 +441,7 @@ test('切片场景在没有切片预算时拒绝启动，退出 2', () => {
     writeFileSync(stalePath, JSON.stringify(budgetOf('baseline-1rps', deriveScenarioBudget(report()))));
     const run = (...extra: string[]): { code: number | null; stderr: string } => {
       const child = Bun.spawnSync({
-        cmd: ['bun', join(import.meta.dir, '..', 'scripts', 'capacity.ts'),
+        cmd: ['bun', join(import.meta.dir, '..', 'scripts', 'capacity', 'capacity.ts'),
           'long-10000-slice', '--acknowledge-long-run', '--report', reportPath, ...extra],
         stdout: 'pipe', stderr: 'pipe',
       });
@@ -458,7 +458,7 @@ test('切片场景在没有切片预算时拒绝启动，退出 2', () => {
     expect(existsSync(reportPath)).toBe(false);
     // 预算给同步场景是把场景和预算配错，不能静默丢掉。
     const mispaired = Bun.spawnSync({
-      cmd: ['bun', join(import.meta.dir, '..', 'scripts', 'capacity.ts'),
+      cmd: ['bun', join(import.meta.dir, '..', 'scripts', 'capacity', 'capacity.ts'),
         'long', '--acknowledge-long-run', '--requests', '2000', '--slice-budget', stalePath,
         '--report', reportPath],
       stdout: 'pipe', stderr: 'pipe',

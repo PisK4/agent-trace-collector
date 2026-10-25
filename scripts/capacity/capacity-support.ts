@@ -3,9 +3,9 @@
  * 生成器固定种子，报告可复现，且不读取任何真实数据路径。
  */
 import { join } from 'node:path';
-import type { HookEnvelope } from '../src/hook';
-import type { Config } from '../src/config';
-import type { DeriveBudget } from '../src/config';
+import type { HookEnvelope } from '../../src/hook';
+import type { Config } from '../../src/config';
+import type { DeriveBudget } from '../../src/config';
 
 export function mulberry32(seed: number): () => number {
   let state = seed >>> 0;
