@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   PURPOSE_RULES, classifyPurposeWithRules, type HarnessPurposeRule,
 } from '../src/harness/purpose';
@@ -72,4 +73,16 @@ test('规则弃权返回 null，落回通用判定', () => {
 
 test('生产登记只含已知品牌标签', () => {
   expect(PURPOSE_RULES.map(rule => rule.agent)).toEqual(['claude', 'omp']);
+});
+
+/**
+ * 品牌字面不回流共享文件：通用判定与结算是无 Harness 知识的，专属指纹只在
+ * src/harness/ 与登记处。按整词匹配，compaction 这类域名词不误伤；命中时把
+ * 规则写进 adapter 并登记，而不是在此放行。
+ */
+test('semantics 与 request-purpose 源码不出现 claude/omp 品牌字面', () => {
+  for (const file of ['../src/semantics.ts', '../src/request-purpose.ts']) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8');
+    expect(/\b(claude|omp)\b/i.test(source)).toBe(false);
+  }
 });
