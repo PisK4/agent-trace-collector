@@ -5,7 +5,7 @@ import { persistBodyTx } from './body';
 import type { BodyInput } from './body';
 import { redact } from './privacy';
 import { localDay, modelTimeTitle } from './format';
-import { normalizeResponseId } from './sources/magpie';
+import { normalizeResponseId } from './sources/magpie/mapping';
 import {
   markGroupDirtyTx,
   markRequestInputTx,

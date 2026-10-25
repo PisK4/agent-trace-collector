@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { LedgerFields, RouteFields } from './magpie';
+import type { LedgerFields, RouteFields } from './magpie/mapping';
 import { SOURCE_PROJECTION_VERSION } from './projection';
 import { PRIVACY_TRANSFORM_VERSION } from '../privacy';
 

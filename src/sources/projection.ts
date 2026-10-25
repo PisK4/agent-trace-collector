@@ -3,9 +3,9 @@ import {
   isRecord,
   mapLedgerRow,
   mapRouteRow,
-} from './magpie';
+} from './magpie/mapping';
 import { localDay } from '../format';
-import type { LedgerFields, RouteFields } from './magpie';
+import type { LedgerFields, RouteFields } from './magpie/mapping';
 import { HAVE_LEDGER } from '../evidence';
 import {
   buildProjectionMeta,

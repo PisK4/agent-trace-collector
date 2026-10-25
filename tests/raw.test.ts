@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
 import { insertPreparedLedgerTx } from '../src/sources/raw';
-import type { LedgerFields } from '../src/sources/magpie';
+import type { LedgerFields } from '../src/sources/magpie/mapping';
 import { SOURCE_PROJECTION_VERSION } from '../src/sources/projection';
 import { PRIVACY_TRANSFORM_VERSION } from '../src/privacy';
 

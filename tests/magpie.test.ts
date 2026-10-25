@@ -3,16 +3,9 @@ import { chmodSync, lstatSync, mkdirSync, symlinkSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { loadLocalSecret } from '../src/config';
-import {
-  assertCostPagePeriod,
-  classifyLedger,
-  costState,
-  mapLedgerRow,
-  mapRouteRow,
-  probeMagpie,
-  syncCosts,
-  validateCostPeriod,
-} from '../src/sources/magpie';
+import { assertCostPagePeriod, costState, syncCosts, validateCostPeriod } from '../src/sources/magpie/costs';
+import { classifyLedger, mapLedgerRow, mapRouteRow } from '../src/sources/magpie/mapping';
+import { probeMagpie } from '../src/sources/magpie/probe';
 import { getStats } from '../src/queries/stats';
 
 const salt = new Uint8Array(32).fill(7);
