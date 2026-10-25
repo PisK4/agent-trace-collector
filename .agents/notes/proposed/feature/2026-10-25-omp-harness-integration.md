@@ -169,6 +169,7 @@ OMP 源码参照（`repos-external/oh-my-pi`，注意 18.0.10 滞后于装机 18
 随实现逐项回填；最终随 proposed → implemented 转写合并进 Decision。
 
 - 2026-10-25 第四项已交付：effort 读数行落在「用量与上下文」折叠行（`usageFoldHtml` 第三参收正文首片，新增 `requestEffortOf` 从 `request_fields.reasoning_effort` 取值），装配处在 `web/app.js` 的 `railFacts`。值取自正文首片而非尝试链，因此单次干净调用（尝试链不渲染）也显示；未读正文或字段缺失时整行不渲染，不占位。
+- 2026-10-25 第五项已交付。`argsOf` 补 `path` 键（`file_path` 优先，`command`/`pattern` 仍不提取）；OMP 源码 18.0.10 复核了参数形状：read 只收 `path`、write 收 `path`+`content`、edit 常态是 replace 模式 `path`+`old_string`+`new_string`、grep 是 `pattern`+`path?`、glob 的 pattern 本身在 `path` 键、todo 按 `op` 组织、task 收 `agent`+`task`、web_search 收 `query`、ask 收 `questions` 数组——摘要分派按这些形状落，核心键缺失走既有回退链。色类按验收标准补了 read/edit/write 的小写别名（与大写同色，不扩新类），grep/glob/todo/task/web_search/ask 落中性色，维持「色类是既有语言、扩类克制」的取舍。会话汇总的写入/读取分组与点击定位改按小写化工具名过滤。算法号 GROUP_ALGORITHM 3→4、DERIVE_ALGORITHM 7→8，`scripts/backfill-omp-semantics.ts` 按汇总回填先例建骨架（本提交只做全组标脏重派生，补列补表随后续交付扩展）。
 
 ## Alternatives considered
 
