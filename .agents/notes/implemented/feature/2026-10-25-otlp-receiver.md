@@ -186,6 +186,7 @@ harness 面的文档级扫描（同日）：
   - 双通道并存两行的提示
 
   错误码表与磁盘档位仍以运维手册为家。
+- 2026-10-26 Codex 白名单条目已交付（`OTLP_MAPPING_VERSION` 升 2）。`codex_cli_rs` 按 span 名 `session_task.turn` 建行：session 取 `thread.id`、模型取 `model`（无回复侧模型与终止原因字段，保持 NULL）、四项用量取自有 `codex.turn.token_usage.*` 族（non_cached / reasoning / total 三项留原始层）；`session_task.compact` / `review` / `user_shell` 不建行也不进未知桶。键集对齐父知识库固定提交源码考察，未抓样实测，真实流量验收单独一轮，决策归[两步走提案](../../proposed/feature/2026-10-26-otlp-exporter-profile-and-codex.md)。页面标签 `codex`、运维手册的 TOML 配置段与 README 接入段同步。
 
 ## Alternatives considered
 

@@ -40,6 +40,27 @@ function ingestOmp(payload: { resource: { service: string }; spans: typeof OMP_C
   }
 }
 
+/** 与 Codex turn span 同形状的合成 span：字段清单取自固定提交源码考察，值全自造。 */
+const CODEX_TURN = {
+  traceId: SYNTH.traceB,
+  spanId: SYNTH.spanLLM,
+  name: 'session_task.turn',
+  startNano: SYNTH.msToNano(1_792_946_000_000),
+  endNano: SYNTH.msToNano(1_792_946_003_200),
+  attrs: {
+    'thread.id': 'thread-synth-0001',
+    'turn.id': 'turn-synth-0001',
+    model: 'synth-codex-model',
+    'codex.turn.token_usage.input_tokens': { int: 1200 },
+    'codex.turn.token_usage.cached_input_tokens': { int: 3000 },
+    'codex.turn.token_usage.cache_write_input_tokens': { int: 500 },
+    'codex.turn.token_usage.non_cached_input_tokens': { int: 1100 },
+    'codex.turn.token_usage.output_tokens': { int: 45 },
+    'codex.turn.token_usage.reasoning_output_tokens': { int: 20 },
+    'codex.turn.token_usage.total_tokens': { int: 4745 },
+  },
+};
+
 test('OMP chat span 落库：via=otlp、have=8、白名单列映射、conv 与 magpie 同组键', () => {
   const { store, result } = ingestOmp([{ resource: { service: 'oh-my-pi' }, spans: [OMP_CHAT] }]);
   try {
@@ -156,8 +177,64 @@ test('CC 一棵 span 树只建 llm_request 行：interaction 不出现在请求�
   }
 });
 
-test('span 不带会话 id：行可查但没有 conv_key，也不进派生队列', () => {
+test('Codex turn span 落库：session 取 thread.id，四项用量取自有键族，未映射项留原始层', () => {
   const store = fixture();
+  try {
+    const decoded = decodeTracesBody(tracesProtobuf([
+      { resource: { service: 'codex_cli_rs' }, spans: [CODEX_TURN] },
+    ]), 'protobuf');
+    const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
+    expect(result.requestsCreated).toBe(1);
+    const row = store.store.read.query(`
+      SELECT via, have, agent, session, model_requested, model_served, stop,
+        in_tok, out_tok, cache_read, cache_write, conv_source
+      FROM request`).get() as Record<string, unknown>;
+    expect(row.via).toBe('otlp');
+    expect(row.have).toBe(8);
+    expect(row.agent).toBe('codex');
+    expect(row.session).toBe('thread-synth-0001');
+    expect(row.model_requested).toBe('synth-codex-model');
+    // Codex 无回复侧模型与终止原因字段：按缺失保持 NULL，不拿相邻字段顶替。
+    expect(row.model_served).toBeNull();
+    expect(row.stop).toBeNull();
+    expect(row.in_tok).toBe(1200);
+    expect(row.out_tok).toBe(45);
+    expect(row.cache_read).toBe(3000);
+    expect(row.cache_write).toBe(500);
+    expect(row.conv_source).toBe('otlp-session');
+    // 七项用量里不进既有列的三项留在原始层，不丢。
+    const raw = JSON.parse((store.store.read.query<{ attributes_json: string }, []>(
+      'SELECT attributes_json FROM raw_otlp_span').get()!).attributes_json);
+    expect(raw['codex.turn.token_usage.non_cached_input_tokens']).toBe(1100);
+    expect(raw['codex.turn.token_usage.reasoning_output_tokens']).toBe(20);
+    expect(raw['codex.turn.token_usage.total_tokens']).toBe(4745);
+  } finally {
+    store.close();
+  }
+});
+
+test('Codex 的 compact 与 user_shell 任务 span 不建行，也不进未知桶', () => {
+  const store = fixture();
+  try {
+    const decoded = decodeTracesBody(tracesProtobuf([
+      { resource: { service: 'codex_cli_rs' }, spans: [
+        { ...CODEX_TURN, name: 'session_task.compact', spanId: SYNTH.spanTool },
+        { ...CODEX_TURN, name: 'session_task.user_shell', spanId: SYNTH.spanInteraction },
+      ] },
+    ]), 'protobuf');
+    const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
+    expect(result.spans).toBe(2);
+    expect(result.requestsCreated).toBe(0);
+    // 自有键族不在 LLM 形状判据里：旁路任务静默落原始层，不刷未知桶。
+    expect(result.unknownShape).toBe(0);
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(0);
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(2);
+  } finally {
+    store.close();
+  }
+});
+
+test('span 不带会话 id：行可查但没有 conv_key，也不进派生队列', () => {  const store = fixture();
   try {
     const decoded = decodeTracesBody(tracesProtobuf([{ resource: { service: 'oh-my-pi' }, spans: [{
       traceId: SYNTH.traceA, spanId: SYNTH.spanLLM, name: 'chat synth-model-lite',
