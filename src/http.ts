@@ -32,6 +32,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  '/session-view.js': { file: 'session-view.js', type: 'text/javascript; charset=utf-8' },
   '/body-view.js': { file: 'body-view.js', type: 'text/javascript; charset=utf-8' },
   '/rail-facts.js': { file: 'rail-facts.js', type: 'text/javascript; charset=utf-8' },
   '/reader-store.js': { file: 'reader-store.js', type: 'text/javascript; charset=utf-8' },

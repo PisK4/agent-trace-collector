@@ -220,7 +220,10 @@ web/
 
 ### 阶段 4：页面展示、布局与正文模型
 
-按四个小步交付，每步单独可回退：
+按四个小步交付，每步单独可回退。第 1 步（session-view.js）已交付：
+十个会话级展示函数与四个格式化辅助搬出，函数签名改显式输入，
+openSummaryList 的网络与状态更新留在控制器。
+
 
 1. **`session-view.js`**：搬出 `sessionTotalsHtml`、`coverageHoverText`、`pathLabel`、`summaryToolChips`、`summaryPathFlow`、`summarySkills`、`summaryStructure`、`sessionSummaryFold`、`sessionHead`、`railSummaryListHtml`。函数签名改为显式输入；`openSummaryList` 的网络与状态更新留在控制器。
 2. **`layout.js`**：搬出 `applyTheme`、主题按钮处理、`clampWidth`、`resizeRail`、`fitRail`、`syncPanelButtons` 与拖拽、键盘事件。模块自己持有 `themePref`、`preferredRailWidth`、`draggingPointer`。轨迹锚点、选中步骤焦点与轮次带定位留在控制器。
