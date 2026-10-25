@@ -11,7 +11,7 @@ import {
 } from './derive-decision';
 import type { PredecessorMatch, ResolvedTool } from './derive-decision';
 import {
-  compareLogicalOrder, compareTraversalOrder, fingerprintsOf, presentationPortsOf,
+  compareLogicalOrder, compareTraversalOrder, fingerprintsOf, interruptCountTx, presentationPortsOf,
   replyInfoOf, uncertainOrderIds,
 } from './derive-read';
 import type { DeriveScope, LogicalRow, ReplyInfo } from './derive-read';
@@ -50,7 +50,7 @@ type ChainRow = {
   title_source: string | null; title: string | null; model_served: string | null;
   req_kind: string | null; model_title: string | null; purpose_chain: string;
   input_preview: string | null; input_preview_kind: string | null; reply_preview: string | null;
-  reply_shape: string | null;
+  reply_shape: string | null; interrupt_count: number | null;
 };
 
 /** 链阶段为摘要准备的输入：本轮关系、当前可读序列与用途结论。 */
@@ -58,6 +58,8 @@ type PresentationInput = {
   row: ChainRow; current: readonly string[] | null;
   replyInfo: ReplyInfo; isAux: boolean; isTitle: boolean; modelTitle: string | null;
   match: PredecessorMatch;
+  /** 本笔确定增量的中断计数；delta 为 null 时沿用旧行值，不冒充 0。 */
+  interrupts: number | null;
 };
 
 /**
@@ -72,7 +74,7 @@ type PresentationInput = {
  */
 function writePresentationTx(db: Database, input: PresentationInput,
   associations: readonly ResolvedTool[], group: QueuedGroup): void {
-  const { row, current, replyInfo, isAux, isTitle, modelTitle, match } = input;
+  const { row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts } = input;
   const decision = presentationDecision(presentationPortsOf(db), {
     reqId: row.req_id,
     agent: row.agent,
@@ -105,14 +107,17 @@ function writePresentationTx(db: Database, input: PresentationInput,
   // 形状位与摘要同一套保留语义：正文可读时按本次 reply 重算，不可读时保留
   // 派生时的旧值（回收不清除不重算；升级前从未算过的行保持 NULL，由回填收口）。
   const replyShape = replyInfo.shape ?? row.reply_shape;
+  // 中断计数同一套保留语义：delta 在手时按本次增量计，其余场合沿用旧值。
+  const interruptCount = interrupts ?? row.interrupt_count;
   db.run(`UPDATE request SET title=?,title_source=?,input_preview=?,
-    input_preview_kind=?,reply_preview=?,reply_shape=?,derive_version=derive_version+1,
+    input_preview_kind=?,reply_preview=?,reply_shape=?,interrupt_count=?,
+    derive_version=derive_version+1,
     summary_algorithm=CASE WHEN ?=1 THEN ? ELSE summary_algorithm END,
     summary_basis=CASE WHEN ?=1 THEN ? ELSE summary_basis END,
     summary_state=CASE WHEN ?=1 THEN 'recomputed' ELSE 'retained' END
     WHERE req_id=?`, [
     decision.title, decision.titleSource, decision.inputPreview, decision.inputKind,
-    decision.replyPreview, replyShape,
+    decision.replyPreview, replyShape, interruptCount,
     comparable ? 1 : 0, GROUP_ALGORITHM, comparable ? 1 : 0, basis, comparable ? 1 : 0,
     row.req_id,
   ]);
@@ -258,7 +263,7 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
     const rows = db.query<ChainRow, [string, string]>(`
       SELECT req_id, actor, agent, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
              title_source, title, model_served, req_kind, model_title, purpose_chain,
-             input_preview, input_preview_kind, reply_preview, reply_shape
+             input_preview, input_preview_kind, reply_preview, reply_shape, interrupt_count
       FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
     const ordered = [...rows].sort(compareTraversalOrder);
     // 同毫秒且没有来源位置证据的请求：可以遍历，但不能用来证明先后。
@@ -315,7 +320,10 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
       ]);
       pairRows.push({ ...row,
         prev_relation: match.relation, delta_ordinals: deltaJson });
-      presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match });
+      // 中断计数只在确定增量在手时重算（first/confirmed 隐含正文可读且参与）；
+      // 关系未知、分支与排除用途没有"新增"可言，保留旧值，不冒充 0。
+      const interrupts = delta === null ? null : interruptCountTx(db, row.req_id, delta);
+      presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts });
       if (current === null) retained += 1;
       else recomputed += 1;
       if (!isAux && current !== null && !uncertain.has(row.req_id)) {
@@ -385,9 +393,15 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
         AND body_state IN ('available','partial'))`,
   [group.conv_key, group.actor]);
 
-  type Call = { req_id: number; ord: number; call_id: string; name: string; index: number };
+  type Call = {
+    req_id: number; ord: number; call_id: string; name: string; index: number;
+    arg_path: string | null; arg_skill: string | null;
+  };
   const calls: Call[] = [];
-  const results: { req_id: number; index: number; ord: number; path: string; call_id: string; value: unknown; confirmed: boolean }[] = [];
+  const results: {
+    req_id: number; index: number; ord: number; path: string; call_id: string;
+    value: unknown; confirmed: boolean; is_error: number;
+  }[] = [];
 
   for (const [index, row] of rows.entries()) {
     // 排除用途是旁路：不进入工具候选，与它不进祖先集合同一个理由。
@@ -401,12 +415,16 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     const ordinalConfirmed = (ord: number): boolean =>
       confirmedDelta.all || confirmedDelta.ords.includes(ord);
     for (const block of anthropicReplyCalls(body.reply)) {
-      calls.push({ req_id: row.req_id, ord: block.ord, call_id: block.id, name: block.name, index });
+      calls.push({
+        req_id: row.req_id, ord: block.ord, call_id: block.id, name: block.name, index,
+        arg_path: block.argPath, arg_skill: block.argSkill,
+      });
     }
     for (const result of anthropicRequestResults(body.request)) {
       results.push({
         req_id: row.req_id, index, ord: result.ord, path: result.path,
         call_id: result.id, value: result.value, confirmed: ordinalConfirmed(result.ord),
+        is_error: result.isError,
       });
     }
   }
@@ -427,10 +445,12 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     if (state === 'ambiguous') ambiguous += 1;
     else pending += 1;
     db.run(
-      `INSERT INTO tool_call(call_id,req_id,ord,tool_name,result_req,result_ord,result_path,state,derive_version,
+      `INSERT INTO tool_call(call_id,req_id,ord,tool_name,arg_path,arg_skill,
+         result_req,result_ord,result_path,is_error,state,derive_version,
          algorithm_version,basis_json,retention_state)
-       VALUES (?,?,?,?,NULL,NULL,NULL,?,1,?,?,'recomputed')`,
-      [call.call_id, call.req_id, call.ord, call.name, state, GROUP_ALGORITHM, toolBasis(group, call.call_id)],
+       VALUES (?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,1,?,?,'recomputed')`,
+      [call.call_id, call.req_id, call.ord, call.name, call.arg_path, call.arg_skill,
+        state, GROUP_ALGORITHM, toolBasis(group, call.call_id)],
     );
   }
 
@@ -438,12 +458,12 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     const candidates = byCallId.get(result.call_id) ?? [];
     if (candidates.length === 0) continue;
     if (candidates.length > 1) {
-      // 多候选保持 ambiguous，结果位置仍然记下，便于人工核对。
+      // 多候选保持 ambiguous，结果位置与失败位照样记下，便于人工核对。
       for (const call of candidates) {
         db.run(
-          `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state='ambiguous'
+          `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, is_error=?, state='ambiguous'
            WHERE req_id=? AND ord=?`,
-          [result.req_id, result.ord, result.path, call.req_id, call.ord],
+          [result.req_id, result.ord, result.path, result.is_error, call.req_id, call.ord],
         );
       }
       continue;
@@ -467,9 +487,9 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     });
     if (outcome === 'skip') continue;
     db.run(
-      `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, state=?
+      `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, is_error=?, state=?
        WHERE req_id=? AND ord=?`,
-      [result.req_id, result.ord, result.path, outcome, call.req_id, call.ord],
+      [result.req_id, result.ord, result.path, result.is_error, outcome, call.req_id, call.ord],
     );
     if (outcome === 'resolved') resolved += 1;
   }

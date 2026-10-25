@@ -60,6 +60,7 @@ import { routeReadTarget } from './url-route.js';
  *   | {kind: 'select-delta', reqId: number}
  *   | {kind: 'open-tool', reqId: number, callOrd: number}
  *   | {kind: 'open-pair', owner: number, callOrd: number}
+ *   | {kind: 'open-offpage', reqId: number}
  *   | {kind: 'close-tool', andTab: boolean}
  *   | {kind: 'select-tab', tab: string}
  *   | {kind: 'select-tool-page', page: string}
@@ -210,6 +211,22 @@ export function applyIntent(state, intent) {
         effects: [
           { kind: 'render-main' }, { kind: 'render-rail' }, { kind: 'update-url' },
           { kind: 'ensure-pair', owner: intent.owner, callOrd: intent.callOrd },
+        ],
+      };
+    }
+    case 'open-offpage': {
+      // 汇总条目定位窗口外请求：详情进右栏（复用窗口外请求详情的既有导航），
+      // 不自动扩窗口。中栏列表不动，主列表停在最前面。
+      const next = {
+        ...state, offPageReqId: intent.reqId, reqId: null, turn: null,
+        toolOrd: null, toolOwner: null, missingReqId: null,
+      };
+      return {
+        state: next,
+        effects: [
+          { kind: 'open-rail' }, { kind: 'render-main' }, { kind: 'render-rail' },
+          { kind: 'render-crumb' }, { kind: 'update-url' },
+          { kind: 'ensure-read', reqId: intent.reqId },
         ],
       };
     }

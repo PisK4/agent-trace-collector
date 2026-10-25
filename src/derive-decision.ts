@@ -1,5 +1,5 @@
 import { modelTimeTitle } from './format';
-import { interpretMessage } from './input-interpretation';
+import { interpretMessage, isUserInterruptMessage } from './input-interpretation';
 
 /**
  * 派生判定内核：两条派生路径共用的「怎么判」。
@@ -17,8 +17,44 @@ import { interpretMessage } from './input-interpretation';
 // 协议抽取：什么算一次工具调用、什么算一次工具结果。两种协议结构都认。
 // ---------------------------------------------------------------------------
 
+/** 一次调用携带的参数事实：两个键之外的东西不提取。 */
+export type CallArgs = {
+  /** Edit/Write/Read 的 `file_path`；键缺失、非字符串或空串为 null。 */
+  argPath: string | null;
+  /** Skill 的 `skill`；键缺失、非字符串或空串为 null。 */
+  argSkill: string | null;
+};
+
+/** 调用提取的行形状：id 与 name 供配对，arg 供会话汇总，ord 是回复内容块位置。 */
+export type ReplyCall = { id: string; name: string; ord: number } & CallArgs;
+
+/** 参数对象的统一读法：chat 的 arguments 是 JSON 字符串，anthropic 的 input 是对象。 */
+function argsObjectOf(raw: unknown): Record<string, unknown> | null {
+  let value = raw;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
+
+/** 单键提取：只认字符串且非空，不猜近邻键。 */
+function argKeyOf(args: Record<string, unknown> | null, key: string): string | null {
+  const value = args === null ? undefined : args[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function argsOf(rawInput: unknown): CallArgs {
+  const args = argsObjectOf(rawInput);
+  return { argPath: argKeyOf(args, 'file_path'), argSkill: argKeyOf(args, 'skill') };
+}
+
 /** 从回复里取工具调用。导出理由：候选抽取只有这一处，切片与同步不能各有一套判据。 */
-export function anthropicReplyCalls(reply: unknown): { id: string; name: string; ord: number }[] {
+export function anthropicReplyCalls(reply: unknown): ReplyCall[] {
   if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return [];
   const content = (reply as Record<string, unknown>).content;
   if (!Array.isArray(content)) {
@@ -26,7 +62,7 @@ export function anthropicReplyCalls(reply: unknown): { id: string; name: string;
     // 各自从 0 计数，发布确定位置会撞主键或指错 choice，只认单 choice。
     const choices = (reply as Record<string, unknown>).choices;
     if (!Array.isArray(choices) || choices.length !== 1) return [];
-    const out: { id: string; name: string; ord: number }[] = [];
+    const out: ReplyCall[] = [];
     for (const choice of choices) {
       if (choice === null || typeof choice !== 'object') continue;
       const message = (choice as Record<string, unknown>).message;
@@ -39,17 +75,20 @@ export function anthropicReplyCalls(reply: unknown): { id: string; name: string;
         const id = record.id;
         const fn = record.function;
         if (typeof id !== 'string' || fn === null || typeof fn !== 'object') continue;
-        out.push({ id, name: String((fn as Record<string, unknown>).name ?? ''), ord: index });
+        out.push({
+          id, name: String((fn as Record<string, unknown>).name ?? ''), ord: index,
+          ...argsOf((fn as Record<string, unknown>).arguments),
+        });
       }
     }
     return out;
   }
-  const out: { id: string; name: string; ord: number }[] = [];
+  const out: ReplyCall[] = [];
   for (const [ord, block] of content.entries()) {
     if (block === null || typeof block !== 'object') continue;
     const record = block as Record<string, unknown>;
     if (record.type !== 'tool_use' || typeof record.id !== 'string') continue;
-    out.push({ id: record.id, name: String(record.name ?? ''), ord });
+    out.push({ id: record.id, name: String(record.name ?? ''), ord, ...argsOf(record.input) });
   }
   return out;
 }
@@ -133,15 +172,18 @@ export function replyShapeOf(reply: unknown): ReplyShape {
 }
 
 /** 从请求里取工具结果；Anthropic 的 tool_result 与 chat 的 role=tool。 */
-export function anthropicRequestResults(request: unknown): { id: string; ord: number; path: string; value: unknown }[] {  if (request === null || typeof request !== 'object' || Array.isArray(request)) return [];
+export function anthropicRequestResults(request: unknown): {
+  id: string; ord: number; path: string; value: unknown; isError: number;
+}[] {  if (request === null || typeof request !== 'object' || Array.isArray(request)) return [];
   const messages = (request as Record<string, unknown>).messages;
   if (!Array.isArray(messages)) return [];
-  const out: { id: string; ord: number; path: string; value: unknown }[] = [];
+  const out: { id: string; ord: number; path: string; value: unknown; isError: number }[] = [];
   for (const [ord, message] of messages.entries()) {
     if (message === null || typeof message !== 'object') continue;
     const record = message as Record<string, unknown>;
     if (record.role === 'tool' && typeof record.tool_call_id === 'string') {
-      out.push({ id: record.tool_call_id, ord, path: `request.messages[${ord}]`, value: record.content ?? null });
+      // chat 协议没有失败通道：结果送达即非失败，与缺席按缺省读的口径一致。
+      out.push({ id: record.tool_call_id, ord, path: `request.messages[${ord}]`, value: record.content ?? null, isError: 0 });
       continue;
     }
     const content = record.content;
@@ -150,10 +192,12 @@ export function anthropicRequestResults(request: unknown): { id: string; ord: nu
       if (block === null || typeof block !== 'object') continue;
       const entry = block as Record<string, unknown>;
       if (entry.type !== 'tool_result' || typeof entry.tool_use_id !== 'string') continue;
+      // 失败位按协议缺省读：显式 true 才是失败，false 与缺席都是非失败。
       out.push({
         id: entry.tool_use_id, ord,
         path: `request.messages[${ord}].content[${index}]`,
         value: entry.content ?? null,
+        isError: entry.is_error === true ? 1 : 0,
       });
     }
   }
@@ -293,6 +337,27 @@ export function confirmedDeltaOf(
   if (relation === 'first') return { all: true, ords: [] };
   if (relation === 'confirmed' && delta !== null) return { all: false, ords: delta };
   return { all: false, ords: [] };
+}
+
+/**
+ * 确定增量里的已识别用户中断计数。
+ *
+ * 只数 delta 指向的消息：中断标记随上下文延续出现在后续每笔请求里，按 delta
+ * 归属让同一条标记只在首次出现的那笔计 1。增量之外的请求（分支、未知关系、
+ * 排除用途）没有"新增"可言，调用方传 null，计数为 0；正文不可读时同样不数，
+ * 调用方保留旧值。
+ */
+export function interruptCountOf(
+  messages: readonly unknown[],
+  delta: readonly number[] | null,
+): number {
+  if (delta === null) return 0;
+  let count = 0;
+  for (const ordinal of delta) {
+    const message = messages[ordinal];
+    if (message !== undefined && isUserInterruptMessage(message)) count += 1;
+  }
+  return count;
 }
 
 // ---------------------------------------------------------------------------

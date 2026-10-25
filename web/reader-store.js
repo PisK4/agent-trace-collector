@@ -46,6 +46,9 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * @property {(id: number) => {state: string, summary: unknown} | null} peekRoute 同步读取路由缓存；未读到或读取失败返回 null。
  * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries').TurnPairRow[]}} peekTurns 同步读取轮次快照；absent 覆盖 404、读取失败与无窗口三种不可呈现态。
  * @property {() => Promise<void>} loadTurns 按当前会话与窗口下界取轮次列表；换窗后的重取排在前一次之后。
+ * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries').SessionSummary | null}} peekSummary 同步读取会话汇总快照；absent 覆盖 404、读取失败与无会话三种不可呈现态。
+ * @property {(key: string) => Promise<void>} loadSummary 打开会话即拉一次汇总，不懒加载；换会话代次变更后迟到响应不写入。
+ * @property {(query: import('../src/queries').SummaryEntriesQuery) => Promise<import('../src/queries').SummaryEntries>} loadSummaryEntries 汇总条目点击后的按组查询；无缓存，每次点击现查。
  * @property {(id: number) => void} clearUpdated 清除自动重读的「已更新」标记。
  * @property {(id: number) => void} invalidate 原地清空一笔记录的缓存并落作废态；不通知、不排自动重读，测试与强制失效用。
  */
@@ -80,13 +83,14 @@ function createLanes(limit, fetcher) {
  * @param {(url: string) => Promise<Response>} fetcher
  * @param {(id: number) => void} [onReadChanged] 记录快照异步变化（作废、自动重读
  *   换新或失败）时通知页面重绘；迟到响应与会话切换后的旧任务不通知。
- * @param {{ autoRereadCooldownMs?: number, onTurnsChanged?: () => void }} [options]
- *   自动重读的冷却窗口，默认 10 秒；轮次快照落地（ready 或 absent）时通知，测试可注入短窗。
+ * @param {{ autoRereadCooldownMs?: number, onTurnsChanged?: () => void, onSummaryChanged?: () => void }} [options]
+ *   自动重读的冷却窗口，默认 10 秒；轮次快照与会话汇总落地（ready 或 absent）时通知，测试可注入短窗。
  * @returns {ReaderStore}
  */
 export function createReaderStore(fetcher, onReadChanged, options) {
   const autoRereadCooldownMs = options?.autoRereadCooldownMs ?? 10000;
   const onTurnsChanged = options?.onTurnsChanged ?? null;
+  const onSummaryChanged = options?.onSummaryChanged ?? null;
   const lane = createLanes(4, fetcher);
   let epoch = 0;
 
@@ -105,6 +109,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   let turns = { status: 'idle', items: [] };
   /** @type {Promise<void> | null} 轮次读取串行化：加载更早触发的重取排在前一次之后，后到先得。 */
   let turnsInflight = null;
+  /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries').SessionSummary | null}} */
+  let summary = { status: 'idle', data: null };
 
   /**
    * 请求读取缓存，按 canonical id 归属。rec 的字段在运行期由各读取路径填充，
@@ -274,6 +280,38 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     try { await task; } finally { if (turnsInflight === task) turnsInflight = null; }
   }
 
+  /**
+   * 打开会话即拉一次汇总：session-head 的合计行与折叠区都吃这份快照。
+   * 404（后端未部署）与读取失败都落 absent——合计行回退窗口口径、折叠区不渲染，
+   * 下次触发（选会话、刷新）重取。换会话代次变更后，迟到响应不写入。
+   * @param {string} key
+   */
+  async function loadSummary(key) {
+    const myEpoch = epoch;
+    summary = { status: 'loading', data: null };
+    onSummaryChanged?.();
+    try {
+      const data = /** @type {import('../src/queries').SessionSummary} */ (
+        await getJson(`/api/sessions/${encodeURIComponent(key)}/summary`));
+      if (myEpoch !== epoch) return;
+      summary = { status: 'ready', data };
+    } catch {
+      if (myEpoch !== epoch) return;
+      summary = { status: 'absent', data: null };
+    } finally {
+      if (myEpoch === epoch) onSummaryChanged?.();
+    }
+  }
+
+  /** @param {import('../src/queries').SummaryEntriesQuery} query */
+  async function loadSummaryEntries(query) {
+    const params = new URLSearchParams({ kind: query.kind });
+    if (query.kind === 'tool' || query.kind === 'skill') params.set('name', query.name);
+    if (query.kind === 'written' || query.kind === 'read') params.set('path', query.path);
+    const data = await getJson(`/api/sessions/${encodeURIComponent(String(sessionKey))}/summary/entries?${params.toString()}`);
+    return /** @type {import('../src/queries').SummaryEntries} */ (data);
+  }
+
   /** @param {string} key @param {number} limit */
   async function selectSession(key, limit = 30) {
     const myEpoch = ++epoch;
@@ -281,6 +319,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     windowLoading = true;
     windowError = null;
     turns = { status: 'idle', items: [] };
+    summary = { status: 'idle', data: null };
     reads.clear();
     routes.clear();
     routeValues.clear();
@@ -298,6 +337,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
       if (myEpoch === epoch) {
         windowLoading = false;
         void loadTurns();
+        void loadSummary(key);
       }
     }
   }
@@ -625,6 +665,11 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return turns;
   }
 
+  /** @returns {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries').SessionSummary | null}} */
+  function peekSummary() {
+    return summary;
+  }
+
   /** @param {number} id 页面交互清除自动重读的「已更新」标记。 */
   function clearUpdated(id) {
     const rec = reads.get(id);
@@ -656,6 +701,9 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     peekRoute,
     peekTurns,
     loadTurns,
+    peekSummary,
+    loadSummary,
+    loadSummaryEntries,
     clearUpdated,
     invalidate,
   };

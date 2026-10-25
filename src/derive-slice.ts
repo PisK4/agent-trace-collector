@@ -14,13 +14,13 @@ import {
 import type { ResolvedTool } from './derive-decision';
 import type { DeriveBudget, SliceRuntime } from './config';
 import {
-  compareLogicalOrder, compareTraversalOrder, fingerprintsOf, presentationPortsOf,
+  compareLogicalOrder, compareTraversalOrder, fingerprintsOf, interruptCountTx, presentationPortsOf,
   replyInfoOf, uncertainOrderIds,
 } from './derive-read';
 import type { DeriveScope, LogicalRow } from './derive-read';
 
 /** 切片派生的算法号。与同步组的 `GROUP_ALGORITHM` 分开：两者算出的结果不能互相复用。 */
-export const DERIVE_ALGORITHM = 6;
+export const DERIVE_ALGORITHM = 7;
 
 export type SliceStep = {
   status: 'idle' | 'advanced' | 'published' | 'discarded' | 'rotated';
@@ -255,7 +255,7 @@ type RequestFact = {
   sort_source: string | null; sort_key: string | null; started_ms: number;
   body_state: string; title: string | null; title_source: string | null;
   input_preview: string | null; input_preview_kind: string | null;
-  reply_preview: string | null; reply_shape: string | null;
+  reply_preview: string | null; reply_shape: string | null; interrupt_count: number | null;
   purpose_revision: number; purpose_version: number | null;
   purpose_chain: string;
 };
@@ -300,7 +300,7 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
   const page = db.query<RequestFact, [string, string, number, number]>(`
     SELECT req_id,input_epoch,input_revision,sort_source,sort_key,started_ms,body_state,
       title,title_source,input_preview,input_preview_kind,reply_preview,reply_shape,
-      purpose_revision,purpose_version,purpose_chain
+      interrupt_count,purpose_revision,purpose_version,purpose_chain
     FROM request WHERE conv_key=? AND actor=? AND actor_state='known' AND req_id>?
     ORDER BY req_id LIMIT ?`)
     .all(gen.conv_key, gen.actor, gen.cursor_req_id,
@@ -329,8 +329,8 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
     db.run(`INSERT INTO derive_request_result(
       generation,req_id,input_epoch,input_revision,sort_source,sort_key,started_ms,
       title,title_source,input_preview,input_preview_kind,reply_preview,reply_shape,
-      purpose_revision,purpose_version,purpose_chain,algorithm,retention_state,basis_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'{}')`, [
+      interrupt_count,purpose_revision,purpose_version,purpose_chain,algorithm,retention_state,basis_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'{}')`, [
       generation, row.req_id, row.input_epoch, row.input_revision, row.sort_source,
       row.sort_key, row.started_ms,
       // 可读时留空，由摘要阶段写本次重算的值；不可读时原样保留旧列。
@@ -341,6 +341,8 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
       readable ? null : row.input_preview_kind,
       readable ? null : row.reply_preview,
       body === null ? row.reply_shape : replyShapeOf(body.reply),
+      // 中断计数先暂存旧值：摘要阶段 delta 在手才按本次增量重算并覆盖。
+      row.interrupt_count,
       row.purpose_revision, row.purpose_version, row.purpose_chain,
       DERIVE_ALGORITHM, readable ? 'recomputed' : 'retained',
     ]);
@@ -348,14 +350,15 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
     staged += 512 + (calls.length + results.length) * 256;
     for (const call of calls) {
       db.run(`INSERT INTO derive_call_work(generation,req_id,ord,call_id,tool_name,
-        request_index,traversal_ord) VALUES (?,?,?,?,?,-1,-1)`,
-      [generation, row.req_id, call.ord, call.id, call.name]);
+        arg_path,arg_skill,request_index,traversal_ord) VALUES (?,?,?,?,?,?,?,-1,-1)`,
+      [generation, row.req_id, call.ord, call.id, call.name, call.argPath, call.argSkill]);
       writes += 1;
     }
     for (const result of results) {
       db.run(`INSERT INTO derive_result_work(generation,req_id,ord,path,call_id,
-        preview,request_index,traversal_ord,confirmed) VALUES (?,?,?,?,?,?,-1,-1,0)`,
-      [generation, row.req_id, result.ord, result.path, result.id, previewText(result.value)]);
+        preview,is_error,request_index,traversal_ord,confirmed) VALUES (?,?,?,?,?,?,?,-1,-1,0)`,
+      [generation, row.req_id, result.ord, result.path, result.id,
+        previewText(result.value), result.isError]);
       writes += 1;
     }
     if (performance.now() - rowStarted > budget.maxRequestMs) {
@@ -746,10 +749,13 @@ type ToolGen = {
 const TOOL_GEN_COLUMNS = `state,stage,conv_key,actor,group_epoch,input_revision,tool_cursor_ord`;
 
 type CandidateCall = { req_id: number; ord: number };
-type CallWork = { req_id: number; ord: number; call_id: string; tool_name: string | null };
+type CallWork = {
+  req_id: number; ord: number; call_id: string; tool_name: string | null;
+  arg_path: string | null; arg_skill: string | null;
+};
 type ResultWork = {
   req_id: number; ord: number; path: string; call_id: string;
-  confirmed: number; traversal_ord: number;
+  confirmed: number; traversal_ord: number; is_error: number;
 };
 type OrderRow = {
   started_ms: number; sort_source: string | null; sort_key: string | null;
@@ -794,20 +800,22 @@ function pairRequestTools(db: Database, generation: string, reqId: number): numb
   // 排除用途是旁路：既不进候选，也不产生工具行。
   if (own === null || own.purpose_chain !== 'participate') return 0;
   const calls = db.query<CallWork, [string, number]>(`
-    SELECT req_id,ord,call_id,tool_name FROM derive_call_work
+    SELECT req_id,ord,call_id,tool_name,arg_path,arg_skill FROM derive_call_work
     WHERE generation=? AND req_id=? ORDER BY ord`).all(generation, reqId);
   let writes = 0;
   for (const call of calls) {
     const candidates = candidateCalls(db, generation, call.call_id);
     db.run(`INSERT INTO derive_tool_result(generation,req_id,ord,call_id,tool_name,
-      result_req,result_ord,result_path,state,algorithm_version,basis_json,retention_state)
-      VALUES (?,?,?,?,?,NULL,NULL,NULL,?,?,?,'recomputed')`,
+      arg_path,arg_skill,result_req,result_ord,result_path,is_error,state,
+      algorithm_version,basis_json,retention_state)
+      VALUES (?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,?,?,'recomputed')`,
     [generation, call.req_id, call.ord, call.call_id, call.tool_name,
+      call.arg_path, call.arg_skill,
       initialPairState(candidates.length), DERIVE_ALGORITHM,
       toolBasis(generation, call.call_id)]);
     writes += 1;
     const results = db.query<ResultWork, [string, string]>(`
-      SELECT w.req_id,w.ord,w.path,w.call_id,w.confirmed,w.traversal_ord
+      SELECT w.req_id,w.ord,w.path,w.call_id,w.confirmed,w.traversal_ord,w.is_error
       FROM derive_result_work w
       JOIN derive_request_result d ON d.generation=w.generation AND d.req_id=w.req_id
       WHERE w.generation=? AND w.call_id=? AND d.purpose_chain='participate'
@@ -815,11 +823,12 @@ function pairRequestTools(db: Database, generation: string, reqId: number): numb
     const callOrder = orderOf(db, generation, call.req_id);
     for (const result of results) {
       if (candidates.length > 1) {
-        // 多候选保持 ambiguous，结果位置仍然记下，便于人工核对。
+        // 多候选保持 ambiguous，结果位置与失败位照样记下，便于人工核对。
         for (const candidate of candidates) {
           db.run(`UPDATE derive_tool_result SET result_req=?,result_ord=?,result_path=?,
-            state='ambiguous' WHERE generation=? AND req_id=? AND ord=?`,
-          [result.req_id, result.ord, result.path, generation, candidate.req_id, candidate.ord]);
+            is_error=?,state='ambiguous' WHERE generation=? AND req_id=? AND ord=?`,
+          [result.req_id, result.ord, result.path, result.is_error,
+            generation, candidate.req_id, candidate.ord]);
         }
         writes += candidates.length;
         continue;
@@ -840,8 +849,9 @@ function pairRequestTools(db: Database, generation: string, reqId: number): numb
       });
       if (outcome === 'skip') continue;
       db.run(`UPDATE derive_tool_result SET result_req=?,result_ord=?,result_path=?,
-        state=? WHERE generation=? AND req_id=? AND ord=?`,
-      [result.req_id, result.ord, result.path, outcome, generation, call.req_id, call.ord]);
+        is_error=?,state=? WHERE generation=? AND req_id=? AND ord=?`,
+      [result.req_id, result.ord, result.path, result.is_error, outcome,
+        generation, call.req_id, call.ord]);
       writes += 1;
     }
   }
@@ -956,6 +966,7 @@ const SUMMARY_GEN_COLUMNS =
 /** 摘要阶段一行要的事实：暂存行给增量与消费过的用途修订，当前请求行给展示输入。 */
 type SummaryRow = {
   req_id: number; traversal_ord: number; started_ms: number; delta_ordinals: string | null;
+  staged_interrupt_count: number | null;
   staged_purpose_revision: number; live_purpose_revision: number;
   purpose_chain: string; req_kind: string | null; model_served: string | null;
   model_title: string | null; agent: string | null;
@@ -1005,6 +1016,7 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
   if (!assertQueueRevision(db, gen)) throw new Error('slice_group_revision_changed');
   const page = db.query<SummaryRow, [string, number, number]>(`
     SELECT d.req_id,d.traversal_ord,d.started_ms,d.delta_ordinals,
+      d.interrupt_count AS staged_interrupt_count,
       d.purpose_revision AS staged_purpose_revision,r.purpose_revision AS live_purpose_revision,
       r.purpose_chain,r.req_kind,r.model_served,r.model_title,r.agent,
       r.title AS live_title,r.title_source AS live_title_source,
@@ -1037,6 +1049,11 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
     const replyInfo = current === null
       ? { preview: row.live_reply_preview }
       : replyInfoOf(db, row.req_id);
+    // 中断计数：确定增量在手（first/confirmed，隐含正文可读且参与）时按本次增量
+    // 重算；其余场合保留物化时暂存的旧值，不冒充 0。
+    const delta = row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[];
+    const interruptCount = delta === null
+      ? row.staged_interrupt_count : interruptCountTx(db, row.req_id, delta);
     const decision = presentationDecision(ports, {
       reqId: row.req_id,
       agent: row.agent,
@@ -1046,7 +1063,7 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
       isTitle: row.req_kind === 'title',
       modelTitle: row.model_title,
       current,
-      delta: row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[],
+      delta,
       retained: current === null
         ? {
           title: row.live_title,
@@ -1058,9 +1075,10 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
       replyPreview: replyInfo.preview,
     }, associations);
     db.run(`UPDATE derive_request_result SET title=?,title_source=?,input_preview=?,
-      input_preview_kind=?,reply_preview=?,retention_state=? WHERE generation=? AND req_id=?`,
+      input_preview_kind=?,reply_preview=?,interrupt_count=?,retention_state=?
+      WHERE generation=? AND req_id=?`,
     [decision.title, decision.titleSource, decision.inputPreview, decision.inputKind,
-      decision.replyPreview,
+      decision.replyPreview, interruptCount,
       current === null ? 'retained' : 'recomputed', generation, row.req_id]);
     if (performance.now() - rowStarted > budget.maxRequestMs) {
       throw new Error('slice_summary_budget');
