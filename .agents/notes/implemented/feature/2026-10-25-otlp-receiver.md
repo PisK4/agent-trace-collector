@@ -186,8 +186,8 @@ harness 面的文档级扫描（同日）：
   - 双通道并存两行的提示
 
   错误码表与磁盘档位仍以运维手册为家。
-- 2026-10-26 Codex 白名单条目已交付（`OTLP_MAPPING_VERSION` 升 2）。`codex_cli_rs` 按 span 名 `session_task.turn` 建行：session 取 `thread.id`、模型取 `model`（无回复侧模型与终止原因字段，保持 NULL）、四项用量取自有 `codex.turn.token_usage.*` 族（non_cached / reasoning / total 三项留原始层）；`session_task.compact` / `review` / `user_shell` 不建行也不进未知桶。键集对齐父知识库固定提交源码考察，未抓样实测，真实流量验收单独一轮，决策归[两步走提案](../../proposed/feature/2026-10-26-otlp-exporter-profile-and-codex.md)。页面标签 `codex`、运维手册的 TOML 配置段与 README 接入段同步。
-- 2026-10-26 未知服务可见性已交付。traces 接收结果加 `unknownServices` 计数；未登记 `service.name` 的 span 照旧只落原始层，另按服务与接收日聚合记一行 `service_not_registered` issue（`ingest_issue` 主键去重，同日重发不刷表），健康接口的 issues 列表自然可见，运维手册补了按 service 分组查 `raw_otlp_span` 的 SQL。这是对外 profile 的门铃，决策归[两步走提案](../../proposed/feature/2026-10-26-otlp-exporter-profile-and-codex.md)。
+- 2026-10-26 Codex 白名单条目已交付（`OTLP_MAPPING_VERSION` 升 2）。`codex_cli_rs` 按 span 名 `session_task.turn` 建行：session 取 `thread.id`、模型取 `model`（无回复侧模型与终止原因字段，保持 NULL）、四项用量取自有 `codex.turn.token_usage.*` 族（non_cached / reasoning / total 三项留原始层）；`session_task.compact` / `review` / `user_shell` 不建行也不进未知桶。键集对齐父知识库固定提交源码考察，未抓样实测，真实流量验收单独一轮，决策归[两步走提案](../../implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md)。页面标签 `codex`、运维手册的 TOML 配置段与 README 接入段同步。
+- 2026-10-26 未知服务可见性已交付。traces 接收结果加 `unknownServices` 计数；未登记 `service.name` 的 span 照旧只落原始层，另按服务与接收日聚合记一行 `service_not_registered` issue（`ingest_issue` 主键去重，同日重发不刷表），健康接口的 issues 列表自然可见，运维手册补了按 service 分组查 `raw_otlp_span` 的 SQL。这是对外 profile 的门铃，决策归[两步走提案](../../implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md)。
 
 ## Alternatives considered
 
@@ -240,7 +240,7 @@ harness 面的文档级扫描（同日）：
 - OTLP 独有事实进读模型列：`query_source_safe`、Claude Code 的 `attempt`、`agent_id` / `parent_agent_id` 结构化子代理关系、工具 span 的精确起止。
 - 会话内按来源过滤或并排展示双通道重复行。
 - 跨通道按 `response_id_norm` 精确去重：锚点已实测（OMP span 属性、Claude Code logs 事件），判重机制与 hook↔账本现有关联同构，合并策略与字段优先级需单独设计。
-- 其他 harness 的接入：Codex 已交付（见交付记录，决策与对外 profile 归[两步走提案](../../proposed/feature/2026-10-26-otlp-exporter-profile-and-codex.md)）；goose 与 Gemini CLI 缓接，固定提交考察在父知识库；Cursor 企业版只导 metrics/logs 且明确不含 CLI 正文，对本通道无会话阅读增量，不接；OpenCode 无原生出口，社区插件不追。逐个按 `(service.name, 选取规则)` 白名单加。
+- 其他 harness 的接入：Codex 已交付（见交付记录，决策与对外 profile 归[两步走提案](../../implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md)）；goose 与 Gemini CLI 缓接，固定提交考察在父知识库；Cursor 企业版只导 metrics/logs 且明确不含 CLI 正文，对本通道无会话阅读增量，不接；OpenCode 无原生出口，社区插件不追。逐个按 `(service.name, 选取规则)` 白名单加。
 - 派生层接入（用途判定、工具配对、前驱链）。
 - metrics 信号。第一批只做 traces 与 logs；`gen_ai.client.token.usage` 这类直方图对会话阅读没有增量。
 - magpie OTLP 的专门适配。

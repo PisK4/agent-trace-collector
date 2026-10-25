@@ -203,3 +203,17 @@ OMP（oh-my-pi）的 feature 语义进读模型与阅读层，五项随 [Agent N
 | 布局合并桶 | req 11444 的 files 18 个碎项并成 rest 块，可视文字与悬停 title 均为「另外 18 项」——title 缺名是本轮真实数据暴露的缺陷，验收中修复（500e2eb）后复验 |
 | 内容列表 | 同请求内容列表 53 行跨类降序，「显示全部」折叠接既有 data-fold 恢复机制 |
 | 视觉快照 | 未取得：ego lite 的 CDP `Page.captureScreenshot` 对该页持续超时；视觉项由 DOM 断言与合成测试覆盖，数字互证在浏览器 DOM 内完成 |
+
+## OTLP 两步走：Codex 条目与未知服务门铃（2026-10-26）
+
+本轮只有合成验收，真实流量验收未跑：Codex 的键集对齐父知识库固定提交源码考察（锚定 `2b5bdcf675`，漂移核对过上游 main `970111f6cb62`），没有本机抓样。合成验收进 `bun test`（`tests/otlp-ingest.test.ts` 11 例、`tests/web.test.ts` 标签断言，typecheck 通过），与真实验收分开呈报：
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| Codex 建行 | `session_task.turn` span（按考察字段清单构造，值全自造）落 `via='otlp'`、`have=8`、`agent='codex'`，session 取 `thread.id`、模型取 `model`、四项用量取 `codex.turn.token_usage.*`；`model_served` 与 `stop` 保持 NULL，non_cached/reasoning/total 三项留原始层 |
+| 旁路任务 | `session_task.compact` 与 `session_task.user_shell` 不建行、不进未知桶（自有键族不在 LLM 形状判据里） |
+| 门铃 | 未登记服务 span 落原始层，按服务与接收日聚合记一行 `service_not_registered` issue；同日重发不新增，跨日新记一行；接收结果带 `unknownServices` 计数 |
+| 版本 | `OTLP_MAPPING_VERSION=2`，既有两家规则行为不变（全量旧断言通过） |
+| 页面 | `agentLabel` 带 `codex`，未知来源原样透出 |
+
+真实流量验收的做法与前提（`~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 直连、真实会话、重试与多候选下七个用量字段的回填语义核对）见[两步走决策](../.agents/notes/implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md)，跑完后在本节补真实结果。

@@ -1,6 +1,6 @@
 # Agent Note: OTLP 第四通道扩展三个 harness 的白名单
 
-Status: rejected — 实施范围收敛为 Codex 先行与对外接入 profile，决策由 [2026-10-26-otlp-exporter-profile-and-codex](../../proposed/feature/2026-10-26-otlp-exporter-profile-and-codex.md) 承接；本文冻结留底三家规则草案与排序论证
+Status: rejected — 实施范围收敛为 Codex 先行与对外接入 profile，决策由 [2026-10-26-otlp-exporter-profile-and-codex](../../implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md) 承接；本文冻结留底三家规则草案与排序论证
 
 调研物证在父知识库三份固定提交考察档案里：[Gemini CLI](../../../../Agent知识库/Agent研究/gemini-cli/OTLP导出考察.md)、[Codex](../../../../Agent知识库/Agent研究/codex/OTLP导出考察.md)、[goose](../../../../Agent知识库/Agent研究/goose/OTLP导出考察.md)。本文只记决策材料：接谁、规则长什么样、正文口径到哪一档，不复述源码取证。
 
