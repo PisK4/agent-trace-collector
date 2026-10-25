@@ -3,7 +3,8 @@ import type { DeriveScope, DrainResult } from './sync';
 import { drainDeriveGroupTx } from './sync';
 import { queuePendingSql } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
-import { recoverSlice, sliceGroupStep } from './slice';
+import { recoverSlice } from './slice/generation';
+import { sliceGroupStep } from './slice/scheduler';
 
 const IDLE_MS = 2000;
 const ONLINE_LIMIT = 10;

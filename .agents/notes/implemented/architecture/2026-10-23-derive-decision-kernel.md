@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-新增 `src/derive/decision.ts` 作为判定内核：两条路径的「怎么判」只有一个家，同步路径（`derive/sync.ts`）与切片路径（`derive/slice.ts`）退化为两个写 adapter——一个写 `request` 列，一个写代际表。搬进内核的判定：
+新增 `src/derive/decision.ts` 作为判定内核：两条路径的「怎么判」只有一个家，同步路径（`derive/sync.ts`）与切片路径（`derive/slice/`）退化为两个写 adapter——一个写 `request` 列，一个写代际表。搬进内核的判定：
 
 - 关系：`settleRelation`（扫描状态到关系/父节点/增量的唯一出口）与 `matchPredecessor`（内存扫描形态，切片侧仍自带分页扫描，只把结算交给内核）；
 - 主链 trunk：`chainTrunkRoot` 与 `chainTrunk`（遍历序第一个无可比父节点的参与请求是根，根的可达集是主链）；

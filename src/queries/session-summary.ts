@@ -1,6 +1,6 @@
 /** 会话信息汇总：查询时聚合，不物化。口径见会话信息汇总 note。 */
 
-import { DERIVE_ALGORITHM } from '../derive/slice';
+import { DERIVE_ALGORITHM } from '../derive/state';
 import { GROUP_ALGORITHM, deriveJoinSql, derivedColSql } from '../derive/state';
 import type { Store } from '../store';
 
