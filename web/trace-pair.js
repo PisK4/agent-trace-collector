@@ -1,5 +1,6 @@
 // @ts-check
-import { esc, toolTint } from './body-view.js';
+import { toolTint } from './body-view.js';
+import { esc } from './html.js';
 
 /**
  * 工具配对页：一次调用的两端在右栏同屏就地阅读，Call 在上、Result 在下，

@@ -1,5 +1,7 @@
 // @ts-check
-import { bodyNotice, esc, renderReplyDetail, replyView } from './body-view.js';
+import { bodyNotice, renderReplyDetail } from './body-view.js';
+import { replyView } from './body-model.js';
+import { esc } from './html.js';
 import { bodyLabelText, bodyStateText } from './row-summary.js';
 
 /**

@@ -8,10 +8,69 @@
  */
 
 import {
-  esc, partColor, partLabel, renderMessageDetail, renderMessages, topSystemText,
+  renderMessageDetail, renderMessages,
 } from './body-view.js';
+import { esc } from './html.js';
+import { topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
 import { bodyLabelText } from './row-summary.js';
+
+// —— 上下文组成：已知六类与未知类别 ——
+
+const PARTS = [
+  { kind: 'system', label: '系统提示' },
+  { kind: 'tools', label: '工具定义' },
+  { kind: 'memory', label: '记忆与技能' },
+  { kind: 'files', label: '文件引用' },
+  { kind: 'results', label: '工具结果' },
+  { kind: 'chat', label: '对话内容' },
+];
+
+/** 未知 kind 原样显示，不折叠成"其它"。 @param {string} kind */
+export function partLabel(kind) {
+  return PARTS.find(part => part.kind === kind)?.label ?? String(kind);
+}
+
+/** 未知 kind 使用独立颜色变量，避免落到某个已知类别上。 @param {string} kind */
+export function partColor(kind) {
+  const index = PARTS.findIndex(part => part.kind === kind);
+  return index < 0 ? 'var(--p-unknown)' : `var(--p${index + 1})`;
+}
+
+/**
+ * 尝试链。每一行只用服务端白名单字段；未知 fail 原样转义。
+ * 缺开始时间时只附说明，不计算任何相邻尝试的时间差。
+ * @param {import('../src/queries/routes').AttemptChain | null | undefined} chain
+ * @returns {string}
+ */
+export function renderAttemptChain(chain) {
+  if (chain === null || chain === undefined || chain.state !== 'present') {
+    return '<p class="note">没有可读取的尝试记录。</p>';
+  }
+  const rows = chain.items.map(item => {
+    const bits = [item.model ?? '模型未报告'];
+    if (item.served !== null && item.served !== item.model) bits.push(`served ${item.served}`);
+    if (item.status !== null) bits.push(`HTTP ${item.status}`);
+    if (item.fail !== null) bits.push(`fail ${item.fail}`);
+    if (item.effort !== null) bits.push(`effort ${item.effort}`);
+    if (item.tier_served !== null) bits.push(`tier ${item.tier_served}`);
+    if (item.reasoning_hidden === true) bits.push('推理隐藏');
+    if (item.done === false) bits.push('未结束');
+    if (item.start_ms !== null) {
+      const started = new Date(item.start_ms);
+      if (!Number.isNaN(started.getTime())) bits.push(started.toISOString());
+    }
+    if (item.ms !== null) bits.push(`${item.ms} ms`);
+    if (item.ttft_ms !== null) bits.push(`首 token ${item.ttft_ms} ms`);
+    if (item.first_reasoning_ms !== null) bits.push(`首个推理 ${item.first_reasoning_ms} ms`);
+    if (item.first_text_ms !== null) bits.push(`首个文本 ${item.first_text_ms} ms`);
+    if (item.queued_ms !== null) bits.push(`排队 ${item.queued_ms} ms`);
+    return `<span class="attempt-name">${item.index + 1}. ${bits.map(esc).join(' · ')}</span>`;
+  }).join('<br>');
+  const note = chain.timing.state === 'partial'
+    ? `<p class="note">${esc(chain.timing.note)}</p>` : '';
+  return `${rows}${note}`;
+}
 
 /**
  * 右栏读数页：本次回复 → 请求结构 → 能力清单 → 用量与上下文 → 身份完整性（异常时）。
@@ -35,7 +94,7 @@ export function railFactsHtml(parts) {
  *   reqId: number,
  *   row: { body_state: string, miss_reason?: string | null },
  *   meta: { total: number | null } | null,
- *   entries: import('./body-view.js').Entry[],
+ *   entries: import('./body-model.js').Entry[],
  *   structure: { next: number, total: number | null, ords: number[], loading: boolean, error: string | null },
  *   delta: Set<number> | null,
  *   deltaState?: { next: number, done: boolean, loading: boolean, error: string | null } | null,

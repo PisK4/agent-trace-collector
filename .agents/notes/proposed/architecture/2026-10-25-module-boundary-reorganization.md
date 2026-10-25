@@ -225,6 +225,9 @@ web/
 openSummaryList 的网络与状态更新留在控制器。
 第 2 步（layout.js）已交付：主题偏好、首选宽度与拖拽指针由模块持有，
 暴露 initLayout 与 openRail；syncBandTop 留在控制器。
+第 3 步（body-model.js 与 html.js）已交付：读取模型与类型搬出，
+reader-store 改依赖 body-model；esc 与 mdToHtml 单点，trace-view 删除
+本地副本；renderAttemptChain、PARTS、partLabel、partColor 归 rail-facts。
 
 
 1. **`session-view.js`**：搬出 `sessionTotalsHtml`、`coverageHoverText`、`pathLabel`、`summaryToolChips`、`summaryPathFlow`、`summarySkills`、`summaryStructure`、`sessionSummaryFold`、`sessionHead`、`railSummaryListHtml`。函数签名改为显式输入；`openSummaryList` 的网络与状态更新留在控制器。

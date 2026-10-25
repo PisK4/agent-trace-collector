@@ -9,16 +9,18 @@
  */
 
 import {
-  bodyNotice, deltaOrdinals, esc, messageCopyText, roleTag,
-  renderAttemptChain, renderCapabilities, renderMessageDetail, renderReply,
+  bodyNotice, renderCapabilities, renderMessageDetail, renderReply,
   renderReplyBlockDetail, renderReplyDetail, renderSystemDetail, renderUnknownBlockDetail,
-  replyView, toolEntries, toolTint,
+  roleTag, toolTint,
 } from './body-view.js';
+import { deltaOrdinals, messageCopyText, replyView, toolEntries } from './body-model.js';
+import { esc } from './html.js';
 import { createReaderStore } from './reader-store.js';
 import { initLayout, openRail } from './layout.js';
 import {
-  ledgerRowsHtml, railFactsHtml, readingChangedNote, resolveSelectedSource, secs,
-  structureFoldHtml, systemContextOf, toolOverviewHtml, toolSchemaSection, usageFoldHtml,
+  kk, ledgerRowsHtml, railFactsHtml, readingChangedNote, renderAttemptChain,
+  resolveSelectedSource, secs, structureFoldHtml, systemContextOf, toolOverviewHtml,
+  toolSchemaSection, usageFoldHtml,
 } from './rail-facts.js';
 import { bodyLabelText, bodyStateText, replyCompleteness } from './row-summary.js';
 import {
@@ -272,15 +274,16 @@ if (typeof document !== 'undefined') {
     el('sess-count').textContent = list.length === store.getSessions().items.length
       ? '' : `${list.length} / ${store.getSessions().items.length}`;
     const item = (/** @type {SessionRow} */ s) => {
-      // 左栏只保留具体事实标记；未知派生不再给笼统「待确认」，状态留在选中请求。
-      const flag = s.flags.includes('failed') ? { color: 'var(--bad)', text: '含失败' }
-        : s.flags.includes('missing_body') ? { color: 'var(--muted)', text: '缺正文' }
-          : { color: 'var(--line-strong)', text: '' };
+      // 左栏只保留具体事实标记；失败由红点承载，字眼进悬停；缺正文的点刻意低
+      // 对比，与正常点的差别不可辨，文字仍是唯一载体，保留。
+      const flag = s.flags.includes('failed') ? { color: 'var(--bad)', text: '', title: '含失败' }
+        : s.flags.includes('missing_body') ? { color: 'var(--muted)', text: '缺正文', title: '缺正文' }
+          : { color: 'var(--line-strong)', text: '', title: '' };
       return `<button class="sess" data-session="${esc(s.conv_key)}" aria-current="${s.conv_key === state.session}">
         <span class="sess-title">${esc(s.title || '（无标题）')}</span>
         <span class="sess-time num">${esc(clock(s.last_ms))}</span>
         <span class="sess-meta">
-          <span class="dot" style="background:${flag.color}"></span>
+          <span class="dot" style="background:${flag.color}"${flag.title ? ` title="${flag.title}"` : ''}></span>
           <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')}</span><span class="sep">·</span>
           <span>${s.request_count} 笔</span>
           ${flag.text ? `<span class="sep">·</span><span style="color:${flag.color}">${flag.text}</span>` : ''}
@@ -1123,6 +1126,8 @@ if (typeof document !== 'undefined') {
 
   document.addEventListener('click', (e) => {
     const t = /** @type {HTMLElement} */ (e.target);
+    // 会话 ID 复制钮在会话头 facts 行里，随重绘重建，走委托。
+    if (t.closest('#copy-session')) { void copySessionId(); return; }
     // 收起行里的失败数在 <summary> 内：先于 summary 早退处理，阻止折叠开合，
     // 直接打开失败调用列表（集合随汇总首屏返回，不用再查）。
     const failuresBtn = /** @type {HTMLElement | null} */ (t.closest('[data-summary-failures]'));
@@ -1406,7 +1411,7 @@ if (typeof document !== 'undefined') {
       field.addEventListener('blur', () => field.remove(), { once: true });
     }
   }
-  el('copy-session').addEventListener('click', () => { void copySessionId(); });
+  // 按钮随会话头重绘重建：点击走文档级委托，不在启动时绑死元素。
 
   window.addEventListener('popstate', () => {
     const p = new URLSearchParams(location.search);
