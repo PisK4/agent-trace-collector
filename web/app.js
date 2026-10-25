@@ -454,7 +454,8 @@ if (typeof document !== 'undefined') {
     }
     for (const r of rows) {
       const read = store.peekRequest(r.req_id);
-      const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)));
+      const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
+        store.peekBgJobs().items);
       const ordinal = ordinalOf(r.req_id);
       html += `<section class="trace-group" data-req="${r.req_id}" data-status="${r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success'}" aria-current="${r.req_id === state.reqId}">`;
       // 自动重读换新后的组级「已更新」：点进组里即清除，正常态不出现。

@@ -11,6 +11,7 @@ import { getRoute } from './queries/routes';
 import { getStats } from './queries/stats';
 import { listSessions } from './queries/sessions';
 import { listTurns } from './queries/turns';
+import { listBgJobs } from './queries/bg-jobs';
 import { PAGE_MAX, bodyRangeError, getBodyPage } from './protocols';
 import {
   getReadingBody, getReadingDetail, getToolResultReading,
@@ -345,6 +346,11 @@ export function createHandler(
           from = Number(rawFrom);
         }
         return json(listTurns(store, key, from));
+      }
+
+      const bgJobsMatch = /^\/api\/sessions\/([^/]+)\/bg-jobs$/.exec(path);
+      if (bgJobsMatch !== null) {
+        return json(listBgJobs(store, decodeURIComponent(bgJobsMatch[1]!)));
       }
 
       const summaryMatch = /^\/api\/sessions\/([^/]+)\/summary$/.exec(path);

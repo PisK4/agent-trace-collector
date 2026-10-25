@@ -175,6 +175,8 @@ OMP 源码参照（`repos-external/oh-my-pi`，注意 18.0.10 滞后于装机 18
 
 - 2026-10-25 第二项已交付。解释层：归档消息改判 `injected`、kind `omp_history_archive`（`finalize` 在剥壳后的拼接文本上判锚点）。事件位：`request` 与 `derive_request_result` 各加 `context_event` 列（`none`/`omp_compaction`，NULL 从未判定），两个视图同步带列；判定适配 `contextEventTx` 收 relation+delta——first/confirmed 按确定增量新增归档判，branch 按输入含归档归因（bounded 扫前 20 条 user 消息，归档实测在 ord 1），aux 判 none，其余判不出保留旧值，与 `reply_shape` 三态同套选源语义。dropped 字符数进 basis（同步路径并进 `summary_basis` 的 JSON，切片路径在摘要阶段对压缩行覆写 `basis_json`）。branch 归因注记落在展示层：轨迹 `compaction` 记录步骤（带丢弃量，注明字符数非 token）与关系文案「另起一支 · 压缩归档改写了上下文前缀」。切片与同步的 parity 测试列加 `context_event` 锁两路一致。存量库由 `backfill-omp-semantics.ts` 补列并从 schema-v6.sql 重取视图 DDL。
 
+- 2026-10-25 第三项已交付。`bg_job(conv_key, job_id)` 结算表建在 schema.sql 与回填脚本两处；列名与提案的 `spawn_call_ord` 有一处偏差：spawn 记的是**承载发起工具结果的消息 ord**（`spawn_ord`），不是调用 ord——展示锚点是发起处的 bash 结果行，按消息 ord 直接对位轨迹步骤，不必再 join tool_call。发起只认 role=3 工具结果块（matchAll，一个结果多行发起都能收），通知只认 user 消息里单数完成句与复数公告下的 `── Job bg_N ──` 行；conv 内最早位置先到先得，重发不改判。重建语义对照工具配对：组完成事务里按可读正文整体重算本 actor 的行，两端正文都回收的行保留（retained），重算与保留行撞键时保留行胜（它记的更早位置）。旁路请求不参与配对。配对挂进同步路径组完成（与 tool_call 同批）；切片路径同 tool_call 先例不写这张表，note 如实记录该边界。展示：`/api/sessions/:key/bg-jobs` 端点 + reader-store 快照；轨迹发起结果行尾注配对读数（`bg_N 已配对 · 2.31 s` / `同一请求内` / `等待完成通知`），完成通知出 Event 步骤（该消息被解释层判 injected 本来不占气泡）。
+
 ## Alternatives considered
 
 **读 `~/.omp/agent` 作第四路证据源。** session JSONL 是结构化金矿：`model_usage`（api/provider/model/purpose/usage 含 cost 与 reasoningTokens）、`compaction`（tokensBefore/After/firstKeptEntryId）、`title_change`、`thinking_level_change`、`custom` 事件（tool_execution_start、async-result）、header 的 `parentSession`/`previousSessionFiles` lineage 能解掉子代理与 advisor 的归并问题。否决理由：架构设计的安全边界明写「不扫描 Agent 会话文件，只读 magpie 自己写的来源」；引入第四源是方向性决策，需要用户单独拍板（见边界外），不该夹带在本提案里。

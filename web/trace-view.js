@@ -37,6 +37,7 @@ import { esc } from './html.js';
  * @property {string | null} [toolArgs] 调用步的参数段摘要（已按预算截断，不含工具名）；其余步骤缺省
  * @property {string | null} [toolInput] 调用步的完整参数 JSON，供悬停展示；其余步骤缺省
  * @property {boolean | null} [isError] 结果内容块的 is_error：true/false，未报告为 null；其余步骤缺省
+ * @property {string | null} [bgNote] 背景作业配对标注：发起结果行与通知事件行携带，其余步骤缺省
  */
 
 /**
@@ -55,6 +56,46 @@ function droppedCharsOf(basis) {
     const value = /** @type {Record<string, unknown>} */ (JSON.parse(basis));
     return typeof value.dropped_chars === 'number' ? value.dropped_chars : null;
   } catch { return null; }
+}
+
+/* ---------- 背景作业配对：发起结果行与完成通知行的标注 ---------- */
+
+/** @param {number | null} ms */
+const bgSecs = (ms) => ms === null ? null : `${(ms / 1000).toFixed(2)} s`;
+
+/**
+ * 一条 bg_job 的配对读数。时延按两笔请求的 started_ms 差；发起与通知同笔
+ * 时没有请求级时延，写「同一请求内」而不印一个 0。
+ * @param {import('../src/queries/bg-jobs').BgJobRow} job
+ */
+function bgJobNote(job) {
+  if (job.state !== 'resolved' || job.notice_req === null) return `${job.job_id} 等待完成通知`;
+  if (job.spawn_req === job.notice_req) return `${job.job_id} 已配对 · 同一请求内`;
+  return `${job.job_id} 已配对 · ${bgSecs((job.notice_ms ?? 0) - (job.spawn_ms ?? 0))}`;
+}
+
+/**
+ * bg_job 行按位置建索引：发起侧与通知侧各一份，键是 `req_id:ord`。
+ * @param {import('../src/queries/bg-jobs').BgJobRow[] | undefined} bgJobs
+ */
+function bgIndexes(bgJobs) {
+  /** @type {Map<string, import('../src/queries/bg-jobs').BgJobRow[]>} */
+  const bySpawn = new Map();
+  /** @type {Map<string, import('../src/queries/bg-jobs').BgJobRow[]>} */
+  const byNotice = new Map();
+  for (const job of bgJobs ?? []) {
+    if (job.spawn_req !== null && job.spawn_ord !== null) {
+      const key = `${job.spawn_req}:${job.spawn_ord}`;
+      const list = bySpawn.get(key);
+      if (list === undefined) bySpawn.set(key, [job]); else list.push(job);
+    }
+    if (job.notice_req !== null && job.notice_ord !== null) {
+      const key = `${job.notice_req}:${job.notice_ord}`;
+      const list = byNotice.get(key);
+      if (list === undefined) byNotice.set(key, [job]); else list.push(job);
+    }
+  }
+  return { bySpawn, byNotice };
 }
 
 /* ---------- 工具行摘要：按工具分派，路径折算成 basename，行区间是显示锚点不是事实 ---------- */
@@ -275,12 +316,15 @@ export function toolSummary(name, inputText) {
  * @param {import('./reader-store.js').RequestRead | null} read
  * @param {SystemContext} [systemContext] 顶层 System 的当前值与比较结果；由装配层按
  * 同 actor 已确认前驱计算，投影不做时间推断，也不持久化比较结果。
+ * @param {import('../src/queries/bg-jobs').BgJobRow[]} [bgJobs] 会话的背景作业配对；
+ * 缺省或未读到时不画配对标注。
  * @returns {TraceStep[]}
  */
-export function projectSteps(row, read, systemContext = null) {
+export function projectSteps(row, read, systemContext = null, bgJobs = []) {
   /** @type {TraceStep[]} */
   const steps = [];
   const detail = read?.detail ?? null;
+  const bg = bgIndexes(bgJobs);
   /** @param {string} key @param {TraceStep['status']} status @param {string} text @param {Partial<TraceStep>} [extra] */
   const record = (key, status, text, extra = {}) => {
     steps.push(/** @type {TraceStep} */ ({
@@ -352,16 +396,33 @@ export function projectSteps(row, read, systemContext = null) {
         const path = wholeMessage ? msgBase : `${msgBase}.${block.path}`;
         const indexed = (detail.tool_results ?? []).find(item => item.state === 'resolved'
           && item.result_ord === entry.ord && item.result_path === path) ?? null;
+        const bgSpawn = bg.bySpawn.get(`${row.req_id}:${entry.ord}`) ?? [];
         steps.push({
           key: `${row.req_id}:message:${entry.ord}:result:${block.index}`, reqId: row.req_id,
           kind: 'tool_result',
           text: block.text.length > 0 ? block.text : '（空工具结果）',
           toolName: indexed !== null ? indexed.tool_name : null,
           isError: block.failed === true ? true : block.failed === false ? false : null,
+          bgNote: bgSpawn.length > 0
+            ? bgSpawn.map(bgJobNote).join('；') : undefined,
           messageOrd: entry.ord, callOrd: null,
           source: { side: 'request', path, messageOrd: entry.ord, blockIndex: block.index },
           raw: block.raw, unrecognized: false, status: null, result: null,
           pairOwner: indexed === null ? null : { reqId: indexed.owner_req, callOrd: indexed.ord },
+        });
+      }
+      // 背景作业完成通知：解释层判 injected 不占用户气泡，配对信息在这里出
+      // Event 步骤，让「作业在哪一笔被唤醒」可读。
+      const bgNotice = bg.byNotice.get(`${row.req_id}:${entry.ord}`) ?? [];
+      if (bgNotice.length > 0) {
+        steps.push({
+          key: `${row.req_id}:message:${entry.ord}:bg`, reqId: row.req_id, kind: 'record',
+          text: `后台作业完成 · ${bgNotice.map(job => job.job_id).join('、')}`,
+          bgNote: bgNotice.map(bgJobNote).join('；'),
+          messageOrd: entry.ord, callOrd: null,
+          source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
+          raw: entry.blocks.map(block => block.text).join('\n\n'),
+          unrecognized: false, status: null, result: null, pairOwner: null,
         });
       }
       if (entry.role === 'system') {
@@ -524,13 +585,16 @@ export function renderTraceRows(row, steps, ordinal, selected, callOf = null) {
         arrow ? '<span class="row-arrow" aria-hidden="true">→</span>' : ''}${
         step.kind === 'tool_result' ? `<code>${esc(step.text)}</code>` : ''}`
       : esc(clip(step.text));
+    // 背景作业配对读数跟在行尾；发起行与通知事件行各有自己的内容，不重复正文。
+    const bgNoteHtml = step.bgNote === undefined || step.bgNote === null
+      ? '' : ` <span class="bg-note" title="${esc(step.bgNote)}">${esc(step.bgNote)}</span>`;
     pieces.push(`<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
 <div class="compact-row${step.isError === true ? ' step-error' : ''}">
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${step.key === selected}">
     <span class="compact-meta" title="序号表示当前窗口内的请求 · 请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
     ${chip}
-    <span class="compact-preview"${titleAttr}>${previewHtml}</span>
+    <span class="compact-preview"${titleAttr}>${previewHtml}</span>${bgNoteHtml}
   </button>
 </div>
 </div>`);

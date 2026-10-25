@@ -5,6 +5,7 @@ import {
 } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
 import { readBodyTx } from '../body';
+import { pairBackgroundJobsTx } from './bg-jobs';
 import {
   anthropicReplyCalls, anthropicRequestResults, chainTrunk, chainTrunkRoot,
   confirmedDeltaOf, initialPairState, matchPredecessor, pairOutcome, presentationDecision,
@@ -345,6 +346,8 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
     }
     assignChainRoles(db, group.conv_key, group.actor);
     const paired = pairToolCallsTx(db, group, pairRows, uncertain);
+    // 背景作业配对与工具配对同批：都在组完成事务里按当前可读正文重建。
+    pairBackgroundJobsTx(db, group, pairRows);
     for (const input of presentations) {
       writePresentationTx(db, input, paired.associations, group);
     }
