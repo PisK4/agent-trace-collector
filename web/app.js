@@ -1622,6 +1622,10 @@ if (typeof document !== 'undefined') {
     applyTheme();
   });
 
+  // 品牌回主页即整页重载：落地到无参数初始态（重读会话列表、选最新会话），
+  // 比在页面里重置全部选择字段与在途导航更直接，「刷新」语义也是字面义。
+  el('brand-home').addEventListener('click', () => { location.href = location.pathname; });
+
   /* ---------------- 布局控制：折叠与详情栏调宽 ---------------- */
   const RAIL_MIN = 280, RAIL_MAX = 640, MAIN_MIN = 320;
   /**
