@@ -8,7 +8,7 @@ ATC 现在只有一个输入源：magpie。这个约束在 [项目定位](../../
 
 这个代价在过去一年变得更重，因为 Agent harness 这一侧已经自己长出了标准出口。2026-10-25 查到的两个：
 
-- **Claude Code** 官方导出 OTLP，三个信号都有。metrics 与 logs 稳定，traces 是 beta（要 `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`）。`claude_code.llm_request` span 带 `gen_ai.response.id`（等于 API 的 `request_id`）、`agent_id`、`parent_agent_id`、`attempt`、`stop_reason`、`query_source_safe`；工具 span 带 `tool_use_id`（等于 `gen_ai.tool.call.id`），`file_path` 要开 `OTEL_LOG_TOOL_DETAILS=1` 才发（默认关）；`OTEL_LOG_RAW_API_BODIES=file:<dir>` 能把**完整未截断**的 Anthropic Messages API 请求与响应 JSON 写到磁盘，事件里只留 `body_ref` 指针。出处见 [Monitoring - Claude Code Docs](https://code.claude.com/docs/en/monitoring-usage)。
+- **Claude Code** 官方导出 OTLP，三个信号都有。metrics 与 logs 稳定，traces 是 beta（要 `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`）。`claude_code.llm_request` span 带 `gen_ai.response.id`（等于 API 的 `request_id`）、`agent_id`、`parent_agent_id`、`attempt`、`stop_reason`、`query_source_safe`；工具 span 带 `tool_use_id`（等于 `gen_ai.tool.call.id`），`file_path` 要开 `OTEL_LOG_TOOL_DETAILS=1` 才发（默认关）；`OTEL_LOG_RAW_API_BODIES=file:<dir>` 能把**完整未截断**的 Anthropic Messages API 请求与响应 JSON 写到磁盘，事件里只留 `body_ref` 指针。出处见 [Monitoring - Claude Code Docs](https://code.claude.com/docs/en/monitoring-usage)。2026-10-26 本机实测补充：经网关路由的样本里 span 不带 `gen_ai.response.id`，跨通道锚点改由 logs 事件的 `message.id` 提供，见文末[实测记录](#实测记录2026-10-26-抓样)。
 - **OMP（oh-my-pi）** 在 `packages/agent/src/telemetry.ts` 与 `packages/coding-agent/src/telemetry-export-otlp.ts` 里实现了一套 GenAI 语义约定导出，锚定 `33cc6b9a04`（2026-08-28）。span 层级是 `invoke_agent` → `chat` / `execute_tool`，属性覆盖 `gen_ai.conversation.id`、`gen_ai.response.id`、`gen_ai.tool.call.id`、`gen_ai.input.messages`、`gen_ai.output.messages`、`gen_ai.tool.call.arguments`、`gen_ai.tool.call.result`。`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=full` 时消息走完整序列化（`serializeFullInputMessagesForTelemetry`，`telemetry.ts:887`），不套 240 字摘要上限。
 
 OTLP 本身是稳定标准：规范到 1.11.1，trace / metric / log 三个信号都是 Stable（[OTLP Specification](https://opentelemetry.io/docs/specs/otlp/)）。GenAI 语义约定还在 Development——截至 2026-08 的 63 个 `gen_ai.*` 键没有一个标 Stable——但两个 harness 用的正是这一套，字段名在实际流量里已经收敛。
@@ -53,19 +53,19 @@ OTLP 本身是稳定标准：规范到 1.11.1，trace / metric / log 三个信�
 
 ### 证据身份
 
-OTLP 行没有 ATC 现在依赖的任何锚点。`gen_ai.response.id` 是 API 请求 ID（`req_xxx`），magpie 的 `response_id` 是响应对象 ID（`msg_xxx`），两者不同名也不同值，无法互相归一。所以两条通路采到同一批调用时，**不能合并，只能并存**。
+两条通路之间存在**精确锚点**，2026-10-26 抓样已在两个 harness 上各命中一次（细节见文末[实测记录](#实测记录2026-10-26-抓样)）：OMP chat span 的 `gen_ai.response.id`（`chatcmpl-…`）与 Claude Code logs 事件的 `message.id`（`msg_…`）都落在 magpie 账本 `response_id` 的值空间，经既有前缀归一化后与账本行精确相等——与 hook↔账本现用的 `response_id_norm` 关联同一机制。所以第一批**不合并是范围取舍，不是无锚点的被迫**：合并要处理重复合并、字段优先级与派生组迁移，值得单独立项；锚点已在，记录在案不急于这一批用掉。按时间与模型配对仍然禁止——锚点是 ID 相等，不是时间窗。
 
 物理身份取 `(trace_id, span_id)`：这两个值由发送端生成，同一次导出重发时不变，跨进程重启也不变（Claude Code 的 `interaction` span 每次新开，但已发出的 span ID 稳定）。它满足幂等重放的要求，也不需要推断任何上游语义。
 
 不采用 `(route_id)` 或 `(t_ms, model, tokens)` 这类组合键。前者在 OTLP 里根本不存在，后者会在一秒内多次调用同一模型时撞键。
 
-**span 到 request 行的选取**。一次导出里的 span 是一棵树（OMP `invoke_agent` → `chat` / `execute_tool`；Claude Code `interaction` → `claude_code.llm_request` → 工具 span），不是每个 span 都等价于一笔请求。只有 LLM 调用 span 建 `request` 行，白名单按 span 名维护（第一批：OMP `chat`、Claude Code `claude_code.llm_request`），随 `mapping_version` 一起版本化。白名单外的 span（agent 层、工具层）不建行，留在原始层作元数据——工具 span 建行会把请求列表淹成工具清单，幂等判定也失去确定对象。span 名不在白名单、属性形状却像 LLM 调用的不猜：记入未知桶，等映射层下一版处理，不按属性形状兜底建行。
+**span 到 request 行的选取**。一次导出里的 span 是一棵树（OMP `invoke_agent` → `chat` / `execute_tool`；Claude Code `interaction` → `claude_code.llm_request` → 工具 span），不是每个 span 都等价于一笔请求。只有 LLM 调用 span 建 `request` 行，选取键是 `(service.name, 选取规则)`，随 `mapping_version` 一起版本化——OMP 的 span 名拼了模型名（实测 `chat auto/deepseek-v4.1-flash`），按 span 名会漏，按 `gen_ai.operation.name='chat'` 选（service.name `oh-my-pi`）；Claude Code 的 span 名带稳定前缀，按名 `claude_code.llm_request` 选（service.name `claude-code`）。白名单外的 span（agent 层、工具层）不建行，留在原始层作元数据——工具 span 建行会把请求列表淹成工具清单，幂等判定也失去确定对象。span 名不在白名单、属性形状却像 LLM 调用的不猜：记入未知桶，等映射层下一版处理，不按属性形状兜底建行。
 
 ### 端点认证、脱敏与资源边界
 
 第四通道新增两个写端点，安全基线与 hook 对齐，四件事逐一落实：
 
-**认证。** 两个端点要求 Bearer 令牌，常量时间比较，未带或不匹配返回 401。令牌是数据目录里独立的 `otlp.token`（0600，与 hook 令牌同一生成机制但不共用——一份密钥不进两份上游配置）。两个 harness 都不用改代码：Claude Code 与 OTel SDK 都认标准 `OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer <token>`。本机任意进程不该能写库，这是 hook 已经达到的线，第四通道不降。
+**认证。** 两个端点要求 Bearer 令牌，常量时间比较，未带或不匹配返回 401。令牌是数据目录里独立的 `otlp.token`（0600，与 hook 令牌同一生成机制但不共用——一份密钥不进两份上游配置）。两个 harness 都不用改代码：Claude Code 与 OTel SDK 都认标准 `OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer <token>`。本机任意进程不该能写库，这是 hook 已经达到的线，第四通道不降。令牌透传已实测：两个 harness 配 `OTEL_EXPORTER_OTLP_HEADERS` 后 Authorization 原样到达接收端。
 
 **浏览器侧防线是三件事的组合，不靠碰巧。** `application/x-protobuf` 与 `application/json` 都不是 CORS safelisted content-type，跨站 fetch 会先触发预检并失败；Host 校验只放 `127.0.0.1` 与 `localhost`，挡 DNS rebinding；端点对其它 content-type（如 `text/plain` 这类能发简单请求的形态）一律拒绝。三条同时成立才构成边界，缺一条都要靠另一条默默补位。
 
@@ -79,7 +79,7 @@ OTLP 行没有 ATC 现在依赖的任何锚点。`gen_ai.response.id` 是 API �
 
 这一点决定 OTLP 不能替代 hook。
 
-**Claude Code** 有两条路：span 属性（受 `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` 约束，默认 60 KB；截断标记 `_truncated` 与 `_original_length` 在文档里限定于 tool 事件侧，raw body 用的是 `body_truncated`）与 `OTEL_LOG_RAW_API_BODIES=file:<dir>`（完整不截断，落盘，事件带 `body_ref`）。后者形态就是 Anthropic Messages API 的原始 JSON，现有 `anthropic` 适配器可直接解析。
+**Claude Code** 有两条路：span 属性（受 `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` 约束，默认 60 KB；截断标记 `_truncated` 与 `_original_length` 在文档里限定于 tool 事件侧，raw body 用的是 `body_truncated`）与 `OTEL_LOG_RAW_API_BODIES=file:<dir>`（完整不截断，落盘，事件带 `body_ref`）。后者形态就是 Anthropic Messages API 的原始 JSON，现有 `anthropic` 适配器可直接解析——形态已实测：request 文件顶层就是 `model/messages/system/tools/thinking/stream` 的请求体原样，response 文件是裸 Message 对象，`body_ref` 指针在 `claude_code.api_response_body` 事件里，目录另有 `index.jsonl` 记 session 与 message id 对照。
 
 **OMP** 在 `full` 模式下把完整消息序列化成 OTel 属性，但仍有上限：单次 `gen_ai.input.messages` 保留全部消息（`serializeFullInputMessagesForTelemetry` 不切片），工具调用数组限 64 条（`MAX_TELEMETRY_ARRAY_ITEMS`），对象深度 3 层、键 12 个（`MAX_TELEMETRY_OBJECT_DEPTH` / `MAX_TELEMETRY_OBJECT_KEYS`）。而且 OMP 没有落盘通路——超限就是丢。
 
@@ -89,7 +89,7 @@ OTLP 行没有 ATC 现在依赖的任何锚点。`gen_ai.response.id` 是 API �
 
 四条关系，都要明确：
 
-1. **不合并**。OTLP 行与 magpie 行各自建 `request`，即使它们其实是同一笔调用。合并需要可信的共同锚点，现在没有。强行按时间与模型配对会把两笔不同请求拼成一条不存在的记录——这正是 [架构设计](../../../../docs/architecture-design.md) 里否决过的那类错误。并存的形态分两种：不同 session id 是两套记录分开显示；**同一个 session id**（Claude Code 同时开 magpie 与 OTLP 时，`gen_ai.conversation.id` 与 magpie 侧 session 很可能是同一个值）会落进同一个 `conv_key`——会话列表不翻倍，但会话时间线里每笔调用出现两次，一次 magpie 行一次 OTLP 行。第一批接受这种并存，行上来源可区分；会话内按来源过滤的展示另评（见 Deferred），不在第一批假装解决。
+1. **不合并**。OTLP 行与 magpie 行各自建 `request`，即使它们其实是同一笔调用。合并的锚点已实测存在（见「证据身份」），但合并策略与字段优先级单独评审，第一批不做。强行按时间与模型配对会把两笔不同请求拼成一条不存在的记录——这正是 [架构设计](../../../../docs/architecture-design.md) 里否决过的那类错误。并存的形态分两种：不同 session id 是两套记录分开显示；**同一个 session id**（Claude Code 同时开 magpie 与 OTLP 时，`gen_ai.conversation.id` 与 magpie 侧 session 实测就是同一个值，两个 harness 均命中）会落进同一个 `conv_key`——会话列表不翻倍，但会话时间线里每笔调用出现两次，一次 magpie 行一次 OTLP 行。第一批接受这种并存，行上来源可区分；会话内按来源过滤的展示另评（见 Deferred），不在第一批假装解决。
 2. **不抢字段**。OTLP 行只写与既有列语义严格一致的映射：`started_ms`（span 起始）、`model_requested` / `model_served`、`stop`、`in_tok` / `out_tok` / `cache_read` / `cache_write`（取 `gen_ai.usage.*`）、`agent` 标签。写不进既有列的 OTLP 独有事实全部留原始层：`query_source_safe`（无列）、Claude Code 的 `attempt`（`attempt_count` 是 magpie tries 的计费语义，不同物，不能顶替）、`agent_id` / `parent_agent_id`（UUID 身份，不是 magpie `subagent` 那样的名称标签，写进 `actor` / `subagent` 会拆派生组）、工具 span 的精确起止（无列）。它们进读模型需要单独评审。有 magpie 时，状态、用量、费用仍以 magpie 账本为准。
 3. **magpie 自己的 OTLP 优先级最低**。它的导出器是为 Langfuse 定制的白名单，不含 `response_id`、`conv`、`subagent`、`archive`，正文默认截 256 KiB。同样一条信息，账本与路由已经给了更完整的版本。接它只增加一条降级副本，不增加事实。**本提案不为 magpie 的 OTLP 做适配**，仅在实现上兼容它的 `http/json` 载荷，不投入额外工作。
 4. **缺失判定按期望位图算**。`through` 期望 `1|2|4`、`rejected` 期望 `2`、`otlp` 期望 `8`；会话列表的缺正文标志按「期望位缺失」计算，OTLP 行不因没有 hook 位被标成采集失败。现行 `has_missing`（`src/queries/sessions.ts`）看的是全局第 1 位，这一处随本提案改，`web/app.js` 的位义注释同步扩到 8。
@@ -117,6 +117,20 @@ OTLP 通道的行**不参与**派生组的 `conv_key` 归组，除非 span 里�
 **不被取代、但要补一句区分的**：README 数据来源节与 [trace 格式](../../../../docs/trace-format.md) 证据节记录的「magpie OTLP 不能当第四路」针对 magpie 自己的导出器，本提案「与 magpie 通路的关系」第 3 条与之同向；实施时补一句说明本提案接的是 harness 侧 OTLP，避免读者把两句读成矛盾。
 
 [OMP harness 集成](2026-10-25-omp-harness-integration.md) 的「wire-first」原则把 OTel 列为边界外的新证据源，其边界外清单里的「OTel 旁路采集」决策项由本提案作答，两文互链、不冲突：那份提案用现有三路证据派生 OMP 的 feature 语义，本提案打开一条新的输入面。OMP 的 `session_id` 归组问题在那份提案里被定性为「上游证据形状，接受不处理」；OTLP 的 `gen_ai.conversation.id` 可能改变这个结论，但需要实测确认 OMP 是否真把它写进 span。
+
+## 实测记录（2026-10-26 抓样）
+
+方法：一次性探针接收器（`127.0.0.1:8431`，只收报文落盘、返回规范 200，不解析不入库），本机自产合成会话三轮——Claude Code 2.1.310 traces 走 `http/protobuf`、traces 加 logs 走 `http/json` 并开 `OTEL_LOG_RAW_API_BODIES=file`、OMP 18.12.6 无头模式（`omp -p`）traces 加 logs 走 `http/protobuf`。载荷全部是自产合成数据，可直接当 fixture 素材；探针脚本与样本留在仓库外。边界同 OMP 调研先例：一次性抓样，不读 harness 本地文件。
+
+开工前三问的答案：
+
+1. **会话 id 在 span 里，两个 harness 都在。** Claude Code 的 `claude_code.llm_request` 与 `claude_code.interaction` 都带 `gen_ai.conversation.id` 与 `session.id`（同值，即 CC 会话 UUID）；OMP 的 chat 与 `invoke_agent` span 都带 `gen_ai.conversation.id`，值与 magpie 侧 session 同值（账本行 9775 命中）。归组路径成立，conv_key 撞键（同会话双通道并存）是常态而非假设。
+2. **跨通道精确锚点存在，且已命中。** OMP chat span 的 `gen_ai.response.id`（`chatcmpl-bc46…`）归一化后等于账本行 9775 的 `response_id_norm`；Claude Code logs 的 `claude_code.api_response_body` 事件 `message.id`（`msg_43d90c…`）等于账本行 9748 的 `response_id_norm`。ID 相等就是锚点，与 hook↔账本现有关联同一机制。
+3. **`body_ref` 文件就是裸协议对象。** request 是 Messages API 请求体原样，response 是裸 Message 对象，`anthropic` 适配器可直接解析（见「正文的两种形态」的实测注）。
+
+其余实测事实：`OTEL_EXPORTER_OTLP_HEADERS` 的 Authorization 在两个 harness 都原样到达；OMP span 名拼模型名，选取键定为 `(service.name, gen_ai.operation.name)`；OTLP/JSON 里 `traceId`/`spanId` 是十六进制串、键名驼峰，protobuf 路径是原始字节，映射层统一到原始字节；Claude Code span 的 `gen_ai.response.id` 在经网关路由的样本里缺席（文档声明的 `req_` 形态属直连），映射按缺失保持 NULL；`user_prompt` 默认 `<REDACTED>`；OMP logs 只有 run 级汇总计数（`omp.agent.*`），无逐笔事件，印证 logs 端点第一批只做接收与 `body_ref` 关联；CC 一次调用两个 span（`interaction` 为 `llm_request` 的 parent），白名单不建 interaction 行。
+
+harness 面的文档级扫描（同日）：Codex 原生三信号 OTLP，默认关、`config.toml` 配置（[codex-rs/otel](https://github.com/openai/codex/blob/main/codex-rs/otel/README.md)）；Cursor 企业版 OTLP 只导 metrics 与 logs 且 CLI 不导正文，对本通道无增量（[Cursor 文档](https://prod.cursor.com/docs/enterprise/opentelemetry-export)）；OpenCode 无原生出口，社区插件与 env 约定存在、原生请求状态待查（[issue #14697](https://github.com/anomalyco/opencode/issues/14697)）。结论：标准出口论题在主力 harness 上成立，协议层按两个已实测 harness 落，Codex 列为下一个候选，不为它做预调研。
 
 ## Alternatives considered
 
@@ -161,7 +175,8 @@ OTLP 通道的行**不参与**派生组的 `conv_key` 归组，除非 span 里�
 
 - OTLP 独有事实进读模型列：`query_source_safe`、Claude Code 的 `attempt`、`agent_id` / `parent_agent_id` 结构化子代理关系、工具 span 的精确起止。
 - 会话内按来源过滤或并排展示双通道重复行。
+- 跨通道按 `response_id_norm` 精确去重：锚点已实测（OMP span 属性、Claude Code logs 事件），判重机制与 hook↔账本现有关联同构，合并策略与字段优先级需单独设计。
+- 其他 harness 的接入：Codex 原生三信号（默认关，`config.toml` 配置）是下一个自然候选；Cursor 企业版只导 metrics/logs 且明确不含 CLI 正文，对本通道无会话阅读增量，不接；OpenCode 无原生出口，社区插件不追。逐个按 `(service.name, 选取规则)` 白名单加，不做预调研。
 - 派生层接入（用途判定、工具配对、前驱链）。
 - metrics 信号。第一批只做 traces 与 logs；`gen_ai.client.token.usage` 这类直方图对会话阅读没有增量。
 - magpie OTLP 的专门适配。
-- 其他 harness（Codex、Cursor、OpenCode）的实测与映射。
