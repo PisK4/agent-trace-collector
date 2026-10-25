@@ -15,7 +15,12 @@ Status: implemented
 - 参数键全库统一:Edit/Write/Read 用 `file_path`,Skill 用 `skill`——与 trace 视图 `toolSummary` 已认的键名同一套词汇。
 - 会话结构信号全部现成:`req_kind` 已派生;部分会话有子代理;`attempt_count>1` 共 16 笔。
 
-需求与社区证据经[独立评审](../../../docs/session-trace-summary-review.md)核实,两条口径警示写进定位:OpenTelemetry GenAI 的 `tool_calls` 指标按单次 agent invocation 计客户端执行的调用,与本提案「模型发出的调用、全会话累计」是不同口径,不混称一致;HITL 语境的人介入包括批准、改参、拒绝、补充回答,中断只是其中一小类,本功能不把中断计数称为人介入率。首批定位是**辅助人工评估的会话事实汇总**:计数回答不了任务是否完成、工具是否选对,验收锚定三项阅读任务——快速盘点操作范围、找到值得复核的异常、回到对应原始证据。
+需求与社区证据经[独立评审](../../../docs/session-trace-summary-review.md)核实,两条口径警示写进定位:
+
+- OpenTelemetry GenAI 的 `tool_calls` 指标按单次 agent invocation 计客户端执行的调用,与本提案「模型发出的调用、全会话累计」是不同口径,不混称一致。
+- HITL 语境的人介入包括批准、改参、拒绝、补充回答,中断只是其中一小类,本功能不把中断计数称为人介入率。
+
+首批定位是**辅助人工评估的会话事实汇总**:计数回答不了任务是否完成、工具是否选对,验收锚定三项阅读任务——快速盘点操作范围、找到值得复核的异常、回到对应原始证据。
 
 ## Decision
 
@@ -47,23 +52,44 @@ Status: implemented
 
 ### 提取:三个事实进派生,单源双写
 
-- 调用参数与失败位的提取只有一份实现,住在 `derive/decision.ts`:`anthropicReplyCalls` 顺带读 input 的 `file_path`/`skill`(chat 形状的 `arguments` 字符串与对象都认,坏 JSON 落 NULL 不抛错),`anthropicRequestResults` 顺带读 `is_error`。键缺失落 NULL,不猜近邻键——`path`、`command` 之类的近邻键不提取。
-- `tool_call`(同步模式)与 `derive_tool_result`(切片模式)各加三列 `arg_path`/`arg_skill`/`is_error`;切片路径经 `derive_call_work` 与 `derive_result_work` 暂存转写,配对阶段不重读正文。同步路径在工具配对重建时直写。
-- 中断判定只有一份实现:`isUserInterruptMessage` 住在 `input-interpretation.ts`,计数函数 `interruptCountOf` 住在 `derive/decision.ts`,DB 适配 `interruptCountTx` 住在 `derive/read.ts`。同步路径在链阶段 delta 结算后计数,随摘要写进 `request.interrupt_count`;切片路径在摘要阶段按暂存的 `delta_ordinals` 计数,写进 `derive_request_result.interrupt_count`。正文不可读或 delta 不在手时保留旧值,与回复形状位同一套保留语义。
+- 调用参数与失败位的提取只有一份实现,住在 `derive/decision.ts`。`anthropicReplyCalls` 顺带读 input 的 `file_path`/`skill`(chat 形状的 `arguments` 字符串与对象都认,坏 JSON 落 NULL 不抛错);`anthropicRequestResults` 顺带读 `is_error`。键缺失落 NULL,不猜近邻键——`path`、`command` 之类的近邻键不提取。
+- `tool_call`(同步模式)与 `derive_tool_result`(切片模式)各加三列 `arg_path`/`arg_skill`/`is_error`。切片路径经 `derive_call_work` 与 `derive_result_work` 暂存转写,配对阶段不重读正文;同步路径在工具配对重建时直写。
+- 中断判定只有一份实现:`isUserInterruptMessage` 住在 `input-interpretation.ts`,计数函数 `interruptCountOf` 住在 `derive/decision.ts`,DB 适配 `interruptCountTx` 住在 `derive/read.ts`。同步路径在链阶段 delta 结算后计数,随摘要写进 `request.interrupt_count`。切片路径在摘要阶段按暂存的 `delta_ordinals` 计数,写进 `derive_request_result.interrupt_count`。正文不可读或 delta 不在手时保留旧值,与回复形状位同一套保留语义。
 - 正文回收后:已提取的事实随配对行保留(`retention_state='retained'` 照旧),没有提取到的行留 NULL。汇总端点不读正文,回收会话的计数与明细照常返回,覆盖度反映缺口。
 - backfill 走既有路径:算法号 bump(GROUP 2→3、DERIVE 6→7)→ 全组标 dirty → drain 重算即回填。提取不到的行不阻塞组完成。
 
 ### 结构变更:跟随回复形状位的先例,不 bump 结构版本
 
-十个可空列(-request 一列、tool_call 三列、derive_request_result 一列、derive_tool_result 三列、derive_call_work 两列、derive_result_work 一列)直接进 `schema.sql` 与 `schema-v6.sql`,新库建库即有;`published_derive_request` 与 `effective_request` 两个视图带上 `interrupt_count`。存量 v6 库由 `scripts/backfill-summary-facts.ts` 幂等补列、重建视图、全组标脏重算——与[回复形状位](../feature/2026-10-25-turn-pair-reading.md)落地时确立的路线一致。脚本的边界沿用提案当时写死的约束:仅可空加列、不搬既有数据、值全部由派生重算;部署顺序是停采集器 → 跑脚本 → 起新代码。`SCHEMA_VERSION` 保持 6,首版前「不提供跨结构升级」的立场没有被这次变更打开。
+十个可空列直接进 `schema.sql` 与 `schema-v6.sql`,新库建库即有:-request 一列、tool_call 三列、derive_request_result 一列、derive_tool_result 三列、derive_call_work 两列、derive_result_work 一列。`published_derive_request` 与 `effective_request` 两个视图带上 `interrupt_count`。
+
+存量 v6 库由 `scripts/backfill-summary-facts.ts` 幂等补列、重建视图、全组标脏重算——与[回复形状位](../feature/2026-10-25-turn-pair-reading.md)落地时确立的路线一致。脚本的边界沿用提案当时写死的约束:仅可空加列、不搬既有数据、值全部由派生重算。部署顺序:停采集器 → 跑脚本 → 起新代码。`SCHEMA_VERSION` 保持 6,首版前「不提供跨结构升级」的立场没有被这次变更打开。
 
 ### 端点:查询时聚合与证据回溯
 
-`GET /api/sessions/:key/summary`,只读快照内完成,不物化会话级表:单会话聚合量级很小,物化要跨组协调代际发布,复杂度买不来收益。响应带 `tools[]`(name/count/paired/error_known/errors)、`paths{written,read}`、`skills[]`、`interrupts{count,requests,unknown}`、`totals{in_tok,out_tok,cost,cost_absent,cache_hit}`、`structure{requests_total,main,bypass,subagent_actors,subagent_requests,retries,context_peak_pct,models}`、`coverage{calls_total,calls_paired,calls_error_known,calls_fact_known}`、`failures[]`(失败的 req_id+ord 集合,上限 200,超出置 `failures_truncated`)与 `dirty`。行存在即计数;组 dirty 时返回已发布代或同步旧列的事实加 dirty 标志,不猜未完成的派生。
+`GET /api/sessions/:key/summary`,只读快照内完成,不物化会话级表。理由:单会话聚合量级很小,物化要跨组协调代际发布,复杂度买不来收益。响应字段:
 
-`GET /api/sessions/:key/summary/entries` 承担点击后的按组查询:`kind=tool/written/read/skill` 按组返回调用列表(req_id+ord),`kind=interrupts` 返回中断请求与各自次数;上限 1000。参数不合法显式 400,不静默回退。有效工具行的选源与 `getRequest` 同一条规则:发布代有该请求的工具行用发布代,否则回退同步旧表;`calls_fact_known` 按算法号判——发布代行看 `derive_tool_result.algorithm_version`,同步行看 `tool_call.algorithm_version`,保留行带着旧算法号,参数事实不算已知。
+- `tools[]`:name/count/paired/error_known/errors
+- `paths{written,read}`
+- `skills[]`
+- `interrupts{count,requests,unknown}`
+- `totals{in_tok,out_tok,cost,cost_absent,cache_hit}`
+- `structure{requests_total,main,bypass,subagent_actors,subagent_requests,retries,context_peak_pct,models}`
+- `coverage{calls_total,calls_paired,calls_error_known,calls_fact_known}`
+- `failures[]`:失败的 req_id+ord 集合,上限 200,超出置 `failures_truncated`
+- `dirty`
 
-**证据回溯是首批验收,不是附加项**:失败数直接给出失败调用集合,收起行里的失败数可点击、当场打开失败调用列表;工具、路径与 Skill 条目点击后经 entries 查询打开右栏条目列表,逐项跳配对页(配对页已支持调用方在窗口外时按需读取该请求);复用工具配对页与窗口外请求详情的既有导航(新增 `open-offpage` 选择意图承载「定位窗口外请求」这一步);正文已回收的行展示仍有的定位元数据并注明覆盖缺口。唯一成功标准:能从任一数字回到支撑它的记录。
+行存在即计数;组 dirty 时返回已发布代或同步旧列的事实加 dirty 标志,不猜未完成的派生。
+
+`GET /api/sessions/:key/summary/entries` 承担点击后的按组查询,上限 1000。`kind=tool/written/read/skill` 按组返回调用列表(req_id+ord);`kind=interrupts` 返回中断请求与各自次数。参数不合法显式 400,不静默回退。有效工具行的选源与 `getRequest` 同一条规则:发布代有该请求的工具行用发布代,否则回退同步旧表。`calls_fact_known` 按算法号判——发布代行看 `derive_tool_result.algorithm_version`,同步行看 `tool_call.algorithm_version`;保留行带着旧算法号,参数事实不算已知。
+
+**证据回溯是首批验收,不是附加项**:
+
+- 失败数直接给出失败调用集合,收起行里的失败数可点击、当场打开失败调用列表
+- 工具、路径与 Skill 条目点击后经 entries 查询打开右栏条目列表,逐项跳配对页(配对页已支持调用方在窗口外时按需读取该请求)
+- 复用工具配对页与窗口外请求详情的既有导航(新增 `open-offpage` 选择意图承载「定位窗口外请求」这一步)
+- 正文已回收的行展示仍有的定位元数据并注明覆盖缺口
+
+唯一成功标准:能从任一数字回到支撑它的记录。
 
 ### 前端:session-head 折叠区与读数页精简
 
@@ -106,9 +132,29 @@ Status: implemented
 
 ## Testing
 
-合成数据口径由 `tests/session-summary.test.ts` 锁定:anthropic 与 chat 两协议形状的参数提取、缺键 NULL 不猜近邻键;失败位显式 true 才记 1、缺席按缺省读;中断判定只认用户消息第一个文本块的开头前缀,摘要引用与 tool_result 内文不算,计数按 delta 归属;排除用途的中断贡献按规则计 0、不算覆盖缺口;ambiguous 不计失败、pending 不冒充零失败、coverage 如实;保留行计数与明细列保留、从未提取的行进覆盖缺口;中断未判定不冒充 0;token 与费用缺值进覆盖度、不给 0;缓存分母为空不给数;峰值取 max 比值;路径按原始路径分组;dirty 组返回已发布事实加标志;失败集合与工具/路径/Skill 条目都带 req_id+ord 定位;`migrateSummaryFacts` 对缺列旧库幂等补列、重建视图、既有行不动。`tests/protocols.test.ts` 锁定 chat 调用提取的既有判据不漂移;`tests/web.test.ts` 锁定读数页无请求级命中行、缓存读数悬停指向会话头。
+合成数据口径由 `tests/session-summary.test.ts` 锁定:
 
-真实库验收以目标会话 `98da290b-7df1-4759-9dd4-d7d6482ea858` 的人工核对为准,锚点全部实测核对(2026-10-25):366 次调用(Edit 156 / Bash 138 / Read 57 / Write 15)、13 失败(Bash 11 + Read 2)、Bash 另 1 次结果未判定、写入尝试 44 条路径、读取请求 24 条、主链 256 / 旁路 64、缓存命中 94.9%、上下文峰值 24%、模型 3 个、会话合计 1.8M 提示 / 205K 输出 / $1.0290、cost_absent 13 笔、子代理与重试为零不出现。两处锚点在实施核对时修正:
+- anthropic 与 chat 两协议形状的参数提取、缺键 NULL 不猜近邻键
+- 失败位显式 true 才记 1、缺席按缺省读
+- 中断判定只认用户消息第一个文本块的开头前缀,摘要引用与 tool_result 内文不算,计数按 delta 归属
+- 排除用途的中断贡献按规则计 0、不算覆盖缺口
+- ambiguous 不计失败、pending 不冒充零失败、coverage 如实
+- 保留行计数与明细列保留、从未提取的行进覆盖缺口;中断未判定不冒充 0
+- token 与费用缺值进覆盖度、不给 0;缓存分母为空不给数;峰值取 max 比值;路径按原始路径分组
+- dirty 组返回已发布事实加标志
+- 失败集合与工具/路径/Skill 条目都带 req_id+ord 定位
+- `migrateSummaryFacts` 对缺列旧库幂等补列、重建视图、既有行不动
+
+`tests/protocols.test.ts` 锁定 chat 调用提取的既有判据不漂移;`tests/web.test.ts` 锁定读数页无请求级命中行、缓存读数悬停指向会话头。
+
+真实库验收以目标会话 `98da290b-7df1-4759-9dd4-d7d6482ea858` 的人工核对为准,锚点全部实测核对(2026-10-25):
+
+- 调用 366 次:Edit 156 / Bash 138 / Read 57 / Write 15;失败 13(Bash 11 + Read 2),Bash 另 1 次结果未判定
+- 写入尝试 44 条路径、读取请求 24 条;主链 256 / 旁路 64
+- 缓存命中 94.9%、上下文峰值 24%、模型 3 个
+- 会话合计 1.8M 提示 / 205K 输出 / $1.0290,cost_absent 13 笔;子代理与重试为零不出现
+
+两处锚点在实施核对时修正:
 
 - **中断是 1 次,不是提案阶段估的 2 次。** 「2」来自块级计数:同一条中断消息存在两个字节变体块(后续请求重新携带时序列化字节不同),块级去重把它数成 2。按 delta 归属,标记只在首次出现的 req 4925 计 1,其余 113 次出现都是上下文延续。
 - **app.js 写入是 48 次,不是样张里的 96 次。** 96 来自对消息块的扫描式统计,同一 tool_use 被数成两次;按 tool_call 行计一行一次,与[数据形状](#口径定义)节「块级扫描会数成 2」的警告一致。
