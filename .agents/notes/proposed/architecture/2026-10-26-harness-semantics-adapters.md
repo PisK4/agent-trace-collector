@@ -20,7 +20,7 @@ ATC 需要持续接入外部与自研 Harness。对已支持协议和证据通�
 
 ### module 的职责
 
-以下是拟议职责，不是已定的目录或 TypeScript interface；Review 应根据实际调用者确定最小形式。
+下表是各归属的职责边界。Review 已按 2026-10-26 的已提交源码核对：静态 seam 的收益不在现有调用者（它们本来就只见 `classifyPurpose` 一个入口），而在新增规则与理解单个 Harness 时的 locality；两个既有专属判定都 agent 门控、指纹自足，够格验证 seam。用途分派的最小形态据此定案，输入与技能的结论见[共享规则与专属规则](#共享规则与专属规则)。
 
 | 归属 | 持有的知识 | 调用者不再承担的知识 |
 | --- | --- | --- |
@@ -33,6 +33,8 @@ ATC 需要持续接入外部与自研 Harness。对已支持协议和证据通�
 语义规则可以按 Harness 集中组织，但不得为一个新标签建立只转发 generic 行为的空壳 adapter。用途、输入、技能不是互斥 Feature：一条请求可以同时有用途与输入解释，不能因用途命中就跳过另两种操作。
 
 用途 adapter 只负责专属证据解释。来源 kind、标题兼容、不可读时保留旧结论、通用回退与最终版本策略继续有一个确定的归属，不散入每个 adapter。规则次序必须可从实现中直接确认，不依赖对象枚举、导入副作用或任意数字优先级。
+
+定案的最小形态：分派 module 是 `src/harness/purpose.ts`，持有 `HarnessPurposeRule` 类型、静态登记数组与 `classifyPurpose` 编排；adapter 是各 Harness 一个的判定函数文件，agent 标签与判定的绑定只写在登记处，按登记次序选取，同 agent 多条规则时数组次序即优先级。semantics.ts 保持叶子：类型、`PURPOSE_VERSION`、视图字段提取、标题回复解析与通用判定（来源 kind、标题兼容、不可读保留）留在原处，导出给分派编排。`classifyPurpose` 移交分派 module 是依赖方向的要求——adapter 判定要写 `PURPOSE_VERSION` 这个值，编排留在 semantics.ts 会造出 semantics 与 harness 之间的运行时环；移走后方向单向（harness→semantics），结算方 request-purpose.ts 只改导入。agent 门控收进登记选取（标签不等直接跳过），判定函数不再自查 agent，结果信号里的 agent 证据保持原值。
 
 ### interface 的约束
 
@@ -52,12 +54,14 @@ ATC 需要持续接入外部与自研 Harness。对已支持协议和证据通�
 
 后续收紧规则时，另列命中、同文异客户端、未知标签、用户引用与缺证据的反例；确定影响用途、标题、增量或上下文事件的哪一种结果，再按相应版本与重建机制交付。不能在目录重排中悄悄改变显示文本或主链参与。
 
+Review 落到清单上：第一轮一条定义都不搬。输入包装、OMP 归档锚点与 Claude 技能标题格式留在 input-interpretation.ts 与 capabilities.ts。这些规则全部无 agent 门控——`<file>` 包装在 omp、claude、custom-harness 与空标签下同样命中，OMP 归档判定存在无 agent 参数的调用路径，技能标题按 system 文本匹配；消费方（finalize、派生的 omp_compaction 事件、extractSkills）无论定义放在哪个文件都得理解这条品牌语义，只改导入地址是空壳转发。等某条规则带上真实门控、反例与版本策略齐了，再随行为变化一起搬家。
+
 ### 实施分段
 
 1. 核对最新源码与工作区，Review 本提案和旧记录的分工；确定每种解释的最小 interface，确认它减少了调用者知识。把 Review 修订写回本提案后再实现。
 2. 迁移用途专属规则。以现有 Claude 分类器和 OMP skill_hint 验证静态 seam，保留来源 kind、标题、不可读状态、固定顺序及结算路径。不要把旧注册表提案里的类型和匹配门槛照搬进代码。
 3. 整理输入与技能解释。保持外部结果和执行时机，集中共享格式与专属实现的归属，避免循环依赖和空壳转发。若某项没有减少调用者知识，说明理由并保留现状，不为目录整齐强拆。
-4. 验证新增同类解释的 locality：用测试内的合成 adapter 或等价的窄测试 seam，证明规则可在登记处接入，通用分派和结算无需新增品牌分支；测试 adapter 不进入生产登记。已有黑盒行为回归继续穿过原有外部 interface。
+4. 验证新增同类解释的 locality：用测试内的合成 adapter 走用途的窄测试 seam `classifyPurposeWithRules(rules, view)`（生产入口 `classifyPurpose` 即以静态登记调用它），证明规则可在登记处接入，通用分派和结算无需新增品牌分支；测试 adapter 不进入生产登记。已有黑盒行为回归继续穿过原有外部 interface。
 5. 同步实际职责到架构文档及相关 note，按交付范围处理提案生命周期；只有已完成的决定转 implemented，未完成范围不得借状态转换宣称完成。
 
 移动 implementation 且结果语义、选择次序、读取范围均未改变时，不因文件路径变化提升算法版本。若 Review 决定修改规则，则将行为变更与机械迁移分开说明，并遵循 [派生版本与状态](../../../../docs/architecture-design.md#派生算法版本)及 [显式会话重建](../../../../src/maintenance/rebuild.ts)；真实库重建不属于本提案编写或交接动作，需单独确定运行范围。schema 变化不在第一轮范围。
