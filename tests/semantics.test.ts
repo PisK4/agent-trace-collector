@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
+import { classifyPurpose } from '../src/harness/purpose';
 import {
-  PURPOSE_VERSION, classifyPurpose, parseTitleReply, titleFromReply,
+  PURPOSE_VERSION, parseTitleReply, titleFromReply,
   type PurposeView,
 } from '../src/semantics';
 
