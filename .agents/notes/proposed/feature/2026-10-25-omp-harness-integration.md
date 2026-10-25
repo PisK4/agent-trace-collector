@@ -171,6 +171,8 @@ OMP 源码参照（`repos-external/oh-my-pi`，注意 18.0.10 滞后于装机 18
 - 2026-10-25 第四项已交付：effort 读数行落在「用量与上下文」折叠行（`usageFoldHtml` 第三参收正文首片，新增 `requestEffortOf` 从 `request_fields.reasoning_effort` 取值），装配处在 `web/app.js` 的 `railFacts`。值取自正文首片而非尝试链，因此单次干净调用（尝试链不渲染）也显示；未读正文或字段缺失时整行不渲染，不占位。
 - 2026-10-25 第五项已交付。`argsOf` 补 `path` 键（`file_path` 优先，`command`/`pattern` 仍不提取）；OMP 源码 18.0.10 复核了参数形状：read 只收 `path`、write 收 `path`+`content`、edit 常态是 replace 模式 `path`+`old_string`+`new_string`、grep 是 `pattern`+`path?`、glob 的 pattern 本身在 `path` 键、todo 按 `op` 组织、task 收 `agent`+`task`、web_search 收 `query`、ask 收 `questions` 数组——摘要分派按这些形状落，核心键缺失走既有回退链。色类按验收标准补了 read/edit/write 的小写别名（与大写同色，不扩新类），grep/glob/todo/task/web_search/ask 落中性色，维持「色类是既有语言、扩类克制」的取舍。会话汇总的写入/读取分组与点击定位改按小写化工具名过滤。算法号 GROUP_ALGORITHM 3→4、DERIVE_ALGORITHM 7→8，`scripts/backfill-omp-semantics.ts` 按汇总回填先例建骨架（本提交只做全组标脏重派生，补列补表随后续交付扩展）。
 
+- 2026-10-25 第一项已交付。`PURPOSE_VERSION` 3→4（与 zcode 提案的 3→4 撞车按实施时的当前值 +1 解决，本提案取 4，两篇锚点在 zcode 实施时各自对齐）；`readPurposeViewTx` 扩取数收 `userBlockHeads`（前 5 条 user 消息、逐块取前 200 字符，双限额让成本不随正文体积增长）；`skillHintDecision` 按分类器强指纹先例进规则链，位置在分类器之后、来源 kind 之前。列表降噪走推荐方案：`listSessions` 聚合 `has_participate` 给 `bypass` 标志（判定要求会话内零参与链请求），渲染层过滤 + 折叠计数行（`sessionsListBypassHtml`），不动游标，计数只覆盖已加载页。
+
 ## Alternatives considered
 
 **读 `~/.omp/agent` 作第四路证据源。** session JSONL 是结构化金矿：`model_usage`（api/provider/model/purpose/usage 含 cost 与 reasoningTokens）、`compaction`（tokensBefore/After/firstKeptEntryId）、`title_change`、`thinking_level_change`、`custom` 事件（tool_execution_start、async-result）、header 的 `parentSession`/`previousSessionFiles` lineage 能解掉子代理与 advisor 的归并问题。否决理由：架构设计的安全边界明写「不扫描 Agent 会话文件，只读 magpie 自己写的来源」；引入第四源是方向性决策，需要用户单独拍板（见边界外），不该夹带在本提案里。

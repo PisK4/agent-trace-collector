@@ -1,4 +1,4 @@
-export const PURPOSE_VERSION = 3;
+export const PURPOSE_VERSION = 4;
 
 export type PurposeStatus =
   | 'recognized' | 'unrecognized' | 'missing' | 'retained' | 'unsupported' | 'error';
@@ -24,6 +24,8 @@ export type PurposeView = {
   messageCount: number | null;
   toolCount: number | null;
   replyText: string | null;
+  /** user 文本块的块首（每块前若干字符，逐块不拼消息）：旁路强指纹按块首匹配。 */
+  userBlockHeads: string[];
   source: PurposeSource;
   stored: PurposeStored;
 };
@@ -147,6 +149,32 @@ export function titleFromReply(text: string | null): string | null {
 const SECURITY_MONITOR = 'security monitor for autonomous ai coding agents';
 const BLOCK_STOP = '</block>';
 const BLOCK_VERDICT = /<block>\s*(yes|no)\s*(?:<\/block>)?/gi;
+
+/** OMP skill 描述压缩管线的旁路指纹：一次性的模板调用，块首命中即认。 */
+const OMP_SKILL_HINT = 'Compress into one routing hint of at most 12 words:';
+
+/**
+ * OMP skill 描述压缩调用的强指纹。
+ *
+ * 生产实测这类请求各自带着随机 session id 成会话（20:59:56 一秒四个），消息
+ * 是 harness 生成的压缩模板；判据是 omp + 任一 user 文本块块首命中模板前缀。
+ * 按块首不按消息首行：归档类消息的块 0 常是 system-reminder，正文在后面的块。
+ * 锚点失配时规则静默不命中，退回 participate——降噪失效只是回到现状。
+ */
+function skillHintDecision(view: PurposeView): PurposeDecision | null {
+  if (view.agent !== 'omp') return null;
+  if (!view.userBlockHeads.some(head => head.startsWith(OMP_SKILL_HINT))) return null;
+  const signals = ['skill-hint.agent.omp', 'skill-hint.block-head'];
+  return {
+    status: 'recognized',
+    version: PURPOSE_VERSION,
+    rule: 'omp.skill-hint.v1',
+    signals,
+    chain: 'exclude',
+    kind: 'skill_hint',
+    modelTitle: null,
+  };
+}
 
 /**
  * Claude auto mode 分类器的强指纹。
@@ -284,7 +312,7 @@ function unavailableDecision(view: PurposeView): PurposeDecision {
 /**
  * 一条请求的用途判定。
  *
- * 规则优先级固定为：分类器强指纹 > 来源 kind > 标题兼容 > 兜底。
+ * 规则优先级固定为：分类器强指纹 > skill 描述压缩 > 来源 kind > 标题兼容 > 兜底。
  * 正文不可读时先保留旧解释，来源 kind 只对没有旧解释的行生效；否则正文回收后，
  * 一条普通来源 kind 会覆盖此前识别出的分类器或标题。
  */
@@ -295,6 +323,8 @@ export function classifyPurpose(view: PurposeView): PurposeDecision {
   if (view.parse === 'ok') {
     const classifier = classifierDecision(view);
     if (classifier !== null) return classifier;
+    const skillHint = skillHintDecision(view);
+    if (skillHint !== null) return skillHint;
   }
   const source = sourceDecision(view);
   if (source !== null) return source;

@@ -163,6 +163,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .sess-meta .who{color:var(--text-2);white-space:nowrap}
 .sess-time{font-size:10.5px;color:var(--muted);align-self:start;padding-top:1px}
 .sess-empty{padding:16px 8px;font-size:12px;color:var(--muted)}
+.sess-fold{padding:8px 10px;border-top:1px dashed var(--line)}
 
 /* ---------- 中栏：会话头 ---------- */
 .session-head{padding:14px 20px 12px;border-bottom:1px solid var(--line);background:var(--canvas);position:sticky;top:0;z-index:3}
