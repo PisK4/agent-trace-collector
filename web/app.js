@@ -9,7 +9,7 @@
  */
 
 import {
-  bodyNotice, deltaOrdinals, esc, messageCopyText, partColor, partLabel, roleTag,
+  bodyNotice, deltaOrdinals, esc, messageCopyText, roleTag,
   renderAttemptChain, renderCapabilities, renderMessageDetail, renderReply,
   renderReplyBlockDetail, renderReplyDetail, renderSystemDetail, renderUnknownBlockDetail,
   replyView, toolEntries, toolTint,
@@ -89,7 +89,6 @@ if (typeof document !== 'undefined') {
     toolOwner: /** @type {number | null} */ (null),
     /** 工具详情四页的当前页：overview / params / pair / schema。 */
     toolPage: 'pair',
-    requestOpen: new Set(/** @type {number[]} */ ([])),
     railTab: railTabFromParam(qp.get('tab')),
     query: '',
     agent: 'all',
@@ -212,7 +211,7 @@ if (typeof document !== 'undefined') {
     return chars.length <= max ? flat : `${chars.slice(0, max).join('')}…`;
   }
   // have 位义与 src/evidence.ts 一致：1 正文回调、2 账本用量、4 路由历史。
-  const HAVE_BODY = 1, HAVE_LEDGER = 2, HAVE_ROUTE = 4;
+  const HAVE_BODY = 1, HAVE_LEDGER = 2;
   /** @param {string} value */
   function shortId(value) {
     return value.length > 12 ? `${value.slice(0, 8)}…` : value;
@@ -836,12 +835,6 @@ if (typeof document !== 'undefined') {
     });
   }
 
-  /** @param {string} path @returns {number | null} */
-  function messageOrdOf(path) {
-    const match = /^messages\[(\d+)\]$/.exec(path);
-    return match === null ? null : Number(match[1]);
-  }
-
   /** 窗口内用请求序号称呼，窗口外保留稳定 req_id 并标注。 @param {number} id */
   function windowLabel(id) {
     const rows = currentRows();
@@ -1099,7 +1092,6 @@ if (typeof document !== 'undefined') {
   async function refreshWindow() {
     if (state.session === null) return;
     const myNav = ++navEpoch;
-    state.requestOpen = new Set();
     state.refreshedAt = Date.now();
     state.revealed = false;
     dispatch({ kind: 'refresh-start' });
@@ -1343,7 +1335,6 @@ if (typeof document !== 'undefined') {
     // 页签是显式声明或用户偏好：URL 直达、popstate 与手动切会话都保留当前
     // 顶层页签；请求内的步骤与工具选择仍清除。
     dispatch({ kind: 'open-session', sessionKey: key, wantedTrace });
-    state.requestOpen = new Set();
     state.pendingSession = key;
     state.userScrolled = false;
     state.revealed = false;
