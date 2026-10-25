@@ -15,7 +15,7 @@ Status: implemented
 
 ## Decision
 
-`src/sources/magpie.ts` 用 `stringField` / `numberField` / `promptFields` 读取，每个字段带 `FieldState`：`reported`（读到值）、`empty`（空串）、`absent`（没有键或显式 null）、`invalid`（类型不对）。`invalid` 不抛错、不转类型，值保持 null，状态记下来。空串既不是值也不是撤销。
+`src/sources/magpie/mapping.ts` 用 `stringField` / `numberField` / `promptFields` 读取，每个字段带 `FieldState`：`reported`（读到值）、`empty`（空串）、`absent`（没有键或显式 null）、`invalid`（类型不对）。`invalid` 不抛错、不转类型，值保持 null，状态记下来。空串既不是值也不是撤销。
 
 模型三列各读自己的键：`model` 是 provider 侧模型 id，`requested` 读 `req`（agent 请求的模型：别名、路由组或 `provider/model`），`served` 读 `served`。三者不互相顶替。费用只读 `cost`；旧账本的 `own_cost` / `ownCost` 不再是来源。account 读 `account`，缺失时退回 `providerAccount`。
 

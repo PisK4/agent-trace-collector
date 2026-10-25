@@ -9,7 +9,8 @@ import { readBatch, readRouteFiles } from './sources/files';
 import {
   ingestSource, observeSourceOffset, readFileCursor, readRouteCursors, resumePausedLedger,
 } from './reconcile';
-import { probeMagpie, saveProbe, syncCosts } from './sources/magpie';
+import { syncCosts } from './sources/magpie/costs';
+import { probeMagpie, saveProbe } from './sources/magpie/probe';
 import { createHandler, loadReadToken } from './http';
 import { markHookAbsent, reconcilePending } from './hook';
 import { createDeriveUnit } from './derive-unit';

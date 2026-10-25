@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import { createDeriveUnit } from '../src/derive-unit';
 import { reconcilePending } from '../src/hook';
 import { pruneRaw, resumeSourceGaps } from '../src/retention';
-import { saveProbe, syncCosts } from '../src/sources/magpie';
+import { syncCosts } from '../src/sources/magpie/costs';
+import { saveProbe } from '../src/sources/magpie/probe';
 import { createCapacityMetrics } from '../src/capacity';
 import { fixture } from './fixtures';
 

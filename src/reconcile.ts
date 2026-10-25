@@ -8,9 +8,9 @@ import {
   mapLedgerRow,
   mapRouteRow,
   optionalNumber,
-} from './sources/magpie';
+} from './sources/magpie/mapping';
 import { localDay, modelTimeTitle } from './format';
-import type { LedgerFields, RouteFields } from './sources/magpie';
+import type { LedgerFields, RouteFields } from './sources/magpie/mapping';
 import { insertPreparedLedgerTx, isPurgedEvidence, upsertPreparedRouteTx } from './sources/raw';
 import type { LedgerPhysicalRef } from './sources/raw';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx, projectionSignature, readProjectionTx } from './sources/projection';
