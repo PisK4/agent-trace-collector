@@ -19,7 +19,9 @@
 | [superpowers/plans/](superpowers/plans/) | 执行计划：步骤、复选框、验收清单 | 常备规则、已交付事实的权威 |
 | [.agents/notes/](../.agents/notes/README.md) | 活跃决策记录：why、放弃了什么、必需的验证 | 迁移计划、验收清单、spec 腔 |
 | [.agents/notes/archived/](../.agents/notes/archived/AGENTS.md) | 冻结的历史快照 | 现行权威 |
-| [README.md](../README.md) | 当前状态、运行命令、验收记录 | 常备规则、设计 rationale |
+| [README.md](../README.md) | 对外介绍：项目作用、能看到什么、试跑与接入步骤、边界与非目标、命令与文档入口 | 常备规则、设计 rationale、验收记录（归 acceptance.md） |
+| [acceptance.md](acceptance.md) | 各轮验收的做法与结果：合成验收、真实流量暴露的问题、容量与保留实测；合成与真实分开写 | 现行行为权威（归 architecture-design.md 与代码） |
+| [trace-format.md](trace-format.md) | ATC trace 格式现状：主实体、身份、正文切块、派生结论、置信度与版本字段 | 对外稳定协议承诺、字段默认值清单（归 architecture-design.md） |
 | [../prototypes/README.md](../prototypes/README.md) | Demo 数据源与合成场景：两个入口加载生产页面，不维护第二套界面 | 生产契约（归 `web/` 与 architecture-design.md） |
 
 放置口诀：bug 进 postmortem；rationale 进 note；流程进 cookbook；包契约进 README；常备规则进根 AGENTS.md 加一行链接。
@@ -30,7 +32,7 @@ note 的 `## Decision` 不复述 schema 字段、默认值、接口形状与表�
 
 ## 写作规则
 
-- **文档写现状，不写变更史。** 避免 previously、now、no longer、renamed；点名现行机制。变更史进 commit、note 或 postmortem。README 里的合成验收记录与「本轮修掉」属于待迁移的已知例外，迁移前不改写其中的事实。
+- **文档写现状，不写变更史。** 避免 previously、now、no longer、renamed；点名现行机制。变更史进 commit、note 或 postmortem。[验收记录](acceptance.md)按轮次保存当时的做法与结果，带日期与前提，是这条规则的有意例外；新增记录同样按轮次追加，不改写旧结论。
 - **每段一个物理行**（编辑器软换行）；代码块、表格、列表保持自身格式。
 - **交叉引用一律相对 Markdown 链接**，拒绝裸文件名或 note 编号；链接检查器就绪后拒绝死链与死锚点。
 - **注释与 JSDoc 写完整契约**：行为、失败、时机、所有权、后果、非显然的定位；删推理转写、代码复述、评审分析。
