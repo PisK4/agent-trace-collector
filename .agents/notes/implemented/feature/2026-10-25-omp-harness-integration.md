@@ -23,7 +23,7 @@ ATC 的定位是收敛 magpie 三路证据、按会话阅读 Agent Harness 的 t
 2. **规则进既有体系并带版本**。旁路识别进 purpose 规则体系（对照 [request-purpose-and-chain](../../architecture/2026-10-22-request-purpose-and-chain.md)），消息解释进输入解释层，不散落 if。
 3. **降噪不归并**。旁路会话在列表里折叠，不试图挂回母会话。归并需要线上不存在的证据。
 
-与 [Agent Profile 与请求类别注册表](../../proposed/architecture/2026-10-22-agent-request-kind-registry.md) 的关系：那篇主张把 agent 特称从通用派生管线里移出、收进 RequestKind 注册表，本决策把 OMP 规则直接写进 `classifyPurpose`，方向相反。registry 提案仍是 proposed 且自述「作为输入材料保留，不直接作为执行依据」，本决策按现行体系落地；registry 实施时这两条规则迁入注册表，本文随之更新锚点。
+与 [Agent Profile 与请求类别注册表](../../proposed/architecture/2026-10-22-agent-request-kind-registry.md) 的关系：那篇主张把 agent 特称从通用派生管线里移出、收进 RequestKind 注册表，本决策把 OMP 规则直接写进 `classifyPurpose`，方向相反。registry 提案仍是 proposed 且自述「作为输入材料保留，不直接作为执行依据」，本决策按现行体系落地。两条专属规则后来经[Harness 语义的静态扩展](../architecture/2026-10-26-harness-semantics-adapters.md)迁入静态登记（判定在 `src/harness/omp.ts`，编排仍在 `classifyPurpose`），行为未变。
 
 第一批五项全部交付（各一个提交，2026-10-25）；第二批三项未交付，见 [Deferred](#deferred)。
 

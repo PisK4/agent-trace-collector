@@ -31,7 +31,7 @@ zcode 的语义信号全部走 header，而 header 不在任何证据通道里�
 
 | 层 | 位置 | 产出 |
 | --- | --- | --- |
-| 请求用途 | `src/semantics.ts` 的 `classifyPurpose`，插在强指纹档（分类器之后、来源 kind 之前） | `req_kind='memory-maintenance'`、`chain='exclude'`，`modelTitle=null` |
+| 请求用途 | `src/harness/purpose.ts` 的静态登记（`classifyPurpose` 编排），插在强指纹档（分类器之后、来源 kind 之前） | `req_kind='memory-maintenance'`、`chain='exclude'`，`modelTitle=null` |
 | 输入解释 | `src/input-interpretation.ts` 的内容规则（与 `SKILL_INJECTION`、`STEPPED_AWAY` 同档） | 该段文本 `state='injected'`、`kind='system_notice'`，不进用户气泡、不进标题候选 |
 
 用途层给出 `exclude` 之后，其余事实由既有机制自动落定，不需要新代码（版本锁定）：组阶段把 `purpose_chain='exclude'` 的行写成 `prev_relation='aux'`、`delta=null`、`chain_role='aux'`，并把它排除在祖先比较之外（`src/derive.ts` 的 `assignChainRoles` 与派生循环）。非标题的 aux 行不取用户增量当标题，只留模型标题或时间兜底（`src/derive-decision.ts` 的 `presentationDecision` 中 `facts.isAux` 分支）。阅读端也已通用：`web/app.js` 的 `isAuxRow` 与 `web/trace-view.js` 的 aux 步骤分支已按 `purpose_chain`/`chain_role` 渲染成一笔辅助记录，只需补一句中文标签。
