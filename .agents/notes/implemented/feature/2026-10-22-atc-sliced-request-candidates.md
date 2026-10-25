@@ -21,7 +21,7 @@ Status: implemented
 
 **可读性由 `readBodyTx` 判定。** 读得出正文才标 `recomputed`，标题、标题来源、输入摘要与回复摘要全部留 NULL，交给摘要阶段写本次重算的值。读不出来标 `retained`，这几列原样保留 `request` 上的旧值。
 
-**候选抽取复用共享实现。** 工具调用用 `anthropicReplyCalls`，工具结果用 `anthropicRequestResults`，结果正文压平用 `flattenToolContent`，三者都在[判定内核](../../implemented/architecture/2026-10-23-derive-decision-kernel.md) `src/derive-decision.ts` 里，两条路径同一份。候选行写进 `derive_call_work`/`derive_result_work`，`traversal_ord` 与 `request_index` 先记 -1（"还没排序"只有一个哨兵），配对之后再回填。结果摘要先存 200 字符的前缀，最终展示长度由摘要阶段裁。
+**候选抽取复用共享实现。** 工具调用用 `anthropicReplyCalls`，工具结果用 `anthropicRequestResults`，结果正文压平用 `flattenToolContent`，三者都在[判定内核](../../implemented/architecture/2026-10-23-derive-decision-kernel.md) `src/derive/decision.ts` 里，两条路径同一份。候选行写进 `derive_call_work`/`derive_result_work`，`traversal_ord` 与 `request_index` 先记 -1（"还没排序"只有一个哨兵），配对之后再回填。结果摘要先存 200 字符的前缀，最终展示长度由摘要阶段裁。
 
 **顺序阶段读全组轻量排序键，用 `compareTraversalOrder` 排一次。** 内存里只有 `(req_id, started_ms, sort_source, sort_key)` 元组，正文与结果都不驻留。按 500 行一批写回 `traversal_ord`，同一遍把两张 work 表的 `traversal_ord`/`request_index` 对齐。排序阶段与最后一个空页在同一个事务里执行，做完就把 `stage` 推到 `roles`。
 

@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import { readBodyMetaTx } from './body';
-import { markGroupDirtyTx } from './derive-state';
+import { markGroupDirtyTx } from './derive/state';
 import { parseProtocol } from './protocols';
 import { readSourceFacts } from './sources/facts';
 import {

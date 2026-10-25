@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { backfillReplyShapes } from '../scripts/backfill-reply-shape';
 import { persistBody } from '../src/body';
 import { evictOldestBodyBatch } from '../src/retention';
-import { DERIVE_ALGORITHM } from '../src/derive-slice';
+import { DERIVE_ALGORITHM } from '../src/derive/slice';
 import { fixture, seedRequest, SEED_GROUP } from './fixtures';
 
 const FINAL_REPLY = { stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] };

@@ -205,7 +205,7 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 
 ## 派生切片与代际
 
-普通启动（`bun run start`）不设切片预算，派生走同步组阶段：一次调用算完一批组，结果写回 `request` 行。切片模式由容量实验的两个入口注入预算：`long-10000-slice` 场景（`--slice-budget <预算文件>`，进程内建库）与容量实验的子进程采集器（`--slice --slice-budget <文件>`）。两者都只从预算文件的 `slice.derive_budget` 读，缺了以 `capacity_slice_budget_missing` 退出 2，不落回默认预算——那会把一条常量冒充成校准结果。运维入口的模式开关留到切片正式上线时再补。默认预算常量在 `src/derive-slice.ts` 的 `DEFAULT_DERIVE_BUDGET`，七项含义与超限时的行为：
+普通启动（`bun run start`）不设切片预算，派生走同步组阶段：一次调用算完一批组，结果写回 `request` 行。切片模式由容量实验的两个入口注入预算：`long-10000-slice` 场景（`--slice-budget <预算文件>`，进程内建库）与容量实验的子进程采集器（`--slice --slice-budget <文件>`）。两者都只从预算文件的 `slice.derive_budget` 读，缺了以 `capacity_slice_budget_missing` 退出 2，不落回默认预算——那会把一条常量冒充成校准结果。运维入口的模式开关留到切片正式上线时再补。默认预算常量在 `src/derive/slice.ts` 的 `DEFAULT_DERIVE_BUDGET`，七项含义与超限时的行为：
 
 | 项 | 默认 | 超限时 |
 | --- | --- | --- |

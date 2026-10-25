@@ -13,7 +13,7 @@ import { syncCosts } from './sources/magpie/costs';
 import { probeMagpie, saveProbe } from './sources/magpie/probe';
 import { createHandler, loadReadToken } from './http';
 import { markHookAbsent, reconcilePending } from './hook';
-import { createDeriveUnit } from './derive-unit';
+import { createDeriveUnit } from './derive/unit';
 import {
   RAW_TTL_MS,
   createAdmissionGate,

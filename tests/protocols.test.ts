@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { anthropicReplyCalls, replyShapeOf } from '../src/derive-decision';
+import { anthropicReplyCalls, replyShapeOf } from '../src/derive/decision';
 import { parseProtocol } from '../src/protocols';
 
 test('请求有效而回复缺失仍可阅读请求', () => {

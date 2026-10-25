@@ -6,7 +6,7 @@ import { resolveRequestId } from './store';
 import { ADAPTER_VERSION, parseProtocol } from './protocols';
 import { skeletonLike, validateSkeleton } from './skeleton';
 import { fingerprintHash, messageFingerprint } from './fingerprint';
-import { markRequestInputTx } from './derive-state';
+import { markRequestInputTx } from './derive/state';
 
 /**
  * 可还原的脱敏正文。调用方负责先脱敏再调用 persist，本模块只认已脱敏对象。

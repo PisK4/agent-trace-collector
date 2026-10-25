@@ -3,7 +3,7 @@ import { basename, join } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
 import { commitUnit } from './store';
-import { markRequestInputTx } from './derive-state';
+import { markRequestInputTx } from './derive/state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
 
 /**

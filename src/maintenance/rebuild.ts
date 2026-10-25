@@ -1,8 +1,8 @@
 /** 单会话重建：显式升级用途目标、整链重排与排空，拼出 CLI 报告字段。 */
 
-import { GROUP_ALGORITHM, queuePendingSql } from '../derive-state';
-import { rebuildDerived } from '../derive';
-import { drainDeriveEntry } from '../derive-unit';
+import { GROUP_ALGORITHM, queuePendingSql } from '../derive/state';
+import { rebuildDerived } from '../derive/sync';
+import { drainDeriveEntry } from '../derive/unit';
 import { upgradePurposeTargetTx } from '../request-purpose';
 import type { Store } from '../store';
 

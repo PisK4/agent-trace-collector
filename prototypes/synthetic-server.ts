@@ -4,7 +4,7 @@
 // 未知停止原因、resolved 未读取、pending、ambiguous、辅助请求、分支请求、
 // 能力五态、同名工具、路由 absent/expired 与尝试链。
 import type { CapabilityView, ToolCapability } from '../src/capabilities';
-import { replyShapeOf } from '../src/derive-decision';
+import { replyShapeOf } from '../src/derive/decision';
 import type { BodyCoverage, BodyPage, MessageInterpretation } from '../src/protocols';
 import type { RequestRow } from '../src/queries/projection';
 import type { ToolResultIndexRow } from '../src/queries/requests';

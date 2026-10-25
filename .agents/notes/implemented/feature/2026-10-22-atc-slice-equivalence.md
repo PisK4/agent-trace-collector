@@ -34,7 +34,7 @@ Status: implemented
 
 ## Consequences
 
-- 切片与同步的形状差异（写哪里、读哪里）在测试里被显式编码。改任一侧的取值实现都会让这个文件失败，这是有意的。判定与取值只有一份（`previewOf`、`deriveTitle`、`toolResultPreviewOf`、`replyInfoOf`、`firstUserPreview`、`tailUserPreview`、`messageAt`，前三个在[判定内核](../../implemented/architecture/2026-10-23-derive-decision-kernel.md) `src/derive-decision.ts`，其余在 `src/derive.ts`），两处调用必须保持同形。
+- 切片与同步的形状差异（写哪里、读哪里）在测试里被显式编码。改任一侧的取值实现都会让这个文件失败，这是有意的。判定与取值只有一份（`previewOf`、`deriveTitle`、`toolResultPreviewOf`、`replyInfoOf`、`firstUserPreview`、`tailUserPreview`、`messageAt`，前三个在[判定内核](../../implemented/architecture/2026-10-23-derive-decision-kernel.md) `src/derive/decision.ts`，其余在 `src/derive/sync.ts`），两处调用必须保持同形。
 - 模糊组覆盖的是分支组合，不是规模。两个种子各 50 组、每组最多 20 笔，压缩预算下跑完在秒级。
 - 比较范围只含两条路径都在场的字段。切片独有的阶段游标、`staged_bytes`、代际状态不在判据里。它们不是展示结果，也没有同步侧的对照物。
 - 第一个被这个判据抓到的缺陷是排除用途行标题兜底的分支位置，修复单独提了一条，见[排除用途行的标题兜底不挂在增量分支下](../bug-fix/2026-10-23-atc-slice-aux-title-branch.md)。

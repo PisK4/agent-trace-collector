@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-链角色重算时排除 `prev_relation='unknown'` 的请求。它们保持中性的 `chain_role='main'`，不参与主链竞争，也不显示「分支」；只有正文可读、确实无法与任何更早请求前缀相接的请求才标 `branch`。实现见 [src/derive.ts](../../../../src/derive.ts) 的 `assignChainRoles`。
+链角色重算时排除 `prev_relation='unknown'` 的请求。它们保持中性的 `chain_role='main'`，不参与主链竞争，也不显示「分支」；只有正文可读、确实无法与任何更早请求前缀相接的请求才标 `branch`。实现见 [src/derive/sync.ts](../../../../src/derive/sync.ts) 的 `assignChainRoles`。
 
 `unknown` 会沿组内时间向后传播。一笔正文缺失之后，后续请求也无法确认是否续自它，因此同样保持中性。该组可能整组没有分支标记，这是缺少证据时的保守结果。
 

@@ -3,7 +3,7 @@ import { fixture } from './fixtures';
 import {
   markGroupDirtyTx, markRequestGroupsTx, markRequestInputTx,
   normalizeTargetAlgorithmTx, purposePendingSql,
-} from '../src/derive-state';
+} from '../src/derive/state';
 
 test('用途门控片段：已知归属且待判定，别名可选', () => {
   expect(purposePendingSql()).toBe("actor_state='known' AND purpose_pending=1");

@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-新增 `src/derive-decision.ts` 作为判定内核：两条路径的「怎么判」只有一个家，同步路径（`derive.ts`）与切片路径（`derive-slice.ts`）退化为两个写 adapter——一个写 `request` 列，一个写代际表。搬进内核的判定：
+新增 `src/derive/decision.ts` 作为判定内核：两条路径的「怎么判」只有一个家，同步路径（`derive/sync.ts`）与切片路径（`derive/slice.ts`）退化为两个写 adapter——一个写 `request` 列，一个写代际表。搬进内核的判定：
 
 - 关系：`settleRelation`（扫描状态到关系/父节点/增量的唯一出口）与 `matchPredecessor`（内存扫描形态，切片侧仍自带分页扫描，只把结算交给内核）；
 - 主链 trunk：`chainTrunkRoot` 与 `chainTrunk`（遍历序第一个无可比父节点的参与请求是根，根的可达集是主链）；
@@ -32,7 +32,7 @@ Status: implemented
 
 ## Consequences
 
-- 改判定只动 `derive-decision.ts` 一处；两条路径的一致性由结构保证，parity 测试从「对齐手段」降级为「回归网」。
+- 改判定只动 `derive/decision.ts` 一处；两条路径的一致性由结构保证，parity 测试从「对齐手段」降级为「回归网」。
 - 切片角色阶段的写入形状有变化。收尾事务一次写全组 `in_trunk`（每行一列），角色传播每页少一半写；长组的收尾事务与同步路径整组重算同量级，仍在单事务预算内。
 - `matchPredecessor` 新增第四参 `unreadableEarlier`；`near` 字段保留，但除测试断言外没有消费方，后续若界面要「最接近的一支」再接。
 - capacity 脚本的两份哈希函数仍是跨模式对照工具。它们比较的是两条路径的**产物**，判定收敛后依然成立，不因内核而删除。

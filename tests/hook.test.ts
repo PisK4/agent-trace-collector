@@ -7,7 +7,7 @@ import { loadConfig } from '../src/config';
 import { createHandler } from '../src/http';
 import { acceptHook, bodyOmission, HOOK_ABSENT_THRESHOLD_MS, markHookAbsent, reconcilePending } from '../src/hook';
 import type { HookEnvelope } from '../src/hook';
-import { drainDerive } from '../src/derive';
+import { drainDerive } from '../src/derive/sync';
 import { onRequest, onResponse } from '../plugins/collector.hooks';
 import type { HookContext } from '../plugins/collector.hooks';
 import { restoreBody } from '../src/body';

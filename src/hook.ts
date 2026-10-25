@@ -11,7 +11,7 @@ import {
   markRequestInputTx,
   requestGroupTx,
   resetRequestInputEpochTx,
-} from './derive-state';
+} from './derive/state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
 import { HAVE_BODY, MATCH_BY_RESPONSE_ID, hookConv, insertEvidenceTx } from './evidence';
 

@@ -1,7 +1,7 @@
 /** 会话信息汇总：查询时聚合，不物化。口径见会话信息汇总 note。 */
 
-import { DERIVE_ALGORITHM } from '../derive-slice';
-import { GROUP_ALGORITHM, deriveJoinSql, derivedColSql } from '../derive-state';
+import { DERIVE_ALGORITHM } from '../derive/slice';
+import { GROUP_ALGORITHM, deriveJoinSql, derivedColSql } from '../derive/state';
 import type { Store } from '../store';
 
 /** 汇总条目共用的失败定位：回到支撑记录的最小身份。 */

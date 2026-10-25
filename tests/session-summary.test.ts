@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
 import { persistBody } from '../src/body';
-import { drainDerive, enqueueDerive } from '../src/derive';
+import { drainDerive, enqueueDerive } from '../src/derive/sync';
 import {
   anthropicReplyCalls, anthropicRequestResults, interruptCountOf,
-} from '../src/derive-decision';
+} from '../src/derive/decision';
 import { isUserInterruptMessage } from '../src/input-interpretation';
-import { GROUP_ALGORITHM } from '../src/derive-state';
+import { GROUP_ALGORITHM } from '../src/derive/state';
 import { migrateSummaryFacts } from '../scripts/backfill-summary-facts';
 import {
   getSummaryEntries, getSessionSummary,

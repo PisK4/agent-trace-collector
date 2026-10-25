@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { createDeriveUnit } from '../src/derive-unit';
+import { createDeriveUnit } from '../src/derive/unit';
 import { reconcilePending } from '../src/hook';
 import { pruneRaw, resumeSourceGaps } from '../src/retention';
 import { syncCosts } from '../src/sources/magpie/costs';

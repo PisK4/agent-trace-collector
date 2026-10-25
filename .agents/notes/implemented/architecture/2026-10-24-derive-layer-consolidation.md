@@ -15,12 +15,12 @@ Status: implemented
 
 四件事在同一片代码里一次归位，语义与判据不变：
 
-1. **增量判据**：`derive-decision.ts` 新增 `confirmedDeltaOf(relation, delta)`，返回 `{ all, ords }`。同步配对用它构造 `ordinalConfirmed`，切片结算用它逐行写 `confirmed` 位。
-2. **用途门控**：`derive-state.ts` 新增 `purposePendingSql(alias?)` 只产出谓词片段。**两个查询角色保留**：切片选组时是外层过滤，同步路径认领后是 TOCTOU 复查。选组与处理之间可能有新请求挂进来，外层过滤看不到那次变化。
-3. **算法归一**：`derive-state.ts` 新增 `normalizeTargetAlgorithmTx(db, convKey, actor, algorithm)`，算法号是参数；`GROUP_ALGORITHM` 与 `DERIVE_ALGORITHM` 两个常量各自保留。只改未完成行——clean 行的已发布产物不能被改号伪造出处。
-4. **共享读取层**：新建 `derive-read.ts`，承接 `LogicalRow`、`DeriveScope`、`compareLogicalOrder`/`compareTraversalOrder`、`uncertainOrderIds`、`fingerprintsOf`、`replyInfoOf`、`messageAt`、`presentationPortsOf`；`firstUserPreview`/`tailUserPreview` 合并成 `userPreview(db, reqId, 'first' | 'tail')`，`LIMIT 5` 与首/末条用户文本语义逐字保留。`derive.ts` re-export `DeriveScope` 保持既有 import 点。删除 `blocksOf` 死代码。
+1. **增量判据**：`derive/decision.ts` 新增 `confirmedDeltaOf(relation, delta)`，返回 `{ all, ords }`。同步配对用它构造 `ordinalConfirmed`，切片结算用它逐行写 `confirmed` 位。
+2. **用途门控**：`derive/state.ts` 新增 `purposePendingSql(alias?)` 只产出谓词片段。**两个查询角色保留**：切片选组时是外层过滤，同步路径认领后是 TOCTOU 复查。选组与处理之间可能有新请求挂进来，外层过滤看不到那次变化。
+3. **算法归一**：`derive/state.ts` 新增 `normalizeTargetAlgorithmTx(db, convKey, actor, algorithm)`，算法号是参数；`GROUP_ALGORITHM` 与 `DERIVE_ALGORITHM` 两个常量各自保留。只改未完成行——clean 行的已发布产物不能被改号伪造出处。
+4. **共享读取层**：新建 `derive/read.ts`，承接 `LogicalRow`、`DeriveScope`、`compareLogicalOrder`/`compareTraversalOrder`、`uncertainOrderIds`、`fingerprintsOf`、`replyInfoOf`、`messageAt`、`presentationPortsOf`；`firstUserPreview`/`tailUserPreview` 合并成 `userPreview(db, reqId, 'first' | 'tail')`，`LIMIT 5` 与首/末条用户文本语义逐字保留。`derive/sync.ts` re-export `DeriveScope` 保持既有 import 点。删除 `blocksOf` 死代码。
 
-依赖方向变成 `derive` / `derive-slice` → `derive-read` → `derive-decision` 与 `body`，切片路径不再 import 同步引擎模块。
+依赖方向变成 `derive/sync` / `derive/slice` → `derive/read` → `derive/decision` 与 `body`，切片路径不再 import 同步引擎模块。
 
 ## Alternatives considered
 

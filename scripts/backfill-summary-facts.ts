@@ -12,9 +12,9 @@
  */
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
-import { GROUP_ALGORITHM } from '../src/derive-state';
-import { enqueueDerive } from '../src/derive';
-import { drainDeriveEntry } from '../src/derive-unit';
+import { GROUP_ALGORITHM } from '../src/derive/state';
+import { enqueueDerive } from '../src/derive/sync';
+import { drainDeriveEntry } from '../src/derive/unit';
 import type { Store } from '../src/store';
 
 const path = process.env.ATC_BACKFILL_DB

@@ -1,10 +1,10 @@
 import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
-import { readBodyTx } from './body';
-import { assistantText } from './protocols';
-import { interpretMessage } from './input-interpretation';
-import { clip, interruptCountOf, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './derive-decision';
-import type { PresentationPorts, ResolvedTool, ReplyShape } from './derive-decision';
+import { readBodyTx } from '../body';
+import { assistantText } from '../protocols';
+import { interpretMessage } from '../input-interpretation';
+import { clip, interruptCountOf, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './decision';
+import type { PresentationPorts, ResolvedTool, ReplyShape } from './decision';
 
 /**
  * 两条派生路径共用的读取层：逻辑顺序、指纹序列、用户文本预览与消息定位。

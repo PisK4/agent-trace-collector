@@ -3,7 +3,7 @@ import { getBodyPage } from './protocols';
 import type { BodyPage } from './protocols';
 import { getRequest } from './queries/requests';
 import type { RequestDetail } from './queries/requests';
-import { deriveJoinSql } from './derive-state';
+import { deriveJoinSql } from './derive/state';
 import { resolveRequestId, type Store } from './store';
 
 /**
