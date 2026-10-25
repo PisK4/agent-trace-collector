@@ -173,6 +173,8 @@ OMP 源码参照（`repos-external/oh-my-pi`，注意 18.0.10 滞后于装机 18
 
 - 2026-10-25 第一项已交付。`PURPOSE_VERSION` 3→4（与 zcode 提案的 3→4 撞车按实施时的当前值 +1 解决，本提案取 4，两篇锚点在 zcode 实施时各自对齐）；`readPurposeViewTx` 扩取数收 `userBlockHeads`（前 5 条 user 消息、逐块取前 200 字符，双限额让成本不随正文体积增长）；`skillHintDecision` 按分类器强指纹先例进规则链，位置在分类器之后、来源 kind 之前。列表降噪走推荐方案：`listSessions` 聚合 `has_participate` 给 `bypass` 标志（判定要求会话内零参与链请求），渲染层过滤 + 折叠计数行（`sessionsListBypassHtml`），不动游标，计数只覆盖已加载页。
 
+- 2026-10-25 第二项已交付。解释层：归档消息改判 `injected`、kind `omp_history_archive`（`finalize` 在剥壳后的拼接文本上判锚点）。事件位：`request` 与 `derive_request_result` 各加 `context_event` 列（`none`/`omp_compaction`，NULL 从未判定），两个视图同步带列；判定适配 `contextEventTx` 收 relation+delta——first/confirmed 按确定增量新增归档判，branch 按输入含归档归因（bounded 扫前 20 条 user 消息，归档实测在 ord 1），aux 判 none，其余判不出保留旧值，与 `reply_shape` 三态同套选源语义。dropped 字符数进 basis（同步路径并进 `summary_basis` 的 JSON，切片路径在摘要阶段对压缩行覆写 `basis_json`）。branch 归因注记落在展示层：轨迹 `compaction` 记录步骤（带丢弃量，注明字符数非 token）与关系文案「另起一支 · 压缩归档改写了上下文前缀」。切片与同步的 parity 测试列加 `context_event` 锁两路一致。存量库由 `backfill-omp-semantics.ts` 补列并从 schema-v6.sql 重取视图 DDL。
+
 ## Alternatives considered
 
 **读 `~/.omp/agent` 作第四路证据源。** session JSONL 是结构化金矿：`model_usage`（api/provider/model/purpose/usage 含 cost 与 reasoningTokens）、`compaction`（tokensBefore/After/firstKeptEntryId）、`title_change`、`thinking_level_change`、`custom` 事件（tool_execution_start、async-result）、header 的 `parentSession`/`previousSessionFiles` lineage 能解掉子代理与 advisor 的归并问题。否决理由：架构设计的安全边界明写「不扫描 Agent 会话文件，只读 magpie 自己写的来源」；引入第四源是方向性决策，需要用户单独拍板（见边界外），不该夹带在本提案里。

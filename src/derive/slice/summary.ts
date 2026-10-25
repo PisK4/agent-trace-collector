@@ -4,7 +4,7 @@ import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type { DeriveBudget } from '../../config';
 import type { Store } from '../../store';
 import { presentationDecision, type ResolvedTool } from '../decision';
-import { fingerprintsOf, interruptCountTx, presentationPortsOf, replyInfoOf } from '../read';
+import { contextEventTx, fingerprintsOf, interruptCountTx, presentationPortsOf, replyInfoOf } from '../read';
 import { assertQueueRevision, one, sliceDiscardReason, type SliceStep } from './generation';
 
 /** 一页写多少笔摘要。页是事务边界，也是一次调用里最小的可续跑单位。 */
@@ -21,7 +21,8 @@ const SUMMARY_GEN_COLUMNS =
 /** 摘要阶段一行要的事实：暂存行给增量与消费过的用途修订，当前请求行给展示输入。 */
 type SummaryRow = {
   req_id: number; traversal_ord: number; started_ms: number; delta_ordinals: string | null;
-  staged_interrupt_count: number | null;
+  prev_relation: string | null;
+  staged_interrupt_count: number | null; staged_context_event: string | null;
   staged_purpose_revision: number; live_purpose_revision: number;
   purpose_chain: string; req_kind: string | null; model_served: string | null;
   model_title: string | null; agent: string | null;
@@ -75,8 +76,9 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
   }
   if (!assertQueueRevision(db, gen)) throw new Error('slice_group_revision_changed');
   const page = db.query<SummaryRow, [string, number, number]>(`
-    SELECT d.req_id,d.traversal_ord,d.started_ms,d.delta_ordinals,
+    SELECT d.req_id,d.traversal_ord,d.started_ms,d.delta_ordinals,d.prev_relation,
       d.interrupt_count AS staged_interrupt_count,
+      d.context_event AS staged_context_event,
       d.purpose_revision AS staged_purpose_revision,r.purpose_revision AS live_purpose_revision,
       r.purpose_chain,r.req_kind,r.model_served,r.model_title,r.agent,
       r.title AS live_title,r.title_source AS live_title_source,
@@ -115,6 +117,16 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
     const delta = row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[];
     const interruptCount = row.purpose_chain === 'exclude' ? 0
       : delta === null ? row.staged_interrupt_count : interruptCountTx(db, row.req_id, delta);
+    // 上下文事件位同一套保留语义：排除用途判 none；正文可读且关系可判时按
+    // 本次判定，其余场合保留暂存旧值。压缩行把丢弃量写进 basis（字符数）。
+    const context = row.purpose_chain === 'exclude'
+      ? { event: 'none' as const, droppedChars: null }
+      : current === null ? null
+        : contextEventTx(db, row.req_id, row.prev_relation, delta);
+    const contextEvent = context?.event ?? row.staged_context_event;
+    const contextBasis = context !== null && context.event !== null
+      ? JSON.stringify({ context_event: context.event, dropped_chars: context.droppedChars })
+      : null;
     const decision = presentationDecision(ports, {
       reqId: row.req_id,
       agent: row.agent,
@@ -136,10 +148,11 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
       replyPreview: replyInfo.preview,
     }, associations);
     db.run(`UPDATE derive_request_result SET title=?,title_source=?,input_preview=?,
-      input_preview_kind=?,reply_preview=?,interrupt_count=?,retention_state=?
+      input_preview_kind=?,reply_preview=?,interrupt_count=?,context_event=?,
+      basis_json=COALESCE(?, basis_json),retention_state=?
       WHERE generation=? AND req_id=?`,
     [decision.title, decision.titleSource, decision.inputPreview, decision.inputKind,
-      decision.replyPreview, interruptCount,
+      decision.replyPreview, interruptCount, contextEvent, contextBasis,
       current === null ? 'retained' : 'recomputed', generation, row.req_id]);
     if (performance.now() - rowStarted > budget.maxRequestMs) {
       throw new Error('slice_summary_budget');

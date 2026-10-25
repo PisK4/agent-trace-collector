@@ -10,7 +10,7 @@
  */
 export type InputState = 'text' | 'empty' | 'injected' | 'unrecognized';
 export type InputKind = 'plain' | 'wrapped' | 'midturn' | 'title_request'
-  | 'command_echo' | 'skill_injection' | 'system_notice';
+  | 'command_echo' | 'skill_injection' | 'system_notice' | 'omp_history_archive';
 
 export type UserInputView = {
   state: InputState;
@@ -51,6 +51,14 @@ const MIDTURN_NOTICE = /This is how Claude Code surfaces messages[\s\S]*$/i;
 const CWD_PREFIX = /^\s*(?:工作目录|working directory|cwd)[:：][^\n]*\n?/i;
 const SKILL_INJECTION = /^Base directory for this skill:/i;
 const STEPPED_AWAY = /^The user stepped away and is coming back\b/i;
+/**
+ * OMP 压缩归档消息的块首锚点：snapcompact 续会话时整段旧史由这条 user 消息
+ * 承载，且在会话每笔请求重发。判据按文本块块首——归档消息块 0 常是
+ * `<system-reminder>`，正文在后面的块，按消息首行一笔都命中不了。
+ */
+export const OMP_ARCHIVE_PREFIX = 'Resume prior conversation. Earlier turns archived under HISTORY';
+/** 归档正文里的预算丢弃量；数字带千分位逗号，展示时注明是字符数不是 token。 */
+const OMP_DROPPED_CHARS = /About ([\d,]+) characters of older middle history dropped/;
 
 type StripResult = { text: string; tag: string | null; malformed: boolean };
 
@@ -200,6 +208,12 @@ function finalize(
   if (STEPPED_AWAY.test(current)) {
     return { ...base, state: 'injected', kind: 'system_notice', text: '', removed };
   }
+  // OMP 压缩归档消息：整段是 harness 写的归档正文，不是用户输入。改判 injected
+  // 让标题与折叠行摘要跳过它——压缩起点的会话标题退化为模型时间兜底，是降噪
+  // 换来的，不是副作用。
+  if (current.startsWith(OMP_ARCHIVE_PREFIX)) {
+    return { ...base, state: 'injected', kind: 'omp_history_archive', text: '', removed };
+  }
   if (current.length === 0) {
     const onlyCommands = removed.length > 0 && removed.every(tag => tag.startsWith('command-'));
     return {
@@ -278,4 +292,31 @@ export function isUserInterruptMessage(message: unknown): boolean {
   const blocks = textBlocks(message);
   if (blocks.length === 0) return false;
   return blocks[0]!.trim().toLowerCase().startsWith(INTERRUPT_PREFIX);
+}
+
+/**
+ * OMP 压缩归档消息的判定：任一文本块 trim 后以归档锚点开头。
+ *
+ * 与中断判定按首个块不同，这里按任一块：归档消息块 0 是 system-reminder、
+ * 块 1 才是归档正文。派生的 context_event 判定消费这一份；措辞漂移出现新
+ * 形状时扩展这里并 bump 算法号重算。
+ */
+export function isOmpArchiveMessage(message: unknown): boolean {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return false;
+  if ((message as Record<string, unknown>).role !== 'user') return false;
+  return textBlocks(message).some(block =>
+    block.trimStart().startsWith(OMP_ARCHIVE_PREFIX));
+}
+
+/** 归档消息里 harness 声明的预算丢弃量（字符数）；块里没写或非归档消息为 null。 */
+export function ompDroppedCharsOf(message: unknown): number | null {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return null;
+  for (const block of textBlocks(message)) {
+    if (!block.trimStart().startsWith(OMP_ARCHIVE_PREFIX)) continue;
+    const match = OMP_DROPPED_CHARS.exec(block);
+    if (match === null) return null;
+    const value = Number(match[1]!.replaceAll(',', ''));
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  return null;
 }

@@ -4,12 +4,14 @@
  * 配套 2026-10-25-omp-harness-integration 提案交付，随提交逐步扩展：
  * - 调用参数提取补 `path` 键（OMP 的 read/write/edit/grep/glob），算法号
  *   GROUP_ALGORITHM/DERIVE_ALGORITHM 随之 bump——这里把全部组标脏重算。
- * - 后续提交在此补 `context_event` 列与视图刷新（压缩事件位）、`bg_job`
- *   结算表（背景作业配对）。
+ * - 压缩事件位：`request` 与 `derive_request_result` 各补 `context_event` 列，
+ *   两个读模型视图从 schema-v6.sql 重取 DDL。
+ * - 背景作业配对：补 `bg_job` 结算表（纯派生、可整体重建）。
  *
  * 全部改动幂等：列存在就跳过，表存在就跳过，重派生总是安全重跑。
  * 用法：先停采集器，再 `bun scripts/backfill-omp-semantics.ts`。
  */
+import { readFileSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { enqueueDerive } from '../src/derive/sync';
 import { drainDeriveEntry } from '../src/derive/unit';
@@ -22,14 +24,48 @@ function columnsOf(db: Database, table: string): string[] {
   return (db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(row => row.name);
 }
 
+function tablesOf(db: Database): string[] {
+  return (db.query(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+  ).all() as { name: string }[]).map(row => row.name);
+}
+
+/** 从 schema-v6.sql 按名字抽取视图 DDL 执行；定义只住在 schema 一处。 */
+function refreshViews(db: Database, names: readonly string[]): void {
+  const schemaV6 = readFileSync(new URL('../src/schema-v6.sql', import.meta.url), 'utf8');
+  const pattern = new RegExp(
+    `CREATE VIEW IF NOT EXISTS (${names.join('|')}) AS[\\s\\S]*?;`, 'g');
+  const views = schemaV6.match(pattern) ?? [];
+  if (views.length !== names.length) throw new Error('backfill_view_ddl_not_found');
+  for (const name of names) db.exec(`DROP VIEW IF EXISTS ${name}`);
+  for (const view of views) db.exec(view);
+}
+
 /**
- * 幂等补列补表。本提交的算法号 bump 只需重派生，没有新列；`context_event`
- * 列与 `bg_job` 表随后续交付在这里补，视图 DDL 按名字从 schema-v6.sql 抽取
- * 执行，不复制第二份定义（照 backfill-summary-facts 的先例）。
+ * 幂等补列补表。schema.sql 已带全部新列新表，这里只处理还没升级的存量库；
+ * 视图 DDL 按名字从 schema-v6.sql 抽取执行，不复制第二份定义。
  */
 export function migrateOmpSemantics(db: Database): void {
   db.transaction(() => {
-    void columnsOf;
+    const add = (table: string, column: string, ddl: string): void => {
+      if (columnsOf(db, table).includes(column)) return;
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    };
+    add('request', 'context_event', 'context_event TEXT');
+    add('derive_request_result', 'context_event', 'context_event TEXT');
+    if (!tablesOf(db).includes('bg_job')) {
+      db.exec(`CREATE TABLE bg_job (
+        job_id       TEXT NOT NULL,
+        conv_key     TEXT NOT NULL,
+        spawn_req    INTEGER,
+        spawn_ord    INTEGER,
+        notice_req   INTEGER,
+        notice_ord   INTEGER,
+        state        TEXT NOT NULL,
+        PRIMARY KEY (conv_key, job_id)
+      ) WITHOUT ROWID`);
+    }
+    refreshViews(db, ['published_derive_request', 'effective_request']);
   }).immediate();
 }
 

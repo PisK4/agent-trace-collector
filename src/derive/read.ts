@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import { readBodyTx } from '../body';
 import { assistantText } from '../protocols';
-import { interpretMessage } from '../input-interpretation';
+import { interpretMessage, isOmpArchiveMessage, ompDroppedCharsOf } from '../input-interpretation';
 import { clip, interruptCountOf, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './decision';
 import type { PresentationPorts, ResolvedTool, ReplyShape } from './decision';
 
@@ -186,6 +186,56 @@ export function interruptCountTx(db: Database, reqId: number,
   const messages: unknown[] = [];
   for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal);
   return interruptCountOf(messages, delta);
+}
+
+/** branch 场合的归档扫描上限：归档消息实测在 user 块 ord 1，上限只防极端正文。 */
+const ARCHIVE_SCAN_MESSAGES = 20;
+
+/** 上下文事件位的判定结果；event 为 null 表示这次判不出来，调用方保留旧值。 */
+export type ContextEventFacts = {
+  event: 'omp_compaction' | 'none' | null;
+  droppedChars: number | null;
+};
+
+/**
+ * 上下文事件位的事务内判定，两条派生路径共用。
+ *
+ * 判据是「本笔的确定增量里新增了归档消息」：归档消息在会话每笔请求都重发，
+ * 按「输入里存在」判会让整场会话每一行都挂压缩标记，降噪变成加噪。
+ * branch 关系的消息前缀整体换掉、没有增量可比，按输入含归档归因
+ * （bounded 扫描 user 消息）；其余关系没有"新增"可言，返回 null。
+ */
+export function contextEventTx(db: Database, reqId: number, relation: string | null,
+  delta: readonly number[] | null): ContextEventFacts {
+  if (relation === 'aux') return { event: 'none', droppedChars: null };
+  if (relation === 'branch') {
+    const rows = db.query<{ z: Uint8Array }, [number, number]>(`
+      SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+      WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord LIMIT ?`)
+      .all(reqId, ARCHIVE_SCAN_MESSAGES);
+    for (const row of rows) {
+      let message: unknown;
+      try {
+        message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
+      } catch {
+        continue;
+      }
+      if (isOmpArchiveMessage(message)) {
+        return { event: 'omp_compaction', droppedChars: ompDroppedCharsOf(message) };
+      }
+    }
+    return { event: 'none', droppedChars: null };
+  }
+  if ((relation === 'first' || relation === 'confirmed') && delta !== null) {
+    for (const ordinal of delta) {
+      const message = messageAt(db, reqId, ordinal);
+      if (isOmpArchiveMessage(message)) {
+        return { event: 'omp_compaction', droppedChars: ompDroppedCharsOf(message) };
+      }
+    }
+    return { event: 'none', droppedChars: null };
+  }
+  return { event: null, droppedChars: null };
 }
 
 /** db 版工具结果摘要：按 delta 的原始 ord 稀疏取消息，判定交给共享实现。 */

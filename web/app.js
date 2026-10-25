@@ -339,7 +339,10 @@ if (typeof document !== 'undefined') {
     if (detail.purpose_chain === 'exclude' || detail.chain_role === 'aux') return '辅助请求，不在主链上';
     if (detail.prev_relation === 'first') return '会话首笔';
     if (detail.prev_relation === 'confirmed') return '续自上一笔';
-    if (detail.prev_relation === 'branch') return '另起一支';
+    if (detail.prev_relation === 'branch') {
+      return detail.context_event === 'omp_compaction'
+        ? '另起一支 · 压缩归档改写了上下文前缀' : '另起一支';
+    }
     if (detail.prev_relation === 'unknown') return '前驱正文不可读，无法比对';
     return '';
   }

@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
-import { interpretMessage, interpretUserText } from '../src/input-interpretation';
+import {
+  interpretMessage, interpretUserText, isOmpArchiveMessage, ompDroppedCharsOf,
+} from '../src/input-interpretation';
 
 test('会话外壳与系统提醒被剥掉，用户正文保留', () => {
   const view = interpretUserText(
@@ -172,4 +174,54 @@ test('user 壳保留内文', () => {
   const view = interpretUserText('<user>你好</user>', 'omp');
   expect(view.text).toBe('你好');
   expect(view.kind).toBe('wrapped');
+});
+
+// —— OMP 压缩归档消息：解释为注入、块级归档判定与丢弃量提取 ——
+
+const ARCHIVE_BODY = 'Resume prior conversation. Earlier turns archived under HISTORY. '
+  + 'About 12,345 characters of older middle history dropped to fit archive budget. '
+  + 'Archived transcript scopes: ¶user: ¶ai:';
+
+test('OMP 压缩归档消息解释为注入，标题与摘要不再消费它', () => {
+  // 块 0 是 system-reminder、块 1 才是归档正文：判据剥壳后落在正文块。
+  const view = interpretMessage({ role: 'user', content: [
+    { type: 'text', text: '<system-reminder>Synthetic date and cwd</system-reminder>' },
+    { type: 'text', text: ARCHIVE_BODY },
+  ] }, 'omp', 1);
+  expect(view.input?.state).toBe('injected');
+  expect(view.input?.kind).toBe('omp_history_archive');
+  expect(view.input?.text).toBe('');
+  // 单块裸归档同样命中。
+  const bare = interpretUserText(ARCHIVE_BODY, 'omp');
+  expect(bare.state).toBe('injected');
+  expect(bare.kind).toBe('omp_history_archive');
+  // 普通用户文本不受影响；引用句在块中段也不是归档。
+  const plain = interpretUserText('先看看 Resume prior conversation 这句怎么翻译', null);
+  expect(plain.state).toBe('text');
+  expect(plain.kind).toBe('plain');
+});
+
+test('归档判定按任一文本块块首，非 user 角色与中段引用不算', () => {
+  expect(isOmpArchiveMessage({ role: 'user', content: [
+    { type: 'text', text: '<system-reminder>x</system-reminder>' },
+    { type: 'text', text: ARCHIVE_BODY },
+  ] })).toBe(true);
+  expect(isOmpArchiveMessage({ role: 'user', content: [
+    { type: 'text', text: `回顾：${ARCHIVE_BODY}` },
+  ] })).toBe(false);
+  expect(isOmpArchiveMessage({ role: 'assistant', content: [
+    { type: 'text', text: ARCHIVE_BODY },
+  ] })).toBe(false);
+  expect(isOmpArchiveMessage(null)).toBe(false);
+});
+
+test('丢弃量从归档块提取，千分位逗号剥掉，没写就是 null', () => {
+  expect(ompDroppedCharsOf({ role: 'user', content: [
+    { type: 'text', text: '<system-reminder>x</system-reminder>' },
+    { type: 'text', text: ARCHIVE_BODY },
+  ] })).toBe(12345);
+  expect(ompDroppedCharsOf({ role: 'user', content: [
+    { type: 'text', text: 'Resume prior conversation. Earlier turns archived under HISTORY. 无丢弃说明' },
+  ] })).toBe(null);
+  expect(ompDroppedCharsOf({ role: 'user', content: '别的消息' })).toBe(null);
 });

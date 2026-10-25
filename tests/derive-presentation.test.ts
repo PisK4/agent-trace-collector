@@ -351,3 +351,91 @@ test('派生写回复形状位：可读按 reply 重算，正文回收后保留�
     f.close();
   }
 });
+
+// —— 压缩事件位：确定增量新增归档才标记，重发不算，branch 按输入归因 ——
+
+/** 按消息数组种子一笔可比请求；conv 用 DERIVE_GROUP，时间与来源位置随 index。 */
+function seedMessageRound(
+  store: ReturnType<typeof fixture>['store'],
+  id: number,
+  startedMs: number,
+  messages: unknown[],
+): void {
+  store.write(db => {
+    db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+      body_state,derive_version,have,created_at,updated_at,sort_source,sort_key)
+      VALUES (?,?,?,'known',?,'2026-10-25','hook','pending',0,1,1,1,'ledger',?)`,
+    [id, DERIVE_GROUP, DERIVE_ACTOR, startedMs,
+      `1:2:3:0|${String(id * 100).padStart(20, '0')}`]);
+  });
+  persistBody(store, id, {
+    protocol: 'anthropic',
+    request: { messages },
+    reply: { content: [{ type: 'text', text: 'ok' }] },
+    redact_version: 1,
+  });
+}
+
+test('压缩事件位按确定增量判定：新增归档记 omp_compaction，重发不算，branch 按输入归因', () => {
+  const f = fixture();
+  try {
+    const userOpen = { role: 'user', content: [{ type: 'text', text: '开场' }] };
+    const archive = { role: 'user', content: [
+      { type: 'text', text: '<system-reminder>Synthetic date and cwd</system-reminder>' },
+      { type: 'text', text: 'Resume prior conversation. Earlier turns archived under HISTORY. '
+        + 'About 12,345 characters of older middle history dropped to fit archive budget. '
+        + 'Archived transcript scopes: ¶user: ¶ai:' },
+    ] };
+    const userMore = { role: 'user', content: [{ type: 'text', text: '继续' }] };
+    seedMessageRound(f.store, 1, 1000, [userOpen]);
+    seedMessageRound(f.store, 2, 2000, [userOpen, archive]);
+    seedMessageRound(f.store, 3, 3000, [userOpen, archive, userMore]);
+    enqueueDerive(f.store, DERIVE_GROUP, DERIVE_ACTOR, '');
+    drainDerive(f.store);
+    const rows = f.store.read.query<{ req_id: number; prev_relation: string | null;
+      context_event: string | null; title_source: string | null; input_preview: string | null;
+      summary_basis: string | null }, []>(
+      `SELECT req_id,prev_relation,context_event,title_source,input_preview,summary_basis
+       FROM request ORDER BY req_id`).all();
+    expect(rows[0]).toMatchObject({ prev_relation: 'first', context_event: 'none' });
+    // 归档消息在 req2 的确定增量里新增：omp_compaction，丢弃量进 basis；
+    // 归档被解释为注入，标题退到模型时间，输入摘要不留归档文本。
+    expect(rows[1]).toMatchObject({ prev_relation: 'confirmed', context_event: 'omp_compaction',
+      title_source: 'model_time', input_preview: null });
+    const basis = JSON.parse(rows[1]!.summary_basis ?? '{}') as Record<string, unknown>;
+    expect(basis.context_event).toBe('omp_compaction');
+    expect(basis.dropped_chars).toBe(12345);
+    // 同一归档在 req3 只是被重发：增量里没有归档，事件位回 none。
+    expect(rows[2]).toMatchObject({ prev_relation: 'confirmed', context_event: 'none' });
+    // branch 关系没有增量可比：输入含归档即归因（合成样本，生产暂无 branch 流量）。
+    seedMessageRound(f.store, 4, 4000, [archive]);
+    enqueueDerive(f.store, DERIVE_GROUP, DERIVE_ACTOR, '');
+    drainDerive(f.store);
+    const branchRow = f.store.read.query<{ prev_relation: string | null;
+      context_event: string | null }, [number]>(
+      'SELECT prev_relation,context_event FROM request WHERE req_id=4').get(4);
+    expect(branchRow).toMatchObject({ prev_relation: 'branch', context_event: 'omp_compaction' });
+  } finally { f.close(); }
+});
+
+test('压缩事件位的保留语义：正文回收沿用旧值，判不出关系不冒充 none', () => {
+  const f = fixture();
+  try {
+    const userOpen = { role: 'user', content: [{ type: 'text', text: '开场' }] };
+    const archive = { role: 'user', content: [
+      { type: 'text', text: 'Resume prior conversation. Earlier turns archived under HISTORY. '
+        + 'About 99 characters of older middle history dropped to fit archive budget.' },
+    ] };
+    seedMessageRound(f.store, 1, 1000, [userOpen, archive]);
+    enqueueDerive(f.store, DERIVE_GROUP, DERIVE_ACTOR, '');
+    drainDerive(f.store);
+    // 首笔全量新增：omp_compaction。回收正文后重算，行保留旧值不是清零。
+    f.store.write(db => db.run(
+      "UPDATE request SET body_state='evicted', skeleton_z=NULL WHERE req_id=1"));
+    enqueueDerive(f.store, DERIVE_GROUP, DERIVE_ACTOR, '');
+    drainDerive(f.store);
+    const row = f.store.read.query<{ context_event: string | null; summary_state: string },
+      [number]>('SELECT context_event,summary_state FROM request WHERE req_id=1').get(1);
+    expect(row).toMatchObject({ context_event: 'omp_compaction', summary_state: 'retained' });
+  } finally { f.close(); }
+});

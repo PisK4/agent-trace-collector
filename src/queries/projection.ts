@@ -33,6 +33,8 @@ export type RequestRow = {
   reply_preview: string | null;
   /** 回复形状位：final 才能当轮次终点；NULL 表示从未判定（升级窗口期）。 */
   reply_shape: 'final' | 'tools' | 'unknown' | null;
+  /** 上下文事件位：omp_compaction 表示本笔新增了 OMP 压缩归档；NULL 从未判定。 */
+  context_event: 'omp_compaction' | 'none' | null;
   /** 用途阶段写下的请求类别；未知值原样返回，查询不折叠成 chat。 */
   req_kind: string;
   /** main 主链、branch 次链、aux 辅助请求（排除用途）；unknown 表示组未完成，角色不可确认。 */
@@ -125,7 +127,7 @@ type DerivedColumns = {
   prev_req_id: number | null; prev_relation: string | null; delta_ordinals: string | null;
   chain_role: string | null; title: string | null; title_source: string | null;
   input_preview: string | null; input_preview_kind: string | null;
-  reply_shape: string | null;
+  reply_shape: string | null; context_event: string | null;
 };
 
 type StateColumns = {
@@ -216,6 +218,7 @@ export function projectRow(row: ProjectableRow): {
       ? row.input_preview_kind as RequestRow['input_preview_kind'] : null,
     reply_preview: row.reply_preview,
     reply_shape: current ? row.reply_shape as RequestRow['reply_shape'] : null,
+    context_event: current ? row.context_event as RequestRow['context_event'] : null,
     req_kind: row.req_kind ?? 'unknown',
     chain_role: current ? (row.chain_role ?? 'unknown') : 'unknown',
     model_title: row.model_title,
