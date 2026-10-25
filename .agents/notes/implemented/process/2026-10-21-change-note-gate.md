@@ -8,7 +8,10 @@ Agent Notes 体系接入后，`verify:notes` 只校验已有 note 的格式与�
 
 ## Decision
 
-`scripts/verify-change-notes.mjs` 增加变更检查，接进 `package.json` 的 `verify:notes`，同时跑暂存区与未推送提交两个范围。它按路径保守判定「需要 note」：改动落在 `src/`、`web/`、`plugins/`、`scripts/`、`tests/`、`package.json`、`bun.lock`、`tsconfig.json` 或根 `AGENTS.md`，就必须在同一暂存集或同一提交里新增或修改一篇 `.agents/notes/.../yyyy-mm-dd-topic.md`。
+`scripts/verify-change-notes.mjs` 增加变更检查，接进 `package.json` 的 `verify:notes`，同时跑暂存区与未推送提交两个范围。它按路径保守判定「需要 note」：改动落在下列任一路径，就必须在同一暂存集或同一提交里新增或修改一篇 `.agents/notes/.../yyyy-mm-dd-topic.md`。
+
+- 代码与工具目录：`src/`、`web/`、`plugins/`、`scripts/`、`tests/`
+- 工程配置：`package.json`、`bun.lock`、`tsconfig.json`、根 `AGENTS.md`
 
 纯机械或局部编辑走显式豁免：提交信息里写 `Agent-Note: none — <reason>`；`--staged` 阶段还没有提交信息，用 `ATC_NOTE_EXEMPT=<reason>` 放行，并把同一理由写进提交信息供 range 模式核对。`--range` 逐提交检查，并跳过本脚本首次进入历史之前的提交，避免追溯旧账。
 

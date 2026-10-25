@@ -4,7 +4,13 @@ Status: implemented
 
 ## Problem
 
-`main.ts` 是 composition root，但摄入与保留的实现写在它的三个定时任务体里：`routeTick` 内联了第二份 `ingest_issue` upsert 和第二份路由游标 upsert，其中 issue upsert 的冲突子句与 `reconcile.ts` 的 `recordIssue` 不同，也不写 `byte_length`；`ledgerTick` 内联了 `observed_off` 推进；`retentionTick` 内联了触顶判定与二十批回收循环。本地 `readCursor` 与 `sources/files.ts` 对游标形状各有一份理解，函数体里还有一段解析了却不用的死代码。五个任务没有单元测试，改一条行格式规则要同时动 `files.ts`、`reconcile.ts`、`main.ts` 三处。
+`main.ts` 是 composition root，但摄入与保留的实现写在它的三个定时任务体里：
+
+- `routeTick` 内联了第二份 `ingest_issue` upsert 和第二份路由游标 upsert；issue upsert 的冲突子句与 `reconcile.ts` 的 `recordIssue` 不同，也不写 `byte_length`
+- `ledgerTick` 内联了 `observed_off` 推进
+- `retentionTick` 内联了触顶判定与二十批回收循环
+
+本地 `readCursor` 与 `sources/files.ts` 对游标形状各有一份理解，函数体里还有一段解析了却不用的死代码。五个任务没有单元测试，改一条行格式规则要同时动 `files.ts`、`reconcile.ts`、`main.ts` 三处。
 
 ## Decision
 
@@ -25,5 +31,5 @@ Status: implemented
 ## Consequences
 
 - 行格式与游标规则一个家：改路由游标语义只动 `reconcile.ts`，改触顶策略只动 `retention.ts`。
-- 路由落库与预算回收首次有了直接测试（`reconcile.test.ts` 的指纹游标与坏行记账、`retention.test.ts` 的触顶回收与闸门失效），此前只有 `queries.test.ts`/`maintenance.test.ts` 间接覆盖。
+- 路由落库与预算回收首次有了直接测试：`reconcile.test.ts` 的指纹游标与坏行记账，`retention.test.ts` 的触顶回收与闸门失效。此前只有 `queries.test.ts`/`maintenance.test.ts` 间接覆盖。
 - `tests/main.test.ts` 验证切片启用断言、起停和在线来源接线；任务内部规则仍在所属 module 直接测试，信号与真实进程生命周期留给端到端用例。

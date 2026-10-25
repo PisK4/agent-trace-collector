@@ -4,11 +4,25 @@ Status: implemented
 
 ## Problem
 
-运行模型的词汇散在 architecture-design.md 各节、代码注释与 note 里，没有一处把它们并列列出：source 词形覆盖三个概念（证据通道、物理来源、流量种类），七个递增计数各自回答不同的问题，认识论五词与销毁动词的区分只存在于散文叙述。同时有一处文档与代码的分歧：architecture-design.md 的 request_evidence DDL 注释写 merge_state 取值含 ambiguous，代码从不写该值，多候选歧义由 pending_hook.candidates 承载。project-overview.md 的名词节只收四个定位级名词，容纳不了这些运行词汇。
+运行模型的词汇散在 architecture-design.md 各节、代码注释与 note 里，没有一处把它们并列列出：
+
+- source 一个词形覆盖三个概念：证据通道、物理来源、流量种类
+- 七个递增计数各自回答不同的问题
+- 认识论五词与销毁动词的区分只存在于散文叙述
+
+同时有一处文档与代码的分歧：architecture-design.md 的 request_evidence DDL 注释写 merge_state 取值含 ambiguous，代码从不写该值，多候选歧义由 pending_hook.candidates 承载。project-overview.md 的名词节只收四个定位级名词，容纳不了这些运行词汇。
 
 ## Decision
 
-仓库根新增 [CONTEXT.md](../../../../CONTEXT.md) 作为运行词汇的唯一词汇表，本变更交付首批词条：证据的坐标（证据通道、物理来源、流量种类、出生通路 via、关联、请求折叠）、递增计数家族、认识论五词、销毁动词、kind 三族。管辖权分三条：术语定义与边界归 CONTEXT.md；字段清单、值域细节与默认值仍归 [architecture-design.md](../../../../docs/architecture-design.md)；定位级入门名词（请求、session、conv、trace）的定义留在 [project-overview.md](../../../../docs/project-overview.md) 名词节，CONTEXT.md 不重复定义。merge_state 的 ambiguous 从 DDL 注释移除，文档写现状。CONTEXT.md 登记进 [docs/AGENTS.md](../../../../docs/AGENTS.md) 分层表，project-overview.md 名词节补一行指向。
+仓库根新增 [CONTEXT.md](../../../../CONTEXT.md) 作为运行词汇的唯一词汇表，本变更交付首批词条五组：
+
+- 证据的坐标：证据通道、物理来源、流量种类、出生通路 via、关联、请求折叠
+- 递增计数家族
+- 认识论五词
+- 销毁动词
+- kind 三族
+
+管辖权分三条：术语定义与边界归 CONTEXT.md；字段清单、值域细节与默认值仍归 [architecture-design.md](../../../../docs/architecture-design.md)；定位级入门名词（请求、session、conv、trace）的定义留在 [project-overview.md](../../../../docs/project-overview.md) 名词节，CONTEXT.md 不重复定义。merge_state 的 ambiguous 从 DDL 注释移除，文档写现状。CONTEXT.md 登记进 [docs/AGENTS.md](../../../../docs/AGENTS.md) 分层表，project-overview.md 名词节补一行指向。
 
 词条准入按场景压测：压测中能逼出边界混淆的词才收进词汇表，不追求全量。
 
