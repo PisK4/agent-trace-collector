@@ -190,3 +190,16 @@ OMP（oh-my-pi）的 feature 语义进读模型与阅读层，五项随 [Agent N
 | 背景作业配对 | 24 笔会话 24 个作业：同笔 resolved 13、跨笔 resolved 5、pending 6（含发起正文已回收的诚实缺口）；另一会话 1 个 resolved |
 | effort 读数 | OMP 骨架可读请求的 `request_fields.reasoning_effort`（high/low）在用量折叠行显示，单次干净调用也显示 |
 | 工具语义 | 小写 read 42 / edit 38 / write 15 / grep 1 的 `arg_path` 重算后非空，会话汇总「写入尝试 / 读取请求」对 OMP 会话有值；小写工具命中同族色类 |
+
+## 读数页上下文分布 treemap（2026-10-26）
+
+真实数据验收不动生产采集器：对生产库做在线 `VACUUM INTO` 快照（1.2 GB），复制脱敏盐到 0700 临时目录，临时 collector 用独立端口加载快照，验收后删除目录。快照含 magpie 10-24 拆出第七类之后的真实七类行。合成验收进 `bun test`（752 例全绿：`tests/context-map.test.ts` 三档宽度 × 四状态守恒断言、`tests/web.test.ts` 集成断言、`tests/http.test.ts` 静态白名单目录覆盖），与真实验收分开呈报。
+
+| 验收项 | 真实结果 |
+| --- | --- |
+| 数字互证 | req 11444（glm-5.3，208,984 tokens，占用 20.9%）：图例七类之和等于 u-total 提示总量；对话内容 102.1k = 第 3 轮 56.9k + 第 1 轮 29.4k + 另外 2 项 15.8k；空闲 791.0k = 窗口 1.0M − 208,984；正常态无 pill |
+| 白名单 items | req 10899（109,878 tokens）：`sum(parts) = tokens` 成立，七类 items 经 `safePrompt` 白名单透出，类内 item 之和与类总量一致（files 差 1 为四舍五入） |
+| 第七色槽 | 两笔真实请求的 skills 类（4.0k）落 `--p7`，图例与 tile 同槽 |
+| 布局合并桶 | req 11444 的 files 18 个碎项并成 rest 块，可视文字与悬停 title 均为「另外 18 项」——title 缺名是本轮真实数据暴露的缺陷，验收中修复（500e2eb）后复验 |
+| 内容列表 | 同请求内容列表 53 行跨类降序，「显示全部」折叠接既有 data-fold 恢复机制 |
+| 视觉快照 | 未取得：ego lite 的 CDP `Page.captureScreenshot` 对该页持续超时；视觉项由 DOM 断言与合成测试覆盖，数字互证在浏览器 DOM 内完成 |
