@@ -637,21 +637,6 @@ export function renderReplyDetail(view, tools = [], foldKey = '') {
   </div>`;
 }
 
-/**
- * 原始脱敏对象。只展示这一片实际取到的字段与回复，不合成任何 demo 值。
- * @param {BodyPage} page
- */
-export function renderRaw(page) {
-  /** @param {string} label @param {unknown} value @param {string} note */
-  const group = (label, value, note) => value === null || value === undefined
-    ? `<div class="raw-group"><div class="label">${label}</div><p class="note">${note}</p></div>`
-    : `<div class="raw-group"><div class="label">${label}</div>
-       <pre class="raw" tabindex="0">${esc(JSON.stringify(value, null, 2))}</pre></div>`;
-  return group('请求字段（不含 messages）', page.request_fields, '这一片没有读到请求的顶层字段。')
-    + group('回复对象', page.reply, '这一笔没有保存到回复对象。')
-    + `<p class="note">消息正文按块单独分页读取；这里只展示请求顶层字段与回复。内容在写入前已脱敏，占位符不可逆。</p>`;
-}
-
 // —— 上下文组成：已知六类与未知类别 ——
 
 export const PARTS = [

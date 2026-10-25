@@ -12,7 +12,7 @@ import { PURPOSE_VERSION } from '../src/semantics';
 import { readBodyTx } from '../src/body';
 import { GROUP_ALGORITHM } from '../src/derive-state';
 import { listSessions } from '../src/queries';
-import { modelTimeTitle } from '../src/sources/magpie';
+import { modelTimeTitle } from '../src/format';
 import { messageFingerprint } from '../src/fingerprint';
 import { interpretMessage } from '../src/input-interpretation';
 import { persistBody } from '../src/body';

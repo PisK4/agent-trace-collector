@@ -1,7 +1,7 @@
 import { zstdDecompressSync } from 'node:zlib';
 import type { BodyState } from './store';
 import { resolveRequestId, type Store } from './store';
-import { modelTimeTitle } from './sources/magpie';
+import { modelTimeTitle } from './format';
 import { deriveJoinSql, derivedColSql, groupCurrentSql, groupIsCurrent } from './derive-state';
 import { HAVE_BODY } from './evidence';
 

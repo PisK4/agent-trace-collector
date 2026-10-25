@@ -57,7 +57,7 @@ export type SourceRead = SourceCursor & {
   error: string | null;
 };
 
-/** 旧摄入入口使用的账本批次形状；SourceRead 与测试构造的批次都满足它。 */
+/** 暂停批次形状（resumePausedLedger 消费）；SourceRead 与测试构造的批次都满足它。 */
 export type FileBatch = Pick<SourceRead,
   'generation' | 'rewriteEpoch' | 'lines' | 'committedOff' | 'observedOff' |
   'seenSize' | 'headLen' | 'headHash' | 'issues'>;

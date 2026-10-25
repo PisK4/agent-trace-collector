@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { zstdDecompressSync } from 'node:zlib';
 import { fixture } from './fixtures';
 import type { SourceRead } from '../src/sources/files';
-import { ingestLedger, ingestRoute, ingestSource, observeSourceOffset, readFileCursor, resumePausedLedger } from '../src/reconcile';
+import { ingestSource, observeSourceOffset, readFileCursor, resumePausedLedger } from '../src/reconcile';
 import { purgeMetadata } from '../src/maintenance';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
 import { readSourceFacts } from '../src/sources/facts';
@@ -70,6 +70,11 @@ function sourceRead(
   return { ...base, ...overrides };
 }
 
+/** 记录级路由摄入也走文件入口：同一内核，引用键由文件批次形状给出。 */
+function routeReadOf(records: unknown[]): SourceRead {
+  return sourceRead(records.map(record => JSON.stringify(record)));
+}
+
 const salt = new Uint8Array(32).fill(7);
 
 test('已确认归属的账本请求进入派生队列', () => {
@@ -78,7 +83,7 @@ test('已确认归属的账本请求进入派生队列', () => {
     const batch = batchOf([
       { t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'synthetic-sess', in: 10, out: 5 },
     ]);
-    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    ingestSource(f.store, batch, salt, 1);
     expect(f.store.read.query('SELECT conv_key, actor FROM derive_queue').all()).toEqual([
       { conv_key: JSON.stringify(['session', 'synthetic-sess']), actor: 'synthetic-sess' },
     ]);
@@ -93,7 +98,7 @@ test('无会话身份的账本请求不入派生队列', () => {
     const batch = batchOf([
       { t: '2026-10-20T00:00:00Z', agent: 'demo', model: 'm', provider: 'p', status: 400, rejected: true },
     ]);
-    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    ingestSource(f.store, batch, salt, 1);
     expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 1 });
     expect(f.store.read.query('SELECT count(*) AS n FROM derive_queue').get()).toEqual({ n: 0 });
   } finally {
@@ -109,8 +114,8 @@ test('两条计费行只生成一个请求且保留 kind', () => {
       { t: '2026-10-20T00:00:01Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, in: 20, out: 5, kind: 'web_search', session: 's' },
     ];
     const batch = batchOf(rows);
-    expect(ingestLedger(f.store, 'usage.jsonl', batch, 1, salt)).toEqual({ accepted: 2, invalid: 0, duplicate: 0, purged_skip: 0 });
-    expect(ingestLedger(f.store, 'usage.jsonl', batch, 2, salt)).toEqual({ accepted: 0, invalid: 0, duplicate: 2, purged_skip: 0 });
+    expect(ingestSource(f.store, batch, salt, 1)).toEqual({ accepted: 2, invalid: 0, duplicate: 0, purged_skip: 0 });
+    expect(ingestSource(f.store, batch, salt, 2)).toEqual({ accepted: 0, invalid: 0, duplicate: 2, purged_skip: 0 });
     expect(f.store.read.query('SELECT status,attempt_in,attempt_billed,cache_write FROM request').all()).toEqual([
       { status: 200, attempt_in: 30, attempt_billed: 2, cache_write: null },
     ]);
@@ -127,7 +132,7 @@ test('两条计费行只生成一个请求且保留 kind', () => {
 test('路由先到不增请求，账本到达后补齐摘要', () => {
   const f = fixture();
   try {
-    ingestRoute(f.store, [{
+    ingestSource(f.store, routeReadOf([{
       id: 7,
       time: '2026-10-20T00:00:00Z',
       agent: 'demo',
@@ -139,13 +144,13 @@ test('路由先到不增请求，账本到达后补齐摘要', () => {
       tries: [{ provider: 'p', model: 'm' }, { provider: 'p', model: 'm' }],
       prompt: { tokens: 100, counted: true, window: 200000, turns: 4, parts: [{ tokens: 10 }] },
       order: [{ provider: 'p', model: 'm' }],
-    }], 1, salt);
+    }]), salt, 1);
     expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 0 });
     expect(f.store.read.query('SELECT count(*) AS n FROM route_summary').get()).toEqual({ n: 1 });
 
-    ingestLedger(f.store, 'usage.jsonl', batchOf([
+    ingestSource(f.store, batchOf([
       { t: '2026-10-20T00:00:02Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 10, out: 5 },
-    ]), 2, salt);
+    ]), salt, 2);
     expect(f.store.read.query(
       'SELECT conv_key,conv_source,have,prompt_tokens,attempt_count,attempt_billed,actor,actor_state FROM request',
     ).all()).toEqual([{
@@ -171,7 +176,7 @@ test('无route的账本行各自建立独立请求', () => {
       { t: '2026-10-20T00:00:00Z', agent: 'demo', model: 'm', provider: 'p', status: 200, in: 1 },
       { t: '2026-10-20T00:00:01Z', agent: 'demo', model: 'm', provider: 'p', status: 200, in: 2 },
     ]);
-    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    ingestSource(f.store, batch, salt, 1);
     const rows = f.store.read.query('SELECT route_id,attempt_billed,status FROM request ORDER BY req_id').all();
     expect(rows).toEqual([
       { route_id: null, attempt_billed: 1, status: 200 },
@@ -189,7 +194,7 @@ test('rejected行不按空route合并且费用标注不适用', () => {
       { t: '2026-10-20T00:00:00Z', rejected: true, status: 400, provider: '', in: 5, out: 0 },
       { t: '2026-10-20T00:00:01Z', rejected: true, status: 401, provider: '', in: 6, out: 0 },
     ]);
-    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    ingestSource(f.store, batch, salt, 1);
     expect(f.store.read.query('SELECT via,cost_state,cost_reason,status FROM request ORDER BY req_id').all()).toEqual([
       { via: 'rejected', cost_state: 'absent', cost_reason: 'not_applicable', status: 400 },
       { via: 'rejected', cost_state: 'absent', cost_reason: 'not_applicable', status: 401 },
@@ -204,7 +209,7 @@ test('坏完整行记录issue并推进游标，后续正常行入库', () => {
   try {
     const batch = batchOf(['not json', { t: '2026-10-20T00:00:00Z', route_id: 9, agent: 'demo', model: 'm', provider: 'p', status: 200, in: 1 }]);
     const before = f.store.writeStats.count;
-    expect(ingestLedger(f.store, 'usage.jsonl', batch, 1, salt)).toEqual({ accepted: 1, invalid: 1, duplicate: 0, purged_skip: 0 });
+    expect(ingestSource(f.store, batch, salt, 1)).toEqual({ accepted: 1, invalid: 1, duplicate: 0, purged_skip: 0 });
     expect(f.store.writeStats.count - before).toBe(1);
     expect(f.store.read.query('SELECT committed_off FROM source_cursor').get()).toEqual({ committed_off: batch.committedOff });
     expect(f.store.read.query('SELECT reason FROM ingest_issue').all()).toEqual([{ reason: 'ledger_invalid_json' }]);
@@ -220,9 +225,9 @@ test('原始层删除后的重放不重复计费', () => {
     const batch = batchOf([
       { t: '2026-10-20T00:00:00Z', route_id: 11, agent: 'demo', model: 'm', provider: 'p', status: 200, in: 12, out: 3 },
     ]);
-    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    ingestSource(f.store, batch, salt, 1);
     f.store.write(db => db.run('DELETE FROM raw_ledger'));
-    expect(ingestLedger(f.store, 'usage.jsonl', batch, 2, salt)).toEqual({ accepted: 0, invalid: 0, duplicate: 1, purged_skip: 0 });
+    expect(ingestSource(f.store, batch, salt, 2)).toEqual({ accepted: 0, invalid: 0, duplicate: 1, purged_skip: 0 });
     expect(f.store.read.query('SELECT attempt_in,attempt_billed FROM request').get()).toEqual({ attempt_in: 12, attempt_billed: 1 });
     expect(f.store.read.query('SELECT count(*) AS n FROM raw_ledger').get()).toEqual({ n: 0 });
   } finally {
@@ -233,12 +238,12 @@ test('原始层删除后的重放不重复计费', () => {
 test('乱序到达按时间收敛且起始时间取最早', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', batchOf([
+    ingestSource(f.store, batchOf([
       { t: '2026-10-20T00:00:02Z', route_id: 12, agent: 'demo', model: 'm', provider: 'p', status: 200, in: 2 },
-    ], 'g:1'), 2, salt);
-    ingestLedger(f.store, 'usage.jsonl', batchOf([
+    ], 'g:1'), salt, 2);
+    ingestSource(f.store, batchOf([
       { t: '2026-10-20T00:00:00Z', route_id: 12, agent: 'demo', model: 'm', provider: 'p', status: 500, in: 1 },
-    ], 'g:0'), 3, salt);
+    ], 'g:0'), salt, 3);
     expect(f.store.read.query('SELECT status,attempt_in,attempt_billed,started_ms FROM request').get())
       .toEqual({ status: 200, attempt_in: 3, attempt_billed: 2, started_ms: Date.parse('2026-10-20T00:00:00Z') });
   } finally {
@@ -249,9 +254,9 @@ test('乱序到达按时间收敛且起始时间取最早', () => {
 test('缺字段保持NULL而不是补零', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', batchOf([
+    ingestSource(f.store, batchOf([
       { t: '2026-10-20T00:00:00Z', route_id: 13, agent: 'demo', model: 'm', provider: 'p', status: 200, in: 7 },
-    ]), 1, salt);
+    ]), salt, 1);
     expect(f.store.read.query('SELECT cache_read,cache_write,reasoning,cost,cost_state FROM request').get())
       .toEqual({ cache_read: null, cache_write: null, reasoning: null, cost: null, cost_state: 'absent' });
   } finally {
@@ -263,7 +268,7 @@ test('暂停时只记缺口与observed_off，游标停在原处', () => {
   const f = fixture();
   try {
     const first = batchOf([{ t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 10, out: 5 }]);
-    ingestLedger(f.store, 'usage.jsonl', first, 1, salt);
+    ingestSource(f.store, first, salt, 1);
     const committed = f.store.read.query<{ committed_off: number }, []>('SELECT committed_off FROM source_cursor').get();
     expect(committed?.committed_off).toBe(first.committedOff);
 
@@ -288,7 +293,7 @@ test('暂停时只记缺口与observed_off，游标停在原处', () => {
       first.generation,
       first.committedOff,
     );
-    ingestLedger(f.store, 'usage.jsonl', resumed, 3, salt);
+    ingestSource(f.store, resumed, salt, 3);
     expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 2 });
     expect(f.store.read.query('SELECT from_off, state FROM source_gap').all()).toEqual([
       { from_off: first.committedOff, state: 'filled' },
@@ -303,14 +308,14 @@ test('换代后暂停缺口标unrecoverable且不被后续读取改写', () => {
   const f = fixture();
   try {
     const first = batchOf([{ t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 10, out: 5 }]);
-    ingestLedger(f.store, 'usage.jsonl', first, 1, salt);
+    ingestSource(f.store, first, salt, 1);
     const paused = batchOf([], first.generation, first.committedOff);
     paused.observedOff = first.committedOff + 40;
     resumePausedLedger(f.store, 'usage.jsonl', paused, 2);
 
     // 文件被原地重写：游标换代，旧区间无法再按偏移重读。
     const rewritten = batchOf([{ t: '2026-10-20T00:00:09Z', route_id: 9, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-b', in: 1, out: 1 }], 'g:1', 0);
-    ingestLedger(f.store, 'usage.jsonl', rewritten, 3, salt);
+    ingestSource(f.store, rewritten, salt, 3);
     expect(f.store.read.query('SELECT state FROM source_gap').all()).toEqual([{ state: 'unrecoverable' }]);
   } finally {
     f.close();
@@ -321,7 +326,7 @@ test('暂停后文件继续追加，重启恢复得到与从未暂停一致的�
   const f = fixture();
   try {
     const base = batchOf([{ t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 10, out: 5 }]);
-    ingestLedger(f.store, 'usage.jsonl', base, 1, salt);
+    ingestSource(f.store, base, salt, 1);
 
     // 暂停期间上游又写了两行：只记缺口。
     const paused = batchOf([
@@ -336,7 +341,7 @@ test('暂停后文件继续追加，重启恢复得到与从未暂停一致的�
       { t: '2026-10-20T00:00:01Z', route_id: 8, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 1, out: 1 },
       { t: '2026-10-20T00:00:02Z', route_id: 9, agent: 'demo', model: 'm', provider: 'p', status: 200, session: 'sess-a', in: 2, out: 2 },
     ], base.generation, base.committedOff);
-    const result = ingestLedger(f.store, 'usage.jsonl', resumed, 3, salt);
+    const result = ingestSource(f.store, resumed, salt, 3);
     expect(result.accepted).toBe(2);
     expect(f.store.read.query('SELECT route_id FROM request ORDER BY route_id').all()).toEqual([
       { route_id: 7 }, { route_id: 8 }, { route_id: 9 },
@@ -354,10 +359,10 @@ test('已主动淘汰的证据在来源回放时计purged_skip而不复活', () 
       t: '2026-10-20T00:00:00Z', route_id: 11, agent: 'demo', model: 'm', provider: 'p',
       status: 200, session: 'synthetic-replay', in: 10, out: 5,
     }]);
-    expect(ingestLedger(f.store, 'usage.jsonl', batch, 1, salt).accepted).toBe(1);
+    expect(ingestSource(f.store, batch, salt, 1).accepted).toBe(1);
     expect(purgeMetadata(f.store, '2026-10-21', 'approval-synthetic-replay').deleted).toBe(1);
 
-    const replay = ingestLedger(f.store, 'usage.jsonl', batch, 2, salt);
+    const replay = ingestSource(f.store, batch, salt, 2);
     expect(replay.accepted).toBe(0);
     expect(replay.purged_skip).toBe(1);
     // 证据、请求都不回来；墓碑本身保留。
@@ -372,11 +377,11 @@ test('已主动淘汰的证据在来源回放时计purged_skip而不复活', () 
 test('账本req与served分别落列而provider model不冒充请求模型', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+    ingestSource(f.store, batchOf([{
       t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', session: 'sess-a',
       req: 'req-model', model: 'provider-model', served: 'served-model',
       provider: 'p', status: 200, in: 10, out: 5,
-    }]), 1, salt);
+    }]), salt, 1);
     expect(f.store.read.query(
       'SELECT status,model_requested,model_served,in_tok,attempt_in,attempt_billed FROM request',
     ).get()).toEqual({
@@ -392,10 +397,10 @@ test('账本req与served分别落列而provider model不冒充请求模型', () 
 test('缺req保持NULL且不拿provider model补齐', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+    ingestSource(f.store, batchOf([{
       t: '2026-10-20T00:00:00Z', route_id: 8, agent: 'demo', session: 'sess-a',
       model: 'provider-only', provider: 'p', status: 200, in: 4,
-    }]), 1, salt);
+    }]), salt, 1);
     expect(f.store.read.query('SELECT model_requested,model_served FROM request').get())
       .toEqual({ model_requested: null, model_served: null });
   } finally {
@@ -406,13 +411,13 @@ test('缺req保持NULL且不拿provider model补齐', () => {
 test('账本行与payload来自同一脱敏对象且未知键保留', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+    ingestSource(f.store, batchOf([{
       t: '2026-10-20T00:00:00Z', route_id: 9, agent: 'demo', session: 'sess-a',
       account: 'synthetic-account', providerAccount: 'synthetic-account',
       future_field: { note: 'Bearer synthetic-secret-123' },
       future_nested: { authorization: 'synthetic-secret-456' },
       model: 'm', provider: 'p', status: 200, in: 1,
-    }]), 1, salt);
+    }]), salt, 1);
     const row = f.store.read.query<{ account: string; payload_json: string }, []>(
       'SELECT account,payload_json FROM raw_ledger').get()!;
     expect(row.account).toMatch(/^\[redacted:credential:[0-9a-f]{16}\]$/);
@@ -438,7 +443,7 @@ test('部分raw过期后旧尝试合计不缩小', () => {
       { t: '2026-10-20T00:00:00Z', route_id: 10, agent: 'demo', session: 's', handed_on: true, status: 429, model: 'm', provider: 'p', in: 10 },
       { t: '2026-10-20T00:00:01Z', route_id: 10, agent: 'demo', session: 's', status: 200, model: 'm', provider: 'p', in: 20 },
     ]);
-    ingestLedger(f.store, 'usage.jsonl', batch, 1, salt);
+    ingestSource(f.store, batch, salt, 1);
     expect(f.store.read.query('SELECT attempt_in,attempt_billed FROM request').get())
       .toEqual({ attempt_in: 30, attempt_billed: 2 });
     const second = batch.lines[1]!.offset;
@@ -470,9 +475,9 @@ test('部分raw过期后旧尝试合计不缩小', () => {
 test('后到非法账本行保留旧尝试合计并报告非current', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+    ingestSource(f.store, batchOf([{
       t: '2026-10-20T00:00:00Z', route_id: 11, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 10,
-    }]), 1, salt);
+    }]), salt, 1);
     expect(f.store.read.query('SELECT attempt_in,attempt_billed FROM request').get())
       .toEqual({ attempt_in: 10, attempt_billed: 1 });
     f.store.write(db => {
@@ -503,10 +508,10 @@ test('同毫秒跨代际不证明顺序时清空排序键', () => {
       t: '2026-10-20T00:00:00Z', route_id: 11, agent: 'demo', session: 's',
       model: 'm', provider: 'p', status, in: inTok,
     });
-    ingestLedger(f.store, 'usage.jsonl', batchOf([row(200, 10)], '1:2:3:0'), 1, salt);
+    ingestSource(f.store, batchOf([row(200, 10)], '1:2:3:0'), salt, 1);
     expect(f.store.read.query('SELECT sort_source,sort_key,attempt_in FROM request').get())
       .toEqual({ sort_source: 'ledger', sort_key: '1:2:3:0|00000000000000000000', attempt_in: 10 });
-    ingestLedger(f.store, 'usage-2.jsonl', batchOf([row(500, 20)], '1:2:3:1'), 2, salt);
+    ingestSource(f.store, { ...batchOf([row(500, 20)], '1:2:3:1'), name: 'usage-2.jsonl' }, salt, 2);
     // 两行同毫秒且跨代际：不发布 final，清空排序键，避免 A 只看一把 key 就当成可证顺序
     expect(f.store.read.query(
       'SELECT status,model_requested,sort_source,sort_key,attempt_in,attempt_billed,attempt_state FROM request',
@@ -528,12 +533,12 @@ function routeSummaryText(f: ReturnType<typeof fixture>, routeId: number): strin
 test('路由列、payload与长期摘要来自同一脱敏对象', () => {
   const f = fixture();
   try {
-    ingestRoute(f.store, [{
+    ingestSource(f.store, routeReadOf([{
       id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm', provider: 'p',
       status: 200, error: 'failed sk-synthetic-abcdefgh',
       tries: [{ provider: 'p', model: 'm', error: 'Bearer synthetic-secret-123' }],
       prompt: { tokens: 100, counted: true, window: 200000, turns: 2, parts: [{ kind: 'system', tokens: 10 }] },
-    }], 1, salt);
+    }]), salt, 1);
     const raw = f.store.read.query<{ error: string; payload_json: string }, []>(
       'SELECT error,payload_json FROM raw_route WHERE route_id=7').get()!;
     expect(raw.error).toContain('[redacted:api_key:');
@@ -551,13 +556,13 @@ test('counted布尔与合法省略映射为且仅为0或1', () => {
   for (const [counted, expected] of [[true, 1], [false, 0], [undefined, 0]] as const) {
     const f = fixture();
     try {
-      ingestRoute(f.store, [{
+      ingestSource(f.store, routeReadOf([{
         id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200,
         prompt: { tokens: 100, ...(counted === undefined ? {} : { counted }) },
-      }], 1, salt);
-      ingestLedger(f.store, 'usage.jsonl', batchOf([{
+      }]), salt, 1);
+      ingestSource(f.store, batchOf([{
         t: '2026-10-20T00:00:01Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 1,
-      }]), 2, salt);
+      }]), salt, 2);
       expect(f.store.read.query('SELECT prompt_tokens,prompt_counted FROM request').get())
         .toEqual({ prompt_tokens: 100, prompt_counted: expected });
     } finally {
@@ -569,15 +574,15 @@ test('counted布尔与合法省略映射为且仅为0或1', () => {
 test('非法counted不写prompt族且保留旧值并报告非current', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+    ingestSource(f.store, batchOf([{
       t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 1,
-    }]), 1, salt);
+    }]), salt, 1);
     f.store.write(db => db.run(
       `UPDATE request SET prompt_tokens=50,prompt_counted=1,parts_json='[{"kind":"old","tokens":1}]'`));
-    ingestRoute(f.store, [{
+    ingestSource(f.store, routeReadOf([{
       id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200,
       prompt: { tokens: 100, counted: 'yes' },
-    }], 2, salt);
+    }]), salt, 2);
     const projection = f.store.write(db => projectRequestTx(db, 1, {
       now: 3, mappingVersion: SOURCE_PROJECTION_VERSION,
     }));
@@ -597,7 +602,7 @@ test('账本字段级变化推进修订，重复证据与费用刷新不推进',
     const first = batchOf([
       { t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 10 },
     ]);
-    ingestLedger(f.store, 'usage.jsonl', first, 1, salt);
+    ingestSource(f.store, first, salt, 1);
     const state = () => f.store.read.query<{
       input_epoch: string; input_revision: number; purpose_pending: number;
     }, []>('SELECT input_epoch,input_revision,purpose_pending FROM request').get()!;
@@ -607,7 +612,7 @@ test('账本字段级变化推进修订，重复证据与费用刷新不推进',
     expect(f.store.read.query('SELECT state FROM derive_queue').get()).toEqual({ state: 'dirty' });
 
     // 同一批证据重放：提前返回，修订不动。
-    expect(ingestLedger(f.store, 'usage.jsonl', first, 2, salt).duplicate).toBe(1);
+    expect(ingestSource(f.store, first, salt, 2).duplicate).toBe(1);
     expect(state()).toEqual(initial);
 
     // 费用刷新只改费用列，不是派生输入。
@@ -616,9 +621,9 @@ test('账本字段级变化推进修订，重复证据与费用刷新不推进',
     expect(state()).toEqual(initial);
 
     // 同一 route 的第二条计费行改变尝试合计与最终结果：输入变了。
-    ingestLedger(f.store, 'usage.jsonl', batchOf([
+    ingestSource(f.store, batchOf([
       { t: '2026-10-20T00:00:01Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 20, out: 5 },
-    ], 'g:1'), 4, salt);
+    ], 'g:1'), salt, 4);
     const after = state();
     expect(after.input_epoch).toBe(initial.input_epoch);
     expect(after.input_revision).toBeGreaterThan(initial.input_revision);
@@ -631,24 +636,24 @@ test('账本字段级变化推进修订，重复证据与费用刷新不推进',
 test('route kind变化推进修订，同值重放不推进', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', batchOf([
+    ingestSource(f.store, batchOf([
       { t: '2026-10-20T00:00:00Z', route_id: 7, agent: 'demo', session: 's', model: 'm', provider: 'p', status: 200, in: 10 },
-    ]), 1, salt);
+    ]), salt, 1);
     const route = {
       id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's', model: 'm', provider: 'p',
       status: 200, kind: 'chat',
     };
-    ingestRoute(f.store, [route], 2, salt);
+    ingestSource(f.store, routeReadOf([route]), salt, 2);
     const revision = () => f.store.read.query<{ input_revision: number }, []>(
       'SELECT input_revision FROM request').get()!.input_revision;
     const afterFirst = revision();
 
     // 同一 route 同值重放：投影签名不变，修订不动。
-    ingestRoute(f.store, [route], 3, salt);
+    ingestSource(f.store, routeReadOf([route]), salt, 3);
     expect(revision()).toBe(afterFirst);
 
     // kind 从 chat 变成 compact：来源种类是派生输入，必须重算。
-    ingestRoute(f.store, [{ ...route, kind: 'compact' }], 4, salt);
+    ingestSource(f.store, routeReadOf([{ ...route, kind: 'compact' }]), salt, 4);
     expect(revision()).toBeGreaterThan(afterFirst);
     expect(f.store.read.query('SELECT kind FROM raw_route').get()).toEqual({ kind: 'compact' });
   } finally {
@@ -659,15 +664,15 @@ test('route kind变化推进修订，同值重放不推进', () => {
 test('在线摄入的原始行带映射与隐私版本', () => {
   const f = fixture();
   try {
-    ingestLedger(f.store, 'usage.jsonl', batchOf([{
+    ingestSource(f.store, batchOf([{
       t: '2026-10-20T00:00:00Z', route_id: 7, err: 'synthetic error', err_type: 'rate_limit', in: 10, out: 5,
-    }]), 1, salt);
+    }]), salt, 1);
     expect(f.store.read.query(`SELECT err,err_type,mapping_version,privacy_version
       FROM raw_ledger`).get()).toEqual({
       err: 'synthetic error', err_type: 'rate_limit',
       mapping_version: SOURCE_PROJECTION_VERSION, privacy_version: PRIVACY_TRANSFORM_VERSION,
     });
-    ingestRoute(f.store, [{ id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's' }], 1, salt);
+    ingestSource(f.store, routeReadOf([{ id: 7, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's' }]), salt, 1);
     expect(f.store.read.query(`SELECT mapping_version,privacy_version FROM raw_route`)
       .get()).toEqual({
       mapping_version: SOURCE_PROJECTION_VERSION, privacy_version: PRIVACY_TRANSFORM_VERSION,
@@ -692,11 +697,11 @@ test('到达顺序不改变请求事实与隐私形态', () => {
     const f = fixture();
     try {
       if (ledgerFirst) {
-        ingestLedger(f.store, 'usage.jsonl', batchOf([ledger]), 1, salt);
-        ingestRoute(f.store, [route], 2, salt);
+        ingestSource(f.store, batchOf([ledger]), salt, 1);
+        ingestSource(f.store, routeReadOf([route]), salt, 2);
       } else {
-        ingestRoute(f.store, [route], 1, salt);
-        ingestLedger(f.store, 'usage.jsonl', batchOf([ledger]), 2, salt);
+        ingestSource(f.store, routeReadOf([route]), salt, 1);
+        ingestSource(f.store, batchOf([ledger]), salt, 2);
       }
       const request = f.store.read.query<Record<string, unknown>, []>(
         'SELECT status,model_requested,model_served,prompt_tokens,prompt_counted,conv_key,actor FROM request').get()!;
@@ -720,14 +725,14 @@ test('到达顺序不改变请求事实与隐私形态', () => {
 test('路由摘要按 format 2 写入展示字段，缺失 prompt 保持 null', () => {
   const f = fixture();
   try {
-    ingestRoute(f.store, [{
+    ingestSource(f.store, routeReadOf([{
       id: 8, time: '2026-10-20T00:00:00Z', agent: 'demo', session: 's',
       model: 'm', provider: 'p', status: 200, kind: 'chat', folder: '/tmp/project', effort: 'high',
       prompt: { tokens: 100, counted: true, window: 200000, parts: [{ kind: 'system', tokens: 10 }] },
     }, {
       id: 9, time: '2026-10-20T00:00:01Z', agent: 'demo', session: 's',
       model: 'm', provider: 'p', status: 200,
-    }], 1, salt);
+    }]), salt, 1);
     const first = JSON.parse(routeSummaryText(f, 8)) as Record<string, unknown>;
     expect(first).toMatchObject({
       format: 2, kind: 'chat', folder: '/tmp/project', effort: 'high',

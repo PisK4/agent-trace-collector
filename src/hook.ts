@@ -4,7 +4,8 @@ import { commitUnit } from './store';
 import { persistBodyTx } from './body';
 import type { BodyInput } from './body';
 import { redact } from './privacy';
-import { localDay, modelTimeTitle, normalizeResponseId } from './sources/magpie';
+import { localDay, modelTimeTitle } from './format';
+import { normalizeResponseId } from './sources/magpie';
 import {
   markGroupDirtyTx,
   markRequestInputTx,

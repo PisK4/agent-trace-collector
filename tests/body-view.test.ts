@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   bodyNotice, deltaOrdinals, displayRoleOf, messageCopyText, messageEntries, partColor, partLabel,
-  renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderRaw, renderReply,
+  renderAttemptChain, renderCapabilities, renderMessageDetail, renderMessages, renderReply,
   renderReplyDetail, renderTools, replyView, roleClass, roleTag, toolEntries, topSystemText,
 } from '../web/body-view.js';
 import type { BodyPage } from '../src/protocols';
@@ -316,15 +316,6 @@ test('消息与回复都先转义，XSS 载荷不会成为标签', () => {
   // 未知块走转义 JSON，也不能逃逸。
   const unknown = renderReplyDetail(replyView(page({ reply: { id: 'm', content: [{ type: 'mystery', text: payload }] } })));
   expect(unknown).not.toContain('<img');
-});
-
-test('原始对象只展示这一片取到的字段', () => {
-  const html = renderRaw(page({ request_fields: { model: 'm' }, reply: { id: 'msg_1', content: [] } }));
-  expect(html).toContain('&quot;model&quot;: &quot;m&quot;');
-  expect(html).toContain('回复对象');
-  const empty = renderRaw(page({ request_fields: null, reply: null }));
-  expect(empty).toContain('没有读到请求的顶层字段');
-  expect(empty).toContain('没有保存到回复对象');
 });
 
 test('空消息与超长消息都不撑破预览', () => {

@@ -1,4 +1,4 @@
-import { modelTimeTitle } from './sources/magpie';
+import { modelTimeTitle } from './format';
 import { interpretMessage } from './input-interpretation';
 
 /**

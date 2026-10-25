@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { loadConfig } from '../src/config';
-import { createHandler, loadReadToken } from '../src/http';
+import { createHandler, loadReadToken, STATIC_FILES } from '../src/http';
 import { getRequest, getRoute, listRequests, listSessions } from '../src/queries';
 import { createCapacityMetrics } from '../src/capacity';
 
@@ -123,17 +125,30 @@ test('页面模块白名单能取到阅读器依赖的脚本', async () => {
   try {
     const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
     // /app.js 会 import 其余脚本；任何一个不在白名单里时页面会整块加载失败。
-    // 新增 web 模块文件时必须同步这里与 src/http.ts 的 STATIC_FILES。
-    for (const [path, type] of [['/app.js', 'text/javascript'], ['/body-view.js', 'text/javascript'], ['/rail-facts.js', 'text/javascript'], ['/reader-store.js', 'text/javascript'], ['/row-summary.js', 'text/javascript'], ['/selection.js', 'text/javascript'], ['/trace-pair.js', 'text/javascript'], ['/trace-view.js', 'text/javascript'], ['/url-route.js', 'text/javascript']]) {
+    // 清单直接消费 src/http.ts 的 STATIC_FILES，手抄副本在这里没有第二份。
+    for (const [path, entry] of Object.entries(STATIC_FILES)) {
       const response = await handler(new Request(`http://127.0.0.1:8320${path}`, {
         headers: { host: '127.0.0.1:8320', origin: 'http://127.0.0.1:8320' },
       }));
       expect(response.status).toBe(200);
-      expect(response.headers.get('content-type')).toContain(type);
+      expect(response.headers.get('content-type')).toContain(entry.type.split(';')[0]);
       expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     }
   } finally {
     f.close();
+  }
+});
+
+test('静态白名单与 web 目录互相覆盖', () => {
+  const webDir = join(import.meta.dir, '..', 'web');
+  // 两份手清单两边同漏时放行（b260ee1 即此）；改为对目录断言，新增模块文件
+  // 忘记登记时在这里失败，而不是页面加载时。
+  const listed = new Set(Object.values(STATIC_FILES).map(entry => entry.file));
+  for (const name of readdirSync(webDir)) {
+    expect(listed.has(name)).toBe(true);
+  }
+  for (const entry of Object.values(STATIC_FILES)) {
+    expect(existsSync(join(webDir, entry.file))).toBe(true);
   }
 });
 
