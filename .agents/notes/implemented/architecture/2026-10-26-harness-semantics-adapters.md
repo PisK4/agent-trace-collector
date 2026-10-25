@@ -44,7 +44,7 @@ adapter 不读数据库、文件或网络，不写派生列、不推进修订、
 
 [架构演进决定](2026-10-22-atc-architecture-evolution.md)关于三个独立语义操作、请求级触发和有界读取的决定继续有效；[用途解释](2026-10-22-request-purpose-and-chain.md)与[服务端输入解释](../feature/2026-10-22-server-side-input-interpretation.md)的行为约束不被取代。架构设计的用途阶段描述已随本次交付同步，没有决定被取代，未触发新的 supersession。
 
-[ZCode 支持](../../proposed/feature/2026-10-24-zcode-agent-support.md)仍是独立 Feature 提案，[OTLP 接收端](../../proposed/feature/2026-10-25-otlp-receiver.md)持有新证据通道的范围，都不由 Harness 语义 adapter 承载。
+[ZCode 支持](../../proposed/feature/2026-10-24-zcode-agent-support.md)仍是独立 Feature 提案，[OTLP 接收端](../feature/2026-10-25-otlp-receiver.md)持有新证据通道的范围，都不由 Harness 语义 adapter 承载。
 
 ## Alternatives considered
 

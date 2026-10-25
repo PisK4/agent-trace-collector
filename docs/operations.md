@@ -1,16 +1,17 @@
 # 运维手册
 
-采集器把账本、路由与 hook 三路证据写进同一个 SQLite 库。在线读取走独立只读连接，写入全部走单写者事务。下面这些操作都在**采集器已停止**的前提下进行。
+采集器把账本、路由、hook 与 OTLP 四路证据写进同一个 SQLite 库。在线读取走独立只读连接，写入全部走单写者事务。下面这些操作都在**采集器已停止**的前提下进行。
 
 ## 数据目录
 
-默认 `~/Library/Application Support/agent-trace-collector`，用 `ATC_DATA_DIR` 覆盖。目录权限 0700，里面的数据库、WAL、日志与两个令牌文件都是 0600。
+默认 `~/Library/Application Support/agent-trace-collector`，用 `ATC_DATA_DIR` 覆盖。目录权限 0700，里面的数据库、WAL、日志与三个令牌文件都是 0600。
 
 | 文件 | 用途 |
 | --- | --- |
 | `trace.db` | 主库，WAL 模式，`auto_vacuum=INCREMENTAL` |
 | `read.token` | 页面读取令牌，首次启动生成 |
 | `hook.token` | 插件投递令牌，首次启动生成；插件只拿这一个 |
+| `otlp.token` | OTLP 端点令牌，首次启动生成；harness exporter 只拿这一个 |
 | `redaction.salt` | 脱敏用的本地盐；与库里的绑定标识配对，不能单独替换 |
 | `maintenance.lock` | 维护命令的独占锁，只在维护期间存在 |
 
@@ -103,7 +104,7 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 4. 以只读连接查包内数据库自身：盐绑定一致、`PRAGMA user_version` 与清单相等。
 5. `mkdir` 原子保留目标名后再 `rename`；目标已存在报 `destination_exists`。
 
-恢复不包含 `read.token` 与 `hook.token`。启动时这两个文件按首次启动规则重新生成，插件要拿新的 hook 令牌重新注册——恢复盐连续性不等于恢复认证身份。
+恢复不包含 `read.token`、`hook.token` 与 `otlp.token`。启动时这三个文件按首次启动规则重新生成，插件与 harness exporter 要拿新令牌重新注册——恢复盐连续性不等于恢复认证身份。
 
 常见错误码：
 
@@ -159,7 +160,7 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 2. `verify` 当前库，确认问题不是磁盘或权限。
 3. `bundle` 到数据目录外的一个新目录；只有数据库的 `backup` 不能恢复占位符连续性。
 4. `restore` 到另一个新目录，按 `restore` 的校验顺序确认清单、哈希、盐绑定与结构版本都通过。
-5. 用 `ATC_DATA_DIR` 指向恢复目录启动：首次启动会重新生成 `read.token` 与 `hook.token`，插件要用新令牌重新注册。
+5. 用 `ATC_DATA_DIR` 指向恢复目录启动：首次启动会重新生成 `read.token`、`hook.token` 与 `otlp.token`，插件与 exporter 要用新令牌重新注册。
 6. 先让合成来源跑一遍分页、正文与路由，确认占位符与备份前一致。
 7. 确认无误后再停服务、切换配置。
 
@@ -197,8 +198,8 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 | 触发 | 效果 | 恢复条件 |
 | --- | --- | --- |
 | 正文 ≥ 预算 | 回收最旧正文到 90% 预算 | 回到 90% 以下 |
-| 总盘 ≥ 80% | 只接元数据，正文标 `partial` / `disk_body_paused` | 跌回 75% 以下 |
-| 总盘 ≥ 95% | hook 一律 507，什么都不写 | 跌回 90% 以下 |
+| 总盘 ≥ 80% | 只接元数据，正文标 `partial` / `disk_body_paused`；OTLP span 照收，body_ref 停读文件、记 `metadata_only` | 跌回 75% 以下 |
+| 总盘 ≥ 95% | hook 一律 507，什么都不写；OTLP 端点同样整批 507 | 跌回 90% 以下 |
 | 剩余空间 < `max(256 MiB, 2 × 本批上界)` | 暂停 | 余量回到门槛以上 |
 
 回收在单个事务里删引用、删孤儿块、清骨架、改状态，`have` 与历史读数不动，`body_prev_state` 保留原状态。raw 层保留 7 天，到期只删原文、给证据标 `payload_state=expired`；仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。
@@ -292,8 +293,42 @@ AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按
 
 完成演练后恢复最终选定状态，把起止时间、任何正文缺口与最终服务状态记进本地报告。真实运行需要等待，不能用合成测试结果替代 24 小时观察。
 
+## OTLP 接入
+
+采集器自带 OTLP 接收端点：`POST /v1/traces` 与 `POST /v1/logs`，Bearer 认证用数据目录里的 `otlp.token`。令牌读法用命令替换，不落进 shell 历史。
+
+两个 harness 都按 OTel 标准环境变量配置，endpoint 给到根、SDK 自己拼 `/v1/traces`：
+
+```sh
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8320
+export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $(cat '<dataDir>/otlp.token')"
+```
+
+Claude Code 要正文文件指针时再开 `OTEL_LOG_RAW_API_BODIES=file`（logs 走 `http/json`，事件里带 `body_ref` 路径，采集器按指针读文件落正文）；OMP 的 logs 只有 run 级汇总，开了也不产逐笔正文。协议按 harness 各自支持的选择：`application/x-protobuf` 与 `application/json` 两种都收。
+
+验证（空载荷也应回 200）：
+
+```sh
+curl -s -X POST http://127.0.0.1:8320/v1/traces \
+  -H "authorization: Bearer $(cat '<dataDir>/otlp.token')" \
+  -H 'content-type: application/json' -d '{"resourceSpans":[]}'
+# {"partialSuccess":{}}
+```
+
+| 状态 | 原因 |
+| --- | --- |
+| 400 `invalid_otlp` | 载荷解码失败，响应带原因码（`otlp_wire_*` / `otlp_json_*`） |
+| 401 | Bearer 令牌不对 |
+| 403 | Host 头不是 `127.0.0.1` / `localhost` |
+| 405 | 不是 POST |
+| 413 | 整批超过 64 MiB |
+| 415 | content-type 不在白名单；浏览器跨站写不进来 |
+| 429 | 与 hook 共用的单飞守卫，稍后重试 |
+| 503 | 写库失败（`writer_failed`），exporter 按 OTLP 语义重发 |
+| 507 | 95% 磁盘档整批拒收，腾空间后自动恢复 |
+
 ## schema 版本
 
-当前 `user_version=6`。空数据目录首次启动直接建到 v6；低版本一律报 `schema_rebuild_required`（含 v5），高版本报 `schema_version_unsupported`。
+当前 `user_version=7`。空数据目录首次启动直接建到 v7；v6 库打开时在单个事务里原地升到 v7（纯新增，不动旧行），更早版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 与 v7，v6 包恢复后首次打开同样原地升级。
 
-首版发布前不提供跨结构升级，也没有迁移命令与续跑入口：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库；旧库里的正文与派生结果一起丢弃，没有"结构已升级、数据未迁移"的中间态。重建后的历史只有元数据：账本与路由的重放不产生正文，而正文只能从 hook 拿到，所以重建前的正文、预览与工具配对都补不回来。要留住正文就在升级前导出：正文落在旧库的 `block.z` 与 `request.skeleton_z`，`raw_hook` 里的原文在完成关联后通常已经清空，不是可靠的导出源。`scripts/backfill-fingerprint.ts` 补的是 v3/v4 时代的派生列，不是到 v6 的路径——它把 `user_version` 写成 4，v6 的代码打不开它。不要手改 `user_version`。
+首版发布前的破坏式替换只对 v6 之前的库：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库；旧库里的正文与派生结果一起丢弃，没有"结构已升级、数据未迁移"的中间态。重建后的历史只有元数据：账本与路由的重放不产生正文，正文只能从 hook 或 OTLP 的 body_ref 拿到，所以重建前的正文、预览与工具配对都补不回来。要留住正文就在升级前导出：正文落在旧库的 `block.z` 与 `request.skeleton_z`，`raw_hook` 里的原文在完成关联后通常已经清空，不是可靠的导出源。`scripts/backfill-fingerprint.ts` 补的是 v3/v4 时代的派生列，不是到 v7 的路径——它把 `user_version` 写成 4，v7 的代码打不开它。不要手改 `user_version`。
