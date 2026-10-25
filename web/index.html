@@ -255,6 +255,28 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-preview code{font-size:10px;color:var(--text-2)}
 .timeline-end{display:flex;align-items:center;justify-content:center;gap:6px;padding:22px 0 5px;color:var(--muted);font-size:10px}
 .timeline-end span{width:5px;height:5px;background:var(--line-strong);border-radius:50%}
+
+/* ---------- 轮次带：轨迹的目录层，吸顶贴 session-head 下沿随滚动常驻 ---------- */
+/* 一行高度横向滚动，轮数多少都只占一行；与轨迹同底色，下缘一条线划分层。 */
+.turn-band{
+  position:sticky;z-index:2;display:flex;align-items:center;gap:4px;
+  padding:5px 20px;background:var(--canvas);border-bottom:1px solid var(--line);
+  overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;
+}
+.turn-chip{
+  flex:none;display:inline-flex;align-items:center;gap:6px;max-width:36ch;
+  padding:3px 8px;border:1px solid var(--line);border-radius:3px;background:var(--surface);
+  font-size:11px;color:var(--text-2);
+}
+.turn-chip b{font:500 10px var(--mono);color:var(--muted)}
+.turn-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.turn-chip:hover{background:var(--hover)}
+.turn-chip[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.turn-chip[aria-pressed="true"] b{color:var(--accent)}
+/* 带吸顶后，滚动定位的组要让出带的高度：会话头 155 + 带一行 32。 */
+.step-list.band-above .trace-group{scroll-margin-top:187px}
+/* 轮次面板的空态比整栏空态紧凑。 */
+.turn-panel-empty{padding:10px 4px;text-align:left}
 @media(max-width:1300px){.compact-meta{font-size:8px}}
 @media(max-width:620px){.compact-row{gap:5px}.compact-select{gap:5px}.compact-preview{font-size:11px}.row-label{width:56px;font-size:9px}.row-tint{max-width:120px;font-size:9px}}
 
@@ -546,6 +568,7 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 @media(max-width:620px){
   .crumb{display:none}
       .session-head{padding:12px 14px}
+  .turn-band{padding-inline:14px}
   .req-body{margin-left:10px}
   /* 消息行在窄屏保留完整英文角色标签，去掉序号列，预览仍单行截断 */
   .msg-head{grid-template-columns:64px minmax(0,1fr);gap:6px}

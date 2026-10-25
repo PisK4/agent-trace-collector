@@ -24,6 +24,8 @@ import { routeReadTarget } from './url-route.js';
  * @property {string} railTab
  * @property {number | null} missingReqId
  * @property {number | null} offPageReqId
+ * @property {number | null} turn 选中的轮次（会话内已结算轮序号）；null 表示请求态。轮次选择是
+ *   瞬时阅读态，不落 URL；除 select-turn 外的选择与导航意图都清它，点轨迹任意行即回请求态。
  */
 
 /**
@@ -36,10 +38,13 @@ import { routeReadTarget } from './url-route.js';
 
 /**
  * @typedef {Object} Effect 待执行效果；执行器按序消费。
- * @property {'open-rail'|'render-crumb'|'render-main'|'render-rail'|'update-url'|'focus-step'|'scroll-group'|'ensure-read'|'ensure-pair'|'resume-delta'|'read-route'} kind
+ * @property {'open-rail'|'render-crumb'|'render-main'|'render-rail'|'update-url'|'focus-step'|'scroll-group'|'ensure-read'|'ensure-pair'|'resume-delta'|'read-route'|'ensure-turn'} kind
  * @property {number} [reqId]
  * @property {number} [owner]
  * @property {number} [callOrd]
+ * @property {number} [startReq]
+ * @property {number} [replyReq]
+ * @property {number[]} [ords]
  */
 
 /**
@@ -60,6 +65,8 @@ import { routeReadTarget } from './url-route.js';
  *   | {kind: 'select-tool-page', page: string}
  *   | {kind: 'clear-step'}
  *   | {kind: 'tool-gone'}
+ *   | {kind: 'select-turn', row: import('../src/queries').TurnPairRow}
+ *   | {kind: 'turn-gone'}
  *   | {kind: 'nav-settled'}
  * } Intent 装配层解析事件后发出的意图。
  */
@@ -86,6 +93,7 @@ export function applyIntent(state, intent) {
       const next = {
         ...state, session: intent.sessionKey, reqId: intent.wantedTrace,
         selectedStep: null, toolOrd: null, toolOwner: null, missingReqId: null, offPageReqId: null,
+        turn: null,
       };
       return { state: next, effects: [] };
     }
@@ -94,39 +102,39 @@ export function applyIntent(state, intent) {
       // 不在此清（随后的 open-session 会清）。
       const next = {
         ...state, session: intent.session, reqId: intent.trace, railTab: intent.tab,
-        toolOrd: null, toolOwner: null, missingReqId: null, offPageReqId: null,
+        toolOrd: null, toolOwner: null, missingReqId: null, offPageReqId: null, turn: null,
       };
       return { state: next, effects: [] };
     }
     case 'trace-resolved': {
       if (intent.result === 'canonical' && intent.reqId !== null) {
-        return { state: { ...state, reqId: intent.reqId }, effects: [] };
+        return { state: { ...state, reqId: intent.reqId, turn: null }, effects: [] };
       }
       if (intent.result === 'off-page') {
-        return { state: { ...state, offPageReqId: state.reqId, reqId: null }, effects: [] };
+        return { state: { ...state, offPageReqId: state.reqId, reqId: null, turn: null }, effects: [] };
       }
       if (intent.result === 'missing') {
-        return { state: { ...state, missingReqId: state.reqId, reqId: null }, effects: [] };
+        return { state: { ...state, missingReqId: state.reqId, reqId: null, turn: null }, effects: [] };
       }
       return { state, effects: [] };
     }
     case 'session-default': {
       // 无 trace 且无窗口外目标时默认选最新；已有目标不用最新顶替。
       if (state.reqId !== null || state.offPageReqId !== null) return { state, effects: [] };
-      return { state: { ...state, reqId: intent.latestReqId }, effects: [] };
+      return { state: { ...state, reqId: intent.latestReqId, turn: null }, effects: [] };
     }
     case 'select-latest': {
       // 显式刷新：无条件回到最新并清选择。
-      const next = { ...state, reqId: intent.latestReqId, selectedStep: null, toolOrd: null, toolOwner: null };
+      const next = { ...state, reqId: intent.latestReqId, selectedStep: null, toolOrd: null, toolOwner: null, turn: null };
       return { state: next, effects: [] };
     }
     case 'refresh-start': {
-      return { state: { ...state, missingReqId: null, offPageReqId: null }, effects: [] };
+      return { state: { ...state, missingReqId: null, offPageReqId: null, turn: null }, effects: [] };
     }
     case 'locate': {
       const next = {
         ...state, reqId: intent.reqId, selectedStep: null, toolOrd: null, toolOwner: null,
-        missingReqId: null, offPageReqId: null,
+        missingReqId: null, offPageReqId: null, turn: null,
       };
       return {
         state: next,
@@ -149,7 +157,7 @@ export function applyIntent(state, intent) {
         toolPage: 'pair',
         railTab: pair ? 'tools'
           : source.side === 'request' || source.side === 'reply' ? 'body' : 'facts',
-        missingReqId: null, offPageReqId: null,
+        missingReqId: null, offPageReqId: null, turn: null,
       };
       /** @type {Effect[]} */
       const effects = [
@@ -164,7 +172,7 @@ export function applyIntent(state, intent) {
       // 不清 missing/offPage（现行行为）。
       const next = {
         ...state, reqId: intent.reqId, selectedStep: intent.stepKey,
-        toolOrd: null, toolOwner: null,
+        toolOrd: null, toolOwner: null, turn: null,
         railTab: intent.bodyTab ? 'body' : state.railTab,
       };
       return { state: next, effects: [{ kind: 'render-main' }, { kind: 'render-rail' }, { kind: 'update-url' }] };
@@ -172,7 +180,7 @@ export function applyIntent(state, intent) {
     case 'select-delta': {
       const next = {
         ...state, reqId: intent.reqId, selectedStep: null, toolOrd: null, toolOwner: null,
-        toolPage: 'pair', railTab: 'facts', missingReqId: null, offPageReqId: null,
+        toolPage: 'pair', railTab: 'facts', missingReqId: null, offPageReqId: null, turn: null,
       };
       return {
         state: next,
@@ -184,7 +192,7 @@ export function applyIntent(state, intent) {
     }
     case 'open-tool': {
       const next = {
-        ...state, toolOrd: intent.callOrd, toolOwner: intent.reqId, toolPage: 'pair',
+        ...state, toolOrd: intent.callOrd, toolOwner: intent.reqId, toolPage: 'pair', turn: null,
         selectedStep: intent.reqId !== null ? `${intent.reqId}:call:${intent.callOrd}` : state.selectedStep,
       };
       /** @type {Effect[]} */
@@ -195,7 +203,7 @@ export function applyIntent(state, intent) {
     case 'open-pair': {
       const next = {
         ...state, toolOrd: intent.callOrd, toolOwner: intent.owner, toolPage: 'pair', railTab: 'tools',
-        selectedStep: `${intent.owner}:call:${intent.callOrd}`,
+        selectedStep: `${intent.owner}:call:${intent.callOrd}`, turn: null,
       };
       return {
         state: next,
@@ -207,27 +215,45 @@ export function applyIntent(state, intent) {
     }
     case 'close-tool': {
       const next = intent.andTab
-        ? { ...state, toolOrd: null, toolOwner: null, railTab: 'facts' }
-        : { ...state, toolOrd: null, toolOwner: null };
+        ? { ...state, toolOrd: null, toolOwner: null, railTab: 'facts', turn: null }
+        : { ...state, toolOrd: null, toolOwner: null, turn: null };
       return { state: next, effects: [{ kind: 'render-rail' }, { kind: 'update-url' }] };
     }
     case 'select-tab': {
       const tab = intent.tab === 'facts' || intent.tab === 'route' || intent.tab === 'tools' ? intent.tab : 'body';
-      const next = { ...state, railTab: tab };
+      const next = { ...state, railTab: tab, turn: null };
       return { state: next, effects: [...routeEffects(next), { kind: 'render-rail' }, { kind: 'update-url' }] };
     }
     case 'select-tool-page': {
       // 工具四页导航：只改页内页签，不更新 URL（现行行为）。
       const page = intent.page === 'overview' || intent.page === 'params' || intent.page === 'schema' ? intent.page : 'pair';
-      return { state: { ...state, toolPage: page }, effects: [{ kind: 'render-rail' }] };
+      return { state: { ...state, toolPage: page, turn: null }, effects: [{ kind: 'render-rail' }] };
     }
     case 'clear-step': {
       // 「本次回复」只清步骤选择：不更新 URL（现行行为）。
-      return { state: { ...state, selectedStep: null }, effects: [{ kind: 'render-rail' }] };
+      return { state: { ...state, selectedStep: null, turn: null }, effects: [{ kind: 'render-rail' }] };
     }
     case 'tool-gone': {
       // 调用方读取后选定工具不存在：清工具选择，渲染由调用方继续。
+      // 轮次态保持不动：这是清理不是选择，正在阅读的轮不因工具失效而退出。
       return { state: { ...state, toolOrd: null, toolOwner: null }, effects: [] };
+    }
+    case 'select-turn': {
+      // 轮次带点选：右栏进轮次态，请求侧选择保持（轨迹高亮不动，回来还在）；
+      // 过期工具选择清掉。选中不落 URL，点轨迹任意行经其余意图回请求态。
+      // 两端补读需要轮次行的请求号与命令组 ords：由装配层随意图带进来，转换不做查找。
+      const next = { ...state, turn: intent.row.turn, toolOrd: null, toolOwner: null };
+      return {
+        state: next,
+        effects: [
+          { kind: 'render-main' }, { kind: 'render-rail' },
+          { kind: 'ensure-turn', startReq: intent.row.start_req, replyReq: intent.row.reply_req, ords: intent.row.ordinals },
+        ],
+      };
+    }
+    case 'turn-gone': {
+      // 轮次列表重算后选中的轮不在了：清选择，渲染由调用方继续。
+      return { state: { ...state, turn: null }, effects: [] };
     }
     case 'nav-settled': {
       // 导航完成（选会话、刷新、定位之外的所有异步收尾）：路由读取的唯一接线点之一。

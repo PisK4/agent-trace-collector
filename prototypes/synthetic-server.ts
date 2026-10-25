@@ -5,7 +5,7 @@
 // 能力五态、同名工具、路由 absent/expired 与尝试链。
 import type { CapabilityView, ToolCapability } from '../src/capabilities';
 import type { BodyCoverage, BodyPage, MessageInterpretation } from '../src/protocols';
-import type { AttemptChain, PromptReading, RequestRow, RouteSummaryReading, SessionRow, ToolResultIndexRow } from '../src/queries';
+import type { AttemptChain, PromptReading, RequestRow, RouteSummaryReading, SessionRow, ToolResultIndexRow, TurnPairRow } from '../src/queries';
 import type { ReadingDetail } from '../src/reading';
 import { WEB_HEADERS, serveWeb } from './static-web';
 
@@ -13,11 +13,12 @@ const port = 8770;
 const convKey = 'conv-synthetic-reading';
 const convWindow = 'conv-synthetic-window';
 const convHook = 'conv-synthetic-hook';
+const convTurns = 'conv-synthetic-turns';
 
 // 合成时间基准：Demo 的会话与请求显示为连续的一段时间，而不是 1970 的 id 秒。
 const BASE_MS = Date.UTC(2026, 9, 24, 8, 0, 0);
 const startOf = (r: { id: number }) =>
-  BASE_MS + (r.id >= 600 ? r.id - 600 : r.id >= 500 ? r.id - 500 : r.id - 101) * 60000;
+  BASE_MS + (r.id >= 700 ? r.id - 700 : r.id >= 600 ? r.id - 600 : r.id >= 500 ? r.id - 500 : r.id - 101) * 60000;
 
 type SynthCall = {
   call_id: string; ord: number; tool_name: string;
@@ -35,10 +36,10 @@ type SynthRequest = {
   id: number; title: string; status: number | null;
   protocol: 'anthropic' | 'chat';
   history: SynthMessage[];
-  inputs: { message: SynthMessage; userInput: boolean }[];
+  inputs: { message: SynthMessage; userInput: boolean; kind?: 'plain' | 'wrapped' | 'midturn' }[];
   reply: unknown;
   tools: unknown;
-  bodyState: 'available' | 'partial' | 'pending';
+  bodyState: 'available' | 'partial' | 'pending' | 'evicted';
   bodyReason: string | null;
   delta: number[] | null;
   prevRelation: 'confirmed' | 'unknown' | 'first' | 'branch' | 'aux'; chainRole: string; purposeChain: string; reqKind: string;
@@ -328,16 +329,163 @@ const HOOK_REQUESTS: SynthRequest[] = [
     timing:{ms:2600,ttft:460,flow:1900,firstText:520} },
 ];
 
-const byId = new Map([...REQUESTS, ...WINDOW_REQUESTS, ...HOOK_REQUESTS].map(r => [r.id, r]));
+// 轮次配对会话：13 笔请求、7 个已结算轮，逐个覆盖轮次判据的场景样本。
+// 703 被打断不结算；709 的终点带着新命令，回复归新轮两端同笔；
+// 711 正文已回收但起点照常进带，命令与回复面板落回收态。
+const TURN_REQUESTS: SynthRequest[] = [
+  { id:700, title:'帮我把 README 的安装一节重写。', status:200, protocol:'anthropic',
+    history:[], inputs:[{message:U('帮我把 README 的安装一节重写。'),userInput:true}],
+    reply:{model:'synth-a', stop_reason:'tool_use', content:[
+      {type:'tool_use', id:'call_t1', name:'read_file', input:{path:'README.md'}}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[2], prevRelation:'first', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[{call_id:'call_t1', ord:0, tool_name:'read_file', result_req:701, result_ord:4, result_path:'request.messages[4].content[0]', state:'resolved'}],
+    usage:{in:2100,out:88,read:0,write:100,cost:0.0022}, timing:{ms:1720,ttft:402,flow:1310,firstText:null} },
+
+  { id:701, title:'读取结果与重写收尾', status:200, protocol:'anthropic',
+    history:[U('帮我把 README 的安装一节重写。'), A('（读取 README 的调用在下一笔）')],
+    inputs:[{message:{role:'user', content:[{type:'tool_result', tool_use_id:'call_t1', content:'# Install\nnpm install 后运行 bun run setup 即可。'}]}, userInput:false}],
+    reply:{model:'synth-a', stop_reason:'end_turn', content:[
+      {type:'text', text:'安装一节已重写：步骤按系统依赖分组，验证命令放在末尾，原段落里过时的全局安装路径已移除。'}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[4], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[], usage:{in:2900,out:310,read:3200,write:260,cost:0.0044}, timing:{ms:3050,ttft:498,flow:2500,firstText:580} },
+
+  { id:702, title:'顺便检查一下 README 里的链接有效性。', status:200, protocol:'anthropic',
+    history:[A('安装一节已重写：步骤按系统依赖分组。')],
+    inputs:[{message:U('顺便检查一下 README 里的链接有效性。'),userInput:true}],
+    reply:{model:'synth-a', stop_reason:'end_turn', content:[
+      {type:'text', text:'链接逐个检查过：三个外链都可达，两个章节锚点因重写换了标题，已一并修正。'}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[3], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[], usage:{in:3300,out:240,read:3600,write:180,cost:0.0039}, timing:{ms:2410,ttft:470,flow:1900,firstText:560} },
+
+  { id:703, title:'再把贡献指南补一节。', status:200, protocol:'anthropic',
+    history:[A('链接检查完成，锚点已修正。')],
+    inputs:[{message:U('再把贡献指南补一节。'),userInput:true}],
+    reply:{model:'synth-a', stop_reason:'tool_use', content:[
+      {type:'tool_use', id:'call_t2', name:'read_file', input:{path:'CONTRIBUTING.md'}}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[3], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[{call_id:'call_t2', ord:0, tool_name:'read_file', result_req:null, result_ord:null, result_path:null, state:'unpaired'}],
+    usage:{in:3600,out:52,read:3900,write:120,cost:0.0028}, timing:{ms:1310,ttft:405,flow:900,firstText:null} },
+
+  { id:704, title:'算了，先处理部署脚本的问题。', status:200, protocol:'anthropic',
+    history:[A('（贡献指南的读取被新命令打断）')],
+    inputs:[{message:U('算了，先处理部署脚本的问题。'),userInput:true}],
+    reply:{model:'synth-a', stop_reason:'end_turn', content:[
+      {type:'text', text:'部署脚本的问题定位在 env 加载顺序：变量在读取前被引用，已改为显式传入。贡献指南被打断，没有产出。'}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[3], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[], usage:{in:3900,out:290,read:4200,write:200,cost:0.0046}, timing:{ms:2870,ttft:480,flow:2360,firstText:590} },
+
+  { id:705, title:'跑一下完整测试。', status:200, protocol:'anthropic',
+    history:[A('部署脚本的问题已修复。')],
+    inputs:[{message:U('跑一下完整测试。'),userInput:true}],
+    reply:{model:'synth-a', stop_reason:'tool_use', content:[
+      {type:'tool_use', id:'call_t3', name:'Bash', input:{command:'bun test'}}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[3], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[{call_id:'call_t3', ord:0, tool_name:'Bash', result_req:706, result_ord:3, result_path:'request.messages[3].content[0]', state:'resolved'}],
+    usage:{in:4200,out:46,read:4500,write:100,cost:0.0027}, timing:{ms:1180,ttft:380,flow:790,firstText:null} },
+
+  { id:706, title:'完整测试收尾（队列前旧任务的总结）', status:200, protocol:'anthropic',
+    history:[U('跑一下完整测试。')],
+    inputs:[{message:{role:'user', content:[{type:'tool_result', tool_use_id:'call_t3', content:'42 pass, 0 fail'}]}, userInput:false}],
+    reply:{model:'synth-a', stop_reason:'end_turn', content:[
+      {type:'text', text:'完整测试跑完：42 通过 0 失败。测试这条任务到这里收尾。'}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[3], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[], usage:{in:4500,out:150,read:4800,write:140,cost:0.0036}, timing:{ms:2010,ttft:450,flow:1540,firstText:570} },
+
+  { id:707, title:'把测试输出也存一份到 reports/。', status:200, protocol:'anthropic',
+    history:[A('完整测试通过，42 通过 0 失败。')],
+    inputs:[{message:U('把测试输出也存一份到 reports/。'),userInput:true,kind:'midturn'}],
+    reply:{model:'synth-a', stop_reason:'tool_use', content:[
+      {type:'tool_use', id:'call_t4', name:'Bash', input:{command:'bun test | tee reports/test-run.txt'}}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[3], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[{call_id:'call_t4', ord:0, tool_name:'Bash', result_req:708, result_ord:3, result_path:'request.messages[3].content[0]', state:'resolved'}],
+    usage:{in:4800,out:50,read:5100,write:110,cost:0.0028}, timing:{ms:1220,ttft:390,flow:820,firstText:null} },
+
+  { id:708, title:'测试输出存档收尾', status:200, protocol:'anthropic',
+    history:[U('把测试输出也存一份到 reports/。')],
+    inputs:[{message:{role:'user', content:[{type:'tool_result', tool_use_id:'call_t4', content:'written reports/test-run.txt'}]}, userInput:false}],
+    reply:{model:'synth-a', stop_reason:'end_turn', content:[
+      {type:'text', text:'输出已存到 reports/test-run.txt，与终端一致。'}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[3], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[], usage:{in:5100,out:110,read:5400,write:120,cost:0.0031}, timing:{ms:1640,ttft:440,flow:1190,firstText:560} },
+
+  { id:709, title:'看看部署脚本的现状。', status:200, protocol:'anthropic',
+    history:[A('输出已存档到 reports/。')],
+    inputs:[{message:U('看看部署脚本的现状。'),userInput:true}],
+    reply:{model:'synth-a', stop_reason:'tool_use', content:[
+      {type:'tool_use', id:'call_t5', name:'read_file', input:{path:'scripts/deploy.sh'}}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[3], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[{call_id:'call_t5', ord:0, tool_name:'read_file', result_req:710, result_ord:3, result_path:'request.messages[3].content[0]', state:'resolved'}],
+    usage:{in:5400,out:48,read:5700,write:100,cost:0.0027}, timing:{ms:1190,ttft:385,flow:800,firstText:null} },
+
+  { id:710, title:'直接把回滚说明加上。', status:200, protocol:'anthropic',
+    history:[U('看看部署脚本的现状。')],
+    inputs:[
+      {message:{role:'user', content:[{type:'tool_result', tool_use_id:'call_t5', content:'#!/usr/bin/env bash\nset -euo pipefail\nbun run build && bun run restart'}]}, userInput:false},
+      {message:U('直接把回滚说明加上。'),userInput:true}],
+    reply:{model:'synth-a', stop_reason:'end_turn', content:[
+      {type:'text', text:'回滚说明已加到部署脚本末尾：记录上一版构建号，restart 失败时按号回退。'}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'available', bodyReason:null,
+    delta:[3,4], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[], usage:{in:5900,out:260,read:6300,write:180,cost:0.0041}, timing:{ms:2520,ttft:470,flow:2020,firstText:580} },
+
+  { id:711, title:'回顾一下今天的改动。', status:200, protocol:'anthropic',
+    history:[A('回滚说明已加到部署脚本末尾。')],
+    inputs:[{message:U('回顾一下今天的改动。'),userInput:true}],
+    reply:{model:'synth-a', stop_reason:'end_turn', content:[
+      {type:'text', text:'今天动了三处：README 安装一节重写、部署脚本 env 加载修复、回滚说明补充。测试保持全绿。'}]},
+    tools:[TOOL_READ, TOOL_BASH], bodyState:'evicted', bodyReason:'合成：正文已回收（演示回收起点）',
+    delta:[3], prevRelation:'confirmed', chainRole:'main', purposeChain:'participate', reqKind:'chat', modelTitle:null,
+    toolCalls:[], usage:{in:6200,out:180,read:6600,write:150,cost:0.0037}, timing:{ms:2130,ttft:460,flow:1650,firstText:570} },
+];
+
+const byId = new Map([...REQUESTS, ...WINDOW_REQUESTS, ...HOOK_REQUESTS, ...TURN_REQUESTS].map(r => [r.id, r]));
+
+/**
+ * 已结算轮表：模块一阶段按判据手工推导的固定列表，只服务界面验证，不参与
+ * 生产验收。轮号是会话内已结算轮的全序序号；缺通道会话没有可结算轮，
+ * 轮次带整条不渲染。
+ */
+const TURNS_BY_SESSION = new Map<string, TurnPairRow[]>([
+  [convKey, [
+    {turn:1, start_req:101, ordinals:[2,3], reply_req:101},
+    {turn:2, start_req:102, ordinals:[4,5], reply_req:103},
+    {turn:3, start_req:107, ordinals:[4,5,6], reply_req:107},
+    {turn:4, start_req:111, ordinals:[4,5], reply_req:111},
+    {turn:5, start_req:116, ordinals:[5], reply_req:117},
+    {turn:6, start_req:119, ordinals:[44], reply_req:119},
+  ]],
+  [convWindow, WINDOW_REQUESTS.map((r, i) => ({turn:i+1, start_req:r.id, ordinals:[2], reply_req:r.id}))],
+  [convHook, []],
+  [convTurns, [
+    {turn:1, start_req:700, ordinals:[2], reply_req:701},
+    {turn:2, start_req:702, ordinals:[3], reply_req:702},
+    {turn:3, start_req:704, ordinals:[3], reply_req:704},
+    {turn:4, start_req:705, ordinals:[3], reply_req:706},
+    {turn:5, start_req:707, ordinals:[3], reply_req:708},
+    {turn:6, start_req:710, ordinals:[4], reply_req:710},
+    {turn:7, start_req:711, ordinals:[3], reply_req:711},
+  ]],
+]);
 
 /** 合成会话池：列表顺序即 Demo 的默认会话顺序。 */
 const POOLS = [
   { key: convKey, title: '空状态排查（合成场景）', agent: 'claude', rows: REQUESTS, flags: ['failed', 'missing_body'] },
   { key: convWindow, title: '窗口分页样本（合成）', agent: 'omp', rows: WINDOW_REQUESTS, flags: [] },
   { key: convHook, title: '缺少通道的请求（合成）', agent: 'claude', rows: HOOK_REQUESTS, flags: ['missing_body'] },
+  { key: convTurns, title: '轮次配对样本（合成）', agent: 'claude', rows: TURN_REQUESTS, flags: ['missing_body'] },
 ];
 
-const convOf = (r: SynthRequest) => r.id >= 600 ? convHook : r.id >= 500 ? convWindow : convKey;
+const convOf = (r: SynthRequest) => r.id >= 700 ? convTurns : r.id >= 600 ? convHook : r.id >= 500 ? convWindow : convKey;
 const agentOf = (r: SynthRequest) => r.id >= 500 && r.id < 600 ? 'omp' : 'claude';
 const haveOf = (r: SynthRequest) => r.have ?? 7;
 const titleSourceOf = (r: SynthRequest) => r.titleSource ?? 'user_delta';
@@ -404,7 +552,7 @@ function toolResultsOf(r: SynthRequest): ToolResultIndexRow[] {
 /** 同一会话中上一笔参与主链的请求；辅助请求不参与，避免把分类器请求当上下文。 */
 function mainPrevOf(r: SynthRequest): number | null {
   if (r.purposeChain === 'exclude' || r.chainRole === 'aux') return null;
-  const pool = r.id >= 600 ? HOOK_REQUESTS : r.id >= 500 ? WINDOW_REQUESTS : REQUESTS;
+  const pool = r.id >= 700 ? TURN_REQUESTS : r.id >= 600 ? HOOK_REQUESTS : r.id >= 500 ? WINDOW_REQUESTS : REQUESTS;
   for (let index = pool.indexOf(r) - 1; index >= 0; index -= 1) {
     const prev = pool[index]!;
     if (prev.purposeChain === 'exclude' || prev.chainRole === 'aux') continue;
@@ -455,8 +603,8 @@ function detailOf(r: SynthRequest): ReadingDetail {
     purpose_status:'selected', purpose_version:1, purpose_rule:null, purpose_chain:r.purposeChain,
     derived_state:'current',
     prev_req_id:mainPrevOf(r), prev_relation:r.prevRelation, delta_ordinals:r.delta,
-    parse_state:r.bodyState === 'pending' ? null : 'ok',
-    reply_state:r.bodyState === 'pending' ? null : r.reply === null ? 'absent' : 'ok',
+    parse_state:r.bodyState === 'available' || r.bodyState === 'partial' ? 'ok' : null,
+    reply_state:r.bodyState === 'available' || r.bodyState === 'partial' ? (r.reply === null ? 'absent' : 'ok') : null,
     first_text_ms:r.timing.firstText, reasoning:null,
     prompt_tokens:prompt.tokens, prompt_counted:prompt.counted === null ? null : prompt.counted ? 1 : 0,
     prompt_window:prompt.window, prompt_turns:null, parts:prompt.parts,
@@ -505,7 +653,7 @@ function bodyPageOf(r: SynthRequest, from: number, to: number): BodyPage {
     if (input === undefined || !input.userInput) return {ord:index, role:'user', role_state:'known', input:null, is_input:false};
     const text = typeof message.content === 'string' ? message.content : '';
     return {ord:index, role:'user', role_state:'known',
-      input:{state:'text', kind:'plain', text, original:text, removed:[], agent:'synthetic-agent', rule:'generic'},
+      input:{state:'text', kind:input.kind ?? 'plain', text, original:text, removed:[], agent:'synthetic-agent', rule:'generic'},
       is_input:true};
   }).filter((item): item is MessageInterpretation => item !== null);
   const coverage: BodyCoverage = {from, to, total, complete:r.bodyState === 'available',
@@ -513,11 +661,11 @@ function bodyPageOf(r: SynthRequest, from: number, to: number): BodyPage {
     reason:r.bodyState === 'available' ? 'available' : r.bodyState === 'partial' ? 'body_partial' : 'body_unavailable'};
   return {
     state:r.bodyState,
-    parse_state:r.bodyState === 'pending' ? null : 'ok',
-    reply_state:r.bodyState === 'pending' ? null : r.reply === null ? 'absent' : 'ok',
+    parse_state:r.bodyState === 'available' || r.bodyState === 'partial' ? 'ok' : null,
+    reply_state:r.bodyState === 'available' || r.bodyState === 'partial' ? (r.reply === null ? 'absent' : 'ok') : null,
     from, to, total, messages:sliced,
-    request_fields:from === 0 ? {model:r.protocol === 'chat' ? 'synth-group' : 'synth-a', stream:true, system:systemOf(r), ...(r.tools === undefined ? {} : {tools:r.tools})} : null,
-    reply:from === 0 ? r.reply : null,
+    request_fields:readable && from === 0 ? {model:r.protocol === 'chat' ? 'synth-group' : 'synth-a', stream:true, system:systemOf(r), ...(r.tools === undefined ? {} : {tools:r.tools})} : null,
+    reply:readable && from === 0 ? r.reply : null,
     reason:r.bodyState === 'available' ? null : r.bodyReason,
     interpretations, coverage,
     capabilities:capabilityOf(r, coverage),
@@ -610,6 +758,17 @@ Bun.serve({
       const items = rows.slice(0, limit).map(rowOf);
       return json({items, next_cursor: rows.length>limit && items.length>0 ? encodeCursor([items[items.length-1]!.started_ms, items[items.length-1]!.req_id]) : null});
     }
+    const turns = /^\/api\/sessions\/([^/]+)\/turns$/.exec(url.pathname);
+    if (turns) {
+      const key = decodeURIComponent(turns[1]!);
+      const all = TURNS_BY_SESSION.get(key);
+      if (all === undefined) return json({error:'not_found'}, 404);
+      // 累计窗口下界：只返回起点在下界之后的轮；缺参数按全会话结算。
+      const rawFrom = url.searchParams.get('from');
+      if (rawFrom !== null && !/^\d+$/.test(rawFrom)) return json({error:'invalid_from'}, 400);
+      const from = rawFrom === null ? null : Number(rawFrom);
+      return json({items: from === null ? all : all.filter(t => t.start_req >= from)});
+    }
     const body = /^\/api\/requests\/(\d+)\/body$/.exec(url.pathname);
     if (body) {
       const r = byId.get(Number(body[1]));
@@ -671,3 +830,4 @@ Bun.serve({
 console.log('合成阅读场景：http://127.0.0.1:'+port+'/?session='+convKey);
 console.log('窗口分页场景：http://127.0.0.1:'+port+'/?session='+convWindow);
 console.log('缺通道场景：  http://127.0.0.1:'+port+'/?session='+convHook);
+console.log('轮次配对场景：http://127.0.0.1:'+port+'/?session='+convTurns);
