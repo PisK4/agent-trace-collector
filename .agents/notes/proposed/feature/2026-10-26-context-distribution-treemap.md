@@ -70,6 +70,10 @@ magpie 自 10-24 起在其 Routing 页提供了成熟的对应物：每个请求
 
 交互原型（自包含单文件 HTML，四种数据状态与两档栏宽可切换）在父知识库：`Agent知识库/Agent工具/agent-trace-collector/2026-10-26-context-map-demo.html`。仓库外参考物，不是交付物；其 `squarify/tilesOf` 与四种状态的合成数据可直接作为移植底稿。原型发布前已用 node 对布局函数跑过守恒断言（三档宽度 × 四状态：tile 界内、每类有面积、有窗口必有空闲块、`sum(parts) = tokens`，全部通过）。
 
+## 交付记录
+
+- 2026-10-26 P0 已交付：`web/rail-facts.js` 的 `PARTS` 降级为 kind→标签+色槽的元数据映射（`partColor` 按槽位名取色，不再按数组下标），`skills` 补入映射落 `--p7`，`memory` 标签改「记忆」；`web/app.css` 三处主题块加 `--p7`（亮 `#30287e`、暗 `#3d3480`）。构成条与图例本就遍历 parts 数据渲染，六类旧行与七类新行自此同屏各自正确。实现时确认 `web/index.html` 并无内联调色板变量（方案写作时的笔误），`--p7` 只落在 app.css 三处。
+
 ## Alternatives considered
 
 **移植 magpie `promptOf` 在 ATC 侧从 hook 正文重算分类。** 数据上可行（hook 通道存有完整请求正文与协议），但分类是 magpie 的派生事实，ATC 是只读观测者，重算违背「一个事实一个家」；hook 正文有 `partial/truncated` 态，重算会把不完整正文当事实；magpie 的启发式仍在周级迭代（10-24、10-25 连续改动），自算版本要永久跟跑。落选。

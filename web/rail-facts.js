@@ -16,15 +16,17 @@ import { topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
 import { bodyLabelText } from './row-summary.js';
 
-// —— 上下文组成：已知六类与未知类别 ——
-
+// —— 上下文组成：已知 kind 的元数据映射，不是渲染清单 ——
+// 渲染遍历 parts 数据实际出现的类别；magpie 拆出新类时这里加一行映射，
+// 未知 kind 原样显示名字、落灰槽（9518e14 建立的兜底）。
 const PARTS = [
-  { kind: 'system', label: '系统提示' },
-  { kind: 'tools', label: '工具定义' },
-  { kind: 'memory', label: '记忆与技能' },
-  { kind: 'files', label: '文件引用' },
-  { kind: 'results', label: '工具结果' },
-  { kind: 'chat', label: '对话内容' },
+  { kind: 'system', label: '系统提示', slot: 'p1' },
+  { kind: 'tools', label: '工具定义', slot: 'p2' },
+  { kind: 'memory', label: '记忆', slot: 'p3' },
+  { kind: 'files', label: '文件引用', slot: 'p4' },
+  { kind: 'results', label: '工具结果', slot: 'p5' },
+  { kind: 'chat', label: '对话内容', slot: 'p6' },
+  { kind: 'skills', label: '技能', slot: 'p7' },
 ];
 
 /** 未知 kind 原样显示，不折叠成"其它"。 @param {string} kind */
@@ -34,8 +36,8 @@ export function partLabel(kind) {
 
 /** 未知 kind 使用独立颜色变量，避免落到某个已知类别上。 @param {string} kind */
 export function partColor(kind) {
-  const index = PARTS.findIndex(part => part.kind === kind);
-  return index < 0 ? 'var(--p-unknown)' : `var(--p${index + 1})`;
+  const part = PARTS.find(item => item.kind === kind);
+  return `var(--${part?.slot ?? 'p-unknown'})`;
 }
 
 /**

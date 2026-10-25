@@ -523,14 +523,18 @@ test('缺时间时只显示说明，不补造间隔', () => {
 test('未知 part kind 保留名称并使用有效颜色', () => {
   expect(partLabel('synthetic_part')).toBe('synthetic_part');
   expect(partColor('synthetic_part')).toBe('var(--p-unknown)');
-  expect(partColor('chat')).toBe('var(--p6)');
   expect(partLabel('<img src=x>')).toBe('<img src=x>');
 });
 
-test('六类已知 part 各有颜色与标签', () => {
+test('已知 part 槽位稳定：六类旧口径照常，skills 得第七槽', () => {
+  // 六类旧口径行（skills 未拆出前）各得既有槽位，不受第七槽加入影响。
   expect(['system', 'tools', 'memory', 'files', 'results', 'chat'].map(partColor))
     .toEqual(['var(--p1)', 'var(--p2)', 'var(--p3)', 'var(--p4)', 'var(--p5)', 'var(--p6)']);
-  expect(partLabel('memory')).toBe('记忆与技能');
+  // 七类新口径：magpie 10-24 拆出的 skills 落靛色第七槽。
+  expect(partColor('skills')).toBe('var(--p7)');
+  expect(partLabel('skills')).toBe('技能');
+  // memory 标签统一显「记忆」：旧行里含未拆出的 skills，行上无标记可区分，不再显示「记忆与技能」。
+  expect(partLabel('memory')).toBe('记忆');
   expect(partLabel('history')).toBe('history');
   expect(partColor('history')).toBe('var(--p-unknown)');
 });
