@@ -12,18 +12,19 @@ export type SessionRow = {
 
 type SessionDbRow = {
   conv_key: string; last_ms: number; request_count: number; title: string | null; agents: string | null;
-  has_failed: number; has_unknown: number; has_missing: number;
+  has_failed: number; has_unknown: number; has_missing: number; has_participate: number;
 };
 
 /**
- * 会话状态只从确定事实聚合，三个标志固定按失败、待确认、缺正文的顺序输出。
+ * 会话状态只从确定事实聚合，四个标志固定按失败、待确认、缺正文、旁路的顺序输出。
  * 失败看 HTTP 状态；待确认看身份未知或前驱关系未知；缺正文看正文不在可读状态
- * 或没拿到回调（`have` 第 1 位是回调位）。
+ * 或没拿到回调（`have` 第 1 位是回调位）；旁路看会话内是否存在参与链请求。
  */
 const SESSION_FLAG_COLUMNS = `
   MAX(CASE WHEN status IS NOT NULL AND status >= 400 THEN 1 ELSE 0 END) AS has_failed,
   MAX(CASE WHEN actor_state = 'unknown' OR prev_relation = 'unknown' THEN 1 ELSE 0 END) AS has_unknown,
-  MAX(CASE WHEN body_state <> 'available' OR (have & ${HAVE_BODY}) = 0 THEN 1 ELSE 0 END) AS has_missing`;
+  MAX(CASE WHEN body_state <> 'available' OR (have & ${HAVE_BODY}) = 0 THEN 1 ELSE 0 END) AS has_missing,
+  MAX(CASE WHEN purpose_chain = 'participate' THEN 1 ELSE 0 END) AS has_participate`;
 
 /**
  * 会话标题只取已经结算的当前结果：排除用途提供模型标题，参与链提供用户标题。
@@ -91,7 +92,7 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
         LIMIT ?`)
       .all(size + 1)
     : store.read.query<SessionDbRow, [number, string, number]>(`
-        SELECT conv_key, last_ms, request_count, title, agents, has_failed, has_unknown, has_missing FROM (
+        SELECT conv_key, last_ms, request_count, title, agents, has_failed, has_unknown, has_missing, has_participate FROM (
           SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
                  ${SESSION_TITLE_SQL} AS title,
                  -- 同首查：agents 是 magpie 的客户端标签，不是 actor 身份。
@@ -112,6 +113,10 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
     if (row.has_failed === 1) flags.push('failed');
     if (row.has_unknown === 1) flags.push('unknown');
     if (row.has_missing === 1) flags.push('missing_body');
+    // 全员 exclude 的会话是旁路（标题生成、skill 描述压缩）：列表默认折叠由
+    // 渲染层做，这里只给事实标志。任一笔参与链请求都不折叠，错藏真会话的
+    // 代价远高于多显示一条噪音。
+    if (row.has_participate === 0) flags.push('bypass');
     return {
       conv_key: row.conv_key,
       title: row.title ?? '',

@@ -13,6 +13,7 @@ function view(over: Partial<PurposeView> = {}): PurposeView {
     messageCount: 2,
     toolCount: 0,
     replyText: '<block>no',
+    userBlockHeads: [],
     source: { state: 'missing', value: null },
     stored: {
       version: null, status: 'missing', rule: null, signals: [],
@@ -144,4 +145,38 @@ test('正文不可读时来源 kind 不覆盖已存分类器', () => {
 test('不支持的协议没有旧解释时记 unsupported', () => {
   const decision = classifyPurpose(view({ parse: 'unsupported', replyText: null }));
   expect(decision).toMatchObject({ status: 'unsupported', version: null });
+});
+
+test('OMP skill 描述压缩指纹：任一 user 块块首命中即旁路，锚点失配不误判', () => {
+  const decision = classifyPurpose(view({
+    agent: 'omp',
+    replyText: null,
+    userBlockHeads: [
+      '<system-reminder>Synthetic session context</system-reminder>',
+      'Compress into one routing hint of at most 12 words: The agent is reading the trace collector schema docs.',
+    ],
+  }));
+  expect(decision).toMatchObject({
+    status: 'recognized', version: PURPOSE_VERSION, kind: 'skill_hint',
+    chain: 'exclude', rule: 'omp.skill-hint.v1', modelTitle: null,
+  });
+  expect(decision.signals).toContain('skill-hint.agent.omp');
+  // 锚点在块中段：不是块首，不命中。
+  const midBlock = classifyPurpose(view({
+    agent: 'omp',
+    userBlockHeads: ['先看别的内容。 Compress into one routing hint of at most 12 words: x'],
+  }));
+  expect(midBlock.chain).toBe('participate');
+  // 同指纹在非 omp agent 上不命中。
+  const otherAgent = classifyPurpose(view({
+    agent: 'claude',
+    userBlockHeads: ['Compress into one routing hint of at most 12 words: x'],
+  }));
+  expect(otherAgent.chain).toBe('participate');
+  // 模板措辞漂移静默退化。
+  const drifted = classifyPurpose(view({
+    agent: 'omp',
+    userBlockHeads: ['Summarize into one routing hint: x'],
+  }));
+  expect(drifted.chain).toBe('participate');
 });

@@ -33,6 +33,11 @@ import {
 /** 一笔用途最多尝试的次数；到顶后按 error 终态消费当前修订。 */
 export const MAX_PURPOSE_RETRIES = 3;
 
+/** 用途取数解压的 user 消息条数上限：旁路请求通常只有 1–2 条 user 消息。 */
+const PURPOSE_USER_MESSAGES = 5;
+/** 每个文本块保留的块首长度：强指纹锚点远短于此，成本不随正文体积增长。 */
+const PURPOSE_HEAD_CHARS = 200;
+
 const PURPOSE_STATUSES = new Set<PurposeStatus>([
   'recognized', 'unrecognized', 'missing', 'retained', 'unsupported', 'error',
 ]);
@@ -150,9 +155,55 @@ function emptyView(identity: PurposeIdentity, parse: PurposeParse, reply: unknow
     toolCount: null,
     replyText: reply === null || reply === undefined
       ? null : (replyTextsOf(reply).join('\n') || null),
+    userBlockHeads: [],
     source: identity.source,
     stored: identity.stored,
   };
+}
+
+/** user 消息里的文本块文本；content 是字符串按一块算，数组只取 type=text 的块。 */
+function userTextBlocks(message: unknown): string[] {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return [];
+  const content = (message as Record<string, unknown>).content;
+  if (typeof content === 'string') return content.length > 0 ? [content] : [];
+  if (!Array.isArray(content)) return [];
+  const out: string[] = [];
+  for (const block of content) {
+    if (block !== null && typeof block === 'object' && !Array.isArray(block)
+      && (block as Record<string, unknown>).type === 'text'
+      && typeof (block as Record<string, unknown>).text === 'string') {
+      const text = (block as Record<string, unknown>).text as string;
+      if (text.length > 0) out.push(text);
+    }
+  }
+  return out;
+}
+
+/**
+ * user 文本块的块首：前若干条 user 消息、逐块取开头一小段。
+ *
+ * 旁路强指纹（skill 描述压缩）写在 user 块首，普通 User 块此前不解压是取数
+ * 成本考虑；这里按条数与块首长度双限额，成本不随正文体积增长。块首判定与
+ * `input-interpretation` 的逐块剥壳一致：归档类消息的块 0 是包装，正文在
+ * 后面的块，按消息首行写匹配器一笔都命中不了。
+ */
+function purposeUserBlockHeadsTx(db: Database, reqId: number): string[] {
+  const rows = db.query<{ z: Uint8Array }, [number, number]>(`
+    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord LIMIT ?`).all(reqId, PURPOSE_USER_MESSAGES);
+  const heads: string[] = [];
+  for (const row of rows) {
+    let message: unknown;
+    try {
+      message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
+    } catch {
+      continue;
+    }
+    for (const text of userTextBlocks(message)) {
+      heads.push(text.trimStart().slice(0, PURPOSE_HEAD_CHARS));
+    }
+  }
+  return heads;
 }
 
 /**
@@ -181,8 +232,9 @@ function purposeSystemTextsTx(db: Database, reqId: number, request: unknown): st
 }
 
 /**
- * 一笔请求的用途视图。只解骨架、引用索引与 System 消息块，不解压普通消息块：
- * 分类器需要的 system、stop 与回复都在骨架或 System 块里，正文条数来自 request 行。
+ * 一笔请求的用途视图。解骨架、引用索引、System 消息块与前若干条 user 消息的
+ * 块首：分类器需要的 system、stop 与回复都在骨架或 System 块里，skill 描述
+ * 压缩指纹在 user 块首；正文条数来自 request 行，普通消息不整块解压。
  */
 export function readPurposeViewTx(db: Database, identity: PurposeIdentity): PurposeView {
   const body = readBodyMetaTx(db, identity.reqId);
@@ -199,6 +251,7 @@ export function readPurposeViewTx(db: Database, identity: PurposeIdentity): Purp
     messageCount: body.messageCount,
     toolCount: toolCountOf(body.request),
     replyText: replyTextsOf(body.reply).join('\n') || null,
+    userBlockHeads: purposeUserBlockHeadsTx(db, identity.reqId),
     source: identity.source,
     stored: identity.stored,
   };

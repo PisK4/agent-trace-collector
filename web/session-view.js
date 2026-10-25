@@ -21,6 +21,20 @@ const AGENT_LABELS = /** @type {Record<string, string>} */ ({ claude: 'Claude Co
 /** @param {string} v */
 export const agentLabel = (v) => AGENT_LABELS[v] ?? v;
 
+/**
+ * 旁路会话折叠行：列表末尾的开关，折叠是默认态，展开只影响渲染。
+ * 计数只覆盖已加载页，界面措辞如实说「已加载」；没有旁路条目整行不渲染。
+ * @param {SessionRow[]} items 搜索与筛选后的已加载条目
+ * @param {boolean} showBypass 当前是否展开
+ */
+export function sessionsListBypassHtml(items, showBypass) {
+  const bypass = items.filter(s => s.flags.includes('bypass'));
+  if (bypass.length === 0) return '';
+  const label = showBypass ? `收起 ${bypass.length} 条旁路会话`
+    : `已折叠 ${bypass.length} 条旁路会话（已加载页）`;
+  return `<div class="sess-fold"><button class="chip-btn" data-bypass-toggle="1">${esc(label)}</button></div>`;
+}
+
 /** @param {string} key */
 function sessionKeyLabel(key) {
   try {

@@ -323,3 +323,39 @@ test('普通 tick 不升级已完成历史，保留旧目标版本', () => {
     });
   } finally { f.close(); }
 });
+
+test('OMP skill 描述压缩调用按块首指纹判旁路，普通 OMP 对话不误判', () => {
+  const f = fixture();
+  try {
+    const HINT = 'Compress into one routing hint of at most 12 words: reading schema docs.';
+    // 块 0 是 system-reminder、块 1 才是指纹：判据按块首，不是消息首行。
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'omp-hint', agent: 'omp', protocol: 'chat',
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: '<system-reminder>Synthetic session context</system-reminder>' },
+        { type: 'text', text: HINT },
+      ] }],
+      reply: { choices: [{ message: { role: 'assistant', content: 'routing hint text' } }] },
+      purposeTarget: 1,
+    });
+    const task = readTask(f.store, id)!;
+    expect(task.view.userBlockHeads[1]).toContain('Compress into one routing hint');
+    drainPurposes(f.store);
+    const row = purposeRow(f.store, id);
+    expect(row).toMatchObject({
+      purpose_status: 'recognized', purpose_version: PURPOSE_VERSION,
+      purpose_chain: 'exclude', req_kind: 'skill_hint', purpose_rule: 'omp.skill-hint.v1',
+    });
+    // 普通对话不命中：同 agent、同形状，正文换成用户输入。
+    const plain = seedPurposeRequest(f.store, {
+      convKey: 'omp-plain', agent: 'omp', protocol: 'chat',
+      messages: [{ role: 'user', content: '帮我看看派生结果' }],
+      reply: { choices: [{ message: { role: 'assistant', content: 'ok' } }] },
+      purposeTarget: 1,
+    });
+    drainPurposes(f.store);
+    expect(purposeRow(f.store, plain)).toMatchObject({
+      purpose_status: 'unrecognized', purpose_chain: 'participate', req_kind: 'chat',
+    });
+  } finally { f.close(); }
+});

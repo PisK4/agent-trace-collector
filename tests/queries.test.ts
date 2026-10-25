@@ -680,6 +680,27 @@ test('会话 flags 按确定状态聚合且顺序固定', () => {
   }
 });
 
+test('全员 exclude 的会话标 bypass，混入一笔参与链就不标', () => {
+  const f = fixture();
+  try {
+    const bypassKey = JSON.stringify(['session', 'bypass-only']);
+    const mixedKey = JSON.stringify(['session', 'bypass-mixed']);
+    f.store.write(db => {
+      const insert = db.prepare(`INSERT INTO request(req_id,conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,purpose_chain)
+        VALUES (?,?,'session','actor-a','omp','known',?,'2026-10-25','through','available',1,7,1,1,?)`);
+      insert.run(11, bypassKey, 1000, 'exclude');
+      insert.run(12, bypassKey, 2000, 'exclude');
+      insert.run(13, mixedKey, 3000, 'exclude');
+      insert.run(14, mixedKey, 4000, 'participate');
+    });
+    const items = listSessions(f.store, 10, null).items;
+    expect(items.find(row => row.conv_key === bypassKey)?.flags).toEqual(['bypass']);
+    expect(items.find(row => row.conv_key === mixedKey)?.flags).toEqual([]);
+  } finally {
+    f.close();
+  }
+});
+
 /** Task 1 红测种子：发布代结果与同步旧列刻意不同值，锁住整套选源。 */
 function seedPublishedReading(f: ReturnType<typeof fixture>) {
   const id = seedPurposeRequest(f.store, {

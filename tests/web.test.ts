@@ -8,6 +8,17 @@ import {
 import {
   railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget,
 } from '../web/url-route.js';
+import { sessionsListBypassHtml } from '../web/session-view.js';
+
+test('旁路折叠行：有旁路条目才渲染，展开与收起各自如实计数', () => {
+  const row = (flags: string[]) => ({
+    conv_key: 'k', title: 't', last_ms: 1, request_count: 1, agents: [], flags,
+  });
+  expect(sessionsListBypassHtml([row([]), row([])], false)).toBe('');
+  expect(sessionsListBypassHtml([row(['bypass']), row(['bypass']), row([])], false))
+    .toContain('已折叠 2 条旁路会话');
+  expect(sessionsListBypassHtml([row(['bypass'])], true)).toContain('收起 1 条旁路会话');
+});
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {
   const rows = [{ req_id: 1 }, { req_id: 2 }];

@@ -27,6 +27,7 @@ import {
   agentLabel, clock, dayTime,
   railSummaryListHtml as railSummaryListView,
   sessionHead as sessionHeadView,
+  sessionsListBypassHtml,
 } from './session-view.js';
 import { applyIntent } from './selection.js';
 import { renderTracePair } from './trace-pair.js';
@@ -77,6 +78,8 @@ if (typeof document !== 'undefined') {
     toolOwner: /** @type {number | null} */ (null),
     /** 工具详情四页的当前页：overview / params / pair / schema。 */
     toolPage: 'pair',
+    /** 旁路会话折叠的展开开关：折叠是默认态，展开只影响渲染不改任何派生。 */
+    showBypass: false,
     railTab: railTabFromParam(qp.get('tab')),
     query: '',
     agent: 'all',
@@ -268,7 +271,10 @@ if (typeof document !== 'undefined') {
   }
 
   function renderSessions() {
-    const list = /** @type {SessionRow[]} */ (store.getSessions().items.filter(sessionMatches));
+    const all = /** @type {SessionRow[]} */ (store.getSessions().items.filter(sessionMatches));
+    // 旁路会话（全请求 exclude）默认折叠：渲染层过滤，分页仍按全量，折叠计数
+    // 只覆盖已加载页。任一笔参与链请求都不折叠。
+    const list = state.showBypass ? all : all.filter(s => !s.flags.includes('bypass'));
     el('load-more-sessions').hidden = store.getSessions().cursor === null;
     // 列表被搜索或筛选收窄时才计数；与已加载数一致时数字不承载信息。
     el('sess-count').textContent = list.length === store.getSessions().items.length
@@ -290,9 +296,12 @@ if (typeof document !== 'undefined') {
         </span>
       </button>`;
     };
+    const foldHtml = sessionsListBypassHtml(all, state.showBypass);
     el('sessions-list').innerHTML = list.length
-      ? list.map(item).join('')
-      : '<p class="sess-empty">当前已加载的会话里没有符合条件的项。搜索与筛选只覆盖已加载范围。</p>';
+      ? list.map(item).join('') + foldHtml
+      : (foldHtml !== ''
+        ? foldHtml
+        : '<p class="sess-empty">当前已加载的会话里没有符合条件的项。搜索与筛选只覆盖已加载范围。</p>');
   }
 
   /* ---------------- 中栏 ---------------- */
@@ -1297,6 +1306,11 @@ if (typeof document !== 'undefined') {
     }
     const sess = /** @type {HTMLElement | null} */ (t.closest('[data-session]'));
     if (sess) { void selectSession(sess.dataset.session ?? ''); return; }
+    if (t.closest('[data-bypass-toggle]')) {
+      state.showBypass = !state.showBypass;
+      renderSessions();
+      return;
+    }
     const agent = /** @type {HTMLElement | null} */ (t.closest('[data-agent]'));
     if (agent) { state.agent = agent.dataset.agent ?? 'all'; renderFilters(); renderSessions(); return; }
     const select = /** @type {HTMLElement | null} */ (t.closest('[data-step-key]'));
