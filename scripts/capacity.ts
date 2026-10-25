@@ -1219,11 +1219,31 @@ async function runLong(args: Args, slice?: SliceBudgetReading): Promise<Scenario
   }
 }
 
+/**
+ * 派生对照指纹的有序列清单：两条取源路径共用，清单与顺序只有这一份。
+ * `fact` 是请求行上的事实；`derived` 在同步路径读 request 的同步旧列
+ * （它同时是上一次完成值的家），在切片路径读发布代 result 行。
+ * 列顺序参与哈希：改清单或换顺序等于换指纹，对照就失效。
+ */
+const HASH_COLUMNS = [
+  ['req_id', 'fact'],
+  ['prev_req_id', 'derived'],
+  ['prev_relation', 'derived'],
+  ['delta_ordinals', 'derived'],
+  ['chain_role', 'derived'],
+  ['title', 'derived'],
+  ['title_source', 'derived'],
+  ['input_preview', 'derived'],
+  ['input_preview_kind', 'derived'],
+  ['reply_preview', 'derived'],
+  ['model_title', 'fact'],
+  ['req_kind', 'fact'],
+  ['purpose_chain', 'derived'],
+] as const;
+
 /** 派生结果的确定性指纹：只读请求行上的派生列，按 req_id 排序。 */
-function derivedHash(store: Store, convKey: string): string {
-  const rows = store.read.query(`SELECT req_id,prev_req_id,prev_relation,delta_ordinals,
-    chain_role,title,title_source,input_preview,input_preview_kind,reply_preview,
-    model_title,req_kind,purpose_chain
+export function derivedHash(store: Store, convKey: string): string {
+  const rows = store.read.query(`SELECT ${HASH_COLUMNS.map(([col]) => col).join(',')}
     FROM request WHERE conv_key=? ORDER BY req_id`).all(convKey);
   return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
 }
@@ -1231,17 +1251,13 @@ function derivedHash(store: Store, convKey: string): string {
 /**
  * 切片结果的指纹：同一列集、同一顺序，只是派生列取自该组**已发布**的 result 行。
  *
- * `model_title` 与 `req_kind` 是请求行上的事实（不是派生产物），因此 join 回来——
- * 少两列或换一处取值，`long-10000` 与 `long-10000-slice` 的 `result_sha256` 就没法比了。
- * 发布指针只有一个，所以这里读到的永远是当前那一代。
+ * 两条取源路径刻意保留：统一成一条回退路径会让对照失去意义——指纹相等
+ * 恰恰说明两条不同来源读出了同一组值。发布指针只有一个，所以这里读到的
+ * 永远是当前那一代。
  */
 export function derivedHashSlice(store: Store, convKey: string, actor: string): string {
-  const rows = store.read.query(`SELECT r.req_id AS req_id, d.prev_req_id AS prev_req_id,
-    d.prev_relation AS prev_relation, d.delta_ordinals AS delta_ordinals,
-    d.chain_role AS chain_role, d.title AS title, d.title_source AS title_source,
-    d.input_preview AS input_preview, d.input_preview_kind AS input_preview_kind,
-    d.reply_preview AS reply_preview, r.model_title AS model_title, r.req_kind AS req_kind,
-    d.purpose_chain AS purpose_chain
+  const rows = store.read.query(`SELECT ${HASH_COLUMNS.map(([col, kind]) =>
+      `${kind === 'fact' ? 'r' : 'd'}.${col} AS ${col}`).join(',')}
     FROM derive_queue q
     JOIN derive_request_result d ON d.generation=q.published_generation
     JOIN request r ON r.req_id=d.req_id

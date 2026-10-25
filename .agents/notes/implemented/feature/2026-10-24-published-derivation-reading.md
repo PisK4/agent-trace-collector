@@ -12,6 +12,8 @@ Status: implemented
 
 同步可用性判据没有另立口径，`groupCurrentSql` / `groupIsCurrent` 是唯一所有者。`target = published`（任意算法号）即同步当前，不额外要求等于当前代码常量 `GROUP_ALGORITHM`。既有测试以算法 3 作为合成当前算法，把它写死成常量会误伤算法升版后的合法组。组不 current 时摘要三列置 NULL，让 `derived_state` 落到非 current，堵住「指针缺失 + 算法号追平」的混读窗口。
 
+[派生选源 SQL 片段单家](../architecture/2026-10-25-derive-source-sql-single-home.md)之后，本 note 的选源语义不变，承载它的 join 与取值片段（`deriveJoinSql`/`derivedColSql`）统一归 `derive-state`，queries 与 reading 的身份查询共用同一形状。
+
 ## Alternatives considered
 
 **按列各自选源。** 会出现标题取发布代、摘要取同步列的混拼；来源条件必须整组应用。

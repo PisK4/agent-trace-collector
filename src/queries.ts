@@ -2,7 +2,7 @@ import { zstdDecompressSync } from 'node:zlib';
 import type { BodyState } from './store';
 import { resolveRequestId, type Store } from './store';
 import { modelTimeTitle } from './sources/magpie';
-import { groupCurrentSql, groupIsCurrent } from './derive-state';
+import { deriveJoinSql, derivedColSql, groupCurrentSql, groupIsCurrent } from './derive-state';
 import { HAVE_BODY } from './evidence';
 
 export type Page<T> = { items: T[]; next_cursor: string | null };
@@ -159,18 +159,6 @@ const SESSION_FLAG_COLUMNS = `
   MAX(CASE WHEN actor_state = 'unknown' OR prev_relation = 'unknown' THEN 1 ELSE 0 END) AS has_unknown,
   MAX(CASE WHEN body_state <> 'available' OR (have & ${HAVE_BODY}) = 0 THEN 1 ELSE 0 END) AS has_missing`;
 
-/** 队列与发布代结果行的一对 join；发布代按队列指针取，不跨代。 */
-const DERIVED_JOIN = (g: string, d: string, r: string) => `LEFT JOIN derive_queue ${g} ON ${g}.conv_key=${r}.conv_key AND ${g}.actor=${r}.actor
-  LEFT JOIN derive_request_result ${d} ON ${d}.generation=${g}.published_generation AND ${d}.req_id=${r}.req_id`;
-
-/**
- * 派生列的取值来源：发布代行优先，否则同步旧列。
- * 这里只决定列从哪张表读——同步列同时是「上一次完成值」的家，dirty 组的
- * historical 仍要从它取旧值；当前与否的屏蔽闸门在 `projectRow`。
- * 同步可用性判据唯一落在 `groupCurrentSql`，不在查询里另立第二套口径。
- */
-const DERIVED_COL = (g: string, d: string, r: string, col: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN ${d}.${col} ELSE ${r}.${col} END`;
-
 /** 摘要状态与依据：发布代映射 retention/algorithm/basis；组不 current 时置 NULL，让 derived_state 落到非 current。 */
 const SUMMARY_STATE_COL = (g: string, d: string, r: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN ${d}.retention_state WHEN ${groupCurrentSql(g)} THEN ${r}.summary_state ELSE NULL END`;
 const SUMMARY_ALGO_COL = (g: string, d: string, r: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN CASE WHEN ${d}.retention_state='legacy' THEN NULL ELSE ${d}.algorithm END WHEN ${groupCurrentSql(g)} THEN ${r}.summary_algorithm ELSE NULL END`;
@@ -190,27 +178,27 @@ const SESSION_TITLE_SQL = `COALESCE(
      AND r1.model_title IS NOT NULL AND r1.purpose_pending = 0
      AND ${groupCurrentSql('q1')}
    ORDER BY r1.started_ms DESC, r1.req_id DESC LIMIT 1),
-  (SELECT ${DERIVED_COL('q2', 'e2', 'r2', 'title')} FROM request r2
+  (SELECT ${derivedColSql('q2', 'e2', 'r2', 'title')} FROM request r2
    JOIN derive_queue q2 ON q2.conv_key = r2.conv_key AND q2.actor = r2.actor
    LEFT JOIN derive_request_result e2 ON e2.generation = q2.published_generation AND e2.req_id = r2.req_id
-   WHERE r2.conv_key = request.conv_key AND ${DERIVED_COL('q2', 'e2', 'r2', 'title_source')} = 'user_delta'
-     AND r2.purpose_chain = 'participate' AND ${DERIVED_COL('q2', 'e2', 'r2', 'chain_role')} = 'main'
-     AND ${DERIVED_COL('q2', 'e2', 'r2', 'title')} IS NOT NULL AND r2.purpose_pending = 0
+   WHERE r2.conv_key = request.conv_key AND ${derivedColSql('q2', 'e2', 'r2', 'title_source')} = 'user_delta'
+     AND r2.purpose_chain = 'participate' AND ${derivedColSql('q2', 'e2', 'r2', 'chain_role')} = 'main'
+     AND ${derivedColSql('q2', 'e2', 'r2', 'title')} IS NOT NULL AND r2.purpose_pending = 0
      AND ${groupCurrentSql('q2')}
    ORDER BY r2.started_ms ASC, r2.req_id ASC LIMIT 1),
-  (SELECT ${DERIVED_COL('q3', 'e3', 'r3', 'title')} FROM request r3
+  (SELECT ${derivedColSql('q3', 'e3', 'r3', 'title')} FROM request r3
    JOIN derive_queue q3 ON q3.conv_key = r3.conv_key AND q3.actor = r3.actor
    LEFT JOIN derive_request_result e3 ON e3.generation = q3.published_generation AND e3.req_id = r3.req_id
-   WHERE r3.conv_key = request.conv_key AND ${DERIVED_COL('q3', 'e3', 'r3', 'title_source')} = 'user_delta'
-     AND r3.purpose_chain = 'participate' AND ${DERIVED_COL('q3', 'e3', 'r3', 'title')} IS NOT NULL
+   WHERE r3.conv_key = request.conv_key AND ${derivedColSql('q3', 'e3', 'r3', 'title_source')} = 'user_delta'
+     AND r3.purpose_chain = 'participate' AND ${derivedColSql('q3', 'e3', 'r3', 'title')} IS NOT NULL
      AND r3.purpose_pending = 0
      AND ${groupCurrentSql('q3')}
    ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1),
-  (SELECT ${DERIVED_COL('q4', 'e4', 'r4', 'title')} FROM request r4
+  (SELECT ${derivedColSql('q4', 'e4', 'r4', 'title')} FROM request r4
    JOIN derive_queue q4 ON q4.conv_key = r4.conv_key AND q4.actor = r4.actor
    LEFT JOIN derive_request_result e4 ON e4.generation = q4.published_generation AND e4.req_id = r4.req_id
    WHERE r4.conv_key = request.conv_key AND r4.purpose_chain = 'participate'
-     AND ${DERIVED_COL('q4', 'e4', 'r4', 'title')} IS NOT NULL AND r4.purpose_pending = 0
+     AND ${derivedColSql('q4', 'e4', 'r4', 'title')} IS NOT NULL AND r4.purpose_pending = 0
      AND ${groupCurrentSql('q4')}
    ORDER BY r4.started_ms ASC, r4.req_id ASC LIMIT 1)
 )`;
@@ -424,16 +412,16 @@ type RequestDbRow = ProjectableRow;
 
 /** 列表不带摘要版本列：它是详情给 E 用的依据，列表只判断 `derived_state`。 */
 const REQUEST_COLUMNS = `r.req_id, r.conv_key, r.actor, r.agent, r.actor_state, r.started_ms,
-  ${DERIVED_COL('g', 'd', 'r', 'title')} AS title,
-  ${DERIVED_COL('g', 'd', 'r', 'title_source')} AS title_source,
+  ${derivedColSql('g', 'd', 'r', 'title')} AS title,
+  ${derivedColSql('g', 'd', 'r', 'title_source')} AS title_source,
   r.status, r.model_requested, r.model_served, r.in_tok, r.out_tok,
   r.cache_read, r.cache_write, r.cost, r.cost_state, r.have,
   r.ms, r.ttft_ms, r.flow_ms, r.body_state, r.miss_reason, r.req_kind,
-  ${DERIVED_COL('g', 'd', 'r', 'chain_role')} AS chain_role,
+  ${derivedColSql('g', 'd', 'r', 'chain_role')} AS chain_role,
   r.model_title, r.purpose_status, r.purpose_version, r.purpose_rule, r.purpose_chain,
-  ${DERIVED_COL('g', 'd', 'r', 'input_preview')} AS input_preview,
-  ${DERIVED_COL('g', 'd', 'r', 'input_preview_kind')} AS input_preview_kind,
-  ${DERIVED_COL('g', 'd', 'r', 'reply_preview')} AS reply_preview,
+  ${derivedColSql('g', 'd', 'r', 'input_preview')} AS input_preview,
+  ${derivedColSql('g', 'd', 'r', 'input_preview_kind')} AS input_preview_kind,
+  ${derivedColSql('g', 'd', 'r', 'reply_preview')} AS reply_preview,
   r.purpose_pending,
   ${SUMMARY_STATE_COL('g', 'd', 'r')} AS summary_state,
   ${SUMMARY_ALGO_COL('g', 'd', 'r')} AS summary_algorithm`;
@@ -474,14 +462,14 @@ export function listRequests(
       return (bound === null
         ? store.read.query<RequestDbRow, [string, number]>(`
             SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
-            ${DERIVED_JOIN('g', 'd', 'r')}
+            ${deriveJoinSql('g', 'd', 'r')}
             WHERE r.conv_key = ?
             ORDER BY r.started_ms DESC, r.req_id DESC
             LIMIT ?`)
           .all(key, size + 1)
         : store.read.query<RequestDbRow, [string, number, number, number]>(`
             SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
-            ${DERIVED_JOIN('g', 'd', 'r')}
+            ${deriveJoinSql('g', 'd', 'r')}
             WHERE r.conv_key = ? AND (r.started_ms, r.req_id) < (?, ?)
             ORDER BY r.started_ms DESC, r.req_id DESC
             LIMIT ?`)
@@ -490,14 +478,14 @@ export function listRequests(
     return (bound === null
       ? store.read.query<RequestDbRow, [string, number]>(`
           SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
-          ${DERIVED_JOIN('g', 'd', 'r')}
+          ${deriveJoinSql('g', 'd', 'r')}
           WHERE r.conv_key = ?
           ORDER BY r.started_ms ASC, r.req_id ASC
           LIMIT ?`)
         .all(key, size + 1)
       : store.read.query<RequestDbRow, [string, number, number, number]>(`
           SELECT ${REQUEST_COLUMNS}, ${GROUP_READ_COLUMNS} FROM request r
-          ${DERIVED_JOIN('g', 'd', 'r')}
+          ${deriveJoinSql('g', 'd', 'r')}
           WHERE r.conv_key = ? AND (r.started_ms, r.req_id) > (?, ?)
           ORDER BY r.started_ms ASC, r.req_id ASC
           LIMIT ?`)
@@ -557,15 +545,15 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     // r.* 之后用同名覆盖派生列：发布代、同步旧列或 NULL 由同一条件整组决定。
     const row = store.read.query<DetailDbRow, [number]>(`
       SELECT r.*, ${GROUP_READ_COLUMNS},
-             ${DERIVED_COL('g', 'd', 'r', 'title')} AS title,
-             ${DERIVED_COL('g', 'd', 'r', 'title_source')} AS title_source,
-             ${DERIVED_COL('g', 'd', 'r', 'input_preview')} AS input_preview,
-             ${DERIVED_COL('g', 'd', 'r', 'input_preview_kind')} AS input_preview_kind,
-             ${DERIVED_COL('g', 'd', 'r', 'reply_preview')} AS reply_preview,
-             ${DERIVED_COL('g', 'd', 'r', 'prev_req_id')} AS prev_req_id,
-             ${DERIVED_COL('g', 'd', 'r', 'prev_relation')} AS prev_relation,
-             ${DERIVED_COL('g', 'd', 'r', 'delta_ordinals')} AS delta_ordinals,
-             ${DERIVED_COL('g', 'd', 'r', 'chain_role')} AS chain_role,
+             ${derivedColSql('g', 'd', 'r', 'title')} AS title,
+             ${derivedColSql('g', 'd', 'r', 'title_source')} AS title_source,
+             ${derivedColSql('g', 'd', 'r', 'input_preview')} AS input_preview,
+             ${derivedColSql('g', 'd', 'r', 'input_preview_kind')} AS input_preview_kind,
+             ${derivedColSql('g', 'd', 'r', 'reply_preview')} AS reply_preview,
+             ${derivedColSql('g', 'd', 'r', 'prev_req_id')} AS prev_req_id,
+             ${derivedColSql('g', 'd', 'r', 'prev_relation')} AS prev_relation,
+             ${derivedColSql('g', 'd', 'r', 'delta_ordinals')} AS delta_ordinals,
+             ${derivedColSql('g', 'd', 'r', 'chain_role')} AS chain_role,
              ${SUMMARY_STATE_COL('g', 'd', 'r')} AS summary_state,
              ${SUMMARY_ALGO_COL('g', 'd', 'r')} AS summary_algorithm,
              ${SUMMARY_BASIS_COL('g', 'd', 'r')} AS summary_basis,
@@ -575,7 +563,7 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
              g.published_generation,
              (SELECT 1 FROM route_summary s WHERE s.route_id = r.route_id) AS summary_exists,
              (SELECT z FROM route_summary s WHERE s.route_id = r.route_id) AS summary_z
-      FROM request r ${DERIVED_JOIN('g', 'd', 'r')} WHERE r.req_id = ?`).get(canonical) as DetailDbRow | null;
+      FROM request r ${deriveJoinSql('g', 'd', 'r')} WHERE r.req_id = ?`).get(canonical) as DetailDbRow | null;
     if (row == null) return null;
     // 工具同样按来源整组读取：发布代查代际结果表；发布代缺行或无指针时回退
     // 同步旧表——它仍是调用身份的家。配对是否可信由 current 屏蔽决定。
