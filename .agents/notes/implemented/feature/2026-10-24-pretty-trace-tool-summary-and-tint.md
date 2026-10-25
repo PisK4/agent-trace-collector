@@ -62,7 +62,7 @@ Status: implemented
 
 ### 工具强调色
 
-- `web/body-view.js` 新增 `toolTint(name)`：与 `partColor` 同属共享显示原语。映射 `tint-read / -edit / -write / -bash / -skill / -agent / -other` 七个色类；`index.html` 对应 `--tool-*` 七个色对（前景加背景，亮暗两套），背景沿用 `--k-*` 的 0.11–0.14 透明度模式。色相：Read 蓝、Edit 橙、Write 紫、Bash 玫红（红色保留给失败语义，2026-10-25 用户修订）、Skill 黄、Agent 绿、其他青灰。
+- `web/body-view.js` 新增 `toolTint(name)`：与 `partColor` 同属共享显示原语。映射 `tint-read / -edit / -write / -bash / -skill / -agent / -other` 七个色类；页面样式（现 `web/app.css`）对应 `--tool-*` 七个色对（前景加背景，亮暗两套），背景沿用 `--k-*` 的 0.11–0.14 透明度模式。色相：Read 蓝、Edit 橙、Write 紫、Bash 玫红（红色保留给失败语义，2026-10-25 用户修订）、Skill 黄、Agent 绿、其他青灰。
 - 不复用 `--p1..p6`，那是上下文组成条的固定槽位，两套语义不混。
 - 色类只包工具名（2026-10-25 用户修订），参数摘要与结果正文以普通文本渲染，不进色类；着色元素只承担「这是哪个工具」一个识别任务。
 - 中栏应用位：调用行 chip 显示工具名、结果行按三级前缀，取代 `Tool call` / `Tool result` 文字小标（`row-kind` 类删除）。配对 result 沿用 call 的颜色，未配对用 `--tool-other`。

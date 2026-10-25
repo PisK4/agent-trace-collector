@@ -31,6 +31,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** 静态白名单是 web/ 目录的唯一发布面；测试用目录内容核对它的覆盖。 */
 export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
+  '/app.css': { file: 'app.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/session-view.js': { file: 'session-view.js', type: 'text/javascript; charset=utf-8' },
   '/layout.js': { file: 'layout.js', type: 'text/javascript; charset=utf-8' },
