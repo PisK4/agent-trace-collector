@@ -490,7 +490,7 @@ if (typeof document !== 'undefined') {
     const open = folds.get(key) === true;
     return `<details class="rail-fold session-fold" data-fold="${esc(key)}"${open ? ' open' : ''}>
       <summary><span class="sum-line" title="${esc(coverageHoverText(s))}"><b>${s.coverage.calls_total}</b> 次工具
-        ${failures > 0 ? `· <span class="warn-n">${failures} 失败</span> ` : ''}· <b>${s.interrupts.count}</b> 次中断
+        ${failures > 0 ? `· <button class="warn-n" data-summary-failures="1" title="点击定位这 ${failures} 次失败调用">${failures} 失败</button> ` : ''}· <b>${s.interrupts.count}</b> 次中断
         · 写入尝试 <b>${writtenPaths}</b> / 读取请求 <b>${readPaths}</b> 条路径</span></summary>
       <div class="fold-body">
         ${s.dirty ? '<p class="note warn">部分组的派生还没追上输入：这里是上一次完成的结果。</p>' : ''}
@@ -1378,6 +1378,24 @@ if (typeof document !== 'undefined') {
 
   document.addEventListener('click', (e) => {
     const t = /** @type {HTMLElement} */ (e.target);
+    // 收起行里的失败数在 <summary> 内：先于 summary 早退处理，阻止折叠开合，
+    // 直接打开失败调用列表（集合随汇总首屏返回，不用再查）。
+    const failuresBtn = /** @type {HTMLElement | null} */ (t.closest('[data-summary-failures]'));
+    if (failuresBtn !== null) {
+      e.preventDefault();
+      const summary = store.peekSummary();
+      const failures = summary !== null && summary.status === 'ready' && summary.data !== null
+        ? summary.data.failures : [];
+      summaryList = {
+        kind: 'failures', param: '', label: `失败调用 · ${failures.length}`,
+        loading: false, error: null,
+        data: { items: failures.map(f => ({ ...f, state: 'resolved' })), truncated: false },
+      };
+      document.body.classList.remove('rail-collapsed');
+      syncPanelButtons();
+      renderRail();
+      return;
+    }
     if (t.closest('summary')) return;
     // 组级「已更新」标记：点进组里即视为已看到，随后的选择处理照常重绘。
     const flaggedGroup = /** @type {HTMLElement | null} */ (t.closest('.trace-group'));
