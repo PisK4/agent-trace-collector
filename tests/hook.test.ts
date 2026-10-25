@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { loadConfig } from '../src/config';
 import { createHandler } from '../src/http';
-import { acceptHook, bodyOmission, reconcilePending } from '../src/hook';
+import { acceptHook, bodyOmission, HOOK_ABSENT_THRESHOLD_MS, markHookAbsent, reconcilePending } from '../src/hook';
 import type { HookEnvelope } from '../src/hook';
 import { drainDerive } from '../src/derive';
 import { onRequest, onResponse } from '../plugins/collector.hooks';
@@ -281,6 +281,200 @@ test('无response ID的hook长期pending不强行关联', () => {
   } finally {
     f.close();
   }
+});
+
+/* ---------- hook 缺席老化守卫（markHookAbsent） ---------- */
+
+const NOW = 1_800_000_000_000;
+const AGED = NOW - 2 * HOOK_ABSENT_THRESHOLD_MS;
+
+/** 账本请求行种子：route_id 默认非空以参与 response ID 关联。 */
+function seedLedgerRow(
+  f: ReturnType<typeof fixture>,
+  reqId: number,
+  responseIdNorm: string | null,
+  startedMs: number,
+  extra: { missReason?: string | null } = {},
+): void {
+  f.store.write(db => db.run(
+    `INSERT INTO request(req_id,route_id,response_id_norm,agent,session,conv_key,conv_source,actor,actor_state,
+       started_ms,day,via,status,body_state,miss_reason,derive_version,have,created_at,updated_at,title,title_source)
+     VALUES (?,?,?,'alpha','synthetic-session',?,'session','synthetic-session','known',
+       ?,'2026-10-20','through',200,'pending',?,0,2,1,1,'ledger title','model_time')`,
+    [reqId, 900 + reqId, responseIdNorm, JSON.stringify(['session', 'synthetic-session']),
+      startedMs, extra.missReason ?? null],
+  ));
+}
+
+test('超龄无hook证据的行标注hook_absent，body_state保持pending', () => {
+  const f = fixture();
+  try {
+    seedLedgerRow(f, 1, 'aged_1', AGED);
+    seedLedgerRow(f, 2, 'young_1', NOW - HOOK_ABSENT_THRESHOLD_MS / 2);
+    seedLedgerRow(f, 3, 'paused_1', AGED, { missReason: 'disk_body_paused' });
+    expect(markHookAbsent(f.store, NOW)).toBe(1);
+    const rowOf = (id: number) => f.store.read.query<{ miss_reason: string | null; body_state: string }, [number]>(
+      'SELECT miss_reason, body_state FROM request WHERE req_id=?').get(id);
+    expect(rowOf(1)).toEqual({ miss_reason: 'hook_absent', body_state: 'pending' });
+    expect(rowOf(2)?.miss_reason).toBeNull();
+    // 阈值内不标；已有原因不覆盖；已标注的行不重复标注。
+    expect(rowOf(3)?.miss_reason).toBe('disk_body_paused');
+    expect(markHookAbsent(f.store, NOW)).toBe(0);
+  } finally { f.close(); }
+});
+
+test('等待关联队列指向本行时不标注，合并完成后不残留', () => {
+  const f = fixture();
+  try {
+    for (let index = 0; index < 12; index++) {
+      acceptHook(f.store, envelope({ hook_id: `absent-${index}`,
+        reply: { id: `msg_absent-${index}`, content: [] } }), 1, salt);
+    }
+    f.store.write(db => {
+      for (let index = 0; index < 12; index++) {
+        db.run(`INSERT INTO request(route_id,response_id_norm,started_ms,day,via,
+          body_state,derive_version,have,created_at,updated_at)
+          VALUES (?,?,?,'2026-10-20','through','pending',0,2,1,1)`,
+        [index + 1, `absent-${index}`, AGED]);
+      }
+    });
+    // 12 行都在等待关联队列里有指向自己的候选：合并随时可能发生，不标注。
+    expect(markHookAbsent(f.store, NOW)).toBe(0);
+    expect(reconcilePending(f.store, NOW)).toEqual({ merged: 10, pending: 2, ambiguous: 0 });
+    // 未合并的两行仍在等待，继续不标注。
+    expect(markHookAbsent(f.store, NOW)).toBe(0);
+    expect(reconcilePending(f.store, NOW + 1)).toEqual({ merged: 2, pending: 0, ambiguous: 0 });
+    const rows = f.store.read.query<{ body_state: string; miss_reason: string | null }, []>(
+      'SELECT body_state, miss_reason FROM request ORDER BY req_id').all();
+    expect(rows).toHaveLength(12);
+    for (const row of rows) {
+      expect(row.body_state).toBe('available');
+      expect(row.miss_reason).toBeNull();
+    }
+    expect(markHookAbsent(f.store, NOW + 2)).toBe(0);
+  } finally { f.close(); }
+});
+
+test('歧义候选行不标注：待裁决不是缺席', () => {
+  const f = fixture();
+  try {
+    seedLedgerRow(f, 1, 'synthetic_1', AGED);
+    seedLedgerRow(f, 2, 'synthetic_1', AGED);
+    acceptHook(f.store, envelope({ hook_id: 'ambiguous-absent' }), 1, salt);
+    expect(markHookAbsent(f.store, NOW)).toBe(0);
+    const reasons = f.store.read.query<{ miss_reason: string | null }, []>(
+      'SELECT miss_reason FROM request WHERE req_id IN (1,2) ORDER BY req_id').all();
+    expect(reasons).toEqual([{ miss_reason: null }, { miss_reason: null }]);
+  } finally { f.close(); }
+});
+
+test('response_id_norm为NULL的行仍被标注', () => {
+  const f = fixture();
+  try {
+    // 无 response id 的 hook 长期挂在等待队列且 response_id_norm 为 NULL；
+    // NOT IN 口径会让所有行永远漏标，NOT EXISTS 对 NULL 放行。
+    acceptHook(f.store, envelope({ hook_id: 'no-reply-id', reply: { content: [] } }), 1, salt);
+    f.store.write(db => db.run(
+      `INSERT INTO request(route_id,response_id_norm,started_ms,day,via,
+        body_state,derive_version,have,created_at,updated_at)
+       VALUES (901,NULL,?,'2026-10-20','through','pending',0,2,1,1)`, [AGED]));
+    expect(markHookAbsent(f.store, NOW)).toBe(1);
+    expect(f.store.read.query<{ miss_reason: string | null; body_state: string }, []>(
+      "SELECT miss_reason, body_state FROM request WHERE response_id_norm IS NULL AND via='through'"
+    ).get()).toEqual({ miss_reason: 'hook_absent', body_state: 'pending' });
+  } finally { f.close(); }
+});
+
+test('每轮标注有上限，余量下轮继续', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => {
+      for (let index = 1; index <= 250; index++) {
+        db.run(`INSERT INTO request(req_id,route_id,response_id_norm,started_ms,day,via,
+          body_state,derive_version,have,created_at,updated_at)
+          VALUES (?,?,NULL,?,'2026-10-20','through','pending',0,2,1,1)`,
+        [index, index, AGED]);
+      }
+    });
+    expect(markHookAbsent(f.store, NOW)).toBe(200);
+    expect(markHookAbsent(f.store, NOW)).toBe(50);
+    expect(markHookAbsent(f.store, NOW)).toBe(0);
+    expect(f.store.read.query<{ n: number }, []>(
+      "SELECT count(*) AS n FROM request WHERE miss_reason='hook_absent'").get()?.n).toBe(250);
+  } finally { f.close(); }
+});
+
+test('恢复路径一：直接命中落正文清掉hook_absent', () => {
+  const f = fixture();
+  try {
+    seedLedgerRow(f, 1, 'synthetic_1', AGED);
+    expect(markHookAbsent(f.store, NOW)).toBe(1);
+    const result = acceptHook(f.store, envelope({ hook_id: 'direct-clear' }), NOW, salt);
+    expect(result.req_id).toBe(1);
+    expect(f.store.read.query<{ body_state: string; miss_reason: string | null; have: number }, [number]>(
+      'SELECT body_state, miss_reason, have FROM request WHERE req_id=?').get(1))
+      .toEqual({ body_state: 'available', miss_reason: null, have: 3 });
+  } finally { f.close(); }
+});
+
+/**
+ * 后台合并路径的构造：两个同 response id 的超龄账本行先被标注，hook 到达时
+ * 两行并存标 ambiguous，清空其中一个候选的响应身份（顺序不可证的既定机制）
+ * 让候选唯一，合并随之落到已标注的行上。
+ */
+function seedMarkedPairThenHook(
+  f: ReturnType<typeof fixture>,
+  overrides: Partial<Parameters<typeof acceptHook>[1]> = {},
+): void {
+  seedLedgerRow(f, 1, 'synthetic_1', AGED);
+  seedLedgerRow(f, 2, 'synthetic_1', AGED);
+  expect(markHookAbsent(f.store, NOW)).toBe(2);
+  acceptHook(f.store, envelope({ hook_id: 'merge-recon', ...overrides }), NOW, salt);
+  f.store.write(db => db.run('UPDATE request SET response_id_norm=NULL WHERE req_id=2'));
+  expect(reconcilePending(f.store, NOW + 1).merged).toBe(1);
+}
+
+test('恢复路径二：合并迁移正文后available清空原因', () => {
+  const f = fixture();
+  try {
+    seedMarkedPairThenHook(f);
+    expect(f.store.read.query<{ body_state: string; miss_reason: string | null; have: number }, [number]>(
+      'SELECT body_state, miss_reason, have FROM request WHERE req_id=?').get(1))
+      .toEqual({ body_state: 'available', miss_reason: null, have: 3 });
+    // have 位已置：缺席守卫不会重标。
+    expect(markHookAbsent(f.store, NOW + 2)).toBe(0);
+  } finally { f.close(); }
+});
+
+test('恢复路径二：合并取源行降级原因', () => {
+  const f = fixture();
+  try {
+    seedMarkedPairThenHook(f, { body_omitted: true, omit_reason: 'collector_object_limit' });
+    // 源行无骨架，正文未迁移：目标保持 pending，降级原因随源行落到本行。
+    expect(f.store.read.query<{ body_state: string; miss_reason: string | null }, [number]>(
+      'SELECT body_state, miss_reason FROM request WHERE req_id=?').get(1))
+      .toEqual({ body_state: 'pending', miss_reason: 'collector_object_limit' });
+  } finally { f.close(); }
+});
+
+test('恢复路径二：源行无骨架无原因时清空hook_absent且不重标', () => {
+  const f = fixture();
+  try {
+    seedLedgerRow(f, 1, 'synthetic_1', AGED);
+    seedLedgerRow(f, 2, 'synthetic_1', AGED);
+    expect(markHookAbsent(f.store, NOW)).toBe(2);
+    const hook = acceptHook(f.store, envelope({ hook_id: 'merge-evicted' }), NOW, salt);
+    // 模拟回收后的源行：骨架已清、正文态 evicted、无缺失原因。
+    f.store.write(db => db.run(
+      "UPDATE request SET skeleton_z=NULL, body_state='evicted' WHERE req_id=?", [hook.req_id]));
+    f.store.write(db => db.run('UPDATE request SET response_id_norm=NULL WHERE req_id=2'));
+    expect(reconcilePending(f.store, NOW + 1).merged).toBe(1);
+    expect(f.store.read.query<{ body_state: string; miss_reason: string | null }, [number]>(
+      'SELECT body_state, miss_reason FROM request WHERE req_id=?').get(1))
+      .toEqual({ body_state: 'pending', miss_reason: null });
+    // hook 证据已关联，have 位已置：不会重标。
+    expect(markHookAbsent(f.store, NOW + 2)).toBe(0);
+  } finally { f.close(); }
 });
 
 test('hook端点拒绝伪造Host、跨站Origin、错误令牌与非local来源', async () => {

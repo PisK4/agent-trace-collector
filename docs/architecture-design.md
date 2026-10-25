@@ -978,12 +978,14 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 | 值 | 判定依据 |
 | --- | --- |
-| `hook_absent` | 账本已到，等满阈值仍没有任何 hook |
+| `hook_absent` | 账本已到，等满阈值（默认 1 小时）仍没有任何已关联的 hook 证据，等待关联队列中也没有指向本行的候选 |
 | `reply_unavailable` | hook 到了，但 `success = 0` 且 `response_z IS NULL` |
 | `parse_failed` | hook 到了，`parse_state = invalid` |
 | `unsupported_protocol` | hook 到了，`parse_state = unsupported` |
 | `origin_not_local` | hook 到了，`origin` 不是 `local`，按配置不接收 |
 | `evicted` | 曾经可用，已按预算回收 |
+
+`hook_absent` 由 pending 定时器里的老化守卫（`src/hook.ts` 的 `markHookAbsent`）在每轮合并重试之后写入，只写 `miss_reason`，不改 `body_state`。它断言的是"没有已关联的 hook 证据"，不是"hook 从未发生"：reply 缺失的回调没有 response ID 可关联，会长期留在等待队列里，对这些行 hook 其实到过。迟到的 hook 由两条路径解除标注：直接命中在落正文时清掉原因；后台合并按合并后的正文现实对账，正文完整即清空，降级原因随源行正文走。
 
 `line_over_32MiB` 与 `reply_over_8MiB` 不能当缺失原因。`gatewayResponse` 里回复捕获超限、捕获读取失败、HTTP 状态码 ≥ 400 三种情形都落到同一句 `run.Finish(ctx, nil, false, body)`（`internal/gateway/gateway_hooks.go:27`），collector 只看得到 `reply = null` 加 `success = false`，分不出是哪一种。插件单行超过 32 MiB 时整笔 hook 都不跑，collector 连请求大小都收不到，更无从判断原因。
 

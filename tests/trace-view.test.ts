@@ -404,6 +404,11 @@ test('HTTP 失败、缺正文与已有步骤并存', () => {
   expect(html).not.toContain('step-status');
   const missingBody = projectSteps(row({ body_state: 'evicted' }), read(detail(), entries, { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
   expect(missingBody.some(s => s.status === 'missing_body')).toBe(true);
+  // 正文状态记录带缺失原因，与 row-summary 的正文未到文案同口径；原因为空保持原文案。
+  const absent = projectSteps(row({ body_state: 'pending', miss_reason: 'hook_absent' }), read(detail(), entries, { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
+  expect(absent.find(s => s.key === '7:body')?.text).toBe('正文状态：pending（hook_absent）');
+  const plain = projectSteps(row({ body_state: 'pending', miss_reason: null }), read(detail(), entries, { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
+  expect(plain.find(s => s.key === '7:body')?.text).toBe('正文状态：pending');
 });
 
 test('工具摘要按工具分派：Read 行区间四种组合', () => {

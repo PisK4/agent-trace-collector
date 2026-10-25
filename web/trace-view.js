@@ -393,7 +393,7 @@ export function projectSteps(row, read, systemContext = null) {
     }
   }
   if (row.body_state !== 'available' && row.body_state !== 'partial') {
-    record('body', 'missing_body', `正文状态：${row.body_state}`);
+    record('body', 'missing_body', `正文状态：${row.body_state}${row.miss_reason ? `（${row.miss_reason}）` : ''}`);
   }
   return steps;
 }
