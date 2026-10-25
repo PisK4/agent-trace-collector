@@ -2,7 +2,7 @@
 
 Status: proposed
 
-本提案作为 Agent 语义问题的输入材料保留。统筹约束见[架构演进方案 v2](../../../../docs/architecture-evolution-v2.md)，具体规则修正见[联合评审](../../../../docs/agent-request-kind-review.md)。静态扩展的本轮 Review 与实现范围由[Harness 语义的静态扩展](2026-10-26-harness-semantics-adapters.md)承接；本文尚未修订的 Interface、匹配门槛与迁移验收不直接作为执行依据。zcode 一家的实测形状、它需要的那条规则与验收见[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)。
+本提案作为 Agent 语义问题的输入材料保留。统筹约束见[架构演进方案 v2](../../../../docs/architecture-evolution-v2.md)，具体规则修正见[联合评审](../../../../docs/agent-request-kind-review.md)。静态扩展的本轮 Review 与实现范围由[Harness 语义的静态扩展](../implemented/architecture/2026-10-26-harness-semantics-adapters.md)承接；本文尚未修订的 Interface、匹配门槛与迁移验收不直接作为执行依据。zcode 一家的实测形状、它需要的那条规则与验收见[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)。
 
 ## Problem
 
@@ -180,7 +180,7 @@ Title Generator 在 Claude Code 与 OMP 上都能识别，放共享集合；auto
 
 **交付现状。** 用途判定已交付，形状与本文不同：`req_kind` 用作稳定 ID，旁路请求写 `chain_role='aux'`，未知值原样保留，正文不可读时保留已存 `req_kind`，标题请求单独写 `model_title`——这些都已落地。判据与依据记在 `purpose_*` 列上（`purpose_version`、`purpose_rule`、`purpose_signals`、`purpose_chain`、`purpose_pending`），不是本文设想的 `req_feature` 文档加 `req_kind_evidence` 列，见[请求用途与链](../../implemented/architecture/2026-10-22-request-purpose-and-chain.md)与[组发布前处理请求](../../implemented/architecture/2026-10-22-request-work-before-group-publish.md)。页面按 `purpose_chain` 与 `chain_role` 读：本文点名的 `isAuxTitleRequest` 与 `reply_preview.startsWith('标题 · ')` 已经不在，`web/app.js` 里 `prev_relation === 'branch'` 的文案仍在。未建的是注册表机制本身：没有 `src/features/<id>.ts` 的纯匹配器，也没有 Agent Profile 注册入口，新增一个类别仍要改派生代码，本文的「新增一个 RequestKind 的流程」尚未成立。
 
-**扩展缝的触发条件。** 注册表采用以下触发条件。当前 Claude 分类器与 OMP skill_hint 已构成两种 Agent 专属类别，首项条件成立；具体范围由[Harness 语义的静态扩展](2026-10-26-harness-semantics-adapters.md)承接。zcode 的记忆维护轮仍按[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)独立评审，不为只有共享形状的客户端建立空壳 Profile：
+**扩展缝的触发条件。** 注册表采用以下触发条件。当前 Claude 分类器与 OMP skill_hint 已构成两种 Agent 专属类别，首项条件成立；具体范围由[Harness 语义的静态扩展](../implemented/architecture/2026-10-26-harness-semantics-adapters.md)承接。zcode 的记忆维护轮仍按[zcode 的 Agent 支持](../feature/2026-10-24-zcode-agent-support.md)独立评审，不为只有共享形状的客户端建立空壳 Profile：
 
 - 出现第二种 agent 特有类别，需要在同一处注册、或需要按 agent 门控同一类别的不同变体；
 - 新增类别的改动需要同时落在派生、查询与页面三处各写一遍；
