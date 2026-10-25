@@ -132,6 +132,10 @@ OTLP 通道的行**不参与**派生组的 `conv_key` 归组，除非 span 里�
 
 harness 面的文档级扫描（同日）：Codex 原生三信号 OTLP，默认关、`config.toml` 配置（[codex-rs/otel](https://github.com/openai/codex/blob/main/codex-rs/otel/README.md)）；Cursor 企业版 OTLP 只导 metrics 与 logs 且 CLI 不导正文，对本通道无增量（[Cursor 文档](https://prod.cursor.com/docs/enterprise/opentelemetry-export)）；OpenCode 无原生出口，社区插件与 env 约定存在、原生请求状态待查（[issue #14697](https://github.com/anomalyco/opencode/issues/14697)）。结论：标准出口论题在主力 harness 上成立，协议层按两个已实测 harness 落，Codex 列为下一个候选，不为它做预调研。
 
+## 交付记录
+
+- 2026-10-26 协议层已交付（`src/sources/otlp/decode.ts`）。手写 wire 走读器只认 varint、fixed64/32 与 length-delimited，group 编码直接判非法；traces 与 logs 两种 ExportRequest 解成平面形状（span 身份为原始字节、时间为 bigint 纳秒），OTLP/JSON 路径同形状归一——十六进制 id 转字节、驼峰键吸收、`intValue` 兼容字符串形态。整数属性超 2^53 保十进制字符串不假装精度还在；数组空位以 null 保位；未知字段整段跳过。破坏输入有封闭原因码（`otlp_wire_*` / `otlp_json_*` / `otlp_span_identity`），HTTP 层据此回 4xx。测试夹具 `tests/otlp-fixtures.ts` 是同子集的手写编码器，与生产解码器互为镜像，全部合成数据。
+
 ## Alternatives considered
 
 **只支持 `http/json`，放弃 OMP。** 工程成本最低——Bun 原生解析 JSON，不需要写 protobuf。落选原因：只剩 Claude Code 一个来源，无法支撑「harness 无关」的定位，而 OMP 是主力 harness。如果实测发现 OMP 用户占比很低，这个选项可以重新考虑。
