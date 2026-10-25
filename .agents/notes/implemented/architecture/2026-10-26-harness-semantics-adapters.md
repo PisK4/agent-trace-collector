@@ -72,4 +72,4 @@ adapter 不读数据库、文件或网络，不写派生列、不推进修订、
 
 ## Testing
 
-[semantics 测试](../../../../tests/semantics.test.ts)穿过 `classifyPurpose` 外部 interface 的黑盒回归保持原断言：分类器优先级、标题形状、来源 kind、retained 与 unsupported 路径未动。[harness-purpose 测试](../../../../tests/harness-purpose.test.ts)锁登记次序即优先级、合成规则只命中自家标签、弃权落回通用判定、生产登记只含已知品牌。[request-purpose 测试](../../../../tests/request-purpose.test.ts)锁 CAS stale、三次失败终态与升级路径。交付时窄测试 30 通过、`tsc --noEmit` 通过；无行为变化，未做真实流量重验，真实库也未重建。
+[semantics 测试](../../../../tests/semantics.test.ts)穿过 `classifyPurpose` 外部 interface 的黑盒回归保持原断言：分类器优先级、标题形状、来源 kind、retained 与 unsupported 路径未动。[harness-purpose 测试](../../../../tests/harness-purpose.test.ts)锁登记次序即优先级、合成规则只命中自家标签、弃权落回通用判定、生产登记只含已知品牌；另有一条结构性断言扫描 `semantics.ts` 与 `request-purpose.ts` 源码不出现品牌字面（整词匹配），专属知识回流共享文件时测试即失败，常备约定见根 AGENTS.md 的「栈特有约定」。[request-purpose 测试](../../../../tests/request-purpose.test.ts)锁 CAS stale、三次失败终态与升级路径。交付时窄测试 30 通过、`tsc --noEmit` 通过；无行为变化，未做真实流量重验，真实库也未重建。

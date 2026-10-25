@@ -32,6 +32,8 @@ bun run verify:notes   # 提交前
 
 - TypeScript + Bun 单进程；不引第三方依赖，SQLite 用 `bun:sqlite`，压缩用 `node:zlib`。
 - 依赖方向单向：`config`（叶子，不 import 仓库内其他模块）← `store` ← 引擎与读模型，见[五个放错层的符号归位](.agents/notes/implemented/architecture/2026-10-23-symbol-relocations.md)。
+- **Harness 专属用途判定走静态登记**：新 Harness 的强指纹写成 `src/harness/<name>.ts` 的判定函数，在 `harness/purpose.ts` 的登记数组加一行，数组次序即优先级；分派与结算不另写品牌分支，`semantics.ts`、`request-purpose.ts` 及消费端不出现 Harness 名称比较，也不建只转发通用行为的空壳 adapter。见[harness 语义 adapter](.agents/notes/implemented/architecture/2026-10-26-harness-semantics-adapters.md)。
+- **共享解释规则不悄悄加 agent 门控**：输入包装、OMP 归档锚点与 Claude 技能标题格式的定义留在 `input-interpretation.ts` 与 `capabilities.ts`，对未知与空标签同样生效；收紧门控是行为变化，先列反例、升 `PURPOSE_VERSION` 并按显式重建交付，不混进重构提交，纯移动不升版、不开重建。
 - `main.ts` 只做 wiring（timer、防重入锁、配置装配、进程日志），任务体归持有对应概念的 module，见[定时任务体归位](.agents/notes/implemented/architecture/2026-10-23-main-orchestration-delegation.md)。
 - 监听地址写死 `127.0.0.1`，不读环境变量覆盖；运行数据在仓库外，文件 0600、目录 0700，其余边界见[安全边界](docs/architecture-design.md#安全边界)。
 - 正文与路由内容在页面一律转义，不直接插 HTML。
