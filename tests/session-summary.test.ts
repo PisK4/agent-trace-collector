@@ -426,6 +426,31 @@ test('组没算完时汇总带 dirty 标志，数字来自已发布事实', () =
   } finally { f.close(); }
 });
 
+test('排除用途的中断贡献按规则计 0，不算覆盖缺口', () => {
+  const f = fixture();
+  try {
+    seedRoundWithInterrupt(f.store);
+    // 分类器行：同会话排除用途，正文可读，输入里引用了中断短语（摘要引用不算）。
+    f.store.write(db => db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+      body_state,derive_version,have,created_at,updated_at,sort_source,sort_key,purpose_chain,req_kind)
+      VALUES (7,?,'main','known',7000,'2026-10-25','hook','available',0,1,1,1,'ledger','7',
+      'exclude','auto-mode-classifier')`, [GROUP]));
+    persistBody(f.store, 7, { protocol: 'anthropic',
+      request: { messages: [
+        { role: 'user', content: [{ type: 'text', text: `综述：${MARKER} 之前发生过` }] },
+      ] },
+      reply: { content: [{ type: 'text', text: 'chat' }] }, redact_version: 1 });
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE req_id=7'));
+    rebuild(f.store);
+    // 排除是判定：写 0 不留 NULL，改判行也不带过期计数。
+    expect(f.store.read.query<{ interrupt_count: number | null }, [number]>(
+      'SELECT interrupt_count FROM request WHERE req_id=7').get(7)).toEqual({ interrupt_count: 0 });
+    const summary = getSessionSummary(f.store, GROUP);
+    // 排除行不进中断覆盖缺口；只有关系未知或正文不可读的参与行才算未知。
+    expect(summary.interrupts).toEqual({ count: 1, requests: [2], unknown: 0 });
+  } finally { f.close(); }
+});
+
 // ---------------------------------------------------------------------------
 // 迁移：幂等补列 + 视图重建，既有行不动、新列全 NULL。
 // ---------------------------------------------------------------------------

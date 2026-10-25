@@ -39,7 +39,7 @@ Status: implemented
 - **失败位读法**:Anthropic `tool_result` 块只有显式 `is_error:true` 才记 1,显式 false 与字段缺席按协议缺省读成 0;chat 的 `role=tool` 消息没有失败通道,同读 0。生产库实测:目标会话 365 个 resolved 结果里 139 个带显式布尔、226 个缺席,真值恰好 13——缺席按缺省读才能让「未判定」落在真正没拿到结果的调用上。这条与[来源投影与字段保真](../architecture/2026-10-22-source-projection-and-field-fidelity.md)按需读取路径的严格三态分工:那边回答「这一块有没有明确报告失败」,这边回答「这次调用有没有失败」。
 - **涉及路径**:发出的调用不解释成执行或产物——Edit 发出后可能匹配失败或被权限拒绝,Read 的路径可能不存在。所以命名是「写入尝试」「读取请求」,不称修改/参考成果;top N 是**高频路径**,不称核心文件。分组按原始路径(次数降序、并列路径字典序,保证确定性);显示层 basename 折算与悬停全路径沿用轨迹行惯例,同名 basename 并列时显示更多路径段。两组独立统计,同一文件两边都出现是正常形态。
 - **显式 Skill 调用**:按 `arg_skill` 分组,键在 `skill`。技能可以经 system 声明进入上下文而不发生 `Skill` 调用,该计数不暗示技能使用的全貌。
-- **已识别用户中断**:派生解释确定增量里的用户消息时,文本块 trim 后以 `[Request interrupted by user for tool use]` 开头计 1(大小写不敏感),落 request 级 `interrupt_count`,会话 SUM。**按 delta 归属**:中断标记随上下文延续出现在后续每笔请求里,只在首次落入某笔确定增量的那笔计一次;分支与关系未知的请求没有「新增」可言,不计数。摘要引用、tool_result 内文、块中段短语都不算。界面文案「已识别用户中断」;无法判定的请求(正文不可读或派生先于本列)计进覆盖度,不冒充 0,也不外推为人介入率。
+- **已识别用户中断**:派生解释确定增量里的用户消息时,文本块 trim 后以 `[Request interrupted by user for tool use]` 开头计 1(大小写不敏感),落 request 级 `interrupt_count`,会话 SUM。**按 delta 归属**:中断标记随上下文延续出现在后续每笔请求里,只在首次落入某笔确定增量的那笔计一次;分支与关系未知的请求没有「新增」可言,不计数。摘要引用、tool_result 内文、块中段短语都不算。**排除用途按规则贡献 0,写 0 不留 NULL**——排除是判定不是缺口,用途改判的行也不保留过期计数;关系未知与正文不可读的参与行才是覆盖缺口。界面文案「已识别用户中断」;无法判定的请求计进覆盖度,不冒充 0,也不外推为人介入率。
 - **全会话 token 与费用**:SUM(`in_tok`/`out_tok`/`cost`) over 会话全部请求;费用四态沿用,`cost_state='absent'` 的笔数进悬停——unpriced 是另一态,不混入「未取得费用」。
 - **缓存命中**:Σ(`cache_read`) ÷ Σ(`in_tok + cache_read`),只计两个读数都在的请求;并入会话合计行尾部,分母口径与缺值进悬停,分母为空不给数,不给 0。
 - **上下文峰值与模型足迹**:峰值取 max(`prompt_tokens` / `prompt_window`) 的整百分点,悬停给公式;模型足迹数 distinct `model_requested`(NULL 不计),多于一个才显示,完整清单进悬停。
@@ -106,7 +106,7 @@ Status: implemented
 
 ## Testing
 
-合成数据口径由 `tests/session-summary.test.ts` 锁定:anthropic 与 chat 两协议形状的参数提取、缺键 NULL 不猜近邻键;失败位显式 true 才记 1、缺席按缺省读;中断判定只认用户消息第一个文本块的开头前缀,摘要引用与 tool_result 内文不算,计数按 delta 归属;ambiguous 不计失败、pending 不冒充零失败、coverage 如实;保留行计数与明细列保留、从未提取的行进覆盖缺口;中断未判定不冒充 0;token 与费用缺值进覆盖度、不给 0;缓存分母为空不给数;峰值取 max 比值;路径按原始路径分组;dirty 组返回已发布事实加标志;失败集合与工具/路径/Skill 条目都带 req_id+ord 定位;`migrateSummaryFacts` 对缺列旧库幂等补列、重建视图、既有行不动。`tests/protocols.test.ts` 锁定 chat 调用提取的既有判据不漂移;`tests/web.test.ts` 锁定读数页无请求级命中行、缓存读数悬停指向会话头。
+合成数据口径由 `tests/session-summary.test.ts` 锁定:anthropic 与 chat 两协议形状的参数提取、缺键 NULL 不猜近邻键;失败位显式 true 才记 1、缺席按缺省读;中断判定只认用户消息第一个文本块的开头前缀,摘要引用与 tool_result 内文不算,计数按 delta 归属;排除用途的中断贡献按规则计 0、不算覆盖缺口;ambiguous 不计失败、pending 不冒充零失败、coverage 如实;保留行计数与明细列保留、从未提取的行进覆盖缺口;中断未判定不冒充 0;token 与费用缺值进覆盖度、不给 0;缓存分母为空不给数;峰值取 max 比值;路径按原始路径分组;dirty 组返回已发布事实加标志;失败集合与工具/路径/Skill 条目都带 req_id+ord 定位;`migrateSummaryFacts` 对缺列旧库幂等补列、重建视图、既有行不动。`tests/protocols.test.ts` 锁定 chat 调用提取的既有判据不漂移;`tests/web.test.ts` 锁定读数页无请求级命中行、缓存读数悬停指向会话头。
 
 真实库验收以目标会话 `98da290b-7df1-4759-9dd4-d7d6482ea858` 的人工核对为准,锚点全部实测核对(2026-10-25):366 次调用(Edit 156 / Bash 138 / Read 57 / Write 15)、13 失败(Bash 11 + Read 2)、Bash 另 1 次结果未判定、写入尝试 44 条路径、读取请求 24 条、主链 256 / 旁路 64、缓存命中 94.9%、上下文峰值 24%、模型 3 个、会话合计 1.8M 提示 / 205K 输出 / $1.0290、cost_absent 13 笔、子代理与重试为零不出现。两处锚点在实施核对时修正:
 

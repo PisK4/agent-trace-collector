@@ -1049,11 +1049,12 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
     const replyInfo = current === null
       ? { preview: row.live_reply_preview }
       : replyInfoOf(db, row.req_id);
-    // 中断计数：确定增量在手（first/confirmed，隐含正文可读且参与）时按本次增量
-    // 重算；其余场合保留物化时暂存的旧值，不冒充 0。
+    // 中断计数：排除用途按规则贡献 0（排除是判定，改判行不带旧值）；确定增量
+    // 在手（first/confirmed，隐含正文可读且参与）时按本次增量重算；其余场合
+    // 保留物化时暂存的旧值，不冒充 0。
     const delta = row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[];
-    const interruptCount = delta === null
-      ? row.staged_interrupt_count : interruptCountTx(db, row.req_id, delta);
+    const interruptCount = row.purpose_chain === 'exclude' ? 0
+      : delta === null ? row.staged_interrupt_count : interruptCountTx(db, row.req_id, delta);
     const decision = presentationDecision(ports, {
       reqId: row.req_id,
       agent: row.agent,

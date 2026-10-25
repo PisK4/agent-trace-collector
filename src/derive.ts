@@ -320,9 +320,11 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
       ]);
       pairRows.push({ ...row,
         prev_relation: match.relation, delta_ordinals: deltaJson });
-      // 中断计数只在确定增量在手时重算（first/confirmed 隐含正文可读且参与）；
-      // 关系未知、分支与排除用途没有"新增"可言，保留旧值，不冒充 0。
-      const interrupts = delta === null ? null : interruptCountTx(db, row.req_id, delta);
+      // 中断计数：排除用途按规则贡献 0（排除是判定，不留 NULL，改判行也不带旧值）；
+      // 确定增量在手（first/confirmed，隐含正文可读且参与）时按本次增量重算；
+      // 关系未知与分支没有"新增"可言，保留旧值，不冒充 0。
+      const interrupts = isAux ? 0
+        : delta === null ? null : interruptCountTx(db, row.req_id, delta);
       presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts });
       if (current === null) retained += 1;
       else recomputed += 1;
