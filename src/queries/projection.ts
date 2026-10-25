@@ -25,6 +25,8 @@ export type RequestRow = {
   model_served: string | null; in_tok: number | null; out_tok: number | null;
   cache_read: number | null; cache_write: number | null;
   cost: number | null; cost_state: CostState; have: number;
+  /** 证据来源通道：through / rejected / hook / otlp；读侧按它区分 magpie 行与 OTLP 行。 */
+  via: string;
   ms: number | null; ttft_ms: number | null; flow_ms: number | null;
   body_state: BodyState; miss_reason: string | null;
   /** 折叠行摘要：派生时写入，不读正文块。kind 说明摘要来自新增还是末轮输入。 */
@@ -145,6 +147,7 @@ type StateColumns = {
 export type ProjectableRow = StateColumns & DerivedColumns & {
   req_id: number; conv_key: string | null; actor: string | null; agent: string | null;
   actor_state: string; started_ms: number; status: number | null;
+  via: string;
   model_requested: string | null; model_served: string | null;
   in_tok: number | null; out_tok: number | null; cache_read: number | null; cache_write: number | null;
   cost: number | null; cost_state: string | null; have: number; body_state: string;
@@ -208,6 +211,7 @@ export function projectRow(row: ProjectableRow): {
     cost: row.cost,
     cost_state: row.cost_state as CostState,
     have: row.have,
+    via: row.via,
     ms: row.ms,
     ttft_ms: row.ttft_ms,
     flow_ms: row.flow_ms,
