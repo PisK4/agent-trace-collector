@@ -388,6 +388,68 @@ test('窗口外请求传入详情保留首个文本；fold 图例只列正值类
   expect(noPrompt).not.toContain('comp-bar');
 });
 
+test('构成区集成：treemap 与内容列表进折叠行，本地估计贴构成区，占用 pill 按阈值出现', () => {
+  const sevenKinds = {
+    state: 'recomputed', reason: 'complete', actual_version: 1, tokens: 185300, counted: true,
+    window: 200000, held: null, turns: 2, ratio: 0.9265, legacy: false, note: null,
+    parts: [
+      { kind: 'system', tokens: 4820, items: [{ name: '系统提示', tag: null, n: null, tokens: 4820 }] },
+      {
+        kind: 'files', tokens: 47380,
+        items: [
+          { name: 'src/http.ts', tag: 'read', n: null, tokens: 8460 },
+          { name: 'src/queries/requests.ts', tag: 'read', n: null, tokens: 6210 },
+          { name: '另外 7 项', tag: 'more', n: 7, tokens: 4700 },
+        ],
+      },
+      {
+        kind: 'results', tokens: 29760,
+        items: [{ name: 'Bash', tag: 'result', n: 62, tokens: 26680 }],
+      },
+      { kind: 'skills', tokens: 3810, items: [{ name: 'skills', tag: 'skills', n: null, tokens: 3810 }] },
+      { kind: 'chat', tokens: 79770, items: [{ name: '2', tag: 'turn', n: null, tokens: 79770 }] },
+    ],
+  };
+  // 校准行、占用 ≥90%：treemap、图例、列表、总量行都在，pill 出「占满」。
+  const full = usageFoldHtml(ledgerRow() as never, { ...ledgerRow(), prompt: sevenKinds } as never);
+  expect(full).toContain('class="ctx-map"');
+  expect(full).toContain('class="ctx-rows"');
+  expect(full).toContain('>Bash<');
+  expect(full).toContain('×62');
+  expect(full).toContain('class="u-pill warn">占满</span>');
+  expect(full).not.toContain('本地估计');
+  // 占用 75%–90%：出「接近占满」；<75% 正常态零状态提示。
+  const near = usageFoldHtml(ledgerRow() as never, {
+    ...ledgerRow(),
+    prompt: { ...sevenKinds, tokens: 160000, ratio: 0.8 },
+  } as never);
+  expect(near).toContain('class="u-pill warn">接近占满</span>');
+  const calm = usageFoldHtml(ledgerRow() as never, {
+    ...ledgerRow(),
+    prompt: { ...sevenKinds, tokens: 60000, ratio: 0.3 },
+  } as never);
+  expect(calm).not.toContain('u-pill warn');
+  expect(calm).not.toContain('接近占满');
+  // 估算行（counted=false）：「本地估计」pill 贴在构成区末行，不藏在折叠深处的说明段。
+  const est = usageFoldHtml(ledgerRow() as never, {
+    ...ledgerRow(),
+    prompt: { ...sevenKinds, counted: false },
+  } as never);
+  expect(est).toContain('class="u-pill" title="分类按请求正文估算，未经本次回复的实测 token 校准">本地估计</span>');
+  const pillAt = est.indexOf('本地估计</span>');
+  const totalAt = est.indexOf('class="u-total"');
+  expect(pillAt).toBeGreaterThan(totalAt);
+  expect(est).not.toContain('<p class="note">本地估计');
+  // 窗口未知：无占用率、无空闲块，treemap 全幅铺已用部分。
+  const nowin = usageFoldHtml(ledgerRow() as never, {
+    ...ledgerRow(),
+    prompt: { ...sevenKinds, window: null, ratio: null },
+  } as never);
+  expect(nowin).not.toContain('占用 <b>');
+  expect(nowin).toContain('窗口未知');
+  expect(nowin).not.toContain('stroke-dasharray');
+});
+
 test('effort 读数：request_fields 有值才显示该行，缺字段或未读正文不显示', () => {
   const withEffort = usageFoldHtml(ledgerRow() as never, null, {
     state: 'available', request_fields: { reasoning_effort: 'high' },

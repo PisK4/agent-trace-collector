@@ -13,6 +13,7 @@ import {
 } from './body-view.js';
 import { esc } from './html.js';
 import { kk, partColor, partLabel } from './parts.js';
+import { contextMapHtml, contextRowsHtml } from './context-map.js';
 import { topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
 import { bodyLabelText } from './row-summary.js';
@@ -342,9 +343,12 @@ export function requestEffortOf(page) {
 }
 
 /**
- * 用量与上下文折叠行（读数页末位，默认展开）：计时与用量两列读数 + 构成单条柱。
- * 摘要行给计时与用量的关键三项；构成条与图例共用正值类别，图例按 token 数降序；
- * 没有正值类别时不留空的条和图例容器，总量、窗口、占用与缺失或估计说明保留。
+ * 用量与上下文折叠行（读数页末位，默认展开）：计时与用量两列读数 + 构成区。
+ * 构成区自上而下是构成条、treemap、图例与内容列表，末行 u-total 汇总总量、
+ * 窗口与占用；构成条与图例共用正值类别，图例按 token 数降序。异常态才出标签：
+ * 占用 ≥75% 出「接近占满」、≥90% 出「占满」warn pill，估算行（counted=false）
+ * 出「本地估计」pill 且贴在构成区末行，正常态零状态提示。没有正值类别时
+ * 不留空的条和图例容器，总量、窗口、占用与缺失或估计说明保留。
  * @param {RequestRow} r
  * @param {RequestDetail | null} detail
  * @param {BodyPage | null} [meta] 正文首片；effort 从 request_fields 取，未读到不显示该行
@@ -352,12 +356,11 @@ export function requestEffortOf(page) {
  */
 export function usageFoldHtml(r, detail, meta = null) {
   const p = detail?.prompt ?? null;
-  const list = /** @type {{kind: string, tokens: number}[]} */ (p?.parts ?? []);
+  const list = /** @type {import('../src/queries/routes').RoutePromptPart[]} */ (p?.parts ?? []);
   const hasComp = p !== null && !(p.tokens === null && list.length === 0);
   const ledger = ledgerParts(r, detail);
-  const hint = p === null || (p.state === 'recomputed' && p.counted === true) ? '' : [
-    p.state === 'recomputed' ? '' : ({ recomputed: '当前结果', retained: '旧结果', missing: '缺失' }[p.state] ?? p.state),
-    p.counted === true ? '' : '本地估计',
+  const hint = p === null || p.state === 'recomputed' ? '' : [
+    ({ recomputed: '当前结果', retained: '旧结果', missing: '缺失' }[p.state] ?? p.state),
   ].filter(Boolean).join(' · ');
   let comp = '';
   if (hasComp) {
@@ -368,12 +371,17 @@ export function usageFoldHtml(r, detail, meta = null) {
     const bar = positive.length > 0
       ? `<div class="comp-bar" aria-hidden="true">${positive.map(x => `<i style="flex:${x.tokens / sum};background:${partColor(String(x.kind))}"></i>`).join('')}</div>`
       : '';
+    const mapHtml = positive.length > 0 ? contextMapHtml(p, r.req_id) : '';
+    const rowsHtml = positive.length > 0 ? contextRowsHtml(p, r.req_id) : '';
     const legend = positive.length > 0
       ? `<div class="comp-legend">${[...positive].sort((a, b) => b.tokens - a.tokens).map(x => `<span class="name"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></span>
         <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>`
       : '';
-    const total = `<div class="u-total" style="margin-top:8px"><span>提示总量 <b>${p.tokens === null ? '<i class="miss">—</i>' : n(p.tokens)}</b></span><span>${p.window ? `窗口 <b>${kk(p.window)}</b>` : '窗口未知'}</span>${p.ratio !== null ? `<span>占用 <b>${(p.ratio * 100).toFixed(1)}%</b></span>` : ''}</div>`;
-    comp = `${bar}${legend}${total}`;
+    const full = p.ratio !== null && p.ratio >= 0.9 ? '占满' : p.ratio !== null && p.ratio >= 0.75 ? '接近占满' : '';
+    const est = p.counted === false
+      ? '<span class="u-pill" title="分类按请求正文估算，未经本次回复的实测 token 校准">本地估计</span>' : '';
+    const total = `<div class="u-total" style="margin-top:8px"><span>提示总量 <b>${p.tokens === null ? '<i class="miss">—</i>' : n(p.tokens)}</b></span><span>${p.window ? `窗口 <b>${kk(p.window)}</b>` : '窗口未知'}</span>${p.ratio !== null ? `<span>占用 <b>${(p.ratio * 100).toFixed(1)}%</b></span>` : ''}${est}${full !== '' ? `<span class="u-pill warn">${full}</span>` : ''}</div>`;
+    comp = `${bar}${mapHtml}${legend}${rowsHtml}${total}`;
   }
   const note = hasComp
     ? (p?.note ?? (p?.window === null ? '没有可用分母，不显示占用率。' : '分类是估计分配，不是逐类精确计数。'))
