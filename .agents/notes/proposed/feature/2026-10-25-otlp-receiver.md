@@ -135,6 +135,7 @@ harness 面的文档级扫描（同日）：Codex 原生三信号 OTLP，默认�
 ## 交付记录
 
 - 2026-10-26 协议层已交付（`src/sources/otlp/decode.ts`）。手写 wire 走读器只认 varint、fixed64/32 与 length-delimited，group 编码直接判非法；traces 与 logs 两种 ExportRequest 解成平面形状（span 身份为原始字节、时间为 bigint 纳秒），OTLP/JSON 路径同形状归一——十六进制 id 转字节、驼峰键吸收、`intValue` 兼容字符串形态。整数属性超 2^53 保十进制字符串不假装精度还在；数组空位以 null 保位；未知字段整段跳过。破坏输入有封闭原因码（`otlp_wire_*` / `otlp_json_*` / `otlp_span_identity`），HTTP 层据此回 4xx。测试夹具 `tests/otlp-fixtures.ts` 是同子集的手写编码器，与生产解码器互为镜像，全部合成数据。
+- 2026-10-26 证据层与映射层（traces）已交付。`have` 第 4 位（8）、`via='otlp'`、`body_state='summary'` 落地；span 物理身份 `(trace_id, span_id)` 进 `request_evidence`（source_kind `otlp_span`，ref_key 是 hex(trace)/hex(span)），重发幂等零副作用。原始层新表 `raw_otlp_span`（schema v7，纯新增；v6 库打开时原地升级，备份白名单随之收 6/7 两版）。选取键 `(service.name, 规则)`：CC 按名 `claude_code.llm_request`、OMP 按 `gen_ai.operation.name='chat'`；键名按实测不走语义约定文档（CC 用量是平铺 `input_tokens` 一族）。agent 标签用 magpie 同值域（`claude-code`→`claude`、`oh-my-pi`→`omp`）。白名单外的 span 只落原始层；LLM 形状但规则没认的进 `ingest_issue` 未知桶不兜底建行。带会话 id 才进派生组（组键与 `sessionRef` 逐字相同、`conv_source='otlp-session'`），没带不进 `derive_queue`。第一批不写 `response_id_norm`——锚点留 Deferred。脱敏先于原始层落盘，`paused` 档整批拒绝。
 
 ## Alternatives considered
 

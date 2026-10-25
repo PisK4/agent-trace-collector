@@ -12,6 +12,8 @@ export const HAVE_BODY = 1;
 export const HAVE_LEDGER = 2;
 /** 请求行已关联路由历史。 */
 export const HAVE_ROUTE = 4;
+/** 请求行来自 OTLP span（第四通道）。 */
+export const HAVE_OTLP = 8;
 
 /** 会话归属引用：key 是 JSON 数组形状的组键，source 记录归属来源。 */
 export type ConvRef = { key: string; source: string };
@@ -48,8 +50,22 @@ export function routeConv(session: string | null, conv: string | null): ConvRef 
   return null;
 }
 
+/**
+ * OTLP 归属：组键与 sessionRef 逐字相同（`gen_ai.conversation.id` 与 magpie
+ * session 同值空间，撞键是常态），conv_source 单记 `otlp-session` 区分来源。
+ * span 没带会话 id 时返回 null——该行不进派生组，只作独立记录可查。
+ */
+export function otlpConv(session: string | null): ConvRef | null {
+  return session === null
+    ? null
+    : { key: JSON.stringify(['session', session]), source: 'otlp-session' };
+}
+
 /** hook 证据的匹配规则名：按 response_id_norm 关联账本请求。 */
 export const MATCH_BY_RESPONSE_ID = 'response_id_norm.v1';
+
+/** OTLP span 证据的匹配规则名：物理身份 (trace_id, span_id) 直接落位，不猜关联。 */
+export const MATCH_BY_SPAN_IDENTITY = 'trace_span.v1';
 
 /**
  * 在调用方现有事务内登记一条来源证据：INSERT OR IGNORE，重复幂等。

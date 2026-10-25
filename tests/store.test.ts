@@ -19,7 +19,7 @@ test('事务失败不留下证据或游标', () => {
   }
 });
 
-test('建库包含27个业务表且使用AUTOINCREMENT', () => {
+test('建库包含28个业务表且使用AUTOINCREMENT', () => {
   const f = fixture();
   try {
     const names = (f.store.read.query(
@@ -29,7 +29,8 @@ test('建库包含27个业务表且使用AUTOINCREMENT', () => {
       'bg_job', 'block', 'collector_state', 'cost_observation',
       'derive_call_work', 'derive_chain_work', 'derive_generation', 'derive_queue',
       'derive_request_result', 'derive_result_work', 'derive_role_work', 'derive_tool_result',
-      'ingest_issue', 'pending_hook', 'purged_evidence', 'raw_hook', 'raw_ledger', 'raw_route',
+      'ingest_issue', 'pending_hook', 'purged_evidence', 'raw_hook', 'raw_ledger',
+      'raw_otlp_span', 'raw_route',
       'request', 'request_alias', 'request_block', 'request_evidence', 'retention_event',
       'route_summary', 'source_cursor', 'source_gap', 'tool_call',
     ]);
@@ -236,7 +237,7 @@ test('拒绝未知的高版本schema', () => {
   }
 });
 
-test('低版本库拒绝打开，空库建到当前版本', () => {
+test('过低版本库拒绝打开，空库建到当前版本', () => {
   const dir = mkdtempSync(join(tmpdir(), 'atc-store-version-'));
   try {
     const legacy = join(dir, 'legacy', 'trace.db');
@@ -247,7 +248,32 @@ test('低版本库拒绝打开，空库建到当前版本', () => {
     expect(() => openStore(legacy)).toThrow('schema_rebuild_required');
     const store = openStore(join(dir, 'fresh', 'trace.db'));
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 6 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 7 });
+    } finally { store.close(); }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v6库原地升到v7：纯新增表，既有数据不动', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'atc-store-upgrade-'));
+  try {
+    // 先按当前版本建库、写入一行数据，再降级 user_version 模拟 v6 库。
+    const path = join(dir, 'trace.db');
+    const seed = openStore(path);
+    seed.write(db => db.run(
+      `INSERT INTO request(started_ms, day, via, body_state, derive_version, have, created_at, updated_at)
+       VALUES (1, '2026-10-26', 'through', 'pending', 0, 2, 1, 1)`));
+    seed.close();
+    const raw = new Database(path);
+    raw.run('PRAGMA user_version=6');
+    raw.close();
+    const store = openStore(path);
+    try {
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 7 });
+      expect((store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(1);
+      // 升级是纯新增：OTLP 原始层表就位且为空。
+      expect((store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(0);
     } finally { store.close(); }
   } finally {
     rmSync(dir, { recursive: true, force: true });
