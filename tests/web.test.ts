@@ -317,17 +317,20 @@ test('计时缺值：仅一项有值只展示一项，全缺不渲染，0 按有
   expect(flow.timing).toContain('60 tok/s');
 });
 
-test('用量两列：缺值显示 —，全缺不渲染，命中与费用口径不变', () => {
+test('用量两列：缺值显示 —，全缺不渲染，命中行退役后缓存读数指向会话头', () => {
   const p = ledgerParts(ledgerRow() as never, null);
   expect(p.usage).toContain('<dl class="chain ledger-chain">');
   expect(p.usage).toContain('>入<');
-  expect(p.usage).toContain('51%');
   expect(p.usage).toContain('$0.0034');
-  expect(p.headline).toBe('总 2.10s · 出 120 · 命中 51%');
-  // 基础字段缺值保留槽位显示 —；派生行（命中）只在可计算时出现。
+  // 请求级命中行与摘要命中已退役：命中率只在会话头合计行表达，
+  // 缓读行的悬停指过去。
+  expect(p.usage).not.toContain('>命中<');
+  expect(p.usage).toContain('命中率是会话级读数，见会话头合计行');
+  expect(p.headline).toBe('总 2.10s · 出 120');
+  // 基础字段缺值保留槽位显示 —。
   const missing = ledgerParts(ledgerRow({ out_tok: null }) as never, null);
   expect(missing.usage.match(/class="miss"/g)?.length).toBe(1);
-  expect(missing.headline).toBe('总 2.10s · 命中 51%');
+  expect(missing.headline).toBe('总 2.10s');
   const allMissing = ledgerParts(ledgerRow({ in_tok: null, out_tok: null, cache_read: null, cache_write: null }) as never, null);
   expect(allMissing.usage).toBe('');
   expect(allMissing.headline).toBe('');

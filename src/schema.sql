@@ -145,6 +145,9 @@ CREATE TABLE request (
   -- 回复形状位：final / tools / unknown，轮次结算的收尾判定在派生期落这里。
   -- 正文回收后保留派生时的值；NULL 表示从未判定（升级窗口期，回填收口为 unknown）。
   reply_shape      TEXT,
+  -- 已识别用户中断：派生解释确定增量里的用户消息时按开头前缀计数。
+  -- 正文回收后保留派生时的值；NULL 表示从未判定（正文不可读或派生先于本列）。
+  interrupt_count  INTEGER,
   derive_version   INTEGER NOT NULL,
   have             INTEGER NOT NULL,
   miss_reason      TEXT,
@@ -240,9 +243,16 @@ CREATE TABLE tool_call (
   req_id     INTEGER NOT NULL,
   ord        INTEGER NOT NULL,
   tool_name  TEXT,
+  -- 调用参数的两个事实：Edit/Write/Read 的 file_path 与 Skill 的 skill。
+  -- 键缺失落 NULL，不猜近邻键；正文回收后随配对行保留。
+  arg_path   TEXT,
+  arg_skill  TEXT,
   result_req INTEGER,
   result_ord INTEGER,
   result_path TEXT,
+  -- 配对结果的失败位：true=1、其余（false、缺席、chat 无失败通道）=0；
+  -- 未配对为 NULL。聚合计失败数，缺席按协议缺省读成非失败。
+  is_error   INTEGER,
   state      TEXT NOT NULL,
   derive_version INTEGER NOT NULL DEFAULT 1,
   algorithm_version INTEGER,

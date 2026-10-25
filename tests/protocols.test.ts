@@ -109,7 +109,9 @@ test('多 choice 不发布只有 ord 的确定调用身份', () => {
   // 单 choice 路径与序号保持原义。
   const single = { choices: [reply.choices[0]] };
   expect(parseProtocol('chat', { messages: [] }, single).calls.map(call => call.ord)).toEqual([0]);
-  expect(anthropicReplyCalls(single)).toEqual([{ id: 'left', name: 'read', ord: 0 }]);
+  expect(anthropicReplyCalls(single)).toEqual([
+    { id: 'left', name: 'read', ord: 0, argPath: null, argSkill: null },
+  ]);
 });
 
 test('回复形状：可识别形状、无有效调用且完整收尾判 final', () => {

@@ -66,7 +66,7 @@ Status: implemented
 - 路由首字时间读 `firstText`。`raw_route.payload_json` 的 14,679 行里 `firstText` 有 2,382 行，`first_text` 0 行；`route_summary.first_text` 此前因此恒为 NULL。摘要列与 `z.first_text` 都来自同一个 `RouteFields.firstText`，只改映射入口。
 - `safeAffinity` 的键集是 `mode`、`why`、`turn`、`at`、`lastTurn`、`within`、`kept`、`cacheRead`、`cacheWrite`。真实的 affinity 对象（12,644 条）没有 `cache_read` / `cache_write`；`last` 是账号或来源身份，与 `order[].who` / `id` 同属身份，继续排除。没有证据的键不加。
 - `attemptChainOf` 只读真实 tries 键：`model`、`status`、`fail`、`error`、`start`、`ms`、`ttft`、`flow`、`firstText`、`firstReasoning`、`served`、`done`、`effort`、`tierServed`、`reasoningHidden`、`queued`。`provider`、`replan`、`gone`、`earlier` 在 14,803 个尝试项里 0 次出现，删掉；`id` 是身份，`net` 与 `rest` 是嵌套透传对象（`rest.key` 含账号），整体不透出。`done` 与 `reasoningHidden` 按布尔透出，缺失保持 null。
-- 工具结果的 `is_error` 在正文块里：14,817 个去重后的工具结果块中 9,012 个带该布尔，286 个为 true。不为它新增列；正文 API 本来就返回原始块，页面展开消息时按需读取，只有 `true` 标“工具结果失败”，缺失不等于成功。
+- 工具结果的 `is_error` 在正文块里：14,817 个去重后的工具结果块中 9,012 个带该布尔，286 个为 true。当时不为它新增列；正文 API 本来就返回原始块，页面展开消息时按需读取，只有 `true` 标“工具结果失败”，缺失不等于成功。2026-10-25 会话信息汇总以「不读全部正文就数不出失败数」为由反转了「不加列」的结论——`tool_call.is_error` 与 `derive_tool_result.is_error` 落列，见[会话信息汇总](../feature/2026-10-25-session-trace-summary.md)；本条的其余决策（按真实键名读取、缺失不等于成功）不受影响，按需读取路径的严格三态保持原样，与汇总提取层「缺席按协议缺省读」的口径分工不混用。
 
 ## Alternatives considered
 
@@ -82,7 +82,7 @@ Status: implemented
 
 **把键名自动做 camelCase / snake_case 或大小写归一。** 归一等于替上游猜键名，会把不同来源的同名字段混成一个量；映射在一处显式列出，读不到就是没有。
 
-**给 `is_error` 加长期列。** 工具结果块本来就在正文里，页面按需读取即可；加列要同时改 schema、派生与迁移，首版前没有证据表明需要长期列。
+**给 `is_error` 加长期列。** 工具结果块本来就在正文里，页面按需读取即可；加列要同时改 schema、派生与迁移，首版前没有证据表明需要长期列。（2026-10-25 更新：会话级聚合构成新证据，`tool_call.is_error` 落列，见[会话信息汇总](../feature/2026-10-25-session-trace-summary.md)；当时的否决理由按其自身口径失效，其余 alternatives 不受影响。）
 
 **整体透出 `net` 与 `rest`。** `rest.key` 是账号或来源身份，`net` 是网络阶段耗时；整体透出越过白名单，只抽布尔或计数也无法回答当前页面要问的问题，所以都不透出。
 

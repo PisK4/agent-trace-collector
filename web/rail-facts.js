@@ -262,21 +262,17 @@ export function ledgerParts(r, detail = null) {
   let usage = '';
   let headline = '';
   if (anyUsage) {
-    const total = (r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0);
-    const hit = r.cache_read !== null && total > 0 ? Math.round(r.cache_read / total * 100) : null;
     usage = [
       row('入', r.in_tok === null ? null : n(r.in_tok), '输入 token，不含缓存读取与写入'),
       row('出', r.out_tok === null ? null : n(r.out_tok), '输出 token'),
-      row('缓读', r.cache_read === null ? null : n(r.cache_read), '缓存读取 token'),
+      row('缓读', r.cache_read === null ? null : n(r.cache_read), '缓存读取 token；命中率是会话级读数，见会话头合计行'),
       row('缓写', r.cache_write === null ? null : n(r.cache_write), '缓存写入 token'),
-      hit !== null ? row('命中', `${hit}%`, '缓存命中 = 缓读 ÷ 提示总量，展示比例，不是计费口径') : '',
       r.cost_state === 'priced' && r.cost !== null ? row('费用', `$${fmtCost(r.cost)}`, '费用（上游报告）') : '',
       r.cost_state === 'zero' ? row('费用', '$0', '费用（上游报告）') : '',
     ].join('');
     headline = [
       ms !== null ? `总 ${(ms / 1000).toFixed(2)}s` : '',
       r.out_tok !== null ? `出 ${n(r.out_tok)}` : '',
-      hit !== null ? `命中 ${hit}%` : '',
     ].filter(Boolean).join(' · ');
   }
   return {

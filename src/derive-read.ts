@@ -3,7 +3,7 @@ import { zstdDecompressSync } from 'node:zlib';
 import { readBodyTx } from './body';
 import { assistantText } from './protocols';
 import { interpretMessage } from './input-interpretation';
-import { clip, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './derive-decision';
+import { clip, interruptCountOf, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './derive-decision';
 import type { PresentationPorts, ResolvedTool, ReplyShape } from './derive-decision';
 
 /**
@@ -174,6 +174,18 @@ export function messageAt(db: Database, reqId: number, ordinal: number): unknown
   } catch {
     return null;
   }
+}
+
+/**
+ * 本笔确定增量里的中断计数：判定在共享内核（interruptCountOf 一份），
+ * 这里只把 delta 指向的消息逐条读出来。调用方在 delta 为 null 时保留旧值，
+ * 不走这条读取路径。
+ */
+export function interruptCountTx(db: Database, reqId: number,
+  delta: readonly number[]): number {
+  const messages: unknown[] = [];
+  for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal);
+  return interruptCountOf(messages, delta);
 }
 
 /** db 版工具结果摘要：按 delta 的原始 ord 稀疏取消息，判定交给共享实现。 */

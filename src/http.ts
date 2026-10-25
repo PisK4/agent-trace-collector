@@ -8,10 +8,13 @@ import {
   getRequest,
   getRoute,
   getStats,
+  getSummaryEntries,
+  getSessionSummary,
   listRequests,
   listSessions,
   listTurns,
 } from './queries';
+import type { SummaryEntriesQuery } from './queries';
 import { PAGE_MAX, bodyRangeError, getBodyPage } from './protocols';
 import {
   getReadingBody, getReadingDetail, getToolResultReading,
@@ -119,6 +122,26 @@ function parseIndex(url: URL, name: string, fallback: number): number {
   if (raw === null) return fallback;
   if (!/^\d+$/.test(raw)) throw new QueryInputError('invalid_body_range');
   return Number(raw);
+}
+
+/**
+ * 汇总条目点击查询的参数解析。每类一个 kind，name/path 缺失或多余参数都显式 400，
+ * 不静默回退——定位查错误输入比查错结果更难发现。
+ */
+function summaryEntriesQuery(url: URL): SummaryEntriesQuery | null {
+  const kind = url.searchParams.get('kind');
+  const name = url.searchParams.get('name');
+  const path = url.searchParams.get('path');
+  if (kind === 'interrupts') {
+    return name === null && path === null ? { kind } : null;
+  }
+  if (kind === 'tool' || kind === 'skill') {
+    return name !== null && name.length > 0 && path === null ? { kind, name } : null;
+  }
+  if (kind === 'written' || kind === 'read') {
+    return path !== null && path.length > 0 && name === null ? { kind, path } : null;
+  }
+  return null;
 }
 
 async function serveStatic(path: string): Promise<Response> {
@@ -321,6 +344,19 @@ export function createHandler(
           from = Number(rawFrom);
         }
         return json(listTurns(store, key, from));
+      }
+
+      const summaryMatch = /^\/api\/sessions\/([^/]+)\/summary$/.exec(path);
+      if (summaryMatch !== null) {
+        return json(getSessionSummary(store, decodeURIComponent(summaryMatch[1]!)));
+      }
+
+      const summaryEntriesMatch = /^\/api\/sessions\/([^/]+)\/summary\/entries$/.exec(path);
+      if (summaryEntriesMatch !== null) {
+        const key = decodeURIComponent(summaryEntriesMatch[1]!);
+        const query = summaryEntriesQuery(url);
+        if (query === null) return json({ error: 'invalid_entries_query' }, 400);
+        return json(getSummaryEntries(store, key, query));
       }
 
       const requestMatch = /^\/api\/requests\/(\d+)$/.exec(path);

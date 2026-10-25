@@ -261,3 +261,21 @@ export function interpretMessage(message: unknown, agent: string | null, ord: nu
     input: role === 'user' ? interpretUserMessage(message, agent) : null,
   };
 }
+
+/**
+ * 已识别用户中断的标记判定：用户消息第一个文本块 trim 后以客户端中断前缀开头。
+ *
+ * 判定按消息开头的位置前缀做，不按全文搜索：压缩摘要大量「引用」这个短语，
+ * tool_result 内文与块中段都不算；剥包装之前的原始块才是 harness 写入的位置，
+ * 所以这里不经过 cleanBlock。大小写不敏感；措辞变化出现新形状时扩展这里并
+ * bump 算法号重算。
+ */
+const INTERRUPT_PREFIX = '[request interrupted by user for tool use]';
+
+export function isUserInterruptMessage(message: unknown): boolean {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return false;
+  if ((message as Record<string, unknown>).role !== 'user') return false;
+  const blocks = textBlocks(message);
+  if (blocks.length === 0) return false;
+  return blocks[0]!.trim().toLowerCase().startsWith(INTERRUPT_PREFIX);
+}
