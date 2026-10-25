@@ -4,12 +4,27 @@ import { zstdDecompressSync } from 'node:zlib';
 import { resolveRequestId, type Store } from '../store';
 import { finite, isRecord, parseJsonOrNull, stringOrNull } from './projection';
 
+/** prompt item 的白名单标量：名字、身份 tag、聚合数与 token；不透出正文。 */
+export type PromptItem = {
+  name: string;
+  tag: string | null;
+  n: number | null;
+  tokens: number;
+};
+
+export type RoutePromptPart = {
+  kind: string;
+  tokens: number;
+  items?: PromptItem[];
+};
+
 export type RoutePrompt = {
   tokens: number;
   counted: boolean;
   window: number | null;
   held: boolean | null;
-  parts: { kind: string; tokens: number }[];
+  turns: number | null;
+  parts: RoutePromptPart[];
 };
 
 export type RouteColumns = {
@@ -110,25 +125,43 @@ function safeAffinity(value: unknown): Record<string, unknown> | null {
   return Object.keys(picked).length === 0 ? null : picked;
 }
 
+/**
+ * `prompt.parts` 的白名单投影：kind 与 tokens 之外，item 级只挑 name/tag/n/tokens
+ * 四个标量，非法项剔除。route_summary 的 `z` 与 request 落列的 `parts_json`
+ * 同源同形状，共用这一个读取。
+ */
+export function safePromptParts(value: unknown): RoutePromptPart[] {
+  if (!Array.isArray(value)) return [];
+  const parts: RoutePromptPart[] = [];
+  for (const part of value) {
+    if (!isRecord(part) || typeof part.kind !== 'string') continue;
+    const count = finite(part.tokens);
+    if (count === null) continue;
+    const items: PromptItem[] = [];
+    if (Array.isArray(part.items)) {
+      for (const item of part.items) {
+        if (!isRecord(item) || typeof item.name !== 'string') continue;
+        const itemTokens = finite(item.tokens);
+        if (itemTokens === null) continue;
+        items.push({ name: item.name, tag: stringOrNull(item.tag), n: finite(item.n), tokens: itemTokens });
+      }
+    }
+    parts.push(items.length > 0 ? { kind: part.kind, tokens: count, items } : { kind: part.kind, tokens: count });
+  }
+  return parts;
+}
+
 export function safePrompt(value: unknown): RoutePrompt | null {
   if (!isRecord(value)) return null;
   const tokens = finite(value.tokens);
   if (tokens === null) return null;
-  const parts: { kind: string; tokens: number }[] = [];
-  if (Array.isArray(value.parts)) {
-    for (const part of value.parts) {
-      if (!isRecord(part) || typeof part.kind !== 'string') continue;
-      const count = finite(part.tokens);
-      if (count === null) continue;
-      parts.push({ kind: part.kind, tokens: count });
-    }
-  }
   return {
     tokens,
     counted: value.counted === true,
     window: finite(value.window),
     held: typeof value.held === 'boolean' ? value.held : null,
-    parts,
+    turns: finite(value.turns),
+    parts: safePromptParts(value.parts),
   };
 }
 
