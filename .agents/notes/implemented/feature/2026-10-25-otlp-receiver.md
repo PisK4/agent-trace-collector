@@ -53,7 +53,7 @@ OTLP 本身是稳定标准：规范到 1.11.1，trace / metric / log 三个信�
 
 ### 证据身份
 
-两条通路之间存在**精确锚点**，2026-10-26 抓样已在两个 harness 上各命中一次（细节见文末[实测记录](#实测记录2026-10-26-抓样)）。OMP chat span 的 `gen_ai.response.id`（`chatcmpl-…`）与 Claude Code logs 事件的 `message.id`（`msg_…`）都落在 magpie 账本 `response_id` 的值空间，经既有前缀归一化后与账本行精确相等。这与 hook↔账本现用的 `response_id_norm` 关联是同一机制。
+两条通路之间存在**精确锚点**，2026-10-26 抓样已在两个 harness 上各命中一次（细节见文末[实测记录](#实测记录2026-10-26-抓样)）。OMP chat span 的 `gen_ai.response.id`（`chatcmpl-…`）与 Claude Code logs 事件的 `message.id`（`msg_…`）都落在 magpie 账本 `response_id` 的值空间。经既有前缀归一化后，两者与账本行精确相等——与 hook↔账本现用的 `response_id_norm` 关联是同一机制。
 
 所以第一批**不合并是范围取舍，不是无锚点的被迫**。合并要处理重复合并、字段优先级与派生组迁移，值得单独立项；锚点已在，记录在案不急于这一批用掉。按时间与模型配对仍然禁止——锚点是 ID 相等，不是时间窗。
 
@@ -179,7 +179,13 @@ harness 面的文档级扫描（同日）：
 - 2026-10-26 HTTP 端点已交付。`POST /v1/traces` 与 `POST /v1/logs`：Host/Origin 边界与 hook 共用同一段，Bearer 用独立 `otlp.token`（`loadLocalSecret` 同一机制、常量时间比较），content-type 只收 `application/x-protobuf` 与 `application/json`（`text/plain` 等简单请求形态 415——浏览器防线三件套的第三条落地）。其余拒绝路径各自就位：方法错 405，单飞守卫与 hook 共用（429），64 MiB 整批 413，解码失败 400 带原因码，95% 档 507。成功回 OTLP 规范的 `{"partialSuccess":{}}`。二进制载荷走 `readBoundedBytes`（新增字节形态，原 `readBounded` 变其 UTF-8 包装）。拒绝原因码进容量观测（`otlp_unavailable`/`unsupported_media_type`/`invalid_otlp` 三个新值）。
 - 2026-10-26 读模型与页面已交付。`via` 进列表与详情投影（`RequestRow` 新增、详情 `r.*` 自然带出），行摘要按通道标「OTLP 通道」；`body_state='summary'` 的文案明示「OTLP 摘要」，不冒充正文可读。会话 `missing_body` 改按期望位图算：through 期望三路齐、rejected 只期望账本、otlp 只期望第 4 位——OTLP 行不因缺 magpie 证据被标成采集失败，通过/拒绝通道的现行语义不变。合成服务器（prototypes）的行构造同步补 `via='through'`。
 - 2026-10-26 文档收口已交付，本文迁入 implemented。按 Supersession 表同步上位文档：README 受众边界改为「magpie 或已适配 harness」、数据来源表补第四行并写明与 magpie 自带导出器的区分；项目定位改写「不做通用摄入协议」为「OTLP 是唯一受控通用入口」；架构设计扩为四通道（位义 1/2/4/8、`via='otlp'`、`body_state='summary'`、OTLP 三表 DDL、端点安全行、容量梯度行为、schema v7 与 v6 原地升级）；trace 格式与 CONTEXT 的通道、via、body_state 条目同步；运维手册补 `otlp.token`、OTLP 接入一节与 95% 档拒收。
-- 2026-10-26 README 接入路径重写。接真实流量一节按两条进路重构：公共启动与令牌生成（补 `otlp.token`）置顶，「走 magpie 三路证据」与「走 OTLP 不装 magpie」各自成小节。OTLP 小节给外部用户可照抄的最短路径，四件事：base64url 令牌取值（裸二进制直接 `cat` 会判畸形请求，重启实测踩到后写明成因）、两个标准环境变量、按 harness 的差异（Claude Code 加 `OTEL_LOG_RAW_API_BODIES=file` 得逐笔正文、OMP 只到摘要）、双通道并存两行的提示。错误码表与磁盘档位仍以运维手册为家。
+- 2026-10-26 README 接入路径重写。接真实流量一节按两条进路重构：公共启动与令牌生成（补 `otlp.token`）置顶，「走 magpie 三路证据」与「走 OTLP 不装 magpie」各自成小节。OTLP 小节给外部用户可照抄的最短路径：
+  - base64url 令牌取值（裸二进制直接 `cat` 会判畸形请求，重启实测踩到后写明成因）
+  - 两个标准环境变量
+  - 按 harness 的差异（Claude Code 加 `OTEL_LOG_RAW_API_BODIES=file` 得逐笔正文、OMP 只到摘要）
+  - 双通道并存两行的提示
+
+  错误码表与磁盘档位仍以运维手册为家。
 
 ## Alternatives considered
 
@@ -232,7 +238,7 @@ harness 面的文档级扫描（同日）：
 - OTLP 独有事实进读模型列：`query_source_safe`、Claude Code 的 `attempt`、`agent_id` / `parent_agent_id` 结构化子代理关系、工具 span 的精确起止。
 - 会话内按来源过滤或并排展示双通道重复行。
 - 跨通道按 `response_id_norm` 精确去重：锚点已实测（OMP span 属性、Claude Code logs 事件），判重机制与 hook↔账本现有关联同构，合并策略与字段优先级需单独设计。
-- 其他 harness 的接入：Codex 原生三信号（默认关，`config.toml` 配置）是下一个自然候选；Cursor 企业版只导 metrics/logs 且明确不含 CLI 正文，对本通道无会话阅读增量，不接；OpenCode 无原生出口，社区插件不追。逐个按 `(service.name, 选取规则)` 白名单加，不做预调研。
+- 其他 harness 的接入：Codex 已交付（见交付记录，决策与对外 profile 归[两步走提案](../../proposed/feature/2026-10-26-otlp-exporter-profile-and-codex.md)）；goose 与 Gemini CLI 缓接，固定提交考察在父知识库；Cursor 企业版只导 metrics/logs 且明确不含 CLI 正文，对本通道无会话阅读增量，不接；OpenCode 无原生出口，社区插件不追。逐个按 `(service.name, 选取规则)` 白名单加。
 - 派生层接入（用途判定、工具配对、前驱链）。
 - metrics 信号。第一批只做 traces 与 logs；`gen_ai.client.token.usage` 这类直方图对会话阅读没有增量。
 - magpie OTLP 的专门适配。
