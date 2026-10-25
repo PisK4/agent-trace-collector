@@ -52,7 +52,7 @@ hook 其实到过。raw_hook 里 `a59f14a6`（00:10:17，success=0）恰在 6005
   3. `NOT EXISTS (SELECT 1 FROM pending_hook ph WHERE ph.response_id_norm = request.response_id_norm)`。等待关联队列里已有 hook 以本行的 response id 指向本行时（含歧义候选行），合并随时可能发生，不标注。不用 `NOT IN` 子查询：目标列为 NULL 时 `NOT IN` 恒为 NULL，会把 `response_id_norm` 为 NULL 的行（顺序不可证被清空响应身份的）永久漏掉；`NOT EXISTS` 的等值比较对 NULL 两边都过滤，NULL 行自然放行为"无指向、可标注"；
   4. `started_ms < now - HOOK_ABSENT_THRESHOLD_MS`。锚点用 `started_ms`：hook 正常在请求结束时到达，等待从请求开始起算。不用 `updated_at`，任何触碰都会刷新它；
   5. `miss_reason IS NULL`，不覆盖已有原因。
-- **动作**：只写 `miss_reason='hook_absent'`，不改 `body_state`。`body_state` 回答"正文现在在不在"（`src/store.ts` 的类型注释），`miss_reason` 回答"为什么没有"；正文确实没有，pending 仍是事实。判定依据按证据能力表述：等满阈值，仍没有任何 hook 证据关联到本请求，且等待关联队列中没有指向本行的候选。不宣称 hook 从未发生——生产库 47 笔孤儿 hook 证明这个断言会出错。`miss_reason` 已在列表行投影上（`src/queries.ts`），store 落地后阅读器自动获得准确文案。
+- **动作**：只写 `miss_reason='hook_absent'`，不改 `body_state`。`body_state` 回答"正文现在在不在"（`src/store.ts` 的类型注释），`miss_reason` 回答"为什么没有"；正文确实没有，pending 仍是事实。判定依据按证据能力表述：等满阈值，仍没有任何 hook 证据关联到本请求，且等待关联队列中没有指向本行的候选。不宣称 hook 从未发生——生产库 47 笔孤儿 hook 证明这个断言会出错。`miss_reason` 已在列表行投影上（`src/queries/projection.ts`），store 落地后阅读器自动获得准确文案。
 - **阈值**：常量 `HOOK_ABSENT_THRESHOLD_MS`，默认 1 小时。依据：本会话正常 chat 请求实测最长约 129 秒，1 小时留了一个数量级余量。偏长的代价只是标签晚出现；偏短的代价是给仍在运行的超长请求写错误事实，违背"报告忠实"。
 - **合并时的原因对账**：`mergeHookInto()` 只迁移正文、正文引用与证据，原本不碰 `miss_reason`；现在合并事务内按合并后的正文现实对账一次：正文完整（`available`，无论迁移与否）→ `miss_reason=NULL`；否则取源行的 `miss_reason`——迁移了是源行正文自己的降级原因，未迁移时源行的降级原因仍是本行正文现实的最好描述，源行没有就清空。hook 证据已关联，"`hook_absent`"必为假，这一条规则在三种形态（迁移后 available、迁移后 partial、无骨架未迁移）下都把它解除。合并后 have 位已置（步骤 5 的 `have=have|HAVE_BODY`），守卫条件 2 保证不会重标，无震荡。
 - **每轮限额**：每轮最多 200 笔：先 SELECT 命中 id（按 `started_ms` 升序），再按 `IN (...)` UPDATE。部署首轮即清完积压；partial index（`WHERE body_state='pending'`）留待量级增长后再评估。

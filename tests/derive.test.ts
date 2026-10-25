@@ -11,7 +11,7 @@ import { drainDerive, drainDeriveTx, enqueueDerive } from '../src/derive';
 import { PURPOSE_VERSION } from '../src/semantics';
 import { readBodyTx } from '../src/body';
 import { GROUP_ALGORITHM } from '../src/derive-state';
-import { listSessions } from '../src/queries';
+import { listSessions } from '../src/queries/sessions';
 import { modelTimeTitle } from '../src/format';
 import { messageFingerprint } from '../src/fingerprint';
 import { interpretMessage } from '../src/input-interpretation';

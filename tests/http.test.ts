@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { loadConfig } from '../src/config';
 import { createHandler, loadReadToken, STATIC_FILES } from '../src/http';
-import { getRequest, getRoute, listRequests, listSessions } from '../src/queries';
+import { getRequest, listRequests } from '../src/queries/requests';
+import { getRoute } from '../src/queries/routes';
+import { listSessions } from '../src/queries/sessions';
 import { createCapacityMetrics } from '../src/capacity';
 import { persistBody } from '../src/body';
 

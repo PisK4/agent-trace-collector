@@ -9,7 +9,7 @@ import { bodyLabelText, bodyStateText } from './row-summary.js';
  * 页签行在轮次态隐藏——页签是请求作用域。读取、失效与选中由 app 装配；
  * 这里只拼字符串，不碰 DOM、不发请求，正文一律转义。
  *
- * @typedef {import('../src/queries').TurnPairRow} TurnPairRow
+ * @typedef {import('../src/queries/turns').TurnPairRow} TurnPairRow
  * @typedef {import('../src/input-interpretation').UserInputView} UserInputView
  * @typedef {import('../src/protocols').BodyPage} BodyPage
  * @typedef {{body_state: string, miss_reason?: string | null}} BodyRow 轮次面板只消费正文状态两字段

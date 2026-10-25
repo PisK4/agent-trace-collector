@@ -13,7 +13,7 @@ import {
   syncCosts,
   validateCostPeriod,
 } from '../src/sources/magpie';
-import { getStats } from '../src/queries';
+import { getStats } from '../src/queries/stats';
 
 const salt = new Uint8Array(32).fill(7);
 

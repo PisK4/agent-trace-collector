@@ -3,9 +3,12 @@ import { fixture, SEED_GROUP, seedPurposeRequest } from './fixtures';
 import { loadBoundSaltTx, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
 import { zstdCompressSync } from 'node:zlib';
-import { attemptChainOf, derivationOf, getRequest, getRoute, getStats, listRequests, listSessions,
-  projectionMetaReading, promptReadingOf, routeSummaryReading, sourceFactsReading } from '../src/queries';
-import type { ProjectionMetaReading } from '../src/queries';
+import { attemptChainOf, getRoute, routeSummaryReading } from '../src/queries/routes';
+import { derivationOf, projectionMetaReading, promptReadingOf, sourceFactsReading } from '../src/queries/readings';
+import type { ProjectionMetaReading } from '../src/queries/readings';
+import { getRequest, listRequests } from '../src/queries/requests';
+import { getStats } from '../src/queries/stats';
+import { listSessions } from '../src/queries/sessions';
 import { persistBody } from '../src/body';
 import { drainDerive, enqueueDerive } from '../src/derive';
 import { markGroupDirtyTx } from '../src/derive-state';

@@ -66,7 +66,7 @@ import { routeReadTarget } from './url-route.js';
  *   | {kind: 'select-tool-page', page: string}
  *   | {kind: 'clear-step'}
  *   | {kind: 'tool-gone'}
- *   | {kind: 'select-turn', row: import('../src/queries').TurnPairRow}
+ *   | {kind: 'select-turn', row: import('../src/queries/turns').TurnPairRow}
  *   | {kind: 'turn-gone'}
  *   | {kind: 'nav-settled'}
  * } Intent 装配层解析事件后发出的意图。

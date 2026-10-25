@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { getBodyPage } from './protocols';
 import type { BodyPage } from './protocols';
-import { getRequest } from './queries';
-import type { RequestDetail } from './queries';
+import { getRequest } from './queries/requests';
+import type { RequestDetail } from './queries/requests';
 import { deriveJoinSql } from './derive-state';
 import { resolveRequestId, type Store } from './store';
 

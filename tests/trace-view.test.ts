@@ -5,7 +5,7 @@ import { projectSteps, renderTraceRows, toolSummary } from '../web/trace-view.js
 
 const TOKEN = 'r1-' + 'a'.repeat(64);
 
-function row(overrides: Record<string, unknown> = {}): import('../src/queries').RequestRow {
+function row(overrides: Record<string, unknown> = {}): import('../src/queries/projection').RequestRow {
   return ({
     req_id: 7, conv_key: 'k', actor: 'a', agent: null, actor_state: 'known' as const, started_ms: 7,
     title: 't', title_source: null, status: 200, model_requested: null, model_served: 'm',
@@ -17,7 +17,7 @@ function row(overrides: Record<string, unknown> = {}): import('../src/queries').
     purpose_status: 'selected', purpose_version: 1, purpose_rule: null,
     purpose_chain: 'participate', derived_state: 'current' as const,
     ...overrides,
-  }) as import('../src/queries').RequestRow;
+  }) as import('../src/queries/projection').RequestRow;
 }
 
 function detail(overrides: Record<string, unknown> = {}) {

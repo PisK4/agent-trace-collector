@@ -3,9 +3,9 @@
  * 读者前端：单一轨迹视图。窗口、正文区间、结构与工具结果都经 reader-store
  * 读取（带阅读版本）；步骤投影用 trace-view 的纯函数，行级文案在 row-summary、
  * 右栏组合在 rail-facts、URL 目标在 url-route，这里只做装配与交互。
- * @typedef {import('../src/queries').RequestDetail} RequestDetail
- * @typedef {import('../src/queries').RequestRow} RequestRow
- * @typedef {import('../src/queries').SessionRow} SessionRow
+ * @typedef {import('../src/queries/requests').RequestDetail} RequestDetail
+ * @typedef {import('../src/queries/projection').RequestRow} RequestRow
+ * @typedef {import('../src/queries/sessions').SessionRow} SessionRow
  */
 
 import {
@@ -70,7 +70,7 @@ if (typeof document !== 'undefined') {
   const folds = new Map();
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
   const structureSelected = new Map();
-  /** @type {{kind: string, param: string, label: string, loading: boolean, error: string | null, data: import('../src/queries').SummaryEntries | null} | null} 会话汇总条目列表：点开条目后右栏的支撑记录清单。 */
+  /** @type {{kind: string, param: string, label: string, loading: boolean, error: string | null, data: import('../src/queries/session-summary').SummaryEntries | null} | null} 会话汇总条目列表：点开条目后右栏的支撑记录清单。 */
   let summaryList = null;
 
   const qp = new URLSearchParams(location.search);
@@ -369,7 +369,7 @@ if (typeof document !== 'undefined') {
     return '';
   }
 
-  /** 会话合计行：token、费用与缓存命中是会话口径；覆盖缺口进悬停。 @param {import('../src/queries').SessionSummary} s */
+  /** 会话合计行：token、费用与缓存命中是会话口径；覆盖缺口进悬停。 @param {import('../src/queries/session-summary').SessionSummary} s */
   function sessionTotalsHtml(s) {
     const t = s.totals;
     if (t.in_tok === null && t.out_tok === null && t.cost === null) return '';
@@ -384,7 +384,7 @@ if (typeof document !== 'undefined') {
     return `<span class="sum" title="${esc(title)}">${parts.join(' · ')}</span>`;
   }
 
-  /** 折叠区收起行的覆盖度悬停：缺口如实列出，不计入失败。 @param {import('../src/queries').SessionSummary} s */
+  /** 折叠区收起行的覆盖度悬停：缺口如实列出，不计入失败。 @param {import('../src/queries/session-summary').SessionSummary} s */
   function coverageHoverText(s) {
     const c = s.coverage;
     const parts = [`调用 ${c.calls_total} 次：已配对 ${c.calls_paired}，失败位已知 ${c.calls_error_known}，参数事实已知 ${c.calls_fact_known}`];
@@ -407,7 +407,7 @@ if (typeof document !== 'undefined') {
     return base;
   }
 
-  /** 工具 chip 行：失败数只在非零时出现；未判定与覆盖缺口进悬停。 @param {import('../src/queries').SessionSummary} s */
+  /** 工具 chip 行：失败数只在非零时出现；未判定与覆盖缺口进悬停。 @param {import('../src/queries/session-summary').SessionSummary} s */
   function summaryToolChips(s) {
     if (s.tools.length === 0) return '';
     const chips = s.tools.map(t => {
@@ -423,7 +423,7 @@ if (typeof document !== 'undefined') {
     return `<div class="tool-row">${chips}</div>`;
   }
 
-  /** 涉及路径：单行流式双色 chip，写入=橙、读取=蓝，各前三加同色 +N 展开。 @param {import('../src/queries').SessionSummary} s */
+  /** 涉及路径：单行流式双色 chip，写入=橙、读取=蓝，各前三加同色 +N 展开。 @param {import('../src/queries/session-summary').SessionSummary} s */
   function summaryPathFlow(s) {
     const written = s.paths.written;
     const read = s.paths.read;
@@ -447,7 +447,7 @@ if (typeof document !== 'undefined') {
     return `<div class="path-flow">${group(written, 'w')}${sep}${group(read, 'r')}</div>`;
   }
 
-  /** 显式 Skill 调用：黄色系 chip，前三加二级展开；没有调用整区不渲染。 @param {import('../src/queries').SessionSummary} s */
+  /** 显式 Skill 调用：黄色系 chip，前三加二级展开；没有调用整区不渲染。 @param {import('../src/queries/session-summary').SessionSummary} s */
   function summarySkills(s) {
     if (s.skills.length === 0) return '';
     const chip = (/** @type {{name: string, count: number}} */ k) =>
@@ -461,7 +461,7 @@ if (typeof document !== 'undefined') {
     return `<div class="sum-skills">${head}${more}</div>`;
   }
 
-  /** 结构行：主链/旁路与峰值常驻，子代理、重试与多模型足迹非零才出现。 @param {import('../src/queries').SessionSummary} s */
+  /** 结构行：主链/旁路与峰值常驻，子代理、重试与多模型足迹非零才出现。 @param {import('../src/queries/session-summary').SessionSummary} s */
   function summaryStructure(s) {
     const st = s.structure;
     const parts = [`主链 <b>${st.main}</b>`, `旁路 <b>${st.bypass}</b>`];
@@ -477,7 +477,7 @@ if (typeof document !== 'undefined') {
     return `<div class="sum-structure" title="${esc(title)}">${parts.join(' · ')}</div>`;
   }
 
-  /** session-head 内的汇总折叠区：收起一行核心数，展开四个分区。 @param {import('../src/queries').SessionSummary | null} s */
+  /** session-head 内的汇总折叠区：收起一行核心数，展开四个分区。 @param {import('../src/queries/session-summary').SessionSummary | null} s */
   function sessionSummaryFold(s) {
     if (s === null) return '';
     const failures = s.tools.reduce((a, t) => a + t.errors, 0);
@@ -593,7 +593,7 @@ if (typeof document !== 'undefined') {
     }
     const s = /** @type {Record<string, unknown>} */ (route.summary);
     const order = Array.isArray(s.order) ? s.order : [];
-    const attempts = /** @type {import('../src/queries').AttemptChain | null} */ (s.attempts ?? null);
+    const attempts = /** @type {import('../src/queries/routes').AttemptChain | null} */ (s.attempts ?? null);
     const canonical = canonicalModel(r);
     // 头部已显示模型；去向行只在与头部不同（错路由、换模型）时才重复 served。
     const served = typeof s.served === 'string' ? s.served : null;
@@ -1240,7 +1240,7 @@ if (typeof document !== 'undefined') {
 
   /**
    * 打开条目列表：按组现查，不缓存；换目标时旧响应作废。
-   * @param {import('../src/queries').SummaryEntriesQuery} query
+   * @param {import('../src/queries/session-summary').SummaryEntriesQuery} query
    * @param {string} label
    */
   async function openSummaryList(query, label) {

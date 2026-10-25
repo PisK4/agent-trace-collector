@@ -7,7 +7,7 @@
  * 绝不把消息内容当 HTML 执行。
  *
  * @typedef {import('../src/protocols').BodyPage} BodyPage
- * @typedef {import('../src/queries').RequestDetail} RequestDetail
+ * @typedef {import('../src/queries/requests').RequestDetail} RequestDetail
  * @typedef {'system' | 'user' | 'assistant' | 'tool' | 'unknown'} Role
  * @typedef {{kind: string, text: string, index: number, raw: unknown, path: string, failed?: boolean}} Block
  * @typedef {import('../src/input-interpretation').UserInputView} UserInputView
@@ -717,7 +717,7 @@ function renderSkillItem(skill) {
 /**
  * 尝试链。每一行只用服务端白名单字段；未知 fail 原样转义。
  * 缺开始时间时只附说明，不计算任何相邻尝试的时间差。
- * @param {import('../src/queries').AttemptChain | null | undefined} chain
+ * @param {import('../src/queries/routes').AttemptChain | null | undefined} chain
  * @returns {string}
  */
 export function renderAttemptChain(chain) {

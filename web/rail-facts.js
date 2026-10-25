@@ -2,8 +2,8 @@
 /**
  * 右栏读数页的组合纯函数：事实页、请求结构、工具概览、用量折叠行与选中来源解析。
  * 只拼 HTML 字符串，不读写 DOM，也不发起读取；测试直接断言输出。
- * @typedef {import('../src/queries').RequestRow} RequestRow
- * @typedef {import('../src/queries').RequestDetail} RequestDetail
+ * @typedef {import('../src/queries/projection').RequestRow} RequestRow
+ * @typedef {import('../src/queries/requests').RequestDetail} RequestDetail
  * @typedef {import('./reader-store.js').RequestRead} RequestRead
  */
 

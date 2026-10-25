@@ -4,7 +4,7 @@ import { SEED_GROUP, seedRequest } from './fixtures';
 import { persistBody } from '../src/body';
 import { drainDerive, enqueueDerive } from '../src/derive';
 import { evictOldestBodyBatch } from '../src/retention';
-import { listTurns } from '../src/queries';
+import { listTurns } from '../src/queries/turns';
 
 /**
  * 轮次结算的场景种子：每笔请求一条消息序列（前缀 = 之前所有笔的累计）与回复。

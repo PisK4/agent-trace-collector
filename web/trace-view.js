@@ -221,7 +221,7 @@ export function toolSummary(name, inputText) {
 }
 
 /**
- * @param {import('../src/queries').RequestRow} row
+ * @param {import('../src/queries/projection').RequestRow} row
  * @param {import('./reader-store.js').RequestRead | null} read
  * @param {SystemContext} [systemContext] 顶层 System 的当前值与比较结果；由装配层按
  * 同 actor 已确认前驱计算，投影不做时间推断，也不持久化比较结果。
@@ -436,7 +436,7 @@ function toolRowParts(step, callOf) {
  * 单行轨迹只显示请求序号、角色、工具身份 chip 与内容，点击行在右栏阅读详情。
  * 工具行的预览不做字符截断：参数摘要与结果正文完整进 DOM，超长由中栏列宽的
  * 省略号处理；其余行仍按 140 字符截断。
- * @param {import('../src/queries').RequestRow} row
+ * @param {import('../src/queries/projection').RequestRow} row
  * @param {TraceStep[]} steps
  * @param {number} ordinal 当前窗口展示号（仅显示，身份用 req_id）
  * @param {string|null} selected 当前选中的步骤键

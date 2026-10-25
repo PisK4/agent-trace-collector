@@ -19,7 +19,7 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * @property {'reading'|'fresh'|'invalidated'|'failed'} status 快照生命周期：详情在手为 fresh，作废待重读为 invalidated，详情读取失败为 failed，其余 reading。只描述 detail/meta/token 层，结构、增量与逐工具的局部状态不进 status。
  * @property {string | null} detailError 详情读取失败原因；仅 failed 态非空。
  * @property {boolean} updatedSinceSeen 自动重读换新后置位；页面交互经 clearUpdated 清除。
- * @property {import('../src/queries').RequestDetail | null} detail
+ * @property {import('../src/queries/requests').RequestDetail | null} detail
  * @property {import('../src/protocols').BodyPage | null} meta
  * @property {Map<number, ReturnType<typeof messageEntries>[number]>} messages
  * @property {ReturnType<typeof messageEntries>} entries
@@ -30,8 +30,8 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
 
 /**
  * @typedef {Object} ReaderStore
- * @property {() => {sessionKey: string | null, requests: import('../src/queries').RequestRow[], olderCursor: string | null, loading: boolean, error: string | null}} getWindow
- * @property {() => {items: import('../src/queries').SessionRow[], cursor: string | null, error: string | null}} getSessions
+ * @property {() => {sessionKey: string | null, requests: import('../src/queries/projection').RequestRow[], olderCursor: string | null, loading: boolean, error: string | null}} getWindow
+ * @property {() => {items: import('../src/queries/sessions').SessionRow[], cursor: string | null, error: string | null}} getSessions
  * @property {(cursor?: string) => Promise<void>} loadSessions
  * @property {(key: string, limit?: number) => Promise<void>} selectSession
  * @property {() => Promise<void>} loadEarlier
@@ -44,11 +44,11 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * @property {(id: number) => RequestRead | null} peekRequest 同步读取当前快照，不发网络；记录存在即返回（含作废、失败与读取中的半成品），null 只表示本会话没有这笔记录。
  * @property {(id: number, ord: number) => import('../src/reading').ToolResultReading | null} peekToolResult 同步读取工具结果缓存，失败占位也算可用。
  * @property {(id: number) => {state: string, summary: unknown} | null} peekRoute 同步读取路由缓存；未读到或读取失败返回 null。
- * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries').TurnPairRow[]}} peekTurns 同步读取轮次快照；absent 覆盖 404、读取失败与无窗口三种不可呈现态。
+ * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/turns').TurnPairRow[]}} peekTurns 同步读取轮次快照；absent 覆盖 404、读取失败与无窗口三种不可呈现态。
  * @property {() => Promise<void>} loadTurns 按当前会话与窗口下界取轮次列表；换窗后的重取排在前一次之后。
- * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries').SessionSummary | null}} peekSummary 同步读取会话汇总快照；absent 覆盖 404、读取失败与无会话三种不可呈现态。
+ * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} peekSummary 同步读取会话汇总快照；absent 覆盖 404、读取失败与无会话三种不可呈现态。
  * @property {(key: string) => Promise<void>} loadSummary 打开会话即拉一次汇总，不懒加载；换会话代次变更后迟到响应不写入。
- * @property {(query: import('../src/queries').SummaryEntriesQuery) => Promise<import('../src/queries').SummaryEntries>} loadSummaryEntries 汇总条目点击后的按组查询；无缓存，每次点击现查。
+ * @property {(query: import('../src/queries/session-summary').SummaryEntriesQuery) => Promise<import('../src/queries/session-summary').SummaryEntries>} loadSummaryEntries 汇总条目点击后的按组查询；无缓存，每次点击现查。
  * @property {(id: number) => void} clearUpdated 清除自动重读的「已更新」标记。
  * @property {(id: number) => void} invalidate 原地清空一笔记录的缓存并落作废态；不通知、不排自动重读，测试与强制失效用。
  */
@@ -94,22 +94,22 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   const lane = createLanes(4, fetcher);
   let epoch = 0;
 
-  /** @type {{items: import('../src/queries').SessionRow[], cursor: string | null, error: string | null}} */
+  /** @type {{items: import('../src/queries/sessions').SessionRow[], cursor: string | null, error: string | null}} */
   const sessions = { items: [], cursor: null, error: null };
   /** @type {string | null} */
   let sessionKey = null;
-  /** @type {import('../src/queries').RequestRow[]} */
+  /** @type {import('../src/queries/projection').RequestRow[]} */
   let windowRows = [];
   /** @type {string | null} */
   let olderCursor = null;
   let windowLoading = false;
   /** @type {string | null} */
   let windowError = null;
-  /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries').TurnPairRow[]}} */
+  /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/turns').TurnPairRow[]}} */
   let turns = { status: 'idle', items: [] };
   /** @type {Promise<void> | null} 轮次读取串行化：加载更早触发的重取排在前一次之后，后到先得。 */
   let turnsInflight = null;
-  /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries').SessionSummary | null}} */
+  /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} */
   let summary = { status: 'idle', data: null };
 
   /**
@@ -265,7 +265,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     const task = (async () => {
       turns = { status: 'loading', items: turns.items };
       try {
-        const page = /** @type {import('../src/queries').TurnsPage} */ (
+        const page = /** @type {import('../src/queries/turns').TurnsPage} */ (
           await getJson(`/api/sessions/${encodeURIComponent(key)}/turns?from=${from}`));
         if (myEpoch !== epoch) return;
         turns = { status: 'ready', items: page.items };
@@ -291,7 +291,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     summary = { status: 'loading', data: null };
     onSummaryChanged?.();
     try {
-      const data = /** @type {import('../src/queries').SessionSummary} */ (
+      const data = /** @type {import('../src/queries/session-summary').SessionSummary} */ (
         await getJson(`/api/sessions/${encodeURIComponent(key)}/summary`));
       if (myEpoch !== epoch) return;
       summary = { status: 'ready', data };
@@ -303,13 +303,13 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     }
   }
 
-  /** @param {import('../src/queries').SummaryEntriesQuery} query */
+  /** @param {import('../src/queries/session-summary').SummaryEntriesQuery} query */
   async function loadSummaryEntries(query) {
     const params = new URLSearchParams({ kind: query.kind });
     if (query.kind === 'tool' || query.kind === 'skill') params.set('name', query.name);
     if (query.kind === 'written' || query.kind === 'read') params.set('path', query.path);
     const data = await getJson(`/api/sessions/${encodeURIComponent(String(sessionKey))}/summary/entries?${params.toString()}`);
-    return /** @type {import('../src/queries').SummaryEntries} */ (data);
+    return /** @type {import('../src/queries/session-summary').SummaryEntries} */ (data);
   }
 
   /** @param {string} key @param {number} limit */
@@ -660,12 +660,12 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return routeValues.get(id) ?? null;
   }
 
-  /** @returns {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries').TurnPairRow[]}} */
+  /** @returns {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/turns').TurnPairRow[]}} */
   function peekTurns() {
     return turns;
   }
 
-  /** @returns {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries').SessionSummary | null}} */
+  /** @returns {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} */
   function peekSummary() {
     return summary;
   }
