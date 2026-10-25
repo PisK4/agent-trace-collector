@@ -14,7 +14,7 @@ import { loadBoundSaltTx, loadConfig } from '../src/config';
 import { redact } from '../src/privacy';
 import { startCollector } from '../src/main';
 import { persistBody } from '../src/body';
-import { GROUP_ALGORITHM } from '../src/derive-state';
+import { GROUP_ALGORITHM } from '../src/derive/state';
 import { PURPOSE_VERSION } from '../src/semantics';
 
 test('维护重建排空目标会话且不消费其它会话积压', async () => {

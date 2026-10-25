@@ -14,7 +14,7 @@ import type { LedgerFields, RouteFields } from './sources/magpie/mapping';
 import { insertPreparedLedgerTx, isPurgedEvidence, upsertPreparedRouteTx } from './sources/raw';
 import type { LedgerPhysicalRef } from './sources/raw';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx, projectionSignature, readProjectionTx } from './sources/projection';
-import { markOwnershipChangeTx, markRequestInputTx, requestGroupTx } from './derive-state';
+import { markOwnershipChangeTx, markRequestInputTx, requestGroupTx } from './derive/state';
 import type { RequestProjection } from './sources/projection';
 import { closeSourceGapsTx, markStaleGapsTx, recordPausedBatchTx } from './retention';
 import { HAVE_LEDGER, HAVE_ROUTE, insertEvidenceTx, ledgerConv, routeConv, sessionRef } from './evidence';

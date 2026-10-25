@@ -8,13 +8,13 @@ Status: implemented
 
 ## Decision
 
-`derive-state.ts`（dirty 标记的内核）拥有判定的唯一写法，本次交付三个符号：
+`derive/state.ts`（dirty 标记的内核）拥有判定的唯一写法，本次交付三个符号：
 
 - `queuePendingSql(alias?)`：待办条件 `state<>'clean'` 的 SQL 片段；
 - `groupCurrentSql(alias)`：「当前」条件三连的 SQL 片段，别名必填；
 - `groupIsCurrent(row)`：同一判定的行形态，输入队列行的原始列名。
 
-消费方全部改为引用片段：`queries/projection.ts` 的 `derivedStateOf` 与 `queries/sessions.ts` 的会话标题候选、`derive.ts` 的组选取与 `remaining` 计数、`derive-slice.ts` 的候选选取/算法归一/`remaining`、`maintenance/verify.ts` 与 `maintenance/rebuild.ts` 的报告、`capacity.ts` 的积压探测。判据本身的语义（clean 行是完成记录、修订与算法追赶、`dirty_since_ms` 口径）不变，仍由[组发布前处理请求](2026-10-22-request-work-before-group-publish.md)与[持久组状态与输入修订](2026-10-22-durable-group-state-and-input-revision.md)持有，本 note 只把判据在代码里的家固定下来。
+消费方全部改为引用片段：`queries/projection.ts` 的 `derivedStateOf` 与 `queries/sessions.ts` 的会话标题候选、`derive/sync.ts` 的组选取与 `remaining` 计数、`derive/slice.ts` 的候选选取/算法归一/`remaining`、`maintenance/verify.ts` 与 `maintenance/rebuild.ts` 的报告、`capacity.ts` 的积压探测。判据本身的语义（clean 行是完成记录、修订与算法追赶、`dirty_since_ms` 口径）不变，仍由[组发布前处理请求](2026-10-22-request-work-before-group-publish.md)与[持久组状态与输入修订](2026-10-22-durable-group-state-and-input-revision.md)持有，本 note 只把判据在代码里的家固定下来。
 
 ## Alternatives considered
 
@@ -26,7 +26,7 @@ Status: implemented
 
 ## Consequences
 
-- 改判据只动 `derive-state.ts` 一处；SQL 与 TS 两种形态同文件相邻，不一致在 review 里直接可见。
+- 改判据只动 `derive/state.ts` 一处；SQL 与 TS 两种形态同文件相邻，不一致在 review 里直接可见。
 - 片段是带别名参数的函数，不是常量。`request` 与 `derive_queue` 都有 `input_revision`，join 内插必须限定别名，这条约束写进片段的文档注释。
 - `capacity.ts` 的旧库列探测（`hasState` 守卫）与片段组合使用，容量实验对 v5 库的容忍路径不受影响。
 - `schema.sql` 里描述约定的注释保留：它面向读 schema 的人，不是判定的实现位置。

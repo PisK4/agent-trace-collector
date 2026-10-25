@@ -1,6 +1,6 @@
 /** 会话列表：聚合窗口、标题选取与状态标志。 */
 
-import { derivedColSql, groupCurrentSql } from '../derive-state';
+import { derivedColSql, groupCurrentSql } from '../derive/state';
 import { HAVE_BODY } from '../evidence';
 import type { Store } from '../store';
 import { checkLimit, decodeCursor, encodeCursor, type Page } from './cursor';

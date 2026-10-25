@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { Store } from '../src/store';
-import { markRequestInputTx } from '../src/derive-state';
+import { markRequestInputTx } from '../src/derive/state';
 import { persistBodyTx } from '../src/body';
 import {
   applyPurposeDecisionTx, applyPurposeErrorTx, drainRequestPurposesTx,

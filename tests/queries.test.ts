@@ -10,8 +10,8 @@ import { getRequest, listRequests } from '../src/queries/requests';
 import { getStats } from '../src/queries/stats';
 import { listSessions } from '../src/queries/sessions';
 import { persistBody } from '../src/body';
-import { drainDerive, enqueueDerive } from '../src/derive';
-import { markGroupDirtyTx } from '../src/derive-state';
+import { drainDerive, enqueueDerive } from '../src/derive/sync';
+import { markGroupDirtyTx } from '../src/derive/state';
 
 function insertRequests(store: ReturnType<typeof fixture>['store'], convKey: string, count: number, sameMs: boolean): void {
   store.write(db => {

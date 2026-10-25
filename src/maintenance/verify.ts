@@ -1,7 +1,7 @@
 /** 只读校验：库完整性与三类容易悄悄积累的结构问题。 */
 
 import { Database } from 'bun:sqlite';
-import { queuePendingSql } from '../derive-state';
+import { queuePendingSql } from '../derive/state';
 
 export type VerifyReport = {
   integrity: string[];

@@ -1,5 +1,5 @@
-import { modelTimeTitle } from './format';
-import { interpretMessage, isUserInterruptMessage } from './input-interpretation';
+import { modelTimeTitle } from '../format';
+import { interpretMessage, isUserInterruptMessage } from '../input-interpretation';
 
 /**
  * 派生判定内核：两条派生路径共用的「怎么判」。

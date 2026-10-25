@@ -6,7 +6,7 @@ import type { Config } from './config';
 import type { Store } from './store';
 import { measureStorage } from './retention';
 import type { StorageUsage } from './retention';
-import { queuePendingSql } from './derive-state';
+import { queuePendingSql } from './derive/state';
 
 /**
  * 进程内容量观测。只保留固定原因码、计数与有界时延样本，不保存被拒正文、

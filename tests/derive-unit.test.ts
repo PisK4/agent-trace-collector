@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from 'bun:test';
 import { join } from 'node:path';
-import { createDeriveUnit, drainDeriveEntry } from '../src/derive-unit';
+import { createDeriveUnit, drainDeriveEntry } from '../src/derive/unit';
 import { openStore } from '../src/store';
 import { fixture, seedPurposeRequest } from './fixtures';
 

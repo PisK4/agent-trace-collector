@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { fixture, seedPurposeRequest } from './fixtures';
-import { markRequestInputTx, markGroupDirtyTx } from '../src/derive-state';
+import { markRequestInputTx, markGroupDirtyTx } from '../src/derive/state';
 import {
   getReadingBody, getReadingDetail, getToolResultReading, ReadingConflictError,
 } from '../src/reading';

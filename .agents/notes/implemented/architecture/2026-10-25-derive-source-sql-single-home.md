@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-join 与取值片段落进 `derive-state.ts`（`deriveJoinSql`/`derivedColSql`，随该模块 `*Sql` 命名），挨着 `queuePendingSql`/`groupCurrentSql`/`purposePendingSql`——它们本就共享「片段相同、查询角色各自保留」的哲学。queries 的全部用点与 reading 的 `IDENTITY_SQL` 共用；选源语义、`projectRow` 的 current 屏蔽、身份槽位（固定 null 槽、两条取源列并读）全部不动。`IDENTITY_SQL` 只是把 join 的形状外包，选哪些列仍由身份语义决定。
+join 与取值片段落进 `derive/state.ts`（`deriveJoinSql`/`derivedColSql`，随该模块 `*Sql` 命名），挨着 `queuePendingSql`/`groupCurrentSql`/`purposePendingSql`——它们本就共享「片段相同、查询角色各自保留」的哲学。queries 的全部用点与 reading 的 `IDENTITY_SQL` 共用；选源语义、`projectRow` 的 current 屏蔽、身份槽位（固定 null 槽、两条取源列并读）全部不动。`IDENTITY_SQL` 只是把 join 的形状外包，选哪些列仍由身份语义决定。
 
 容量脚本侧，`HASH_COLUMNS` 有序清单（标注 `fact`/`derived` 归属）成为唯一一份：同步路径全列读 request，切片路径派生列读发布代 result 行、事实列 join 回 request。两条取源路径刻意保留——统一成一条回退路径会让对照失去意义，指纹相等恰恰要证明两条不同来源读出同一组值。`derivedHash` 导出供对照锚使用。
 

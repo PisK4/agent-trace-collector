@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
 import { SEED_GROUP, seedRequest } from './fixtures';
 import { persistBody } from '../src/body';
-import { drainDerive, enqueueDerive } from '../src/derive';
+import { drainDerive, enqueueDerive } from '../src/derive/sync';
 import { evictOldestBodyBatch } from '../src/retention';
 import { listTurns } from '../src/queries/turns';
 

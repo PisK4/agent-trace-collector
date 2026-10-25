@@ -47,9 +47,9 @@ Status: implemented
 
 ### 提取:三个事实进派生,单源双写
 
-- 调用参数与失败位的提取只有一份实现,住在 `derive-decision.ts`:`anthropicReplyCalls` 顺带读 input 的 `file_path`/`skill`(chat 形状的 `arguments` 字符串与对象都认,坏 JSON 落 NULL 不抛错),`anthropicRequestResults` 顺带读 `is_error`。键缺失落 NULL,不猜近邻键——`path`、`command` 之类的近邻键不提取。
+- 调用参数与失败位的提取只有一份实现,住在 `derive/decision.ts`:`anthropicReplyCalls` 顺带读 input 的 `file_path`/`skill`(chat 形状的 `arguments` 字符串与对象都认,坏 JSON 落 NULL 不抛错),`anthropicRequestResults` 顺带读 `is_error`。键缺失落 NULL,不猜近邻键——`path`、`command` 之类的近邻键不提取。
 - `tool_call`(同步模式)与 `derive_tool_result`(切片模式)各加三列 `arg_path`/`arg_skill`/`is_error`;切片路径经 `derive_call_work` 与 `derive_result_work` 暂存转写,配对阶段不重读正文。同步路径在工具配对重建时直写。
-- 中断判定只有一份实现:`isUserInterruptMessage` 住在 `input-interpretation.ts`,计数函数 `interruptCountOf` 住在 `derive-decision.ts`,DB 适配 `interruptCountTx` 住在 `derive-read.ts`。同步路径在链阶段 delta 结算后计数,随摘要写进 `request.interrupt_count`;切片路径在摘要阶段按暂存的 `delta_ordinals` 计数,写进 `derive_request_result.interrupt_count`。正文不可读或 delta 不在手时保留旧值,与回复形状位同一套保留语义。
+- 中断判定只有一份实现:`isUserInterruptMessage` 住在 `input-interpretation.ts`,计数函数 `interruptCountOf` 住在 `derive/decision.ts`,DB 适配 `interruptCountTx` 住在 `derive/read.ts`。同步路径在链阶段 delta 结算后计数,随摘要写进 `request.interrupt_count`;切片路径在摘要阶段按暂存的 `delta_ordinals` 计数,写进 `derive_request_result.interrupt_count`。正文不可读或 delta 不在手时保留旧值,与回复形状位同一套保留语义。
 - 正文回收后:已提取的事实随配对行保留(`retention_state='retained'` 照旧),没有提取到的行留 NULL。汇总端点不读正文,回收会话的计数与明细照常返回,覆盖度反映缺口。
 - backfill 走既有路径:算法号 bump(GROUP 2→3、DERIVE 6→7)→ 全组标 dirty → drain 重算即回填。提取不到的行不阻塞组完成。
 

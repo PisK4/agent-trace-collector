@@ -14,7 +14,7 @@ v4→v5 的迁移决策见[旧库删除重建](2026-10-23-destructive-schema-rep
 
 `derive_queue` 是持久组状态，不是待办集合：`clean` 行保留，待办查询一律 `state<>'clean'`；`group_epoch` 标识组的世代，`input_revision` 随输入变化增长，完成时记 `published_revision` 与 `published_algorithm`；`dirty_since_ms` 只表示首次未完成触发时间，重复 dirty 保最早值，clean 后清 NULL。任何事务失败都不能提前把组标成 clean。
 
-推进修订的动作集中在 `src/derive-state.ts`，由各个写入者在自己已经持有的 writer 事务里调用，不嵌套 `Store.write`：
+推进修订的动作集中在 `src/derive/state.ts`，由各个写入者在自己已经持有的 writer 事务里调用，不嵌套 `Store.write`：
 
 | 写入者 | 触发点 | 为什么必须推进 |
 | --- | --- | --- |

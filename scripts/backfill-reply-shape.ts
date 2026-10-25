@@ -12,7 +12,7 @@
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { readBodyTx } from '../src/body';
-import { replyShapeOf } from '../src/derive-decision';
+import { replyShapeOf } from '../src/derive/decision';
 
 const path = process.env.ATC_BACKFILL_DB
   ?? `${process.env.HOME}/Library/Application Support/agent-trace-collector/trace.db`;

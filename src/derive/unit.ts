@@ -1,9 +1,9 @@
-import type { Store } from './store';
-import type { DeriveScope, DrainResult } from './derive';
-import { drainDeriveGroupTx } from './derive';
-import { queuePendingSql } from './derive-state';
-import { drainRequestPurposesTx } from './request-purpose';
-import { recoverSlice, sliceGroupStep } from './derive-slice';
+import type { Store } from '../store';
+import type { DeriveScope, DrainResult } from './sync';
+import { drainDeriveGroupTx } from './sync';
+import { queuePendingSql } from './state';
+import { drainRequestPurposesTx } from '../request-purpose';
+import { recoverSlice, sliceGroupStep } from './slice';
 
 const IDLE_MS = 2000;
 const ONLINE_LIMIT = 10;

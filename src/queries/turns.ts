@@ -1,7 +1,7 @@
 /** 轮次结算：读模型即时结算，不落轮次表。判据见轮次两端阅读提案 note。 */
 
 import type { Database } from 'bun:sqlite';
-import { deriveJoinSql, derivedColSql, groupCurrentSql } from '../derive-state';
+import { deriveJoinSql, derivedColSql, groupCurrentSql } from '../derive/state';
 import { interpretMessage } from '../input-interpretation';
 import { readBodyTx } from '../body';
 import type { Store } from '../store';

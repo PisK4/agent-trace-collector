@@ -1,7 +1,7 @@
 /** 元数据淘汰：范围预览与带墓碑的单事务淘汰。 */
 
 import { randomUUID } from 'node:crypto';
-import { markGroupDirtyTx } from '../derive-state';
+import { markGroupDirtyTx } from '../derive/state';
 import type { Store } from '../store';
 
 export type PurgePreview = {

@@ -888,7 +888,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 ### 组完成与输入修订
 
-派生按 `(conv_key, actor)` 成组重算整条链，所以"这一组的产物是不是最新的"必须由持久状态回答，不能靠队列里还有没有这一行。判定只有一份实现：`src/derive-state.ts` 的 `groupCurrentSql` / `queuePendingSql` / `groupIsCurrent`，读模型、组选取、切片认领、维护报告与容量探测都引用同一片段，理由见[组待办与当前判定收进 derive-state](../.agents/notes/implemented/architecture/2026-10-23-group-current-predicate-single-home.md)。
+派生按 `(conv_key, actor)` 成组重算整条链，所以"这一组的产物是不是最新的"必须由持久状态回答，不能靠队列里还有没有这一行。判定只有一份实现：`src/derive/state.ts` 的 `groupCurrentSql` / `queuePendingSql` / `groupIsCurrent`，读模型、组选取、切片认领、维护报告与容量探测都引用同一片段，理由见[组待办与当前判定收进 derive-state](../.agents/notes/implemented/architecture/2026-10-23-group-current-predicate-single-home.md)。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -904,7 +904,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 #### 两个粒度：请求用途先于组结果
 
-派生编排归 `src/derive-unit.ts`。在线用 `createDeriveUnit(store).run({budgetMs})` 返回 `{didWork,nextDueMs}`：每轮预算 400 ms、最多十个组或切片步骤，用途按十笔一批独立提交，组间检查剩余预算；空闲先只读判定，不开写事务。有积压时 `nextDueMs=0`，调度用定时器让出事件循环后续跑，空闲等待两秒。同步单组内部不切开，单个大组仍可能超过预算；生产切片启用限制见[派生代际与发布指针](#派生代际与发布指针)。维护与容量实验用同模块的 `drainDeriveEntry(store, limit, scope?)`，保留完整统计；需要把多个组放进外层事务的离线调用使用 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`。
+派生编排归 `src/derive/unit.ts`。在线用 `createDeriveUnit(store).run({budgetMs})` 返回 `{didWork,nextDueMs}`：每轮预算 400 ms、最多十个组或切片步骤，用途按十笔一批独立提交，组间检查剩余预算；空闲先只读判定，不开写事务。有积压时 `nextDueMs=0`，调度用定时器让出事件循环后续跑，空闲等待两秒。同步单组内部不切开，单个大组仍可能超过预算；生产切片启用限制见[派生代际与发布指针](#派生代际与发布指针)。维护与容量实验用同模块的 `drainDeriveEntry(store, limit, scope?)`，保留完整统计；需要把多个组放进外层事务的离线调用使用 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`。
 
 请求阶段按 `req_id` 取 `purpose_pending=1` 的行，按 `PURPOSE_VERSION=2` 解释并写 `purpose_status`（`recognized`/`unrecognized`/`missing`/`retained`/`unsupported`/`error`）、`purpose_version`、`purpose_rule`、`purpose_chain`、`req_kind` 与 `model_title`，把 `purpose_pending` 清 0 并让 `purpose_revision` 追上当前 `input_revision`。规则优先级固定为分类器强指纹 > 来源 kind > 标题兼容 > 兜底：分类器要求 `agent='claude'`、system 文本含 `security monitor for autonomous ai coding agents`、`stop_sequences` 含 `</block>` 三者同时成立，消息数 2 与工具数 0 只写信号，判定取回复里最后一个 `<block>yes|no`；来源 kind 只把精确的 `title` 当标题别名并排除链，其它非空值变成 `source:<value>` 参与链；标题兼容先看严格回复形状（整段 `<title>` 或只含 `title` 键的 JSON），再看已存 `req_kind='title'`；兜底是 `unrecognized` + `chat` + `participate`。
 
