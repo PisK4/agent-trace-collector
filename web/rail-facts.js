@@ -12,33 +12,13 @@ import {
   renderMessageDetail, renderMessages,
 } from './body-view.js';
 import { esc } from './html.js';
+import { kk, partColor, partLabel } from './parts.js';
 import { topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
 import { bodyLabelText } from './row-summary.js';
 
-// —— 上下文组成：已知 kind 的元数据映射，不是渲染清单 ——
-// 渲染遍历 parts 数据实际出现的类别；magpie 拆出新类时这里加一行映射，
-// 未知 kind 原样显示名字、落灰槽（9518e14 建立的兜底）。
-const PARTS = [
-  { kind: 'system', label: '系统提示', slot: 'p1' },
-  { kind: 'tools', label: '工具定义', slot: 'p2' },
-  { kind: 'memory', label: '记忆', slot: 'p3' },
-  { kind: 'files', label: '文件引用', slot: 'p4' },
-  { kind: 'results', label: '工具结果', slot: 'p5' },
-  { kind: 'chat', label: '对话内容', slot: 'p6' },
-  { kind: 'skills', label: '技能', slot: 'p7' },
-];
-
-/** 未知 kind 原样显示，不折叠成"其它"。 @param {string} kind */
-export function partLabel(kind) {
-  return PARTS.find(part => part.kind === kind)?.label ?? String(kind);
-}
-
-/** 未知 kind 使用独立颜色变量，避免落到某个已知类别上。 @param {string} kind */
-export function partColor(kind) {
-  const part = PARTS.find(item => item.kind === kind);
-  return `var(--${part?.slot ?? 'p-unknown'})`;
-}
+// 类别口径与 token 缩写的定义在 parts.js（与 context-map 共用），这里转发既有消费者。
+export { kk, partColor, partLabel };
 
 /**
  * 尝试链。每一行只用服务端白名单字段；未知 fail 原样转义。
@@ -289,8 +269,6 @@ export function resolveSelectedSource(step) {
 
 /** @param {number | null | undefined} v */
 const n = (v) => (v == null ? '—' : v.toLocaleString('en-US'));
-/** @param {number | null | undefined} v */
-export const kk = (v) => (v == null ? '—' : v >= 1000000 ? (v / 1e6).toFixed(1) + 'M' : v >= 1000 ? (v / 1000).toFixed(1) + 'k' : String(v));
 /** @param {number | null | undefined} ms */
 export const secs = (ms) => (ms == null ? '—' : (ms / 1000).toFixed(2) + ' s');
 /** 费用按 6 位有效数字渲染，去掉上游浮点尾差（账本存原始 float）。 @param {number} v */

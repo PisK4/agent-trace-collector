@@ -74,6 +74,7 @@ magpie 自 10-24 起在其 Routing 页提供了成熟的对应物：每个请求
 
 - 2026-10-26 P0 已交付：`web/rail-facts.js` 的 `PARTS` 降级为 kind→标签+色槽的元数据映射（`partColor` 按槽位名取色，不再按数组下标），`skills` 补入映射落 `--p7`，`memory` 标签改「记忆」；`web/app.css` 三处主题块加 `--p7`（亮 `#30287e`、暗 `#3d3480`）。构成条与图例本就遍历 parts 数据渲染，六类旧行与七类新行自此同屏各自正确。实现时确认 `web/index.html` 并无内联调色板变量（方案写作时的笔误），`--p7` 只落在 app.css 三处。
 - 2026-10-26 P1 后端已交付：`safePrompt` 扩为携带 `turns` 与 item 级白名单（`name/tag/n/tokens` 四标量，非法项剔除），`parts` 投影抽成 `safePromptParts` 供 route_summary 的 `z` 与 request 落列 `parts_json` 共用；`PromptReading` 同步加 `turns` 与 `items`。**Acceptance criteria 第 6 条的决断：详情接口的原始 `parts` 字段移除**——前端与 prototypes 均无消费者，保留只会把非白名单口径继续固化，调用方全走 `prompt.parts`；`parts_json` 列本身不动，仍是投影落列与 legacy fallback 的输入。
+- 2026-10-26 P1 布局模块已交付：新模块 `web/context-map.js`（squarify 与 `tilesOf` 移植自 magpie，类按 parts 数据出现顺序铺）。类别口径与 token 缩写抽到 `web/parts.js`（`PARTS/partLabel/partColor/partSlot/kk`），rail-facts 转发既有导出——usageFold 集成要反向引用 context-map，抽共享层避免 web 模块成环。SVG 坐标采用「横向百分比、纵向固定像素」而非 viewBox 等比缩放：tile 边界随右栏宽度伸缩而文字字号不变，标称布局宽 340×132；文字按像素宽估算截断，每 tile 一个 clipPath 兜底，极窄栏不与邻块重叠。tooltip 用原生 `<title>`（tile 与列表行都带「类 · 名 · tokens · 占比」），与全站原生 title 口径一致，不自绘浮层；「显示全部」用 `<details data-fold>` 接进既有折叠恢复机制，零新增状态。守恒断言（三档宽度 × 四状态：tile 界内不重叠、每类有面积、tile 总量等于 parts 和、有窗口必有空闲块）进 `tests/context-map.test.ts`，全部合成数据。
 
 ## Alternatives considered
 
