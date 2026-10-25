@@ -235,7 +235,7 @@ export function contextMapHtml(p, reqId) {
     }
     const title = t.item !== null
       ? `${partLabel(t.kind)} · ${itemLabel(t.item)} · ${kk(t.item.tokens)} tokens · ${Math.round(t.item.tokens / sum * 100)}%`
-      : `${partLabel(t.kind)} · ${kk(t.tokens)} tokens · ${Math.round(t.tokens / sum * 100)}%`;
+      : `${partLabel(t.kind)}${t.name === null ? '' : ` · ${t.name}`} · ${kk(t.tokens)} tokens · ${Math.round(t.tokens / sum * 100)}%`;
     body.push(`<g class="ctx-tile ck-${slot}" data-ctx-key="${esc(t.key)}"${iids !== '' ? ` data-ctx-its="${esc(iids)}"` : ''}>` +
       `<title>${esc(title)}</title>` +
       `<rect x="${rx}%" y="${y.toFixed(1)}" width="${rw}%" height="${h.toFixed(1)}" rx="3" fill="${partColor(t.kind)}" clip-path="url(#ctxc${reqId}-${i})"/>${label}</g>`);

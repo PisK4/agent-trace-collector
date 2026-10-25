@@ -170,6 +170,16 @@ test('特殊 tag 渲染：more/turns/turn 的固定叫法与 ×N 聚合', () => 
   expect(rows).toContain('>提醒<');
 });
 
+test('布局侧碎项合并桶：可视文字与悬停 title 都带「另外 N 项」', () => {
+  // 20 个碎 item 单个都过不了 TILE_MIN，布局把它们并成一块 rest——这是
+  // 布局侧合并（区别于数据里 magpie 的 more tag item），块名与 title 一致。
+  const items = Array.from({ length: 20 }, (_, i) => ({ name: `frag-${i}`, tag: 'read', n: null, tokens: 1000 }));
+  const p = reading({ tokens: 20000, window: 100000, ratio: 0.2, parts: [{ kind: 'files', tokens: 20000, items }] });
+  const map = contextMapHtml(p, 7);
+  expect(map).toContain('>另外 20 项<');
+  expect(map).toContain('文件引用 · 另外 20 项 · 20.0k tokens');
+});
+
 test('内容列表跨类按 token 降序，超过 8 行折叠进「显示全部」', () => {
   const p = reading({
     parts: [{
