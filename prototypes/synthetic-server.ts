@@ -576,6 +576,7 @@ function rowOf(r: SynthRequest): RequestRow {
   return {
     req_id: r.id, conv_key: convOf(r), actor: 'actor-main', actor_state: 'known',
     agent: agentOf(r), started_ms: startOf(r), title: r.title, title_source: titleSourceOf(r),
+    via: 'through',
     status: r.status, model_requested: 'synth-group', model_served: r.protocol === 'chat' ? 'synth-c' : 'synth-a',
     in_tok: r.usage.in, out_tok: r.usage.out, cache_read: r.usage.read, cache_write: r.usage.write,
     cost: r.usage.cost, cost_state: costStateOf(r), have: haveOf(r),
@@ -601,6 +602,7 @@ function detailOf(r: SynthRequest): ReadingDetail {
   return {
     req_id:r.id, conv_key:convOf(r), actor:'actor-main', actor_state:'known', agent:agentOf(r),
     started_ms:startOf(r), title:r.title, title_source:titleSourceOf(r), status:r.status,
+    via:'through',
     model_requested:'synth-group', model_served:r.protocol === 'chat' ? 'synth-c' : 'synth-a',
     in_tok:r.usage.in, out_tok:r.usage.out, cache_read:r.usage.read, cache_write:r.usage.write,
     cost:r.usage.cost, cost_state:costStateOf(r), have:haveOf(r),

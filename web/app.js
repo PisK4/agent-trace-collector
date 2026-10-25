@@ -195,7 +195,7 @@ if (typeof document !== 'undefined') {
     const chars = [...flat];
     return chars.length <= max ? flat : `${chars.slice(0, max).join('')}…`;
   }
-  // have 位义与 src/evidence.ts 一致：1 正文回调、2 账本用量、4 路由历史。
+  // have 位义与 src/evidence.ts 一致：1 正文回调、2 账本用量、4 路由历史、8 OTLP span。
   const HAVE_BODY = 1, HAVE_LEDGER = 2;
   /** @param {string} value */
   function shortId(value) {
@@ -325,6 +325,7 @@ if (typeof document !== 'undefined') {
   }
   /** @param {RequestRow} r */
   function viaText(r) {
+    if (r.via === 'otlp') return 'OTLP 通道';
     if (!(r.have & HAVE_LEDGER)) return '仅回调，未关联账本';
     if (!(r.have & HAVE_BODY)) return '仅账本，没有回调';
     return '账本 + 回调';

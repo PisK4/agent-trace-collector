@@ -72,7 +72,7 @@ export type RequestDetail = RequestRow & {
 };
 
 /** 列表不带摘要版本列：它是详情给 E 用的依据，列表只判断 `derived_state`。 */
-const REQUEST_COLUMNS = `r.req_id, r.conv_key, r.actor, r.agent, r.actor_state, r.started_ms,
+const REQUEST_COLUMNS = `r.req_id, r.conv_key, r.actor, r.agent, r.actor_state, r.started_ms, r.via,
   ${derivedColSql('g', 'd', 'r', 'title')} AS title,
   ${derivedColSql('g', 'd', 'r', 'title_source')} AS title_source,
   r.status, r.model_requested, r.model_served, r.in_tok, r.out_tok,

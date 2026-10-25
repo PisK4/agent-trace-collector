@@ -10,6 +10,7 @@ export function bodyStateText(r) {
   if (r.body_state === 'pending') return '正文未到';
   if (r.body_state === 'partial') return '正文不完整';
   if (r.body_state === 'evicted') return '正文已回收';
+  if (r.body_state === 'summary') return 'OTLP 摘要';
   return '协议暂不支持';
 }
 
@@ -19,6 +20,10 @@ export function bodyLabelText(r) {
   if (r.body_state === 'pending') return `正文未到${r.miss_reason ? `：${r.miss_reason}` : ''}`;
   if (r.body_state === 'partial') return `正文不完整${r.miss_reason ? `：${r.miss_reason}` : ''}`;
   if (r.body_state === 'evicted') return `正文已回收${r.miss_reason ? `：${r.miss_reason}` : ''}`;
+  // OTLP span 的结构化摘要：有元数据、无权威正文，不冒充「正文可用」。
+  if (r.body_state === 'summary') {
+    return `正文来自 OTLP 摘要${r.miss_reason ? `：${r.miss_reason}` : ''}`;
+  }
   return '原对象已保存，暂不支持结构化解析。';
 }
 
