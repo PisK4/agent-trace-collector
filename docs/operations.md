@@ -295,22 +295,21 @@ AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按
 
 ## OTLP 接入
 
-采集器自带 OTLP 接收端点：`POST /v1/traces` 与 `POST /v1/logs`，Bearer 认证用数据目录里的 `otlp.token`。令牌读法用命令替换，不落进 shell 历史。
-
-两个 harness 都按 OTel 标准环境变量配置，endpoint 给到根、SDK 自己拼 `/v1/traces`：
+采集器自带 OTLP 接收端点：`POST /v1/traces` 与 `POST /v1/logs`，Bearer 认证用数据目录里的 `otlp.token`。令牌文件是 32 字节裸二进制，请求头里要放它的 base64url 形式（`read.token`、`hook.token` 同一约定，见 `src/main.ts` 的装载处）——直接 `cat` 文件会把非 ASCII 字节塞进请求头，请求在 HTTP 层就被判畸形，收到空的 400。取值用命令替换，不落进 shell 历史：
 
 ```sh
+ATC_TOKEN=$(base64 -i '<dataDir>/otlp.token' | tr '+/' '-_' | tr -d '\n=')
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8320
-export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $(cat '<dataDir>/otlp.token')"
+export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $ATC_TOKEN"
 ```
 
-Claude Code 要正文文件指针时再开 `OTEL_LOG_RAW_API_BODIES=file`（logs 走 `http/json`，事件里带 `body_ref` 路径，采集器按指针读文件落正文）；OMP 的 logs 只有 run 级汇总，开了也不产逐笔正文。协议按 harness 各自支持的选择：`application/x-protobuf` 与 `application/json` 两种都收。
+两个 harness 都按 OTel 标准环境变量配置，endpoint 给到根、SDK 自己拼 `/v1/traces`。Claude Code 要正文文件指针时再开 `OTEL_LOG_RAW_API_BODIES=file`（logs 走 `http/json`，事件里带 `body_ref` 路径，采集器按指针读文件落正文）；OMP 的 logs 只有 run 级汇总，开了也不产逐笔正文。协议按 harness 各自支持的选择：`application/x-protobuf` 与 `application/json` 两种都收。
 
 验证（空载荷也应回 200）：
 
 ```sh
-curl -s -X POST http://127.0.0.1:8320/v1/traces \
-  -H "authorization: Bearer $(cat '<dataDir>/otlp.token')" \
+curl -s --noproxy '*' -X POST http://127.0.0.1:8320/v1/traces \
+  -H "authorization: Bearer $ATC_TOKEN" \
   -H 'content-type: application/json' -d '{"resourceSpans":[]}'
 # {"partialSuccess":{}}
 ```
