@@ -25,6 +25,8 @@
   /* 上下文类别槽位：固定不按大小重排，skills 落第七槽；类别按 parts 数据动态渲染，未知 kind 落 --p-unknown */
   --p1:#2a78d6; --p2:#eb6834; --p3:#1baf7a; --p4:#eda100; --p5:#e87ba4; --p6:#008300;
   --p7:#30287e; --p-unknown:#7a8794;
+  /* treemap tile 文字色（亮色）：绿/金/粉三槽相对亮度高于 0.30 取深字，其余白字 */
+  .ctx-map .ck-p3 text,.ctx-map .ck-p4 text,.ctx-map .ck-p5 text{fill:#0d1b24}
   --shadow:0 1px 2px rgba(16,32,48,.06);
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -50,6 +52,9 @@
     --tool-other:#93a5b3; --tool-other-bg:rgba(147,165,179,.13);
     --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
     --p7:#3d3480; --p-unknown:#93a5b3;
+    /* treemap tile 文字色（暗色）：七个色槽都取白字，只有灰槽 unknown 取深字 */
+    .ctx-map .ck-p3 text,.ctx-map .ck-p4 text,.ctx-map .ck-p5 text{fill:#fff}
+    .ctx-map .ck-p-unknown text{fill:#0d1b24}
     --shadow:0 1px 2px rgba(0,0,0,.35);
   }
 }
@@ -66,6 +71,8 @@
   --k-tool-bg:rgba(127,212,217,.12); --k-field-bg:rgba(147,165,179,.12);
   --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
   --p7:#3d3480; --p-unknown:#93a5b3;
+  .ctx-map .ck-p3 text,.ctx-map .ck-p4 text,.ctx-map .ck-p5 text{fill:#fff}
+  .ctx-map .ck-p-unknown text{fill:#0d1b24}
   --shadow:0 1px 2px rgba(0,0,0,.35);
 }
 
@@ -515,6 +522,39 @@ pre.raw{
 .comp-legend .name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .comp-legend .val{font:10.5px var(--mono);color:var(--text-2);text-align:right}
 .comp-legend .pct{font:10.5px var(--mono);color:var(--muted);text-align:right;width:34px}
+
+/* 上下文分布图：构成条之下的 treemap 与内容列表（web/context-map.js 拼装）。
+   SVG 横向用百分比、纵向固定像素：tile 边界随右栏宽度伸缩，文字字号不变。
+   tile 文字色按槽位底色相对亮度取深/白（OKLab 预计算），规则分写三个主题块。 */
+.ctx-map{margin:0 0 9px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--inset)}
+.ctx-map svg{display:block;width:100%}
+.ctx-map .ctx-tile text{fill:#fff}
+.ctx-map .ctx-tile:hover rect,.ctx-map .ctx-tile.ctx-hl rect{filter:brightness(1.12)}
+.ctx-tl{font:10px/1.2 var(--ui);pointer-events:none}
+.ctx-tv{font:10px/1.2 var(--mono);pointer-events:none}
+.ctx-rows{display:flex;flex-direction:column;gap:1px;margin:0 0 6px}
+.ctx-row{display:flex;align-items:center;gap:7px;padding:2.5px 6px;border-radius:4px;font-size:11px}
+.ctx-row:hover,.ctx-row.ctx-hl{background:var(--hover)}
+.ctx-row .dot{width:8px;height:8px;border-radius:2.5px;flex:none}
+.ctx-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctx-row .nm b{font-weight:500}
+.ctx-row .nm small{color:var(--muted);font-size:10px}
+.ctx-row .xn{color:var(--muted);font-size:10px;white-space:nowrap}
+.ctx-row .tg{font:10px var(--mono);color:var(--text-2);background:var(--inset);border:1px solid var(--line);border-radius:3px;padding:0 4px;white-space:nowrap}
+.ctx-row .bar{width:72px;flex:none;height:5px;border-radius:2.5px;background:var(--inset);overflow:hidden}
+.ctx-row .bar i{display:block;height:100%;border-radius:2.5px}
+.ctx-row .v{width:44px;flex:none;text-align:right;font:10.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--text-2)}
+/* 列表超出 8 行的「显示全部」：开合走既有 data-fold 恢复机制。 */
+.ctx-more{margin:2px 0 0}
+.ctx-more summary{display:inline-flex;cursor:pointer;list-style:none;font-size:10.5px;color:var(--accent);padding:2px 6px;border-radius:3px}
+.ctx-more summary::-webkit-details-marker{display:none}
+.ctx-more summary:hover{background:var(--hover)}
+.ctx-more .when-open{display:none}
+.ctx-more[open] .when-open{display:inline}
+.ctx-more[open] .when-closed{display:none}
+/* u-total 行内的异常态 pill：本地估计（中性）与接近占满/占满（warn）。 */
+.u-pill{font-size:10px;border:1px solid var(--line);border-radius:3px;padding:0 5px;color:var(--muted);white-space:nowrap}
+.u-pill.warn{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
 
 .rail-empty{padding:26px 4px;text-align:center;font-size:11.5px;color:var(--muted);line-height:1.7}
 .rail-empty b{display:block;color:var(--text-2);font-weight:550;margin-bottom:3px}

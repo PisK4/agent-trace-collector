@@ -8,7 +8,7 @@ import { replyShapeOf } from '../src/derive/decision';
 import type { BodyCoverage, BodyPage, MessageInterpretation } from '../src/protocols';
 import type { RequestRow } from '../src/queries/projection';
 import type { ToolResultIndexRow } from '../src/queries/requests';
-import type { AttemptChain, RouteSummaryReading } from '../src/queries/routes';
+import type { AttemptChain, PromptItem, RouteSummaryReading } from '../src/queries/routes';
 import type { PromptReading } from '../src/queries/readings';
 import type { SessionRow } from '../src/queries/sessions';
 import type { TurnPairRow } from '../src/queries/turns';
@@ -499,12 +499,44 @@ const costStateOf = (r: SynthRequest) => r.costState
   ?? (r.usage.cost === null ? 'absent' : r.usage.cost === 0 ? 'zero' : 'priced');
 const systemOf = (r: SynthRequest) => r.system ?? SYS;
 
-const PARTS_ORDER = ['system', 'tools', 'memory', 'files', 'results', 'chat'];
-const PARTS_WEIGHT = [0.06, 0.12, 0.18, 0.10, 0.18, 0.36];
+// 七类口径与 magpie 现行分类一致（skills 已拆出），权重模拟一次长会话请求。
+const PARTS_ORDER = ['system', 'tools', 'skills', 'memory', 'files', 'results', 'chat'];
+const PARTS_WEIGHT = [0.05, 0.09, 0.02, 0.02, 0.26, 0.16, 0.40];
+
+/** 每类的合成 item 模板：[名字, tag, 聚合数 n（null 为单件）, 类内占比]。 */
+const PART_ITEMS: Record<string, [string, string, number | null, number][]> = {
+  system: [['synth 系统提示', '', null, 1]],
+  tools: [
+    ['mcp__ata', 'mcp', 5, 0.38], ['Bash', '', null, 0.22], ['Read', '', null, 0.15],
+    ['Edit', '', null, 0.1], ['另外 6 项', 'more', 6, 0.15],
+  ],
+  skills: [['skills', 'skills', null, 1]],
+  memory: [
+    ['/pis/.claude/AGENTS.md', 'user', null, 0.55], ['reminders', 'reminder', null, 0.45],
+  ],
+  files: [
+    ['src/http.ts', 'read', null, 0.18], ['src/queries/requests.ts', 'read', null, 0.13],
+    ['src/schema.sql', 'read', null, 0.1], ['web/rail-facts.js', 'read', null, 0.08],
+    ['fixture.json', 'shell', null, 0.07], ['另外 9 项', 'more', 9, 0.44],
+  ],
+  results: [
+    ['Bash', 'result', 62, 0.85], ['另外 5 项', 'more', 5, 0.15],
+  ],
+  chat: [
+    ['earlier', 'turns', 3, 0.25], ['4', 'turn', null, 0.75],
+  ],
+};
+
+/** 按类 token 与模板占比合成 item 明细（treemap 与内容列表的演示数据源）。 */
+function itemsOf(kind: string, kindTokens: number): PromptItem[] {
+  const tpl = PART_ITEMS[kind];
+  if (tpl === undefined || kindTokens <= 0) return [];
+  return tpl.map(([name, tag, n, share]) => ({ name, tag, n, tokens: Math.max(1, Math.round(kindTokens * share)) }));
+}
 
 /**
- * 路由侧 prompt 构成：总量取输入 + 缓存，六类按固定权重分配。
- * 正文不可读时返回 missing，界面据此不画构成条，也不把缺数据当 0。
+ * 路由侧 prompt 构成：总量取输入 + 缓存，七类按固定权重分配并带 item 明细。
+ * 正文不可读时返回 missing，界面据此不画构成区，也不把缺数据当 0。
  */
 function promptOf(r: SynthRequest): PromptReading {
   if (r.bodyState !== 'available') {
@@ -513,8 +545,11 @@ function promptOf(r: SynthRequest): PromptReading {
   }
   const tokens = (r.usage.in ?? 0) + (r.usage.read ?? 0) + (r.usage.write ?? 0);
   const window = r.protocol === 'chat' ? 128000 : 200000;
-  const parts = PARTS_ORDER.map((kind, index) => ({kind, tokens: Math.round(tokens * (PARTS_WEIGHT[index] ?? 0))}));
-  return {state:'recomputed', reason:'complete', actual_version:1, tokens, counted:true, window, held:null, turns:null,
+  const parts = PARTS_ORDER.map((kind, index) => {
+    const kindTokens = Math.round(tokens * (PARTS_WEIGHT[index] ?? 0));
+    return {kind, tokens: kindTokens, items: itemsOf(kind, kindTokens)};
+  });
+  return {state:'recomputed', reason:'complete', actual_version:1, tokens, counted:true, window, held:null, turns:4,
     parts, ratio: window > 0 ? tokens / window : null, legacy:false, note:null};
 }
 

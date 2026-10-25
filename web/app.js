@@ -1368,6 +1368,43 @@ if (typeof document !== 'undefined') {
     }
   }, true);
 
+  // treemap tile 与内容列表行双向高亮：tile 的 data-ctx-its 列出它代表的 item 身份（iid），
+  // 行的 data-ctx-key 就是 iid；悬停一方，另一方按成员关系点亮。读数页重绘重建节点，
+  // 监听留在文档级；pointerover 在进入任何非联动元素时清掉旧高亮。
+  /** @type {Element | null} */
+  let ctxLit = null;
+  const unlitCtx = () => {
+    for (const el of document.querySelectorAll('.ctx-hl')) el.classList.remove('ctx-hl');
+    ctxLit = null;
+  };
+  document.addEventListener('pointerover', (e) => {
+    if (!(e.target instanceof Element)) return;
+    const t = /** @type {HTMLElement | null} */ (e.target.closest('[data-ctx-key]'));
+    if (t === ctxLit) return;
+    unlitCtx();
+    if (t === null) return;
+    ctxLit = t;
+    const key = t.getAttribute('data-ctx-key') ?? '';
+    const its = (t.getAttribute('data-ctx-its') ?? '').split('\u0002').filter(s => s !== '');
+    t.classList.add('ctx-hl');
+    for (const el of document.querySelectorAll('[data-ctx-key]')) {
+      if (el === t) continue;
+      if (el.classList.contains('ctx-row')) {
+        // 行被点亮：悬停的是 tile，且 tile 的成员身份里有这一行。
+        if (its.includes(el.getAttribute('data-ctx-key') ?? '')) el.classList.add('ctx-hl');
+      } else if ((el.getAttribute('data-ctx-its') ?? '').split('\u0002').includes(key)) {
+        // tile 被点亮：悬停的是行，且该 tile 的成员身份里有这个 item。
+        el.classList.add('ctx-hl');
+      }
+    }
+  });
+  document.addEventListener('pointerout', (e) => {
+    if (ctxLit === null) return;
+    const to = e.relatedTarget;
+    if (to instanceof Element && to.closest('[data-ctx-key]') !== null) return;
+    unlitCtx();
+  });
+
   // 用户主动滚动后，prepend 不再强行补偿旧锚点。
   el('main').addEventListener('wheel', () => { state.userScrolled = true; }, { passive: true });
   el('main').addEventListener('touchmove', () => { state.userScrolled = true; }, { passive: true });
