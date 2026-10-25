@@ -13,18 +13,18 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { createCapacityMetrics, queueSnapshot, summarizeDurations } from '../src/capacity';
-import type { CapacityMetrics, DurationSummary } from '../src/capacity';
-import { persistBodyTx } from '../src/body';
-import type { Config } from '../src/config';
-import { drainDeriveTx, enqueueDeriveTx, rebuildDerived } from '../src/derive/sync';
-import { drainDeriveEntry } from '../src/derive/unit';
-import type { SliceRuntime } from '../src/config';
-import { PAGE_MAX } from '../src/protocols';
-import type { StorageUsage } from '../src/retention';
-import { RAW_TTL_MS } from '../src/retention';
-import { openStore } from '../src/store';
-import type { Store } from '../src/store';
+import { createCapacityMetrics, queueSnapshot, summarizeDurations } from '../../src/capacity';
+import type { CapacityMetrics, DurationSummary } from '../../src/capacity';
+import { persistBodyTx } from '../../src/body';
+import type { Config } from '../../src/config';
+import { drainDeriveTx, enqueueDeriveTx, rebuildDerived } from '../../src/derive/sync';
+import { drainDeriveEntry } from '../../src/derive/unit';
+import type { SliceRuntime } from '../../src/config';
+import { PAGE_MAX } from '../../src/protocols';
+import type { StorageUsage } from '../../src/retention';
+import { RAW_TTL_MS } from '../../src/retention';
+import { openStore } from '../../src/store';
+import type { Store } from '../../src/store';
 import {
   createFakeUpstream, makeHookEnvelope, makeLedgerLine, makeMessages, makeReply,
   makeRouteLine, waitForCollector,

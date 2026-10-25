@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-`scripts/capacity-decision.ts` 把门槛的失败项收敛成一个决策，取值只有 `keep-sync`、`slice`、`stop-non-long` 三种。严重度按比值算：上限类 `actual / max(1, limit)`，下限类 `limit / max(1, actual)`；主因是比值最高的那项所在的场景。进入 `slice` 要同时满足三条：主因场景是 `long-10000`；该场景至少一项失败属于 `max_write_tx_ms`、`event_loop_p99_ms`、`drain_ms`、`backlog_max_age_ms`；其它场景没有 `code-constant` 或 `product-target` 失败。其余有失败的情形一律 `stop-non-long`：保留同步入口，如实列出失败项，不创建 v6 文件。
+`scripts/capacity/capacity-decision.ts` 把门槛的失败项收敛成一个决策，取值只有 `keep-sync`、`slice`、`stop-non-long` 三种。严重度按比值算：上限类 `actual / max(1, limit)`，下限类 `limit / max(1, actual)`；主因是比值最高的那项所在的场景。进入 `slice` 要同时满足三条：主因场景是 `long-10000`；该场景至少一项失败属于 `max_write_tx_ms`、`event_loop_p99_ms`、`drain_ms`、`backlog_max_age_ms`；其它场景没有 `code-constant` 或 `product-target` 失败。其余有失败的情形一律 `stop-non-long`：保留同步入口，如实列出失败项，不创建 v6 文件。
 
 空失败项有两种来源，脚本只认其中一种为通过：被测场景列表为空时抛 `capacity_decision_no_scenarios` 并退出 2，不生成决策文件。"没有场景被测量"不能读成"全部通过"。
 

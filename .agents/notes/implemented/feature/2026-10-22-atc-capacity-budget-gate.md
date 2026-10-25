@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-`scripts/capacity-gate.ts` 持有报告、预算与门槛三者的形状与判定。预算从 `all` 的汇总报告冻结，`source_report_sha256` 对整个文件计算；每个场景一份 `ScenarioBudget`，每个上/下限都带 `basis`，取值为 `code-constant`、`product-target`、`baseline-envelope` 或 `proposed`。
+`scripts/capacity/capacity-gate.ts` 持有报告、预算与门槛三者的形状与判定。预算从 `all` 的汇总报告冻结，`source_report_sha256` 对整个文件计算；每个场景一份 `ScenarioBudget`，每个上/下限都带 `basis`，取值为 `code-constant`、`product-target`、`baseline-envelope` 或 `proposed`。
 
 上限分两类。有目标值的指标（hook 与 page 读时延、事件循环 p99、写事务）直接用目标或提案值当上限，不拿单轮包络去收紧。同一个 1 rps 场景两次跑，page 读 p95 是 33 ms 与 153 ms，差出四倍多，比"一成半余量"大得多；用单轮包络当上限，只会造出抖动红门。单调量（rss、存储字节、拒绝计数）没有目标值，取实测包络留一成半余量。写事务上限、积压年龄与排空上限标 `proposed`（900 ms 只说明"其它连接最多等写锁 1000 ms"，推不出成功上界）。
 

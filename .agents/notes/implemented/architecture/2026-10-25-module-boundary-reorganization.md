@@ -69,7 +69,7 @@ Status: implemented
 - 前端 DOM 契约字符串（`data-step-key`、`data-tool-owner`、`data-call-ord`、`data-fold`、`data-summary-*`）逐字保留；异步代次防护（会话 epoch、`loadEpoch`、`navEpoch`、每请求 `rev`）全部留在控制器与 store。
 - 前端新增文件必须登记 `src/http.ts` 的 `STATIC_FILES`，`tests/http.test.ts` 的目录覆盖断言在测试期暴露遗漏。
 - 文档与活跃 note 的现行路径引用随各阶段同步；历史实施计划（`docs/superpowers/plans/`）与研究记录保留当时的路径原貌，不作为现行权威。
-- 容量脚本（`scripts/capacity*.ts`）的整理留在原地未做：不影响运行时，单独排期，见[容量实验台](../../../docs/superpowers/capacity/README.md)。
+- 容量脚本整理进 `scripts/capacity/`（场景执行、门槛、支撑、采集器与决策五个文件），纯路径移动；命令入口为 `bun scripts/capacity/capacity.ts`。历史上的基线记录与决策 JSON 保留当时的命令原貌。
 - 合成 Demo 不提供会话汇总端点，汇总折叠区的人机验收在生产库完成（[会话信息汇总](../feature/2026-10-25-session-trace-summary.md)）；本次重组对折叠区的验证以纯函数单测与模块图加载为准。
 
 ## Testing

@@ -111,7 +111,7 @@ if (import.meta.main) {
       scenarios: reports.map(item => item.scenario),
       report: reportPath,
       budget: budgetPath,
-      command: ['bun scripts/capacity-decision.ts', ...Bun.argv.slice(2)].join(' '),
+      command: ['bun scripts/capacity/capacity-decision.ts', ...Bun.argv.slice(2)].join(' '),
     });
     writeFileSync(out, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
     process.stdout.write(`${JSON.stringify({ decision: file.decision, primary: file.primary, severity: file.severity })}\n`);
