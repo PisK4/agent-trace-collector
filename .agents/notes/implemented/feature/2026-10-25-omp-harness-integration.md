@@ -31,12 +31,12 @@ ATC 的定位是收敛 magpie 三路证据、按会话阅读 Agent Harness 的 t
 
 生产库 2026-10-25 23:03 快照的 OMP 流量：316 笔请求、9 个 conv_key。解剖结果：
 
-- 协议全部是 OpenAI Chat Completions 流式（`/v1/chat/completions`），工具调用是标准 `tool_calls` / `role:tool`，配对直接工作（某会话 19 笔 bash 调用全部 resolved）。
-- 9 个会话里 3 个是真实用户会话（24、69、215 笔）。其余 6 个是旁路：4 个是同一秒（20:59:56）并行的 skill 描述压缩调用（各 1 笔、随机 v4 session id、`purpose_status` 全是 `unrecognized`），2 个是标题生成会话（各 2 笔，ATC 已正确判 `title/exclude`，规则 `title.reply.v1`）。
+- 协议全部是 OpenAI Chat Completions 流式（`/v1/chat/completions`），工具调用是标准 `tool_calls` / `role:tool`。配对直接工作：某会话 19 笔 bash 调用全部 resolved。
+- 9 个会话里 3 个是真实用户会话（24、69、215 笔）。其余 6 个是旁路：4 个是同一秒（20:59:56）并行的 skill 描述压缩调用，各 1 笔、随机 v4 session id、`purpose_status` 全是 `unrecognized`；2 个是标题生成会话，各 2 笔，ATC 已正确判 `title/exclude`，规则 `title.reply.v1`。
 - 当前 9 个会话里，全部请求 `purpose_chain='exclude'` 的只有 2 个（两个标题会话），没有任何会话是「部分 exclude」。降噪规则上线后，hint 旁路那 4 个会从 `participate` 改判成 `exclude`，折叠的正是它们。
 - **会话切割的根因**：OMP 的旁路一次性调用各自创建新的 SDK 会话，各带独立 session id，与母会话在 wire 上没有任何可关联字段。advisor 更极端——provider-facing session id 是内存映射生成的随机 UUIDv7（`packages/coding-agent/src/advisor/config.ts` 的 `getOrCreateAdvisorProviderSessionId`），刻意不携带母会话线索。magpie 侧对 OMP 也没有 subagent 标注（其 `subagent_id` 全空；其 subagent 识别只覆盖 Claude Code 与 Codex）。这是上游证据形状，不是 ATC 缺陷；接受不处理，只做降噪。
 - OMP 通过 `session_id` / `x-session-id` 类请求头向 magpie 声明会话身份（magpie `internal/gateway/gateway.go` 的 `sessionHeaders` 清单），所以主会话的 session 归组是可靠的。
-- 一个未解的对账差异：10-24 那个 24 笔的会话，OMP 自己的 session 账本记了 46 笔 `model_usage`。差异来自哪（未过 magpie 的直连、内部尝试、还是口径不同）没有结论，本决策不解决采集覆盖问题，代价记录在 Consequences。
+- 一个未解的对账差异：10-24 那个 24 笔的会话，OMP 自己的 session 账本记了 46 笔 `model_usage`。差异来自哪（未过 magpie 的直连、内部尝试、还是口径不同）没有结论。本决策不解决采集覆盖问题，代价记录在 Consequences。
 
 生产观测到的识别锚点（模板文案，属 OMP 生成内容而非用户隐私，直接进规则与 fixture）：
 
@@ -49,13 +49,13 @@ ATC 的定位是收敛 magpie 三路证据、按会话阅读 Agent Harness 的 t
 | 重试请求新增消息含 `<system-interrupt reason="rule_violation" rule="…" path="…">`（源码模板 `packages/coding-agent/src/prompts/system/ttsr-interrupt.md`） | TTSR 流规则中断后注入 | TTSR 识别（未交付，流量未实证） |
 | Chat 请求顶层字段 `reasoning_effort`（实测 `high` / `low`） | OMP 按 thinking level 映射 | 读数展示 |
 
-锚点判据一律按**块首**而不是消息首行：归档消息实测有 8 个内容块，块 0 是 `<system-reminder>`（日期与 cwd），块 1 才是归档正文；按消息首行写匹配器一笔都命中不了。块级判据与 `input-interpretation.ts` 的 `cleanBlock` 逐块剥壳一致。
+锚点判据一律按**块首**而不是消息首行。归档消息实测有 8 个内容块：块 0 是 `<system-reminder>`（日期与 cwd），块 1 才是归档正文；按消息首行写匹配器一笔都命中不了。块级判据与 `input-interpretation.ts` 的 `cleanBlock` 逐块剥壳一致。
 
 18.0.10 的源码树里 grep 不到 routing hint 文案，说明这条管线在 18.0.10 之后才进的主线（或位置变了）。锚点以流量为准；装机版本源码的机制归属未再深查，锚点失配时规则按版本静默退化。
 
 ### 一、旁路调用识别与列表降噪
 
-`classifyPurpose` 的规则链在分类器之后、来源 kind 之前加 `omp.skill-hint.v1`：`agent='omp'` 且任一 user 文本块块首命中 `Compress into one routing hint of at most 12 words:` → `req_kind='skill_hint'`、`purpose_chain='exclude'`。锚点失配时规则静默不命中，退回 `participate`。
+`classifyPurpose` 的规则链在分类器之后、来源 kind 之前加 `omp.skill-hint.v1`。判据：`agent='omp'` 且任一 user 文本块块首命中 `Compress into one routing hint of at most 12 words:` → `req_kind='skill_hint'`、`purpose_chain='exclude'`。锚点失配时规则静默不命中，退回 `participate`。
 
 取数扩了一处：`readPurposeViewTx`（`src/request-purpose.ts`）此前只解骨架、引用索引与 role=2 的 System 块；现在加读 role=0 的前 5 条 user 消息、逐块取前 200 字符的块首（`PurposeView.userBlockHeads`）。双限额让取数成本不随正文体积增长；一次按 ord 限额的单行查询，不扫全表，符合[联合评审](../../../docs/agent-request-kind-review.md)的取数成本契约。
 
@@ -67,14 +67,14 @@ ATC 的定位是收敛 magpie 三路证据、按会话阅读 Agent Harness 的 t
 
 ### 二、compaction 事件位
 
-OMP 的压缩（compaction）有六种触发（`docs/compaction.md`），wire 上统一表现为：续会话里一条以 `Resume prior conversation. Earlier turns archived under HISTORY` 开头的 user 消息承载归档（snapcompact 策略下旧史栅格化成 image 块 + `¶user:`/`¶think:`/`¶ai:`/`¶call:` 作用域文本 + FILES 目录树 + 预算丢弃量说明）。
+OMP 的压缩（compaction）有六种触发（`docs/compaction.md`）。wire 上统一表现为：续会话里一条以 `Resume prior conversation. Earlier turns archived under HISTORY` 开头的 user 消息承载归档；snapcompact 策略下旧史栅格化成 image 块 + `¶user:`/`¶think:`/`¶ai:`/`¶call:` 作用域文本 + FILES 目录树 + 预算丢弃量说明。
 
 **这条消息在会话每笔请求都会重发**，所以判据是「本笔的**确定增量**里新增了归档消息」；按「输入里存在」判会让整场会话每一行都挂上压缩标记，正好违反降噪约定。
 
 落点三层：
 
 1. **输入解释**（`src/input-interpretation.ts`）：归档消息解释为 `injected`、kind `omp_history_archive`，标题与折叠行摘要的选源自然跳过它。代价如实记录：压缩起点的会话标题从 `user_delta` 退化为 `model_time`（模型名 · 时间兜底），不再是被污染的内容标题，但也不再是内容标题。这是降噪换来的，不是副作用。
-2. **请求级派生位**：`request` 与 `derive_request_result` 各加 `context_event` 列（`none` / `omp_compaction`，NULL 表示从未判定），`published_derive_request` 与 `effective_request` 两个视图都带此列。写入与选源对照 `reply_shape` 三态的先例：发布代优先、正文回收保留旧值、NULL 从未判定。判定适配 `contextEventTx`（`src/derive/read.ts`，两条派生路径共用）：`first`/`confirmed` 按确定增量判；`branch` 关系没有增量可比，按输入含归档归因（bounded 扫前 20 条 user 消息，归档实测在 ord 1）；`aux` 判 `none`；其余判不出保留旧值。basis 里记从归档块提取的 `dropped_chars`（同步路径并进 `summary_basis`，切片路径在摘要阶段覆写压缩行的 `basis_json`），展示注明这是字符数，不是 token。
+2. **请求级派生位**：`request` 与 `derive_request_result` 各加 `context_event` 列（`none` / `omp_compaction`，NULL 表示从未判定），`published_derive_request` 与 `effective_request` 两个视图都带此列。写入与选源对照 `reply_shape` 三态的先例：发布代优先、正文回收保留旧值、NULL 从未判定。判定适配 `contextEventTx`（`src/derive/read.ts`，两条派生路径共用）：`first`/`confirmed` 按确定增量判。`branch` 关系没有增量可比，按输入含归档归因（bounded 扫前 20 条 user 消息，归档实测在 ord 1）。`aux` 判 `none`；其余判不出保留旧值。basis 里记从归档块提取的 `dropped_chars`（同步路径并进 `summary_basis`，切片路径在摘要阶段覆写压缩行的 `basis_json`），展示注明这是字符数，不是 token。
 3. **branch 归因注记**：`branch` + `omp_compaction` 在轨迹出 `compaction` 记录步骤（带丢弃量），关系文案出「另起一支 · 压缩归档改写了上下文前缀」。链判定本身不动。生产流量里 `branch` 与压缩并存尚未出现（压缩都发生在会话起点），这条注记目前只有合成 fixture 证据。
 
 ### 三、背景作业配对
@@ -88,7 +88,7 @@ PRIMARY KEY (conv_key, job_id)
 
 主键带 `conv_key`：OMP 重启后 `bg_` 编号从头开始，单以 `job_id` 为主键会跨 conv 撞键。有一处与提案时的形状不同：spawn 记的是**承载发起工具结果的消息 ord**（`spawn_ord`），不是调用 ord——展示锚点是发起处的 bash 结果行，按消息 ord 直接对位轨迹步骤，不必再 join `tool_call`。
 
-发起只认 role=3 的工具结果块（归档正文里的复述与后续请求的重发都是同一文本的再出现）；规则取该 conv 内**最早出现**的位置，否则时延与位置全落到重发请求上。一个结果块内多行发起按 matchAll 全收。通知只认两种完成形态：单数 `Background job bg_NNN has completed.` 与复数 `N background jobs have completed.` 之下的 `── Job bg_NNN ──` 行——只认单数会让只以复数出现的作业永远停在 pending。`<system-notice>` 也承载其它通知，两种形态都不命中的不参与配对。
+发起只认 role=3 的工具结果块（归档正文里的复述与后续请求的重发都是同一文本的再出现）；规则取该 conv 内**最早出现**的位置，否则时延与位置全落到重发请求上。一个结果块内多行发起按 matchAll 全收。通知只认两种完成形态：单数 `Background job bg_NNN has completed.`；复数 `N background jobs have completed.` 之下的 `── Job bg_NNN ──` 行。只认单数会让只以复数出现的作业永远停在 pending。`<system-notice>` 也承载其它通知，两种形态都不命中的不参与配对。
 
 重建语义对照工具配对：组完成事务里按可读正文整体重算本 actor 的行（旁路请求不参与），两端正文都已回收的行原样保留，重算与保留行撞键时保留行胜（它记的是更早的真实位置）。配对挂进同步路径的组完成，与 `tool_call` 同批；切片路径同 `tool_call` 先例不写这张表——切片只是显式容量实验路径，生产走同步。
 
@@ -102,13 +102,27 @@ PRIMARY KEY (conv_key, job_id)
 
 ### 五、OMP 工具的摘要分派与色类
 
-`argsOf`（`src/derive/decision.ts`）补 `path` 键（`file_path` 优先；`command`/`pattern` 之类近邻键仍不提取）：OMP 的 read/write/edit/grep/glob 用 `path` 声明目标文件，此前 OMP 会话的 `arg_path` 全为 NULL，已交付的[会话信息汇总](2026-10-25-session-trace-summary.md)里「写入尝试 / 读取请求」两组对 OMP 半瞎。OMP 源码 18.0.10 复核的参数形状：read 只收 `path`、write 收 `path`+`content`、edit 常态是 replace 模式、grep 是 `pattern`+`path?`、glob 的 pattern 本身在 `path` 键、todo 按 `op` 组织、task 收 `agent`+`task`、web_search 收 `query`、ask 收 `questions`。`grep`/`glob` 的 `path` 是搜索范围，落到 `arg_path` 语义不变形，汇总按工具名过滤不受污染。算法号 GROUP_ALGORITHM 3→4、DERIVE_ALGORITHM 7→8。
+`argsOf`（`src/derive/decision.ts`）补 `path` 键（`file_path` 优先；`command`/`pattern` 之类近邻键仍不提取）。动机：OMP 的 read/write/edit/grep/glob 用 `path` 声明目标文件，此前 OMP 会话的 `arg_path` 全为 NULL——已交付的[会话信息汇总](2026-10-25-session-trace-summary.md)里「写入尝试 / 读取请求」两组对 OMP 半瞎。OMP 源码 18.0.10 复核的参数形状：
+
+- read 只收 `path`；write 收 `path`+`content`；edit 常态是 replace 模式
+- grep 是 `pattern`+`path?`；glob 的 pattern 本身在 `path` 键
+- todo 按 `op` 组织；task 收 `agent`+`task`；web_search 收 `query`；ask 收 `questions`
+
+`grep`/`glob` 的 `path` 是搜索范围，落到 `arg_path` 语义不变形，汇总按工具名过滤不受污染。算法号 GROUP_ALGORITHM 3→4、DERIVE_ALGORITHM 7→8。
 
 `dispatchSummary`（`web/trace-view.js`）补小写分支：read/edit/write 与大写同逻辑认两键；grep 显 pattern、glob 显 pattern、todo 显 op 与要点、task 显 agent 名与 task 首行、web_search 显 query、ask 显 question（OMP 没有 `wait` 内置工具，原提案里的 `wait` 删除）。`toolTint`（`web/body-view.js`）补 read/edit/write 小写别名归同色，不扩新色类；grep/glob/todo/task/web_search/ask 落中性色——色类是既有语言，扩类要克制，先让摘要行本身可读。会话汇总的写入/读取分组与点击定位按小写化工具名过滤。
 
 ### 升级路径
 
-`upgradePurposeTargetTx` 只在显式 `bun run maintain rebuild --session <key>` 时执行，普通 tick 不升级 clean 的历史行。生产升级按此顺序执行完毕：停采集器 → `maintain backup` 全库备份 → `scripts/backfill-omp-semantics.ts`（幂等补 `context_event` 两列、建 `bg_job`、从 schema-v6.sql 重取两个视图 DDL，全组标脏重派生）→ 9 个 OMP 会话逐个 `rebuild --session` → 起采集器。回填脚本二次执行验证过幂等。
+`upgradePurposeTargetTx` 只在显式 `bun run maintain rebuild --session <key>` 时执行，普通 tick 不升级 clean 的历史行。生产升级按此顺序执行完毕：
+
+1. 停采集器
+2. `maintain backup` 全库备份
+3. `scripts/backfill-omp-semantics.ts`：幂等补 `context_event` 两列、建 `bg_job`、从 schema-v6.sql 重取两个视图 DDL，全组标脏重派生
+4. 9 个 OMP 会话逐个 `rebuild --session`
+5. 起采集器
+
+回填脚本二次执行验证过幂等。
 
 ## 与并行工作的协调
 
@@ -116,9 +130,23 @@ PRIMARY KEY (conv_key, job_id)
 
 ## Testing
 
-合成验收进 `bun test`（700 用例全绿），每条规则一组 fixture：skill_hint 块首判据（含块 0 为 system-reminder 的形态、锚点失配退化、非 omp agent 不命中）；归档消息解释与 `context_event`（增量新增判 omp_compaction、重发判 none、branch 按输入归因、正文回收保留旧值、标题退化 model_time 作预期值断言）；bg 配对（跨两笔/同笔/复数通知/非作业通知/role=0 复述不认/重发取最早/pending/正文回收保留行/旁路不参与）；effort 行有值才显示；OMP 小写工具摘要与色类、`path` 提取、汇总小写过滤；切片与同步的 parity 列加 `context_event` 锁两路一致；回填脚本幂等补列重建视图。
+合成验收进 `bun test`（700 用例全绿），每条规则一组 fixture：
 
-真实数据人工验收（生产库，快照 2026-10-26 00:20，与合成验收分开呈报，全文见[验收记录](../../../docs/acceptance.md)）：四个 skill 描述压缩会话全部改判 `omp.skill-hint.v1/exclude`，6 个全员 exclude 会话带 `bypass` 标志；24 笔会话 req 4 判 `omp_compaction`、basis 记 `dropped_chars: 999551`、标题退化为模型时间兜底；bg 配对 24 个作业（同笔 resolved 13、跨笔 resolved 5、pending 6，含发起正文已回收的诚实缺口）；effort 行在单次干净调用可见；小写工具 arg_path 重算后非空（read 42 / edit 38 / write 15 / grep 1）。
+- skill_hint 块首判据：含块 0 为 system-reminder 的形态、锚点失配退化、非 omp agent 不命中
+- 归档消息解释与 `context_event`：增量新增判 omp_compaction、重发判 none、branch 按输入归因、正文回收保留旧值、标题退化 model_time 作预期值断言
+- bg 配对：跨两笔/同笔/复数通知/非作业通知/role=0 复述不认/重发取最早/pending/正文回收保留行/旁路不参与
+- effort 行有值才显示
+- OMP 小写工具摘要与色类、`path` 提取、汇总小写过滤
+- 切片与同步的 parity 列加 `context_event` 锁两路一致
+- 回填脚本幂等补列重建视图
+
+真实数据人工验收（生产库，快照 2026-10-26 00:20，与合成验收分开呈报，全文见[验收记录](../../../docs/acceptance.md)）：
+
+- 四个 skill 描述压缩会话全部改判 `omp.skill-hint.v1/exclude`，6 个全员 exclude 会话带 `bypass` 标志
+- 24 笔会话 req 4 判 `omp_compaction`、basis 记 `dropped_chars: 999551`、标题退化为模型时间兜底
+- bg 配对 24 个作业：同笔 resolved 13、跨笔 resolved 5、pending 6，含发起正文已回收的诚实缺口
+- effort 行在单次干净调用可见
+- 小写工具 arg_path 重算后非空（read 42 / edit 38 / write 15 / grep 1）
 
 ## Deferred
 
@@ -132,9 +160,9 @@ PRIMARY KEY (conv_key, job_id)
 
 ## Alternatives considered
 
-**读 `~/.omp/agent` 作第四路证据源。** session JSONL 是结构化金矿：`model_usage`（api/provider/model/purpose/usage 含 cost 与 reasoningTokens）、`compaction`（tokensBefore/After/firstKeptEntryId）、`title_change`、`thinking_level_change`、`custom` 事件（tool_execution_start、async-result）、header 的 `parentSession`/`previousSessionFiles` lineage 能解掉子代理与 advisor 的归并问题。否决理由：架构设计的安全边界明写「不扫描 Agent 会话文件，只读 magpie 自己写的来源」；引入第四源是方向性决策，需要用户单独拍板（见边界外），不该夹带在本决策里。
+**读 `~/.omp/agent` 作第四路证据源。** session JSONL 是结构化金矿。事件覆盖 `model_usage`（api/provider/model/purpose/usage 含 cost 与 reasoningTokens）、`compaction`（tokensBefore/After/firstKeptEntryId）、`title_change`、`thinking_level_change`、`custom` 事件（tool_execution_start、async-result）；header 的 `parentSession`/`previousSessionFiles` lineage 能解掉子代理与 advisor 的归并问题。否决理由：架构设计的安全边界明写「不扫描 Agent 会话文件，只读 magpie 自己写的来源」；引入第四源是方向性决策，需要用户单独拍板（见边界外），不该夹带在本决策里。
 
-**OMP extension hook 桥。** 用户 `~/.omp/agent/extensions/` 里已有 `ata-omp-trace` 先例（OMP extension 往本机端口推 pi-hooks 事件、读 `PI_SUBAGENT_*` lineage env），同型桥可以给 ATC 提供 magpie 看不见的 harness 语义（turn 边界、工具执行时序、子代理 lineage）。否决理由同上：新证据通道 + 与 OMP 版本耦合的维护面，属边界外决策项。
+**OMP extension hook 桥。** 用户 `~/.omp/agent/extensions/` 里已有 `ata-omp-trace` 先例：OMP extension 往本机端口推 pi-hooks 事件、读 `PI_SUBAGENT_*` lineage env。同型桥可以给 ATC 提供 magpie 看不见的 harness 语义（turn 边界、工具执行时序、子代理 lineage）。否决理由同上：新证据通道 + 与 OMP 版本耦合的维护面，属边界外决策项。
 
 **开 OMP 的 OTel。** OMP 支持 OTLP 三信号（默认关，`OTEL_*` 开启，service name `oh-my-pi`）。否决理由：信号与现有三路大量重复，换来的是第二套采集运维面，性价比最低。
 
