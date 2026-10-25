@@ -175,3 +175,18 @@ raw 层保留 7 天：先给对应证据标 `payload_state=expired` 再删原文
 守恒关系是 `分母 = 有正文 + 无正文 + 无法唯一判断`，`normalized`（规范化 ID）与 `raw`（原始 ID）两份报告各自成立。NULL response ID 与规范化后重复的 ID 单列，不丢弃也不压成一条；两边都缺失的 ID 单列在 `missing_both`，不藏在集合交集中。报告只含 ID、时间、状态、大小与可用性元数据，不含正文，强制写在仓库外、权限 0600。
 
 安装、24 小时并行观察、停 AVA 与回滚的步骤写在[运维手册](operations.md)。这一轮没有执行任何外部配置变更：没有注册 magpie 插件、没有停 AVA、没有改动 launchd。真实运行需要等待，合成测试不能替代观察窗口。
+
+## OMP harness 语义（2026-10-25）
+
+OMP（oh-my-pi）的 feature 语义进读模型与阅读层，五项随 [Agent Note：OMP harness 集成](../.agents/notes/implemented/feature/2026-10-25-omp-harness-integration.md) 交付。合成验收进 `bun test`（700 用例，含 purpose/解释/派生/切片 parity/配对/web 投影各一组）；这里记生产库的真实数据验收，快照 2026-10-26 00:20，与合成验收分开呈报。
+
+升级路径按交付清单执行：停采集器 → `maintain backup`（1.2 GB 全库备份）→ `scripts/backfill-omp-semantics.ts`（补 `context_event` 两列、建 `bg_job`、重建两个读模型视图，62 组 4,915 笔重派生）→ 9 个 OMP 会话逐个 `maintain rebuild --session`（用途目标 3→4）→ 起采集器。二次执行回填脚本幂等。
+
+| 验收项 | 生产结果 |
+| --- | --- |
+| 旁路识别 | 四个 20:59:56 单笔 skill 描述压缩会话全部改判 `omp.skill-hint.v1`/`exclude`/`skill_hint`；两个标题会话保持 `title.reply.v1`；三个真实会话保持参与链 |
+| 列表降噪 | `/api/sessions` 里 6 个全员 exclude 会话带 `bypass` 标志，界面默认折叠、计数行可展开 |
+| 压缩事件位 | 24 笔会话的 req 4 判 `omp_compaction`，basis 记 `dropped_chars: 999551`（字符数）；其余参与行 `none`，正文不可读行保持 NULL；该会话标题退化为 `step-5-preview · 11:04` 模型时间兜底，不再是归档正文 |
+| 背景作业配对 | 24 笔会话 24 个作业：同笔 resolved 13、跨笔 resolved 5、pending 6（含发起正文已回收的诚实缺口）；另一会话 1 个 resolved |
+| effort 读数 | OMP 骨架可读请求的 `request_fields.reasoning_effort`（high/low）在用量折叠行显示，单次干净调用也显示 |
+| 工具语义 | 小写 read 42 / edit 38 / write 15 / grep 1 的 `arg_path` 重算后非空，会话汇总「写入尝试 / 读取请求」对 OMP 会话有值；小写工具命中同族色类 |

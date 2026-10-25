@@ -40,7 +40,7 @@ zcode 的语义信号全部走 header，而 header 不在任何证据通道里�
 
 用途层的取数契约需要一处扩展：`readPurposeViewTx` 目前只解 role=2 的 System 块（`src/request-purpose.ts`），而指纹落在 user 文本块上。扩展内容是读取 `request_block` 里 role=0 且 ord 最大的那一行（一次单行查询、一个块解压），不随正文体积增长。这与[联合评审](../../../../docs/agent-request-kind-review.md)的成本契约一致：先复用实际派生上下文，需要新能力时再扩大 Interface。
 
-`PURPOSE_VERSION` 由 3 升到 4，按既有重算路径处理：正文可读的行按新规则重算，正文已回收的行保留旧结论与旧版本号（`retained`），不把旧值冒充成本次结果。
+`PURPOSE_VERSION` 取实施时的当前值 +1（OMP harness 集成已把 3 升到 4，见 [OMP harness 集成](../../implemented/feature/2026-10-25-omp-harness-integration.md)；本提案实施时不得再写 4），按既有重算路径处理：正文可读的行按新规则重算，正文已回收的行保留旧结论与旧版本号（`retained`），不把旧值冒充成本次结果。
 
 ### 标签补齐
 
