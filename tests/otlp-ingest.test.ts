@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { acceptOtlpTraces } from '../src/sources/otlp/ingest';
 import { decodeTracesBody } from '../src/sources/otlp/decode';
+import { localDay } from '../src/format';
 import { SYNTH, tracesProtobuf } from './otlp-fixtures';
 import { fixture } from './fixtures';
 
@@ -64,7 +65,7 @@ const CODEX_TURN = {
 test('OMP chat span 落库：via=otlp、have=8、白名单列映射、conv 与 magpie 同组键', () => {
   const { store, result } = ingestOmp([{ resource: { service: 'oh-my-pi' }, spans: [OMP_CHAT] }]);
   try {
-    expect(result).toEqual({ spans: 1, spanDuplicates: 0, requestsCreated: 1, unknownShape: 0, bodiesWired: 0 });
+    expect(result).toEqual({ spans: 1, spanDuplicates: 0, requestsCreated: 1, unknownShape: 0, unknownServices: 0, bodiesWired: 0 });
     const row = store.store.read.query(`
       SELECT via, have, body_state, agent, session, conv_key, conv_source, actor, actor_state,
         started_ms, stop, model_requested, model_served, in_tok, out_tok, cache_read, cache_write,
@@ -120,7 +121,7 @@ test('同一批次重发两次：第二次全为重复，不产生新行', () =>
     const first = acceptOtlpTraces(store.store, payload(), NOW, salt);
     const second = acceptOtlpTraces(store.store, payload(), NOW + 1000, salt);
     expect(first.requestsCreated).toBe(1);
-    expect(second).toEqual({ spans: 1, spanDuplicates: 1, requestsCreated: 0, unknownShape: 0, bodiesWired: 0 });
+    expect(second).toEqual({ spans: 1, spanDuplicates: 1, requestsCreated: 0, unknownShape: 0, unknownServices: 0, bodiesWired: 0 });
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(1);
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(1);
   } finally {
@@ -265,7 +266,7 @@ test('LLM 形状但选取规则没认的 span 进未知桶，不按形状兜底�
       },
     }] }]), 'protobuf');
     const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
-    expect(result).toEqual({ spans: 1, spanDuplicates: 0, requestsCreated: 0, unknownShape: 1, bodiesWired: 0 });
+    expect(result).toEqual({ spans: 1, spanDuplicates: 0, requestsCreated: 0, unknownShape: 1, unknownServices: 0, bodiesWired: 0 });
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(0);
     const issues = store.store.read.query<{ reason: string }, [string]>(
       'SELECT reason FROM ingest_issue WHERE source_kind=?').all('otlp_span');
@@ -275,15 +276,43 @@ test('LLM 形状但选取规则没认的 span 进未知桶，不按形状兜底�
   }
 });
 
-test('白名单外的服务不建行也不记未知桶', () => {
+test('白名单外的服务不建行：span 落原始层，按服务与日聚合记 service_not_registered', () => {
   const store = fixture();
   try {
     const decoded = decodeTracesBody(tracesProtobuf([{ resource: { service: 'some-other-harness' }, spans: [
       { ...OMP_CHAT, name: 'chat whatever' },
+      { ...OMP_CHAT, spanId: SYNTH.spanTool, name: 'chat another' },
     ] }]), 'protobuf');
     const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
-    expect(result).toEqual({ spans: 1, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0, bodiesWired: 0 });
+    expect(result).toEqual({ spans: 2, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0, unknownServices: 2, bodiesWired: 0 });
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(0);
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(2);
+    // 同服务同日只记一行门铃 issue，ref_key 聚合到服务与日，不逐 span 刷表。
+    const issues = store.store.read.query<{ ref_key: string; reason: string }, [string]>(
+      'SELECT ref_key, reason FROM ingest_issue WHERE source_kind=?').all('otlp_span');
+    expect(issues).toEqual([
+      { ref_key: `service/some-other-harness/${localDay(NOW)}`, reason: 'service_not_registered' },
+    ]);
+  } finally {
+    store.close();
+  }
+});
+
+test('未登记服务的门铃按日聚合：同日重发不新增，跨日新记一行', () => {
+  const store = fixture();
+  try {
+    const payloadAt = () => decodeTracesBody(tracesProtobuf([{ resource: { service: 'another-one' }, spans: [
+      { ...OMP_CHAT, name: 'chat x' },
+    ] }]), 'protobuf');
+    // 未登记服务的 span 不建行、不写证据，重发时每个 span 都会再见到。
+    acceptOtlpTraces(store.store, payloadAt(), NOW, new Uint8Array(32));
+    acceptOtlpTraces(store.store, payloadAt(), NOW + 1000, new Uint8Array(32));
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM ingest_issue').get() as { n: number }).n).toBe(1);
+    acceptOtlpTraces(store.store, payloadAt(), NOW + 3 * 86_400_000, new Uint8Array(32));
+    const rows = store.store.read.query<{ ref_key: string }, []>(
+      'SELECT ref_key FROM ingest_issue ORDER BY ref_key').all();
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.ref_key).toBe(`service/another-one/${localDay(NOW + 3 * 86_400_000)}`);
   } finally {
     store.close();
   }

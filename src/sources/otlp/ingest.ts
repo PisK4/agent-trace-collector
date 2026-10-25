@@ -9,6 +9,8 @@
  * - 脱敏在原始层落盘之前，脱敏实现只有 src/privacy.ts 一个入口。
  * - span 带会话 id 才进派生组（组键与 sessionRef 逐字相同）；没带就只是
  *   独立记录，不猜归属。
+ * - 未登记 service.name 的 span 只落原始层，按服务与日聚合记一行
+ *   service_not_registered issue（对外 profile 的门铃），不逐 span 刷表。
  * - 暂停档（95%）整批拒绝，不静默丢弃；OTLP 行第一批不写正文，
  *   metadata_only 档对 traces 等价 normal。
  */
@@ -26,7 +28,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import type { OtlpLogRecord, OtlpLogsPayload, OtlpTracesPayload } from './decode';
 import { idHex, nanoToMs } from './decode';
-import { OTLP_MAPPING_VERSION, classifySpan, mapSpan } from './mapping';
+import { OTLP_MAPPING_VERSION, SPAN_RULES, classifySpan, mapSpan } from './mapping';
 import { persistBodyTx } from '../../body';
 
 export type AcceptOtlpTracesResult = {
@@ -34,6 +36,8 @@ export type AcceptOtlpTracesResult = {
   spanDuplicates: number;
   requestsCreated: number;
   unknownShape: number;
+  /** 未登记服务的 span 计数；按服务聚合的门铃明细在 service_not_registered issue。 */
+  unknownServices: number;
   bodiesWired: number;
 };
 
@@ -58,7 +62,7 @@ export function acceptOtlpTraces(
   // 暂停时拒绝整批：收下却写不进只会多一条误导性的"成功"记录。
   if (admission.mode === 'paused') throw new Error('disk_full');
 
-  const result: AcceptOtlpTracesResult = { spans: 0, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0, bodiesWired: 0 };
+  const result: AcceptOtlpTracesResult = { spans: 0, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0, unknownServices: 0, bodiesWired: 0 };
 
   store.write(db => {
     const existingStmt = db.prepare(
@@ -72,6 +76,10 @@ export function acceptOtlpTraces(
       'INSERT OR IGNORE INTO ingest_issue(source_kind,ref_key,reason,observed_at,byte_length) VALUES (?,?,?,?,NULL)');
 
     for (const scope of payload.resourceSpans) {
+      // 登记检查按 scope 做一次：ref_key 聚合到服务与接收日，主键去重防刷表。
+      const unregisteredDayKey = SPAN_RULES.some(entry => entry.service === scope.service)
+        ? null
+        : `service/${scope.service ?? '(unset)'}/${localDay(now)}`;
       for (const span of scope.items) {
         result.spans += 1;
         const refKey = spanRefKey(span.traceId, span.spanId);
@@ -89,6 +97,12 @@ export function acceptOtlpTraces(
           span.statusCode,
           JSON.stringify(redactedAttrs), OTLP_MAPPING_VERSION, PRIVACY_TRANSFORM_VERSION,
         );
+
+        if (unregisteredDayKey !== null) {
+          result.unknownServices += 1;
+          issueStmt.run('otlp_span', unregisteredDayKey, 'service_not_registered', now);
+          continue;
+        }
 
         const verdict = classifySpan(scope.service, span);
         if (verdict.kind === 'unknown') {

@@ -339,6 +339,13 @@ curl -s --noproxy '*' -X POST http://127.0.0.1:8320/v1/traces \
 | 503 | 写库失败（`writer_failed`），exporter 按 OTLP 语义重发 |
 | 507 | 95% 磁盘档整批拒收，腾空间后自动恢复 |
 
+未登记 `service.name` 的导出不建行：span 全量落原始层，并按服务与日聚合记一行 `service_not_registered` issue（健康接口的 issues 列表可见）——新 harness 把 exporter 指过来这件事在列表上看得见。查有哪些服务敲过门、各落了多少 span：
+
+```sh
+sqlite3 "$HOME/Library/Application Support/agent-trace-collector/trace.db" \
+  "SELECT service, COUNT(*) AS spans, MAX(received_at) AS last_seen FROM raw_otlp_span GROUP BY service ORDER BY service"
+```
+
 ## schema 版本
 
 当前 `user_version=7`。空数据目录首次启动直接建到 v7；v6 库打开时在单个事务里原地升到 v7（纯新增，不动旧行），更早版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 与 v7，v6 包恢复后首次打开同样原地升级。
