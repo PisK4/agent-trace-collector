@@ -159,12 +159,12 @@ export function toolSchemaSection(capabilities, toolName) {
 }
 
 /**
- * 阅读版本变化的统一说明：缓存已作废，给出显式重读入口；不自动重读。
+ * 阅读版本变化的统一说明：缓存已作废，store 正按冷却自动重读；保留立即重读入口。
  * @param {number} reqId
  */
 export function readingChangedNote(reqId) {
-  return `<p class="note warn">阅读版本已变化：这一笔的详情与正文缓存已作废。</p>
-    <div class="conv-tools"><button class="chip-btn" data-body-load="${reqId}">重新读取</button></div>`;
+  return `<p class="note warn">阅读版本已变化：这一笔的详情与正文缓存已作废，正在自动重读。</p>
+    <div class="conv-tools"><button class="chip-btn" data-body-load="${reqId}">立即重读</button></div>`;
 }
 
 /**

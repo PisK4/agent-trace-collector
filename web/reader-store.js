@@ -4,17 +4,21 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
 /**
  * 生产阅读的读取协调：网络、区间缓存、inflight 去重、失效与异步代次都在这里，
  * 不进 DOM 闭包。正文与工具结果带阅读版本；409 整笔作废（详情、meta、消息、
- * 区间、结构、增量、工具与路由一起），下一次普通读取重建。token 变化的 validate
- * 读取同样重置整笔快照。迟到响应必须同时匹配会话代次、当前记录归属与捕获的
- * token 才可写入缓存；作废记录不再作为可用快照返回。真正作废当前记录时通过
- * onInvalidated 通知页面；迟到响应与会话切换后的旧回调不作废、不通知，页面
- * 不按 reading_changed 错误自行清理副本。
+ * 区间、结构、增量、工具与路由一起），作废是记录原地重置并保留作废态：原因经
+ * 快照 status 同步可查，store 随即自动重读换新（同一笔有冷却窗口，防派生高频
+ * 发布时打转），换新后置 updatedSinceSeen，页面交互清除；手动「立即重读」随时
+ * 可发起。token 变化的 validate 读取同样原地重置整笔快照。迟到响应必须同时
+ * 匹配会话代次、当前记录归属、记录修订与捕获的 token 才可写入缓存；迟到响应
+ * 与会话切换后的旧回调不作废、不通知，页面不按 reading_changed 错误自行清理。
  *
  * 缓存边界：只保留当前会话已加载窗口的请求，外加显式读取过的窗口外请求。
  */
 
 /**
  * @typedef {Object} RequestRead 一次请求的读取快照。
+ * @property {'reading'|'fresh'|'invalidated'|'failed'} status 快照生命周期：详情在手为 fresh，作废待重读为 invalidated，详情读取失败为 failed，其余 reading。只描述 detail/meta/token 层，结构、增量与逐工具的局部状态不进 status。
+ * @property {string | null} detailError 详情读取失败原因；仅 failed 态非空。
+ * @property {boolean} updatedSinceSeen 自动重读换新后置位；页面交互经 clearUpdated 清除。
  * @property {import('../src/queries').RequestDetail | null} detail
  * @property {import('../src/protocols').BodyPage | null} meta
  * @property {Map<number, ReturnType<typeof messageEntries>[number]>} messages
@@ -37,11 +41,11 @@ import { deltaOrdinals, messageEntries } from './body-view.js';
  * @property {(id: number, pages?: number) => Promise<RequestRead>} loadDelta
  * @property {(id: number, ord: number) => Promise<import('../src/reading').ToolResultReading>} readToolResult
  * @property {(id: number) => Promise<unknown>} readRoute
- * @property {(id: number) => RequestRead | null} peekRequest 同步读取当前缓存态，不发网络；无可用快照返回 null。
- * @property {(id: number) => string | null} peekDetailError 同步读取详情读取失败原因；无记录或未失败返回 null。
+ * @property {(id: number) => RequestRead | null} peekRequest 同步读取当前快照，不发网络；记录存在即返回（含作废、失败与读取中的半成品），null 只表示本会话没有这笔记录。
  * @property {(id: number, ord: number) => import('../src/reading').ToolResultReading | null} peekToolResult 同步读取工具结果缓存，失败占位也算可用。
  * @property {(id: number) => {state: string, summary: unknown} | null} peekRoute 同步读取路由缓存；未读到或读取失败返回 null。
- * @property {(id: number) => void} invalidate
+ * @property {(id: number) => void} clearUpdated 清除自动重读的「已更新」标记。
+ * @property {(id: number) => void} invalidate 原地清空一笔记录的缓存并落作废态；不通知、不排自动重读，测试与强制失效用。
  */
 
 /**
@@ -72,11 +76,14 @@ function createLanes(limit, fetcher) {
 
 /**
  * @param {(url: string) => Promise<Response>} fetcher
- * @param {(id: number) => void} [onInvalidated] store 真正作废当前记录时通知页面；
- *   迟到响应与会话切换后的旧任务不作废、不通知。
+ * @param {(id: number) => void} [onReadChanged] 记录快照异步变化（作废、自动重读
+ *   换新或失败）时通知页面重绘；迟到响应与会话切换后的旧任务不通知。
+ * @param {{ autoRereadCooldownMs?: number }} [options] 自动重读的冷却窗口，默认
+ *   10 秒；测试可注入短窗。
  * @returns {ReaderStore}
  */
-export function createReaderStore(fetcher, onInvalidated) {
+export function createReaderStore(fetcher, onReadChanged, options) {
+  const autoRereadCooldownMs = options?.autoRereadCooldownMs ?? 10000;
   const lane = createLanes(4, fetcher);
   let epoch = 0;
 
@@ -110,6 +117,14 @@ export function createReaderStore(fetcher, onInvalidated) {
       rec = {
         id, token: null,
         detail: null, detailError: null,
+        /** 快照生命周期；作废态由 invalidateRecord 落位。 */
+        status: 'reading',
+        /** 记录修订：作废时自增，迟到详情响应凭它不得写入已重置的记录。 */
+        rev: 0,
+        /** 自动重读换新后置位；页面交互经 clearUpdated 清除。 */
+        updatedSinceSeen: false,
+        /** 上次自动重读发起时间与在排的定时器。 */
+        autoRereadAt: 0, autoTimer: null,
         meta: null,
         pages: new Map(),
         messages: new Map(),
@@ -132,6 +147,61 @@ export function createReaderStore(fetcher, onInvalidated) {
     for (const entry of messageEntries(page)) {
       if (!rec.messages.has(entry.ord)) rec.messages.set(entry.ord, entry);
     }
+  }
+
+  /** @param {any} rec 清空正文缓存：作废与 validate 换版本共用的原地重置。 */
+  function clearRecordContent(rec) {
+    rec.token = null;
+    rec.detail = null;
+    rec.detailError = null;
+    rec.meta = null;
+    rec.pages = new Map();
+    rec.messages = new Map();
+    rec.structure = { next: 0, total: null, ords: [], loading: false, error: null };
+    rec.delta = { next: 0, done: false, loading: false, error: null, unconfirmed: false };
+    rec.tools = new Map();
+    rec.toolValues = new Map();
+    routes.delete(rec.id);
+    routeValues.delete(rec.id);
+  }
+
+  /**
+   * 整笔作废：清正文缓存但保留记录，作废态经快照 status 同步可查；
+   * 修订自增，让迟到的详情响应无法写入已重置的记录。
+   * @param {any} rec
+   */
+  function invalidateRecord(rec) {
+    if (rec.autoTimer !== null) { clearTimeout(rec.autoTimer); rec.autoTimer = null; }
+    clearRecordContent(rec);
+    rec.status = 'invalidated';
+    rec.rev += 1;
+  }
+
+  /**
+   * 作废即自动重读：同一笔在冷却窗口内不重复发起（窗口内再次作废顺延到期），
+   * 会话已切换或记录已被取代、重建时放弃；不设尝试上限，派生停发后自然收敛。
+   * 深度与手动重读一致：详情 + 元信息，再补最多两片可信增量。
+   * @param {any} rec
+   */
+  function scheduleAutoReread(rec) {
+    if (rec.autoTimer !== null) return;
+    const wait = Math.max(0, rec.autoRereadAt + autoRereadCooldownMs - Date.now());
+    rec.autoTimer = setTimeout(() => {
+      rec.autoTimer = null;
+      if (reads.get(rec.id) !== rec || rec.status !== 'invalidated') return;
+      rec.autoRereadAt = Date.now();
+      void (async () => {
+        try {
+          await readRequest(rec.id);
+        } catch { /* 重读失败：failed 态如实可见，由用户或批次重试 */ }
+        if (reads.get(rec.id) === rec && rec.status === 'fresh') rec.updatedSinceSeen = true;
+        onReadChanged?.(rec.id);
+        if (reads.get(rec.id) === rec && rec.detail !== null && !rec.delta.done) {
+          try { await loadDelta(rec.id, 2); } catch { /* 增量失败保留事件行，可再续读 */ }
+          onReadChanged?.(rec.id);
+        }
+      })();
+    }, wait);
   }
 
   /** @param {string | undefined} cursor */
@@ -226,8 +296,9 @@ export function createReaderStore(fetcher, onInvalidated) {
    */
   function invalidateIfCurrent(rec, id, myEpoch, myToken) {
     if (myEpoch === epoch && reads.get(id) === rec && rec.token === myToken) {
-      invalidate(id);
-      onInvalidated?.(id);
+      invalidateRecord(rec);
+      onReadChanged?.(id);
+      scheduleAutoReread(rec);
     }
   }
 
@@ -243,39 +314,37 @@ export function createReaderStore(fetcher, onInvalidated) {
     }
     if (rec.detail !== null && !validate) return;
     const myEpoch = epoch;
+    const myRev = rec.rev;
     /** @type {Promise<void>} */
     const task = (async () => {
       const detail = await getJson(`/api/requests/${rec.id}`);
-      if (myEpoch !== epoch || reads.get(rec.id) !== rec) throwReadingChanged();
+      // 迟到响应：会话已切换、记录已作废重置或被取代。
+      if (myEpoch !== epoch || reads.get(rec.id) !== rec || rec.rev !== myRev) throwReadingChanged();
       if (validate && rec.token !== null && detail.reading_token !== rec.token) {
-        // token 变化：消息、区间、结构、增量、工具、元信息与路由全部作废，避免新旧混拼。
-        rec.pages = new Map();
-        rec.messages = new Map();
-        rec.meta = null;
-        rec.structure = { next: 0, total: null, ords: [], loading: false, error: null };
-        rec.delta = { next: 0, done: false, loading: false, error: null, unconfirmed: false };
-        rec.tools = new Map();
-        rec.toolValues = new Map();
-        routes.delete(rec.id);
-        routeValues.delete(rec.id);
-        onInvalidated?.(rec.id);
+        // token 变化：消息、区间、结构、增量、工具、元信息与路由全部重置，避免新旧混拼。
+        clearRecordContent(rec);
+        onReadChanged?.(rec.id);
       }
       rec.detail = detail;
       rec.token = detail.reading_token;
       rec.detailError = null;
+      rec.status = 'fresh';
     })();
     rec.detailInflight = task;
     try {
       await task;
     } catch (error) {
       if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
-        if (reads.get(rec.id) === rec) {
-          reads.delete(rec.id);
-          onInvalidated?.(rec.id);
+        // 服务端 409：整笔作废并排自动重读；迟到响应（修订或代次已变）由作废方负责，不重复处理。
+        if (reads.get(rec.id) === rec && rec.status !== 'invalidated') {
+          invalidateRecord(rec);
+          onReadChanged?.(rec.id);
+          scheduleAutoReread(rec);
         }
         throw error;
       }
       rec.detailError = error instanceof Error ? error.message : 'detail_failed';
+      rec.status = 'failed';
       throw error;
     } finally {
       if (rec.detailInflight === task) rec.detailInflight = undefined;
@@ -285,6 +354,9 @@ export function createReaderStore(fetcher, onInvalidated) {
   /** @param {any} rec @returns {RequestRead} */
   function assemble(rec) {
     return {
+      status: rec.status,
+      detailError: rec.detailError,
+      updatedSinceSeen: rec.updatedSinceSeen,
       detail: rec.detail,
       meta: rec.meta,
       messages: rec.messages,
@@ -481,16 +553,11 @@ export function createReaderStore(fetcher, onInvalidated) {
     return pending;
   }
 
-  /** @param {number} id @returns {RequestRead | null} 同步读取当前快照；详情未到手不返回半成品。 */
+  /** @param {number} id @returns {RequestRead | null} 记录存在即返回快照（含作废、失败与读取中）；null 只表示本会话没有这笔记录。 */
   function peekRequest(id) {
     const rec = reads.get(id);
-    if (rec === undefined || rec.detail === null) return null;
+    if (rec === undefined) return null;
     return assemble(rec);
-  }
-
-  /** @param {number} id @returns {string | null} 详情读取的失败原因；409 作废删除整笔记录，走 onInvalidated 通道。 */
-  function peekDetailError(id) {
-    return reads.get(id)?.detailError ?? null;
   }
 
   /** @param {number} id @param {number} ord @returns {import('../src/reading').ToolResultReading | null} */
@@ -505,9 +572,16 @@ export function createReaderStore(fetcher, onInvalidated) {
     return routeValues.get(id) ?? null;
   }
 
-  /** @param {number} id */
+  /** @param {number} id 页面交互清除自动重读的「已更新」标记。 */
+  function clearUpdated(id) {
+    const rec = reads.get(id);
+    if (rec !== undefined) rec.updatedSinceSeen = false;
+  }
+
+  /** @param {number} id 原地清空缓存并落作废态；不通知、不排自动重读，测试与强制失效用。 */
   function invalidate(id) {
-    reads.delete(id);
+    const rec = reads.get(id);
+    if (rec !== undefined) invalidateRecord(rec);
     routes.delete(id);
     routeValues.delete(id);
   }
@@ -525,9 +599,9 @@ export function createReaderStore(fetcher, onInvalidated) {
     readToolResult,
     readRoute,
     peekRequest,
-    peekDetailError,
     peekToolResult,
     peekRoute,
+    clearUpdated,
     invalidate,
   };
 }

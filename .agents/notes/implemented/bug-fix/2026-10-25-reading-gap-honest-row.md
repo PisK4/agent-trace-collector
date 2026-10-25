@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-`projectSteps` 增加可选 `readGap` 参数，read 为 null 时由装配层区分三种态，如实显示对应文案：`readingChanged` 里已登记的 id 显示「阅读版本已变化 · 点击重读」；详情读取失败经 reader-store 新增的 `peekDetailError` 同步读取（「详情读取失败 · <原因>」）；其余仍显示「读取中」。三种态共用 `req:loading` 步骤键，点击行都走普通读取重建。409 整笔作废与「不自动重读」的决定继续有效，见[生产阅读缓存 reader-store](../feature/2026-10-24-reader-store-cache.md)。本修复补齐的是它的另一半——作废态在中栏可见、可一键重读，而不是冒充读取中。
+`projectSteps` 增加可选 `readGap` 参数（2026-10-25 晚些时候改为由快照 `status` 直接推导，`ReadGap` 参数与 `peekDetailError` 已退役，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)），read 为 null 时由装配层区分三种态，如实显示对应文案：`readingChanged` 里已登记的 id 显示「阅读版本已变化 · 点击重读」；详情读取失败经 reader-store 新增的 `peekDetailError` 同步读取（「详情读取失败 · <原因>」）；其余仍显示「读取中」。三种态共用 `req:loading` 步骤键，点击行都走普通读取重建。409 整笔作废的决定继续有效，见[生产阅读缓存 reader-store](../feature/2026-10-24-reader-store-cache.md)（「不自动重读」自 2026-10-25 起被自动重读部分取代）。本修复补齐的是它的另一半——作废态在中栏可见、可一键重读，而不是冒充读取中。
 
 `ensureRead` 在详情到手后按初始装载深度补最多两片可信增量（与 `loadWindowReads` 的每笔预算一致），重读一次点击就能恢复塌行前的行组成；超出两片仍走显式续读，见[阅读角色、步骤定位与缓存一致性](2026-10-24-reader-role-and-selection-consistency.md)。
 
@@ -16,11 +16,11 @@ Status: implemented
 
 **作废后保留旧快照渲染到重读完成。** 需要在页面侧重新引入副本缓存，与「页面读取缓存收拢进 reader-store」的决定相反；作废记录不作为可用快照返回仍是 reader-store 的契约。
 
-**409 后自动重读。** 已被 reader-store-cache note 否决：会掩盖「请求已变化」这一事实。
+**409 后自动重读。** 已被 reader-store-cache note 否决：会掩盖「请求已变化」这一事实；2026-10-25 起以带「已更新」留痕与冷却限频的形式实装，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)。
 
 ## Consequences
 
-作废与失败的组在中栏各有一行如实文案，点击行即重建；代价是活跃会话里的塌行仍会出现（派生发布不受阅读端控制），只是从「永久卡在读取中」变成「可见、可一键恢复」。`peekDetailError` 是 store 的新同步入口，只暴露 `detailError`，不改变 `peekRequest` 无快照返回 null 的契约。
+作废与失败的组在中栏各有一行如实文案，点击行即重建；代价是活跃会话里的塌行仍会出现（派生发布不受阅读端控制），只是从「永久卡在读取中」变成「可见、可一键恢复」——2026-10-25 起连这一步也由自动重读接管，塌行只剩重读在途的一瞬。`peekDetailError` 是 store 的新同步入口，只暴露 `detailError`，不改变 `peekRequest` 无快照返回 null 的契约（两者随后均被快照 `status`/`detailError` 字段取代，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)）。
 
 ## Testing
 

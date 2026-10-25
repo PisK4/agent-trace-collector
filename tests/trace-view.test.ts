@@ -35,11 +35,23 @@ function entry(ord: number, input: unknown, isInput: boolean) {
 type ProjectableRead = Parameters<typeof projectSteps>[1];
 function read(detailJson: unknown, entries: unknown[], reply: unknown): ProjectableRead {
   return {
+    status: 'fresh', detailError: null, updatedSinceSeen: false,
     detail: detailJson, meta: reply === null ? null : { reply, capabilities: null },
     messages: new Map(), entries,
     structure: { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null },
     delta: { next: 0, done: true, loading: false, error: null, unconfirmed: false },
     token: TOKEN,
+  } as unknown as ProjectableRead;
+}
+
+/** 缺口快照：记录存在但没有详情，status 区分作废与失败。 */
+function gapRead(status: 'invalidated' | 'failed', detailError: string | null = null): ProjectableRead {
+  return {
+    status, detailError, updatedSinceSeen: false,
+    detail: null, meta: null, messages: new Map(), entries: [],
+    structure: { next: 0, total: null, ords: [], loading: false, error: null },
+    delta: { next: 0, done: true, loading: false, error: null, unconfirmed: false },
+    token: null,
   } as unknown as ProjectableRead;
 }
 
@@ -86,11 +98,11 @@ test('读取未完成与不可用时不拆 input_preview 为用户步骤', () =>
 test('读取作废与读取失败文案如实区分，不冒充读取中', () => {
   const loading = projectSteps(row(), null);
   expect(loading[0]?.text).toBe('读取中');
-  const invalidated = projectSteps(row(), null, null, { reason: 'invalidated' });
-  expect(invalidated[0]?.text).toBe('阅读版本已变化 · 点击重读');
-  const failed = projectSteps(row(), null, null, { reason: 'failed', error: 'http_503' });
+  const invalidated = projectSteps(row(), gapRead('invalidated'));
+  expect(invalidated[0]?.text).toBe('阅读版本已变化 · 自动重读中，点击立即重读');
+  const failed = projectSteps(row(), gapRead('failed', 'http_503'));
   expect(failed[0]?.text).toBe('详情读取失败 · http_503');
-  // 三种态共用同一条记录步骤身份：点击行都走普通读取重建。
+  // 三种态共用同一条记录步骤身份：点击行仍走普通读取。
   expect(loading[0]?.key).toBe('7:loading');
   expect(invalidated[0]?.key).toBe('7:loading');
   expect(failed[0]?.key).toBe('7:loading');

@@ -651,25 +651,67 @@ test('peek 同步读取入口：不发网、无快照为 null、失败占位与�
   store.peekToolResult(1, 0);
   store.peekRoute(1);
   expect(h.urls.length).toBe(urlsAtPeek);
-  // 详情读取失败如实可见：peekDetailError 报告原因，重读成功后清空。
-  expect(store.peekDetailError(1)).toBeNull();
+  // 详情读取失败如实可见：快照带 failed 态与原因，重读成功后清空。
+  expect(store.peekRequest(1)?.detailError).toBeNull();
   detailFails = true;
   store.invalidate(1);
   await expect(store.readRequest(1)).rejects.toThrow('http_503');
-  expect(store.peekRequest(1)).toBeNull();
-  expect(store.peekDetailError(1)).toBe('http_503');
+  expect(store.peekRequest(1)?.status).toBe('failed');
+  expect(store.peekRequest(1)?.detail).toBeNull();
+  expect(store.peekRequest(1)?.detailError).toBe('http_503');
   detailFails = false;
   await store.readRequest(1);
-  expect(store.peekDetailError(1)).toBeNull();
-  // 作废后同步读取回到未读；换会话同样清空。
+  expect(store.peekRequest(1)?.detailError).toBeNull();
+  expect(store.peekRequest(1)?.status).toBe('fresh');
+  // 作废后记录保留、落作废态；换会话清空。
   store.invalidate(1);
-  expect(store.peekRequest(1)).toBeNull();
+  expect(store.peekRequest(1)?.status).toBe('invalidated');
   expect(store.peekToolResult(1, 0)).toBeNull();
   expect(store.peekRoute(1)).toBeNull();
   await store.readRequest(1);
   await store.readRoute(1);
   await store.selectSession('k2', 30);
+  expect(store.peekRequest(1)).toBeNull();
   expect(store.peekRoute(1)).toBeNull();
+});
+
+test('作废即自动重读：换新置已更新标记，冷却内不重复发起', async () => {
+  let token = TOKEN;
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
+    // 定点区间 0/1 永远 409：作废入口；详情与元信息正常。
+    if (url.includes('/body?from=0&to=1')) return respond({ error: 'reading_changed' }, 409);
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher, undefined, { autoRereadCooldownMs: 80 });
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  expect(store.peekRequest(1)?.updatedSinceSeen).toBe(false);
+  token = TOKEN2;
+  await expect(store.readRange(1, 0, 1)).rejects.toThrow('reading_changed');
+  expect(store.peekRequest(1)?.status).toBe('invalidated');
+  expect(store.peekRequest(1)?.detail).toBeNull();
+  // 自动重读在定时器里发起：换新成功后 fresh、带新 token，并置「已更新」。
+  await delay(20);
+  expect(store.peekRequest(1)?.status).toBe('fresh');
+  expect(store.peekRequest(1)?.token).toBe(TOKEN2);
+  expect(store.peekRequest(1)?.updatedSinceSeen).toBe(true);
+  // 页面交互清除标记；记录保持 fresh。
+  store.clearUpdated(1);
+  expect(store.peekRequest(1)?.updatedSinceSeen).toBe(false);
+  expect(store.peekRequest(1)?.status).toBe('fresh');
+  // 冷却内再次作废：不立即重发；冷却到期后才再发起并换新。
+  const detailCalls = h.urls.filter(u => u.endsWith('/api/requests/1')).length;
+  token = TOKEN;
+  await expect(store.readRange(1, 0, 1)).rejects.toThrow('reading_changed');
+  await delay(15);
+  expect(h.urls.filter(u => u.endsWith('/api/requests/1')).length).toBe(detailCalls);
+  await delay(160);
+  expect(h.urls.filter(u => u.endsWith('/api/requests/1')).length).toBe(detailCalls + 1);
+  expect(store.peekRequest(1)?.status).toBe('fresh');
+  expect(store.peekRequest(1)?.token).toBe(TOKEN);
 });
 
 test('共享网络队列并发不超过 4', async () => {
