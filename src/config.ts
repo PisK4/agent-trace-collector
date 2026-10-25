@@ -129,7 +129,7 @@ export function readLocalSecret(path: string): Uint8Array {
   return new Uint8Array(bytes);
 }
 
-export type LocalSecretName = 'redaction.salt' | 'read.token' | 'hook.token';
+export type LocalSecretName = 'redaction.salt' | 'read.token' | 'hook.token' | 'otlp.token';
 
 export function loadLocalSecret(dataDir: string, fileName: LocalSecretName): Uint8Array {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });

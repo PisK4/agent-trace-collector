@@ -19,6 +19,9 @@ import {
 } from './reading';
 import { acceptHook } from './hook';
 import type { HookAdmission, HookEnvelope } from './hook';
+import { OtlpDecodeError } from './sources/otlp/decode';
+import { decodeLogsBody, decodeTracesBody } from './sources/otlp/decode';
+import { acceptOtlpLogs, acceptOtlpTraces } from './sources/otlp/ingest';
 import { createIngestMetrics, type CapacityMetrics, type IngestMetrics } from './capacity';
 
 const WEB_ROOT = new URL('../web/', import.meta.url);
@@ -265,8 +268,14 @@ async function handleHookIngest(
 
 /** 只读上限内的字节；超限立即返回 null，不把剩余内容读进内存。 */
 async function readBounded(req: Request, limit: number): Promise<string | null> {
+  const bytes = await readBoundedBytes(req, limit);
+  return bytes === null ? null : Buffer.from(bytes).toString('utf8');
+}
+
+/** readBounded 的二进制形态：protobuf 载荷不能过 UTF-8 往返。 */
+async function readBoundedBytes(req: Request, limit: number): Promise<Uint8Array | null> {
   const body = req.body;
-  if (body === null) return '';
+  if (body === null) return new Uint8Array(0);
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -280,7 +289,96 @@ async function readBounded(req: Request, limit: number): Promise<string | null> 
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks.map(chunk => Buffer.from(chunk))).toString('utf8');
+  return Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
+}
+
+/**
+ * OTLP 接收端点（/v1/traces 与 /v1/logs）。
+ *
+ * 顺序与 hook 对齐：Host/Origin → 常量时间 Bearer → 方法 → content-type
+ * 白名单（浏览器防线三件套之一：非 safelisted content-type 会先卡预检）→
+ * 共用单飞守卫 → 流式计字节 → 解码 → 入库。
+ * 成功回 OTLP 规范的 200 与 `{"partialSuccess":{}}`；一切失败显式 4xx/5xx，不静默丢弃。
+ */
+async function handleOtlpIngest(
+  req: Request,
+  store: Store,
+  config: Config,
+  otlp: { token: string; salt: Uint8Array; admission?: () => HookAdmission } | undefined,
+  metrics: IngestMetrics,
+  signal: 'traces' | 'logs',
+): Promise<Response> {
+  if (otlp === undefined) {
+    metrics.reject('otlp_unavailable');
+    return json({ error: 'otlp_unavailable' }, 404);
+  }
+  const hostOrigin = checkHostOrigin(req, config.port);
+  if (hostOrigin !== null) {
+    metrics.reject(hostOrigin);
+    return json({ error: hostOrigin }, 403);
+  }
+  const authorization = req.headers.get('authorization');
+  if (authorization === null || !authorization.startsWith('Bearer ') ||
+      !timingSafeEqual(authorization.slice(7), otlp.token)) {
+    metrics.reject('unauthorized');
+    return json({ error: 'unauthorized' }, 401);
+  }
+  if (req.method !== 'POST') {
+    metrics.reject('method_not_allowed');
+    return json({ error: 'method_not_allowed' }, 405, { allow: 'POST' });
+  }
+  const contentType = (req.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+  if (contentType !== 'application/x-protobuf' && contentType !== 'application/json') {
+    // text/plain 这类能发 CORS 简单请求的形态必须显式拒绝，防线不靠碰巧。
+    metrics.reject('unsupported_media_type');
+    return json({ error: 'unsupported_media_type' }, 415);
+  }
+  if (ingesting) {
+    metrics.reject('busy');
+    return json({ error: 'busy' }, 429);
+  }
+  const declared = Number(req.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declared) && declared > MAX_ENVELOPE_BYTES) {
+    metrics.reject('envelope_too_large');
+    return json({ error: 'envelope_too_large' }, 413);
+  }
+
+  ingesting = true;
+  try {
+    const bytes = await readBoundedBytes(req, MAX_ENVELOPE_BYTES);
+    if (bytes === null) {
+      metrics.reject('envelope_too_large');
+      return json({ error: 'envelope_too_large' }, 413);
+    }
+    const kind = contentType === 'application/json' ? 'json' : 'protobuf';
+    const options = { admission: otlp.admission };
+    try {
+      if (signal === 'traces') {
+        const payload = decodeTracesBody(bytes, kind);
+        const result = acceptOtlpTraces(store, payload, Date.now(), otlp.salt, options);
+        metrics.accept({ duplicate: result.spanDuplicates > 0, requestBytes: bytes.length, replyBytes: 0 });
+      } else {
+        const payload = decodeLogsBody(bytes, kind);
+        const result = acceptOtlpLogs(store, payload, Date.now(), otlp.salt, options);
+        metrics.accept({ duplicate: result.duplicates > 0, requestBytes: bytes.length, replyBytes: 0 });
+      }
+      return json({ partialSuccess: {} });
+    } catch (error) {
+      if (error instanceof OtlpDecodeError) {
+        metrics.reject('invalid_otlp');
+        return json({ error: 'invalid_otlp', code: error.code }, 400);
+      }
+      const code = error instanceof Error ? error.message : 'unknown';
+      if (code === 'disk_full') {
+        metrics.reject('insufficient_storage');
+        return json({ error: 'insufficient_storage' }, 507);
+      }
+      metrics.reject('writer_failed');
+      return json({ error: 'writer_failed', code }, 503);
+    }
+  } finally {
+    ingesting = false;
+  }
 }
 
 export function createHandler(
@@ -289,6 +387,7 @@ export function createHandler(
   readToken: string,
   hook?: { token: string; salt: Uint8Array; admission?: () => HookAdmission },
   metrics?: CapacityMetrics,
+  otlp?: { token: string; salt: Uint8Array; admission?: () => HookAdmission },
 ): (req: Request) => Promise<Response> {
   // hook 计数在未注入观测运行时也保留，只是没有对外入口。
   const ingestMetrics = metrics?.ingest ?? createIngestMetrics();
@@ -296,6 +395,12 @@ export function createHandler(
     const url = new URL(req.url);
     if (url.pathname === '/hook/ingest') {
       return await handleHookIngest(req, store, config, hook, ingestMetrics);
+    }
+    if (url.pathname === '/v1/traces') {
+      return await handleOtlpIngest(req, store, config, otlp, ingestMetrics, 'traces');
+    }
+    if (url.pathname === '/v1/logs') {
+      return await handleOtlpIngest(req, store, config, otlp, ingestMetrics, 'logs');
     }
     const isNavigation = !url.pathname.startsWith('/api/');
     const verdict = checkAccess(req, config.port, readToken, isNavigation);
