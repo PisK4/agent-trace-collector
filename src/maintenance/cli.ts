@@ -7,6 +7,7 @@ import { backupBundle, backupDatabase, restoreBundle } from './backup';
 import { acquireMaintenanceLock, type LockHandle } from './lock';
 import { previewMetadataPurge, purgeMetadata } from './purge';
 import { rebuildSession } from './rebuild';
+import { reparseProtocol } from './reparse';
 import { verifyDatabase } from './verify';
 
 function parseArgs(argv: string[]): Map<string, string | true> {
@@ -36,6 +37,7 @@ const USAGE = `usage:
   maintain bundle --dir <dataDir> --out <new-dir>
   maintain restore --bundle <bundleDir> --out <new-dir>
   maintain rebuild --db <path> --session <conv_key>
+  maintain reparse --db <path> --protocol <name>
   maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --approval-id <id>]
 `;
 
@@ -105,8 +107,9 @@ export async function runMaintenance(argv: string[], io: {
     }
   }
 
-  if (command === 'verify' || command === 'purge-metadata' || command === 'rebuild') {
-    // verify 只读，不需要锁；purge 与 rebuild 写库，必须有。
+  if (command === 'verify' || command === 'purge-metadata' || command === 'rebuild'
+    || command === 'reparse') {
+    // verify 只读，不需要锁；其余命令写库，必须有。
     let store: Store | null = null;
     let lock: LockHandle | null = null;
     try {
@@ -114,20 +117,26 @@ export async function runMaintenance(argv: string[], io: {
         out(JSON.stringify({ ok: true, ...verifyDatabase(dbPath) }));
         return 0;
       }
-      if (command === 'rebuild') {
-        const session = stringFlag(flags, 'session');
-        if (session === null) {
+      if (command === 'rebuild' || command === 'reparse') {
+        const argument = stringFlag(flags, command === 'rebuild' ? 'session' : 'protocol');
+        if (argument === null) {
           err(USAGE.trimEnd());
           return 2;
         }
-        lock = acquireMaintenanceLock(dirname(dbPath), `rebuild:${process.pid}`);
+        lock = acquireMaintenanceLock(dirname(dbPath), `${command}:${process.pid}`);
         if (lock === null) {
           err('maintenance_lock_held');
           return 1;
         }
         store = openStore(dbPath);
-        const report = rebuildSession(store, session);
-        out(JSON.stringify({ ok: true, session, ...report }));
+        if (command === 'rebuild') {
+          const report = rebuildSession(store, argument);
+          out(JSON.stringify({ ok: true, session: argument, ...report }));
+        } else {
+          // 被拒绝与单独失败的行都进报告：原样保留，不把跳过写成通过。
+          const report = reparseProtocol(store, argument);
+          out(JSON.stringify({ ok: true, ...report }));
+        }
         return 0;
       }
       const before = stringFlag(flags, 'before');

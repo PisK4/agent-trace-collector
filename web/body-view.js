@@ -91,9 +91,11 @@ export function renderMessages(entries, options) {
 
 /**
  * 单条消息的完整内容。用户与工具结果按原文保留换行，助手文本按 Markdown 显示。
+ * `arrayKey` 是消息数组在协议对象里的键（messages / input），只影响位置标签。
  * @param {Entry} entry
+ * @param {string} [arrayKey]
  */
-export function renderMessageDetail(entry) {
+export function renderMessageDetail(entry, arrayKey = 'messages') {
   const displayRole = displayRoleOf(entry);
   const blocks = entry.blocks.map(block => {
     if (block.kind === 'text') {
@@ -115,7 +117,7 @@ export function renderMessageDetail(entry) {
   return `<div class="body-panel">
     <div class="bp-head">
       <span class="kind ${roleClass(displayRole)} bp-kind">${roleTag(displayRole)}</span>
-      <span class="bp-path">messages[${entry.ord}]</span>
+      <span class="bp-path">${esc(arrayKey)}[${entry.ord}]</span>
       <button class="chip-btn" data-copy-msg="${entry.ord}">复制原文</button>
     </div>
     <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${entry.blocks.length} 个内容块</span></div>
@@ -124,14 +126,15 @@ export function renderMessageDetail(entry) {
 }
 
 /**
- * 顶层 System 的右栏详情：全文转义展示，路径固定 request.system。
+ * 顶层 System 的右栏详情：全文转义展示，路径随协议（request.system / request.instructions）。
  * @param {string} text
+ * @param {string} [path]
  */
-export function renderSystemDetail(text) {
+export function renderSystemDetail(text, path = 'request.system') {
   return `<div class="body-panel">
     <div class="bp-head">
       <span class="kind system bp-kind">System</span>
-      <span class="bp-path">request.system</span>
+      <span class="bp-path">${esc(path)}</span>
     </div>
     <div class="bp-text bp-plain">${esc(text)}</div>
   </div>`;

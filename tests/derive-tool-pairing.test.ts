@@ -114,6 +114,27 @@ test('chat协议工具结果位置与名称由本次关联给出', () => {
   } finally { f.close(); }
 });
 
+test('responses 协议的调用与结果按 call_id 配对', () => {
+  const f = fixture();
+  try {
+    seedDeriveRound(f.store, [1, 2]);
+    const user = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'synthetic input' }] };
+    const call = { type: 'function_call', call_id: 'synthetic_call', name: 'read_file', arguments: '{}' };
+    const result = { type: 'function_call_output', call_id: 'synthetic_call', output: 'synthetic output' };
+    persistBody(f.store, 1, { protocol: 'responses', request: { input: [user] },
+      reply: { id: 'resp_1', status: 'completed', output: [call] }, redact_version: 1 });
+    persistBody(f.store, 2, { protocol: 'responses', request: { input: [user, call, result] },
+      reply: { id: 'resp_2', status: 'completed', output: [] }, redact_version: 1 });
+    rebuildDeriveGroup(f.store);
+    expect(deriveSnapshot(f.store, [1, 2]).tools[0]).toMatchObject({
+      state: 'resolved', result_ord: 2, result_path: 'request.input[2]',
+    });
+    expect(deriveSnapshot(f.store, [1, 2]).requests[1]?.input_preview).toBe('工具结果 · read_file');
+  } finally {
+    f.close();
+  }
+});
+
 test('标题请求的回复含工具调用也不产生工具行', () => {
   const f = fixture();
   try {

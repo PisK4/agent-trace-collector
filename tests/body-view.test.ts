@@ -23,7 +23,8 @@ const missingCapabilities: CapabilityView = {
 
 function page(overrides: Partial<BodyPage> = {}): BodyPage {
   return {
-    state: 'available', parse_state: 'ok', reply_state: 'ok', from: 0, to: 0, total: 2,
+    state: 'available', protocol: 'anthropic', parse_state: 'ok', reply_state: 'ok',
+    from: 0, to: 0, total: 2,
     messages: [], request_fields: null, reply: null, reason: null,
     interpretations: [],
     coverage: { from: 0, to: 0, total: 2, complete: true, loaded_complete: false, reason: 'available' },
@@ -203,6 +204,74 @@ test('回复两种协议都能读出文本、推理与调用', () => {
     ['call', 'reply.choices[0].message.tool_calls[0]'],
   ]);
   expect(chat.choiceCount).toBe(1);
+});
+
+test('Responses 回复从 output 出块，调用序号与服务端位置同源', () => {
+  const view = replyView(page({
+    protocol: 'responses',
+    reply: {
+      id: 'resp_1',
+      status: 'completed',
+      output: [
+        { type: 'reasoning', summary: [{ type: 'summary_text', text: '先看文件' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '我去读一下。' }] },
+        { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"path":"a.ts"}' },
+      ],
+    },
+  }));
+  expect(view.state).toBe('ok');
+  expect(view.text).toBe('我去读一下。');
+  expect(view.thinking).toEqual(['先看文件']);
+  expect(view.finish).toBe('completed');
+  // 路径按项定位：消息项展开 content，调用项整项即块。
+  expect(view.blocks.map(block => [block.kind, block.path, block.index])).toEqual([
+    ['thinking', 'reply.output[0]', 0],
+    ['text', 'reply.output[1].content[0]', 1],
+    ['call', 'reply.output[2]', 2],
+  ]);
+  // ord 取项在 output 里的位置：服务端的 tool_call.ord 按同一口径落库。
+  expect(view.calls).toEqual([{
+    id: 'call_1', name: 'read', inputText: '{"path":"a.ts"}', ord: 2, path: 'reply.output[2]',
+  }]);
+  // 两个消息项各有 content[0]：块序号取项位置，步骤键不撞。
+  const twoMessages = replyView(page({
+    protocol: 'responses',
+    reply: { status: 'completed', output: [
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'a' }] },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'b' }] },
+    ] },
+  }));
+  expect(twoMessages.blocks.map(block => [block.index, block.path])).toEqual([
+    [0, 'reply.output[0].content[0]'],
+    [1, 'reply.output[1].content[0]'],
+  ]);
+  // incomplete 的原因抬到 finish：已知截断不显示成未知停止。
+  expect(replyView(page({ reply: {
+    status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [],
+  } })).finish).toBe('max_output_tokens');
+});
+
+test('Responses 请求项按 type 出块，工具结果不混进用户消息', () => {
+  const entries = messageEntries(page({
+    protocol: 'responses',
+    messages: [
+      { ord: 0, value: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '读配置' }] } },
+      { ord: 1, value: { type: 'function_call', call_id: 'c1', name: 'read', arguments: '{}' } },
+      { ord: 2, value: { type: 'function_call_output', call_id: 'c1', output: 'done' } },
+      { ord: 3, value: { type: 'reasoning', summary: [] } },
+      { ord: 4, value: { type: 'codex_item', value: 1 } },
+    ],
+  }));
+  expect(entries.map(entry => [entry.role, entry.blocks.map(block => block.kind)])).toEqual([
+    ['user', ['text']],
+    ['assistant', ['call']],
+    ['tool', ['result']],
+    ['assistant', ['thinking']],
+    ['unknown', ['other']],
+  ]);
+  expect(displayRoleOf(entries[2]!)).toBe('tool');
+  expect(entries[1]!.blocks[0]!.text).toContain('read(');
+  expect(entries[2]!.preview).toBe('done');
 });
 
 test('多 choice 由 choiceCount 声明，不结构化隐瞒；无效回复不带块', () => {

@@ -242,3 +242,21 @@ OMP（oh-my-pi）的 feature 语义进读模型与阅读层，五项随 [Agent N
 | 消费者等价 | `replyInfoOf`、`messageAt`、`interruptCountTx`、`contextEventTx` 与展示 ports 在缓存与非缓存两条路径上结果一致 |
 
 真实流量、完整组端到端对照、事件循环尾延迟与 RSS 未测，切片页的读取计数也不在本轮验收范围。本条只说明读取复用与结果等价在合成数据上成立，不作为容量结论。
+
+## Responses 协议适配（合成，2026-10-26）
+
+Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对象已保存」：`input` 不进块库，逐条消息、工具往返与回复都读不出。本轮把该协议接进协议形状表，合成验收全部进 `bun test`（780 例全绿，typecheck 通过），没有跑真实流量回填。
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| 存储往返 | `input` 非空数组、空数组、裸字符串与带未知顶层字段四种形状，保存后恢复与脱敏原对象逐字相等；裸字符串合成一条用户消息存块，恢复时还原成字符串 |
+| 语义指纹 | 不同 `call_id`、不同 `arguments`、不同 `output`、不同未知项产生不同指纹；只在工具结果处不同的两笔，公共前缀停在调用上 |
+| 输入阅读 | `input_text` 用户消息形成输入步骤与标题文本；`developer` 消息按 system 角色解释 |
+| 系统提示 | 顶层 `instructions` 与 `developer` 消息合并进能力视图与页面 System；空白 `instructions` 不算系统提示 |
+| 工具往返 | 两笔 Responses 请求经真实派生流程得到 `resolved` 配对，`tool_call` 落库 `result_path=request.input[2]`，摘要「工具结果 · read_file」；HTTP 结果接口按 `call_id` 读出 `output`，`call_id` 不匹配返回 `invalid_location` |
+| 回复与轮次 | `completed` 无调用判 `final`、`completed` 带有效调用判 `tools`；`status` 缺失、`incomplete`、`failed`、`in_progress` 与缺 `call_id` 都判 `unknown` |
+| 页面块视图 | `replyView` 从 `output` 出块：消息项展开 content，调用与推理整项一块，路径 `reply.output[i]`，调用序号与 `tool_call.ord` 同口径；两条消息项各有 `content[0]` 时步骤键不撞 |
+| 增量输入 | 带 `previous_response_id` 的请求关系落 `unknown`，不充当后续请求的祖先；其后的完整历史请求仍确认到更早的完整祖先 |
+| 历史回填 | 旧布局（整段 `input` 在骨架里、`adapter_version` 为 NULL 或 1）重写后逐字恢复、消息进块、`parse_state` 转 `ok`；裸字符串形态记 `messages_form=string`；`partial` 与损坏骨架拒绝并原样保留；其它协议不动；第二次执行无写入、不推进 `input_revision` |
+
+真实流量验收未做：本机库里已有的 `responses` 行还没跑 [reparse](operations.md#reparse)，Codex 会话的逐条消息与工具配对仍停在旧布局。

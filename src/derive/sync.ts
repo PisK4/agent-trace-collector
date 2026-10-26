@@ -11,13 +11,13 @@ import {
 import type { BodyReadCache, BodyReadStats } from '../body-cache';
 import { pairBackgroundJobsTx } from './bg-jobs';
 import {
-  anthropicReplyCalls, anthropicRequestResults, chainTrunk, chainTrunkRoot,
-  confirmedDeltaOf, initialPairState, matchPredecessor, pairOutcome, presentationDecision,
+  chainTrunk, chainTrunkRoot, confirmedDeltaOf, initialPairState, matchPredecessor, pairOutcome,
+  presentationDecision, replyCallsOf, requestResultsOf,
 } from './decision';
 import type { PredecessorMatch, ResolvedTool } from './decision';
 import {
-  compareLogicalOrder, compareTraversalOrder, contextEventTx, fingerprintsOf, interruptCountTx,
-  presentationPortsOf, replyInfoOf, uncertainOrderIds,
+  compareLogicalOrder, compareTraversalOrder, contextEventTx, fingerprintsOf, incrementalInputOf,
+  interruptCountTx, presentationPortsOf, replyInfoOf, uncertainOrderIds,
 } from './read';
 import type { ContextEventFacts, DeriveScope, LogicalRow, ReplyInfo } from './read';
 
@@ -302,6 +302,9 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
     const presentations: PresentationInput[] = [];
     for (const row of ordered) {
       const current = fingerprintsOf(db, row.req_id);
+      // 增量输入（Responses 的 previous_response_id）不含完整历史：
+      // 既不能拿它找前驱，也不能让它充当后面请求的祖先。
+      const incremental = incrementalInputOf(db, row.req_id);
       const replyInfo = current === null
         ? { preview: row.reply_preview, shape: null }
         : replyInfoOf(db, row.req_id, bodyCache);
@@ -320,6 +323,10 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
       } else if (uncertain.has(row.req_id)) {
         // 顺序未证实：同毫秒的来源身份只够排序，不够当因果证据。
         match = { parent: null, relation: 'unknown', delta: null, near: null };
+      } else if (incremental) {
+        // 本笔只带新增部分：共同前缀比较没有可比对象，判成 confirmed 或 branch
+        // 都是拿不完整的历史下结论。
+        match = { parent: null, relation: 'unknown', delta: null, near: null };
       } else {
         // 顺序未证实的行在祖先扫描里仍占位（sawEarlier/unreadableEarlier 已记账），
         // 分支到 unknown 的降级在 settleRelation 里完成，不再由调用方修补。
@@ -328,7 +335,9 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
       if (!isAux) {
         // 排除用途是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
         sawEarlier = true;
-        if (current === null || uncertain.has(row.req_id)) unreadableEarlier = true;
+        // 增量输入的指纹只是本笔新增部分：链在这里断开，后面的请求对不上
+        // 已知祖先时只能算"没法比"，不能断言成"另起一支"。
+        if (current === null || uncertain.has(row.req_id) || incremental) unreadableEarlier = true;
       }
 
       const delta = match.delta;
@@ -354,7 +363,7 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
       presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts, context });
       if (current === null) retained += 1;
       else recomputed += 1;
-      if (!isAux && current !== null && !uncertain.has(row.req_id)) {
+      if (!isAux && current !== null && !uncertain.has(row.req_id) && !incremental) {
         ancestors.push({ reqId: row.req_id, fingerprints: current });
       }
       processed += 1;
@@ -444,13 +453,13 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     const confirmedDelta = confirmedDeltaOf(row.prev_relation, delta);
     const ordinalConfirmed = (ord: number): boolean =>
       confirmedDelta.all || confirmedDelta.ords.includes(ord);
-    for (const block of anthropicReplyCalls(body.reply)) {
+    for (const block of replyCallsOf(body.protocol, body.reply)) {
       calls.push({
         req_id: row.req_id, ord: block.ord, call_id: block.id, name: block.name, index,
         arg_path: block.argPath, arg_skill: block.argSkill,
       });
     }
-    for (const result of anthropicRequestResults(body.request)) {
+    for (const result of requestResultsOf(body.protocol, body.request)) {
       results.push({
         req_id: row.req_id, index, ord: result.ord, path: result.path,
         call_id: result.id, value: result.value, confirmed: ordinalConfirmed(result.ord),

@@ -134,7 +134,7 @@ Status: implemented
 
 合成数据口径由 `tests/session-summary.test.ts` 锁定:
 
-- anthropic 与 chat 两协议形状的参数提取、缺键 NULL 不猜近邻键
+- anthropic、chat 与 responses 三种协议形状的参数提取、缺键 NULL 不猜近邻键
 - 失败位显式 true 才记 1、缺席按缺省读
 - 中断判定只认用户消息第一个文本块的开头前缀,摘要引用与 tool_result 内文不算,计数按 delta 归属
 - 排除用途的中断贡献按规则计 0、不算覆盖缺口

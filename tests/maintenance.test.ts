@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import { fixture, seedPurposeRequest } from './fixtures';
 import { openStore } from '../src/store';
 import { acquireMaintenanceLock, lockPath, maintenanceLockPresent } from '../src/maintenance/lock';
@@ -13,7 +14,7 @@ import { verifyDatabase } from '../src/maintenance/verify';
 import { loadBoundSaltTx, loadConfig } from '../src/config';
 import { redact } from '../src/privacy';
 import { startCollector } from '../src/main';
-import { persistBody } from '../src/body';
+import { persistBody, restoreBody } from '../src/body';
 import { GROUP_ALGORITHM } from '../src/derive/state';
 import { PURPOSE_VERSION } from '../src/semantics';
 
@@ -772,6 +773,158 @@ test('重建把目标会话的派生算法号追平，阅读派生结果按新�
     expect(f.store.read.query<{ purpose_target: number }, [number]>(
       'SELECT purpose_target FROM request WHERE req_id=?').get(id))
       .toEqual({ purpose_target: PURPOSE_VERSION });
+  } finally {
+    f.close();
+  }
+});
+
+// —— reparse：旧布局正文按当前适配器重写的显式入口 ——
+
+const oldSkeleton = (request: unknown, reply: unknown, protocol = 'responses') =>
+  zstdCompressSync(Buffer.from(JSON.stringify({
+    format: 1, protocol, request_without_messages: request, reply,
+    has_messages: false, redact_version: 1,
+  })));
+
+function seedOldBody(
+  store: ReturnType<typeof fixture>['store'],
+  rows: readonly { id: number; bodyState?: string; skeleton: Uint8Array; adapterVersion?: number | null }[],
+): void {
+  store.write(db => {
+    for (const row of rows) {
+      db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,
+        body_state,derive_version,have,created_at,updated_at,msg_count,parse_state,adapter_version)
+        VALUES (?,'reparse','actor','known',?,'2026-10-22','hook',?,0,1,1,1,NULL,'unsupported',?)`,
+      [row.id, row.id, row.bodyState ?? 'available', row.adapterVersion ?? null]);
+      db.run('UPDATE request SET skeleton_z=? WHERE req_id=?', [row.skeleton, row.id]);
+    }
+  });
+}
+
+function skeletonOf(store: ReturnType<typeof fixture>['store'], id: number): Record<string, unknown> {
+  const row = store.read.query<{ skeleton_z: Uint8Array }, [number]>(
+    'SELECT skeleton_z FROM request WHERE req_id=?').get(id)!;
+  return JSON.parse(zstdDecompressSync(row.skeleton_z).toString('utf8')) as Record<string, unknown>;
+}
+
+async function runReparse(store: ReturnType<typeof fixture>['store'], dir: string, args: string[]) {
+  const lines: string[] = [];
+  const code = await runMaintenance(['reparse', '--db', join(dir, 'trace.db'), ...args],
+    { out: line => lines.push(line), err: () => {} });
+  return { code, report: lines.length === 0 ? null : JSON.parse(lines[0]!) as Record<string, unknown> };
+}
+
+test('重解析把旧布局的 Responses 正文按当前形状重写', async () => {
+  const f = fixture();
+  try {
+    const requestArray = {
+      instructions: 'be brief',
+      input: [
+        { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'rules' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+        { type: 'function_call', call_id: 'c1', name: 'read', arguments: '{}' },
+      ],
+      temperature: 0.2,
+    };
+    const reply = { id: 'resp_1', status: 'completed', output: [] };
+    const requestString = { input: 'plain string input', metadata: { k: 'v' } };
+    seedOldBody(f.store, [
+      { id: 1, skeleton: oldSkeleton(requestArray, reply) },
+      { id: 2, skeleton: oldSkeleton(requestString, null), adapterVersion: 1 },
+    ]);
+    const { code, report } = await runReparse(f.store, f.dir, ['--protocol', 'responses']);
+    expect(code).toBe(0);
+    expect(report).toMatchObject({
+      ok: true, protocol: 'responses', scanned: 2, matched: 2, rewritten: 2,
+      rejected: [], failed: [], unattributed_skeleton: 0, remaining: 0,
+    });
+    // 恢复逐字相等：数组与裸字符串两种形态都按记录放回原键。
+    expect(restoreBody(f.store, 1)).toEqual({
+      protocol: 'responses', request: requestArray, reply, redact_version: 1,
+    });
+    expect(restoreBody(f.store, 2)).toEqual({
+      protocol: 'responses', request: requestString, reply: null, redact_version: 1,
+    });
+    expect(f.store.read.query('SELECT msg_count, adapter_version, parse_state FROM request WHERE req_id=1').get())
+      .toEqual({ msg_count: 3, adapter_version: 2, parse_state: 'ok' });
+    expect(f.store.read.query('SELECT count(*) AS n FROM request_block WHERE req_id=1').get())
+      .toEqual({ n: 3 });
+    expect(skeletonOf(f.store, 1)).toMatchObject({
+      messages_key: 'input', messages_form: 'array', has_messages: true,
+    });
+    expect(skeletonOf(f.store, 2)).toMatchObject({
+      messages_key: 'input', messages_form: 'string', has_messages: true,
+    });
+  } finally {
+    f.close();
+  }
+});
+
+test('重解析拒绝不完整与损坏的正文，其它协议原样保留', async () => {
+  const f = fixture();
+  try {
+    seedOldBody(f.store, [
+      { id: 1, bodyState: 'partial', skeleton: oldSkeleton({ input: [] }, null) },
+      // 骨架可读出协议名，但不是写入契约里的格式：严格校验拒绝，宽松读取不会。
+      { id: 2, skeleton: zstdCompressSync(Buffer.from(JSON.stringify({
+        format: 2, protocol: 'responses', request_without_messages: {}, has_messages: false,
+      }))) },
+      { id: 3, skeleton: oldSkeleton({ messages: [] }, null, 'anthropic') },
+    ]);
+    const { code, report } = await runReparse(f.store, f.dir, ['--protocol', 'responses']);
+    expect(code).toBe(0);
+    expect(report).toMatchObject({ scanned: 3, matched: 2, rewritten: 0, remaining: 2 });
+    expect(report?.rejected).toEqual([
+      { req_id: 1, reason: 'body_partial' },
+      { req_id: 2, reason: 'skeleton_invalid' },
+    ]);
+    expect(f.store.read.query(
+      'SELECT body_state, adapter_version FROM request WHERE req_id=1').get())
+      .toEqual({ body_state: 'partial', adapter_version: null });
+    expect(f.store.read.query('SELECT count(*) AS n FROM request_block').get()).toEqual({ n: 0 });
+    // 其它协议不在这次命令的范围内，版本保持原样。
+    expect(f.store.read.query('SELECT adapter_version FROM request WHERE req_id=3').get())
+      .toEqual({ adapter_version: null });
+  } finally {
+    f.close();
+  }
+});
+
+test('重解析重复执行不重复写入，也不推进输入修订', async () => {
+  const f = fixture();
+  try {
+    seedOldBody(f.store, [{ id: 1, skeleton: oldSkeleton({
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+    }, null) }]);
+    const first = await runReparse(f.store, f.dir, ['--protocol', 'responses']);
+    expect(first.report).toMatchObject({ rewritten: 1, remaining: 0 });
+    const afterFirst = f.store.read.query<{
+      input_revision: number; adapter_version: number }, [number]>(
+      'SELECT input_revision, adapter_version FROM request WHERE req_id=1').get(1);
+    const blocks = f.store.read.query('SELECT count(*) AS n FROM block').get();
+    const refs = f.store.read.query('SELECT count(*) AS n FROM request_block').get();
+    const second = await runReparse(f.store, f.dir, ['--protocol', 'responses']);
+    expect(second.code).toBe(0);
+    expect(second.report).toMatchObject({ scanned: 0, matched: 0, rewritten: 0, remaining: 0 });
+    expect(f.store.read.query<{
+      input_revision: number; adapter_version: number }, [number]>(
+      'SELECT input_revision, adapter_version FROM request WHERE req_id=1').get(1))
+      .toEqual(afterFirst!);
+    expect(f.store.read.query('SELECT count(*) AS n FROM block').get()).toEqual(blocks!);
+    expect(f.store.read.query('SELECT count(*) AS n FROM request_block').get()).toEqual(refs!);
+  } finally {
+    f.close();
+  }
+});
+
+test('重解析缺少 --protocol 时只报用法', async () => {
+  const f = fixture();
+  try {
+    const errors: string[] = [];
+    const code = await runMaintenance(['reparse', '--db', join(f.dir, 'trace.db')],
+      { out: () => {}, err: line => errors.push(line) });
+    expect(code).toBe(2);
+    expect(errors.join('\n')).toContain('maintain reparse');
   } finally {
     f.close();
   }

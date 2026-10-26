@@ -1,8 +1,9 @@
 import type { Database } from 'bun:sqlite';
-import { readBodyTx } from '../body';
+import { readBodyMetaTx, readBodyTx } from '../body';
 import { messageOfBlock } from '../body-cache';
 import type { BlockMessageRow, BodyReadCache } from '../body-cache';
 import { assistantText } from '../protocols';
+import { isIncrementalRequest } from '../protocol-shape';
 import { interpretMessage, isOmpArchiveMessage, ompDroppedCharsOf } from '../input-interpretation';
 import { clip, interruptCountOf, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './decision';
 import type { PresentationPorts, ResolvedTool, ReplyShape } from './decision';
@@ -113,6 +114,17 @@ export function fingerprintsOf(db: Database, reqId: number): string[] | null {
   return refs.map(ref => ref.fingerprint);
 }
 
+/**
+ * 本笔是否只带增量输入（Responses 的 `previous_response_id`）。
+ *
+ * 只读骨架，不碰块；正文不可读时返回 false，那条路径已由指纹为 null 拦下。
+ * 判据住在形状表里，两条扫描路径（同步与切片）都问这一处。
+ */
+export function incrementalInputOf(db: Database, reqId: number): boolean {
+  const meta = readBodyMetaTx(db, reqId);
+  return meta !== null && isIncrementalRequest(meta.protocol, meta.request);
+}
+
 /** 首段或末段用户文本：两个方向的唯一差别是扫描次序，取值判据只有一份。 */
 function userPreview(db: Database, reqId: number, end: 'first' | 'tail',
   cache?: BodyReadCache): string | null {
@@ -161,8 +173,11 @@ export function replyInfoOf(db: Database, reqId: number,
   cache?: BodyReadCache): ReplyInfo {
   const body = readBodyTx(db, reqId, cache);
   if (body === null) return { preview: null, shape: null };
-  const text = assistantText(body.reply) ?? replyToolSummary(body.reply);
-  return { preview: text === null ? null : clip(text), shape: replyShapeOf(body.reply) };
+  const text = assistantText(body.reply) ?? replyToolSummary(body.protocol, body.reply);
+  return {
+    preview: text === null ? null : clip(text),
+    shape: replyShapeOf(body.protocol, body.reply),
+  };
 }
 
 /** 按消息位置取一行正文消息；缺失或解压失败返回 null。导出给切片摘要阶段复用。 */
@@ -239,10 +254,13 @@ export function contextEventTx(db: Database, reqId: number, relation: string | n
 /** db 版工具结果摘要：按 delta 的原始 ord 稀疏取消息，判定交给共享实现。 */
 function toolResultPreview(db: Database, reqId: number, delta: readonly number[],
   associations: readonly ResolvedTool[], cache?: BodyReadCache): string | null {
+  // 协议从骨架的长期字段取：稀疏消息数组没有请求对象可查键名。
+  const meta = readBodyMetaTx(db, reqId);
+  if (meta === null) return null;
   // 稀疏位留给结果提取跳过：ord 必须保持原位置，不能压缩。
   const messages: unknown[] = [];
   for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal, cache);
-  return toolResultPreviewOf(messages, reqId, associations);
+  return toolResultPreviewOf(messages, reqId, associations, meta.protocol);
 }
 
 /**

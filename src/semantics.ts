@@ -73,12 +73,17 @@ function textsIn(content: unknown): string[] {
   return out;
 }
 
-/** system 文本可能来自顶层 `system`，也可能来自 system/developer 角色的消息。 */
+/** system 文本可能来自顶层 `system`、Responses 的顶层 `instructions`，也可能来自 system/developer 角色的消息。 */
 export function systemTextsOf(request: unknown): string[] {
   if (!isRecord(request)) return [];
   const out: string[] = [];
   out.push(...textsIn(request.system));
-  const messages = Array.isArray(request.messages) ? request.messages : [];
+  // Responses 把系统提示放在顶层 instructions，与 system 同源合并：只读 system
+  // 会让用途判定看不到技能清单，分类器与技能指纹一起落空。
+  const instructions = textOf(request.instructions);
+  if (instructions !== null) out.push(instructions);
+  const messages = Array.isArray(request.messages) ? request.messages
+    : Array.isArray(request.input) ? request.input : [];
   for (const message of messages) {
     if (!isRecord(message)) continue;
     if (message.role !== 'system' && message.role !== 'developer') continue;
@@ -94,11 +99,6 @@ export function stopSequencesOf(request: unknown): string[] {
   return raw.filter((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
-export function messageCountOf(request: unknown): number | null {
-  if (!isRecord(request)) return null;
-  return Array.isArray(request.messages) ? request.messages.length : null;
-}
-
 /** 没有 `tools` 键等于零个工具；键在但类型不对返回 null，不猜成零。 */
 export function toolCountOf(request: unknown): number | null {
   if (!isRecord(request)) return null;
@@ -106,10 +106,24 @@ export function toolCountOf(request: unknown): number | null {
   return Array.isArray(request.tools) ? request.tools.length : null;
 }
 
-/** 回复文本取 Anthropic 的 `content` 与 OpenAI 的 `choices[].message.content`。 */
+/** 回复文本取 Anthropic 的 `content`、OpenAI 的 `choices[].message.content` 与 Responses 的 `output`。 */
 export function replyTextsOf(reply: unknown): string[] {
   if (!isRecord(reply)) return [];
   const out = textsIn(reply.content);
+  // Responses 的正文在 output 的 message 项 content 里，也可能直接是 output_text 项；
+  // 推理与调用项没有正文，统一跳过。
+  if (Array.isArray(reply.output)) {
+    for (const item of reply.output) {
+      if (!isRecord(item)) continue;
+      if (item.type === 'message') {
+        out.push(...textsIn(item.content));
+        continue;
+      }
+      if (item.type !== 'output_text' && item.type !== 'text') continue;
+      const text = textOf(item.text);
+      if (text !== null) out.push(text);
+    }
+  }
   if (Array.isArray(reply.choices)) {
     for (const choice of reply.choices) {
       if (!isRecord(choice) || !isRecord(choice.message)) continue;

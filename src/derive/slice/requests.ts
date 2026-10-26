@@ -6,7 +6,7 @@ import { createBodyReadCache } from '../../body-cache';
 import type { DeriveBudget } from '../../config';
 import type { Store } from '../../store';
 import {
-  anthropicReplyCalls, anthropicRequestResults, flattenToolContent, replyShapeOf,
+  flattenToolContent, replyCallsOf, replyShapeOf, requestResultsOf,
 } from '../decision';
 import { compareTraversalOrder, uncertainOrderIds, type LogicalRow } from '../read';
 import { DERIVE_ALGORITHM } from '../state';
@@ -96,8 +96,8 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
     const rowStarted = performance.now();
     const body = readBodyTx(db, row.req_id, bodyCache);
     const readable = body !== null;
-    const calls = body === null ? [] : anthropicReplyCalls(body.reply);
-    const results = body === null ? [] : anthropicRequestResults(body.request);
+    const calls = body === null ? [] : replyCallsOf(body.protocol, body.reply);
+    const results = body === null ? [] : requestResultsOf(body.protocol, body.request);
     // 候选也整笔算：只写一半候选会让配对在"这一笔确实没有第二个工具调用"与
     // "第二个还没写进来"之间分不清，宁可直接丢掉这一代。
     if (calls.length + results.length > budget.maxCandidatesPerBatch) {
@@ -117,7 +117,7 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
       readable ? null : row.input_preview,
       readable ? null : row.input_preview_kind,
       readable ? null : row.reply_preview,
-      body === null ? row.reply_shape : replyShapeOf(body.reply),
+      body === null ? row.reply_shape : replyShapeOf(body.protocol, body.reply),
       // 中断计数先暂存旧值：摘要阶段 delta 在手才按本次增量重算并覆盖。
       row.interrupt_count,
       // 上下文事件位同批暂存旧值：摘要阶段关系在手才按本次判定并覆盖。

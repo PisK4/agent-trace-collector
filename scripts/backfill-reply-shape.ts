@@ -61,7 +61,7 @@ export type ReplyShapeBackfillReport = {
 /** 形状补算的唯一规则：正文可读按内核重算，不可读标 unknown。 */
 function shapeFor(db: Database, reqId: number): string {
   const body = readBodyTx(db, reqId);
-  return body === null ? 'unknown' : replyShapeOf(body.reply);
+  return body === null ? 'unknown' : replyShapeOf(body.protocol, body.reply);
 }
 
 /** 逐行补算 request 与发布代暂存行，幂等：重跑只是把同一批值再写一遍。 */

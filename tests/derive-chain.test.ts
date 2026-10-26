@@ -2,9 +2,10 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fixture, seedTextChain, seedDeriveRound, deriveSnapshot, rebuildDeriveGroup, DERIVE_GROUP, DERIVE_ACTOR } from './fixtures';
+import { fixture, seedPurposeRequest, seedTextChain, seedDeriveRound, deriveSnapshot, rebuildDeriveGroup, DERIVE_GROUP, DERIVE_ACTOR } from './fixtures';
 import { confirmedDeltaOf, matchPredecessor } from '../src/derive/decision';
 import { drainDerive, enqueueDerive } from '../src/derive/sync';
+import { incrementalInputOf } from '../src/derive/read';
 import { messageFingerprint } from '../src/fingerprint';
 import { listSessions } from '../src/queries/sessions';
 import { openStore } from '../src/store';
@@ -96,6 +97,80 @@ for (const state of ['partial', 'available'] as const) {
     });
   }
 }
+
+test('增量输入不判成 confirmed，也不充当后续请求的祖先', () => {
+  const f = fixture();
+  try {
+    // 四笔 Responses 请求：1 是完整历史 [A]，2 续上 [A, B]，3 只带增量 [C] 并用
+    // previous_response_id 指向 2，4 又是完整历史 [A, B, C, D]。
+    const ids = [1, 2, 3, 4];
+    f.store.write(db => {
+      for (const [index, id] of ids.entries()) {
+        db.run(`INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,
+          day,via,body_state,derive_version,have,created_at,updated_at,sort_source,sort_key)
+          VALUES (?,?,'session','actor-a','known',?,'2026-10-22','hook','pending',0,1,1,1,
+          'ledger',?)`,
+        [id, JSON.stringify(['session', 'chain']), 1000 + index,
+          `ledger|${String(index).padStart(4, '0')}`]);
+      }
+    });
+    const body = (texts: string[], extra: Record<string, unknown> = {}) => ({
+      protocol: 'responses',
+      request: {
+        input: texts.map(text => ({
+          type: 'message', role: 'user', content: [{ type: 'input_text', text }],
+        })),
+        ...extra,
+      },
+      reply: { id: `resp_${texts.join('')}`, status: 'completed', output: [] },
+      redact_version: 1,
+    });
+    persistBody(f.store, 1, body(['A']));
+    persistBody(f.store, 2, body(['A', 'B']));
+    persistBody(f.store, 3, body(['C'], { previous_response_id: 'resp_2' }));
+    persistBody(f.store, 4, body(['A', 'B', 'C', 'D']));
+    enqueueDerive(f.store, JSON.stringify(['session', 'chain']), 'actor-a', '');
+    drainDerive(f.store);
+    const rows = f.store.read.query<{ req_id: number; prev_req_id: number | null;
+      prev_relation: string; chain_role: string }, []>(
+      `SELECT req_id,prev_req_id,prev_relation,chain_role FROM request
+       WHERE req_id IN (1,2,3,4) ORDER BY req_id`).all();
+    // 2 的完整历史包含 1，照常确认；3 的输入不是完整历史，关系只能是未知；
+    // 4 整笔历史仍包含 2，确认关系不因中间那笔增量而失效。
+    expect(rows.map(row => [row.req_id, row.prev_req_id, row.prev_relation])).toEqual([
+      [1, null, 'first'],
+      [2, 1, 'confirmed'],
+      [3, null, 'unknown'],
+      [4, 2, 'confirmed'],
+    ]);
+    expect(rows.map(row => row.chain_role)).toEqual(['main', 'main', 'main', 'main']);
+  } finally {
+    f.close();
+  }
+});
+
+test('增量输入只凭骨架判定，不读消息块', () => {
+  const f = fixture();
+  try {
+    const incremental = seedPurposeRequest(f.store, {
+      convKey: 'conv-incremental', protocol: 'responses',
+      request: {
+        input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'A' }] }],
+        previous_response_id: 'resp_0',
+      },
+    });
+    expect(incrementalInputOf(f.store.read, incremental)).toBe(true);
+    const full = seedPurposeRequest(f.store, {
+      convKey: 'conv-incremental', protocol: 'responses',
+      request: { input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'B' }] }] },
+    });
+    expect(incrementalInputOf(f.store.read, full)).toBe(false);
+    // 正文不可读（回收）与行不存在都不是增量：没有可读骨架就不下这个结论。
+    expect(incrementalInputOf(f.store.read, 9999)).toBe(false);
+  } finally {
+    f.close();
+  }
+});
 
 test('合法空messages可读但不证明后续请求的父节点', () => {
   const f = fixture();

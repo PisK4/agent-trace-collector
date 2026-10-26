@@ -1,5 +1,5 @@
 // @ts-check
-import { deltaOrdinals, replyView } from './body-model.js';
+import { deltaOrdinals, messagePathOf, replyView, systemPathOf } from './body-model.js';
 import { toolTint } from './body-view.js';
 import { esc } from './html.js';
 
@@ -13,7 +13,7 @@ import { esc } from './html.js';
 /**
  * 步骤来源：请求字段、请求消息内容块或本次回复内容块，path 是实际协议路径。
  * 记录与辅助步骤不落在协议对象上，source 为 null，点击打开该请求读数。
- * @typedef {{side:'request', path:'request.system', messageOrd:null, blockIndex:null}
+ * @typedef {{side:'request', path:string, messageOrd:null, blockIndex:null}
  *   | {side:'request', path:string, messageOrd:number, blockIndex:number|null}
  *   | {side:'reply', path:string, messageOrd:null, blockIndex:number|null}
  *   | null} StepSource
@@ -46,8 +46,10 @@ import { esc } from './html.js';
  * @typedef {{text: string, changed: boolean | null} | null} SystemContext
  */
 
-const LENGTH_FINISH = new Set(['length', 'max_tokens']);
-const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use']);
+// 三种协议的结束词表并集：Responses 的 status 只有 completed，截断原因在
+// incomplete_details.reason 里（replyView 已把它抬到 finish）。
+const LENGTH_FINISH = new Set(['length', 'max_tokens', 'max_output_tokens']);
+const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use', 'completed']);
 
 /** 压缩归档的预算丢弃量读数：basis 由派生写，缺字段不冒充 0。 @param {string | null} basis */
 function droppedCharsOf(basis) {
@@ -348,7 +350,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
       text: systemContext.changed === true
         ? `System 与已确认前驱不同 · ${systemContext.text}` : systemContext.text,
       messageOrd: null, callOrd: null,
-      source: { side: 'request', path: 'request.system', messageOrd: null, blockIndex: null },
+      source: { side: 'request', path: systemPathOf(read?.meta ?? null), messageOrd: null, blockIndex: null },
       raw: systemContext.text, unrecognized: false, status: null, result: null, pairOwner: null,
     });
   }
@@ -386,7 +388,8 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
   } else {
     for (const entry of read.entries) {
       if (!trusted.has(entry.ord)) continue;
-      const msgBase = `request.messages[${entry.ord}]`;
+      // 路径按协议的数组键拼（messages / input），不写死键名。
+      const msgBase = messagePathOf(read.meta, entry.ord);
       // 工具结果块按内容块出独立步骤；混合消息的真实用户文本只产生一次。
       const resultBlocks = entry.blocks.filter(block => block.kind === 'result');
       for (const block of resultBlocks) {
