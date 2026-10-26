@@ -20,7 +20,7 @@ P1 交付明细视图。后端把 `safePrompt` 白名单扩到 item 级（`name/
 
 模块依赖不成环：context-map 与 rail-facts 共享的类别口径与 token 缩写抽到 `web/parts.js`，rail-facts 转发既有导出保持既有消费者不破坏；usageFold 集成（rail-facts → context-map）与取色（context-map → 口径原语）都单向。
 
-数据链路不新增采集：magpie 请求期启发式分类（token 估算）→ vendor 回答后按实测等比校准 → `routing/<date>.jsonl` → ATC 路由通道增量读取 → `request` 行 `parts_json`，全程只存名字不存正文。守恒基础（`sum(parts) = tokens` 全量成立、`tokens = in + cache_read + cache_write` 99.6%）见[架构设计](../../../docs/architecture-design.md)「三通道连接质量」一节。
+数据链路不新增采集：magpie 请求期启发式分类（token 估算）→ vendor 回答后按实测等比校准 → `routing/<date>.jsonl` → ATC 路由通道增量读取 → `request` 行 `parts_json`，全程只存名字不存正文。守恒基础（`sum(parts) = tokens` 全量成立、`tokens = in + cache_read + cache_write` 99.6%）见[架构设计](../../../../docs/architecture-design.md)「三通道连接质量」一节。
 
 ## Alternatives considered
 
@@ -44,6 +44,10 @@ P1 交付明细视图。后端把 `safePrompt` 白名单扩到 item 级（`name/
 
 部分取代[计时与用量并入「用量与上下文」折叠行](../simplification/2026-10-24-usage-ledger-fold.md)的展开态构成区陈述；该篇的折叠键、收起摘要与「异常才提醒」规则不变，已互相链接。
 
+## Related
+
+[上下文矩阵布局与点击明细提案](../../proposed/feature/2026-10-26-context-treemap-drilldown.md)拟调整面积分母、容器尺寸布局与点击阅读，部分重新评审本文的空闲区、标称宽和暂不提供正文点击的取舍。该提案尚未交付，本文继续描述现行实现。
+
 ## Testing
 
-`bun run typecheck` 通过；`bun test` 全量 752 例通过：`tests/context-map.test.ts`（三档宽度 × 四状态守恒断言：tile 界内不重叠、每类有面积、tile 总量等于 parts 和、有窗口必有空闲块；特殊 tag 与布局合并桶断言）、`tests/web.test.ts`（构成区集成与占用 pill 阈值）、`tests/queries.test.ts`（item 白名单）、`tests/body-view.test.ts`（七类槽位）、`tests/http.test.ts`（静态白名单目录覆盖）。真实恢复数据验收（生产库在线快照、临时 collector 独立端口加载、生产采集器未停）见[验收记录](../../../docs/acceptance.md)：图例、treemap、空闲块与 u-total 数字互证一致；真实数据暴露并修复布局合并桶悬停 title 缺「另外 N 项」的缺陷。视觉截图未取得（ego lite 的 CDP 截图对该页超时），视觉项由 DOM 断言与合成测试覆盖。
+`bun run typecheck` 通过；`bun test` 全量 752 例通过：`tests/context-map.test.ts`（三档宽度 × 四状态守恒断言：tile 界内不重叠、每类有面积、tile 总量等于 parts 和、有窗口必有空闲块；特殊 tag 与布局合并桶断言）、`tests/web.test.ts`（构成区集成与占用 pill 阈值）、`tests/queries.test.ts`（item 白名单）、`tests/body-view.test.ts`（七类槽位）、`tests/http.test.ts`（静态白名单目录覆盖）。真实恢复数据验收（生产库在线快照、临时 collector 独立端口加载、生产采集器未停）见[验收记录](../../../../docs/acceptance.md)：图例、treemap、空闲块与 u-total 数字互证一致；真实数据暴露并修复布局合并桶悬停 title 缺「另外 N 项」的缺陷。视觉截图未取得（ego lite 的 CDP 截图对该页超时），视觉项由 DOM 断言与合成测试覆盖。
