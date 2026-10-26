@@ -1,12 +1,12 @@
 # agent-trace-collector
 
-ATC 是本机 LLM 请求的轨迹记录器。它把经过 magpie 网关的每一笔请求落成一条结构化记录：请求体、回复、用量、耗时、路由决策，然后按会话把它们读成一条可以逐步骤翻看的轨迹。
+ATC 是本机 LLM 请求的轨迹记录器。两条进路的数据收敛进同一个 SQLite 库：经 magpie 网关的请求带来完整请求体、回复与路由决策，harness 自己的 OTLP 导出带来模型、用量与会话读数。每笔请求落成一条结构化记录，按会话读成一条可以逐步骤翻看的轨迹。
 
 用途有三个：看清某个 Agent Harness 在这一轮到底给模型发了什么、拿回了什么；定位失败、截断与重试发生在哪一笔；把不同 harness 的请求放进同一套读数、同一套轨迹结构与同一个会话列表里横向对照。
 
 它挂在数据面旁边，不是代理。没在运行时，Agent 的请求照常走完，只是这段时间没有新记录。
 
-真实数据有两条进路：装了 magpie 的走网关三路证据；harness 自带 OTLP 导出的（Claude Code 与 OMP 已实测，Codex 按官方源码适配），把 exporter 指到本机的 `/v1/traces` 与 `/v1/logs`，收 span 摘要与正文。两条也可以同时开。只想先看界面的话，下面的合成 demo 不依赖任何一条，也不碰真实数据。
+真实数据有两条进路：装了 magpie 的走网关三路证据；harness 自带 OTLP 导出的（已适配 Claude Code、OMP 与 Codex CLI），把 exporter 指到本机的 `/v1/traces` 与 `/v1/logs`。两条也可以同时开。只想先看界面的话，下面的合成 demo 不依赖任何一条，也不碰真实数据。
 
 ## 能看到什么
 
@@ -53,7 +53,7 @@ bun run start        # 127.0.0.1:8320
 
 ### 走 OTLP：不装 magpie，harness 自己导出
 
-已适配三个 harness：Claude Code 与 OMP（实测），Codex（按官方源码适配）。采集器收 `POST /v1/traces` 与 `POST /v1/logs`，认证用首次启动生成的 `otlp.token`。令牌文件是 32 字节裸二进制，环境变量里放它的 base64url 形式——直接 `cat` 文件会把非 ASCII 字节塞进 Authorization，请求在 HTTP 层就被判畸形：
+已适配三个 harness：Claude Code、OMP 与 Codex CLI。Claude Code 与 OMP 用探针接收器抓样核对过导出形状，Codex 直连采集器跑通过全链路。采集器收 `POST /v1/traces` 与 `POST /v1/logs`，认证用首次启动生成的 `otlp.token`。令牌文件是 32 字节裸二进制，环境变量里放它的 base64url 形式——直接 `cat` 文件会把非 ASCII 字节塞进 Authorization，请求在 HTTP 层就被判畸形：
 
 ```sh
 ATC_TOKEN=$(base64 -i '<dataDir>/otlp.token' | tr '+/' '-_' | tr -d '\n=')
@@ -80,7 +80,7 @@ magpie 三路证据各自补别人的缺失，收敛进同一个 SQLite 库；OT
 | magpie hook | 客户端协议请求体、合并回复、success、agent、session、model | 请求头、流内事件、provider 尝试、`route_id`；回调可能缺失 |
 | 用量账本 | 状态、用量、`route_id`、`response_id`、provider、账户 | 请求与回复正文 |
 | 路由历史 | 候选顺序、尝试、规则、亲和性、prompt 结构 | 窗口过滤不全留痕；只读盘、30 天滚动 |
-| OTLP（harness 侧） | LLM span 的模型、用量、耗时与会话 id；Claude Code 另带正文文件指针 | 请求头、provider 尝试；OMP 只到摘要，Codex 无逐笔正文 |
+| OTLP（harness 侧） | LLM span 的模型、用量、耗时与会话 id；Claude Code 另带正文文件指针 | 请求头、provider 尝试；OMP 只到结构化摘要，Codex 没有任何正文通路 |
 
 连接靠两个键：`response_id` 把 hook 记录接到账本行，`route_id` 把账本行接到路由历史。OTLP 行靠 span 物理身份 `(trace_id, span_id)` 自持，第一批不与 magpie 行合并——同一会话双通道并存时时间线里每笔调用出现两次，行上来源可区分。
 
@@ -105,13 +105,13 @@ magpie 另有 OTLP 导出，但它的属性白名单里没有 `response_id`、`c
 
 - **只记录 magpie 与已适配 harness 观察到的流量。** 不经过网关也不导 OTLP 的请求看不见。请求统计以已保存的观测范围为限，缺正文单独标明，不能把 hook 覆盖率当作总请求量。
 - **不做代理。** 不转发、不改写、不拦截任何 LLM 流量。
-- **不扫描 Agent 自己的会话文件。** 只读 magpie 自己写的三路来源：hook、用量账本文件、路由历史目录。magpie 从 Agent 会话文件里读出来的 direct 行不在账本文件里，当前不摄入。
+- **不扫描 Agent 自己的会话文件。** 只读 magpie 自己写的三路来源：hook、用量账本文件、路由历史目录。magpie 从 Agent 会话文件里读出来的 direct 行不在账本文件里，当前不摄入。OTLP 通道唯一的文件读取是 `body_ref`：只读事件显式指到的单个文件，不列目录、不读 harness 写的其它文件。
 - **不做跨 harness 的通用摄入协议。** 唯一的通用入口是 OTLP 的 `/v1/traces` 与 `/v1/logs`，接 harness 自己的 exporter；其余通用 trace 协议不做。`agent` 是 magpie 给出的客户端标签，OTLP 侧按 `service.name` 映射到同一值域；派生层是 harness 通用的，识别某个 harness 的 wire 痕迹是个别规则。新增 harness 支持意味着新增识别规则或协议适配器。
 - **不做导出。** 当前没有对外 schema、没有导出端点、没有跨工具互操作。接口只服务本机页面。
 - **不做告警、指标看板与多机聚合。**
 - **不做服务端全文检索。** 正文在块里，建索引要把每块都解压一遍，写入与存储成本都不小。页面上的搜索只按会话标题与客户端标签过滤已加载列表。
 - **正文预算驱动回收。** 默认正文 10 GB、总盘 16 GB，回收最旧正文到 90% 预算；总盘到 80% 只接元数据，到 95% 停止接收。回收的正文补不回来。
-- **schema 不原地升级。** 升级前先停采集器，把旧数据目录移走或删除，让新版本建新库。旧库里的正文与派生结果一起丢弃。
+- **schema 升级分两档。** v6 库打开时在单个事务里原地升到 v7，纯新增、不动旧行；更早的版本没有升级路径，报 `schema_rebuild_required`，要停采集器、把旧数据目录移走再重建，旧库里的正文与派生结果一起丢弃。步骤与备份白名单见[运维手册](docs/operations.md)的 schema 版本一节。
 
 运行数据不进仓库：数据库、WAL、日志与本地密钥都在数据目录。测试只用合成数据，真实请求正文、账号、令牌与用户配置不进 fixture、日志或提交。
 
@@ -130,7 +130,7 @@ Langfuse 这类平台的记录单位是一次 LLM 调用或一个 span：`input`
 
 分工可以直说：**趋势与共享交给平台，逐笔原文与对账留在本机。** magpie 的 OTLP 导出本来就是给观测平台用的，两边可以同时开：同一批请求，平台侧看成本趋势与团队对比，本机侧读这次会话到底发生了什么。harness 侧 OTLP 也可以一份双发，本机收摘要与正文，平台收趋势。
 
-受众边界讲清楚：本机必须有 magpie，或者用一个已适配的 harness（当前是 Claude Code、OMP 与 Codex）。两者都没有的话收不到任何数据——OTLP 通道不放宽这个边界，它只是把边界从「装 magpie」挪到「装 magpie 或已适配 harness」。
+受众边界讲清楚：本机必须有 magpie，或者用一个已适配的 harness（当前是 Claude Code、OMP 与 Codex CLI）。两者都没有的话收不到任何数据——OTLP 通道不放宽这个边界，它只是把边界从「装 magpie」挪到「装 magpie 或已适配 harness」。
 
 ## 命令
 
