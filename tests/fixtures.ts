@@ -38,6 +38,8 @@ export type PurposeSeed = {
   stop?: string[] | null;
   tools?: unknown[] | null;
   messages?: unknown[];
+  /** 完整请求对象：给了就原样写入，不再按 messages 拼装（Responses 的 input 用）。 */
+  request?: unknown;
   reply?: unknown;
   sourceKind?: string | null;
   purposeTarget?: number;
@@ -72,13 +74,13 @@ export function seedPurposeRequest(store: Store, input: PurposeSeed = {}): numbe
   if (bodyState === 'available') {
     store.write(db => persistBodyTx(db, reqId, {
       protocol,
-      request: {
+      request: input.request !== undefined ? input.request : {
         ...(input.system === undefined || input.system === null ? {} : { system: input.system }),
         messages: input.messages ?? [],
         ...(input.stop === undefined || input.stop === null ? {} : { stop_sequences: input.stop }),
         ...(input.tools === undefined || input.tools === null ? {} : { tools: input.tools }),
       },
-      reply: input.reply ?? { content: [{ type: 'text', text: 'plain reply' }] },
+      reply: input.reply === undefined ? { content: [{ type: 'text', text: 'plain reply' }] } : input.reply,
       redact_version: 1,
     }));
   }

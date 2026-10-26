@@ -6,6 +6,10 @@ import { resolveRequestId } from './store';
 import { ADAPTER_VERSION, parseProtocol } from './protocols';
 import { skeletonLike, validateSkeleton } from './skeleton';
 import { fingerprintHash, messageFingerprint } from './fingerprint';
+import {
+  requestItemsOf, roleNameOfItem, withItems, withoutItems,
+} from './protocol-shape';
+import type { MessageForm, MessagesKey } from './protocol-shape';
 import { markRequestInputTx } from './derive/state';
 
 /**
@@ -36,6 +40,8 @@ type Skeleton = {
   format: 1;
   protocol: string;
   request_without_messages: unknown;
+  messages_key: MessagesKey;
+  messages_form: MessageForm;
   reply: unknown;
   redact_version: number;
   has_messages: boolean;
@@ -52,9 +58,10 @@ const serialize = (value: unknown): Buffer => {
 };
 
 export function roleCode(message: unknown): number {
-  if (message === null || typeof message !== 'object' || Array.isArray(message)) return ROLE_UNKNOWN;
-  const role = (message as Record<string, unknown>).role;
-  if (typeof role !== 'string') return ROLE_UNKNOWN;
+  // 有 role 用 role；Responses 顶层项没有 role，按 type 推断（调用/推理→assistant，
+  // 工具结果→tool）。留在 unknown 会让工具结果混进 user 块，污染用途判定。
+  const role = roleNameOfItem(message);
+  if (role === null) return ROLE_UNKNOWN;
   const code = ROLE_BY_NAME[role.toLowerCase()];
   return typeof code === 'number' ? code : ROLE_UNKNOWN;
 }
@@ -67,12 +74,7 @@ function messagesOf(request: unknown): unknown[] | null {
 }
 
 function withoutMessages(request: unknown): unknown {
-  if (request === null || typeof request !== 'object' || Array.isArray(request)) return request;
-  const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(request as Record<string, unknown>)) {
-    if (key !== 'messages') copy[key] = value;
-  }
-  return copy;
+  return withoutItems(request, 'messages');
 }
 
 function skeletonOf(body: BodyInput, messages: unknown[] | null): Skeleton {
@@ -82,6 +84,8 @@ function skeletonOf(body: BodyInput, messages: unknown[] | null): Skeleton {
     format: 1,
     protocol: body.protocol,
     request_without_messages: messages === null ? body.request : withoutMessages(body.request),
+    messages_key: 'messages',
+    messages_form: 'array',
     reply: body.reply,
     redact_version: body.redact_version,
     has_messages: messages !== null,
@@ -163,6 +167,9 @@ export type BodyMeta = {
   request: unknown;
   reply: unknown;
   hasMessages: boolean;
+  /** 消息数组在原始对象里的键与形态：恢复时按这两项放回去，不看协议名。 */
+  messagesKey: MessagesKey;
+  messagesForm: MessageForm;
   messageCount: number;
   redact_version: number;
 };
@@ -180,7 +187,8 @@ export type StoredBody = {
  */
 function readSkeletonTx(db: Database, reqId: number): {
   protocol: string; request: unknown; reply: unknown;
-  hasMessages: boolean; messageCount: number; redactVersion: number;
+  hasMessages: boolean; messagesKey: MessagesKey; messagesForm: MessageForm;
+  messageCount: number; redactVersion: number;
 } | null {
   const row = db.query<{
     skeleton_z: Uint8Array | null; body_state: string; msg_count: number | null;
@@ -227,6 +235,8 @@ export function readBodyMetaTx(db: Database, reqId: number): BodyMeta | null {
     request: skeleton.request,
     reply: skeleton.reply,
     hasMessages: skeleton.hasMessages,
+    messagesKey: skeleton.messagesKey,
+    messagesForm: skeleton.messagesForm,
     messageCount: skeleton.messageCount,
     redact_version: skeleton.redactVersion,
   };
@@ -244,7 +254,7 @@ export function readBodyTx(db: Database, reqId: number): StoredBody | null {
       redact_version: meta.redact_version,
     };
   }
-  // 带消息时骨架必须原本就是对象，否则无法无损合并 messages。
+  // 带消息时骨架必须原本就是对象，否则无法无损合并消息数组。
   if (meta.request === null || typeof meta.request !== 'object' || Array.isArray(meta.request)) {
     return null;
   }
@@ -260,9 +270,13 @@ export function readBodyTx(db: Database, reqId: number): StoredBody | null {
       return null;
     }
   }
+  // 键与形态来自骨架自己的记录：Responses 的 input 与裸字符串输入都逐字还原，
+  // 不按协议名二次推断（旧骨架缺这两项时按 messages/array 读）。
+  const request = withItems(meta.request, meta.messagesKey, meta.messagesForm, messages);
+  if (request === null) return null;
   return {
     protocol: meta.protocol,
-    request: { ...(meta.request as Record<string, unknown>), messages },
+    request,
     reply: meta.reply,
     redact_version: meta.redact_version,
   };

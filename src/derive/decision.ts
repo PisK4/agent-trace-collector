@@ -1,5 +1,6 @@
 import { modelTimeTitle } from '../format';
 import { interpretMessage, isUserInterruptMessage } from '../input-interpretation';
+import { wireCallsOf, wireResultsIn, wireResultsOf } from '../protocol-shape';
 
 /**
  * 派生判定内核：两条派生路径共用的「怎么判」。
@@ -59,43 +60,10 @@ function argsOf(rawInput: unknown): CallArgs {
 }
 
 /** 从回复里取工具调用。导出理由：候选抽取只有这一处，切片与同步不能各有一套判据。 */
-export function anthropicReplyCalls(reply: unknown): ReplyCall[] {
-  if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return [];
-  const content = (reply as Record<string, unknown>).content;
-  if (!Array.isArray(content)) {
-    // chat 形状：choices[0].message.tool_calls。多 choice 的 ord 在 choice 内
-    // 各自从 0 计数，发布确定位置会撞主键或指错 choice，只认单 choice。
-    const choices = (reply as Record<string, unknown>).choices;
-    if (!Array.isArray(choices) || choices.length !== 1) return [];
-    const out: ReplyCall[] = [];
-    for (const choice of choices) {
-      if (choice === null || typeof choice !== 'object') continue;
-      const message = (choice as Record<string, unknown>).message;
-      if (message === null || typeof message !== 'object') continue;
-      const calls = (message as Record<string, unknown>).tool_calls;
-      if (!Array.isArray(calls)) continue;
-      for (const [index, call] of calls.entries()) {
-        if (call === null || typeof call !== 'object') continue;
-        const record = call as Record<string, unknown>;
-        const id = record.id;
-        const fn = record.function;
-        if (typeof id !== 'string' || fn === null || typeof fn !== 'object') continue;
-        out.push({
-          id, name: String((fn as Record<string, unknown>).name ?? ''), ord: index,
-          ...argsOf((fn as Record<string, unknown>).arguments),
-        });
-      }
-    }
-    return out;
-  }
-  const out: ReplyCall[] = [];
-  for (const [ord, block] of content.entries()) {
-    if (block === null || typeof block !== 'object') continue;
-    const record = block as Record<string, unknown>;
-    if (record.type !== 'tool_use' || typeof record.id !== 'string') continue;
-    out.push({ id: record.id, name: String(record.name ?? ''), ord, ...argsOf(record.input) });
-  }
-  return out;
+export function replyCallsOf(protocol: string, reply: unknown): ReplyCall[] {
+  return wireCallsOf(protocol, reply).map(call => ({
+    id: call.id, name: call.name, ord: call.ord, ...argsOf(call.input),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -139,17 +107,41 @@ function hasRejectedToolBlock(reply: Record<string, unknown>): boolean {
   });
 }
 
+/** Responses 里被调用抽取跳过的调用项：缺 `call_id` 的函数调用或自定义调用。 */
+function hasRejectedResponsesCall(output: readonly unknown[]): boolean {
+  return output.some(item => {
+    if (item === null || typeof item !== 'object') return false;
+    const record = item as Record<string, unknown>;
+    if (record.type !== 'function_call' && record.type !== 'custom_tool_call') return false;
+    return typeof record.call_id !== 'string';
+  });
+}
+
 /**
  * 回复形状判定，轮次结算收尾信号的唯一实现。
  *
  * 零工具计数不等于收尾：缺失回复、不识别的形状、多 choice、缺 ID 的工具块、
  * 截断的回复在这里全部落 `unknown`，不冒充最终答复。调用抽取与配对共用
- * `anthropicReplyCalls` 一份判据；被它跳过的工具块单独侦测，不让损坏形状
- * 混进 `final`。
+ * `replyCallsOf` 一份判据；被它跳过的工具块单独侦测，不让损坏形状混进 `final`。
+ *
+ * Responses 没有 `stop_reason`，完成状态在顶层 `status`：`completed` 才是正常
+ * 收尾，`incomplete`/`failed` 与缺失一律 `unknown`。映射保守——把未完成读成
+ * final 会让轮次提前闭合，把失败读成 final 会把一次报错算成一轮正常答复。
  */
-export function replyShapeOf(reply: unknown): ReplyShape {
+export function replyShapeOf(protocol: string, reply: unknown): ReplyShape {
   if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return 'unknown';
   const record = reply as Record<string, unknown>;
+  if (protocol === 'responses') {
+    const output = record.output;
+    // 没有 output 数组就没有可读回复；空数组是"已完成但没有正文"，仍按状态判。
+    if (!Array.isArray(output)) return 'unknown';
+    // 只有 completed 能下结论：incomplete/failed 与缺失、未知状态一律 unknown，
+    // 与 Anthropic 的截断停止原因同一口径。
+    if (record.status !== 'completed') return 'unknown';
+    // 缺 call_id 的调用项说明形状介于可识别与损坏之间，不能下结论。
+    if (hasRejectedResponsesCall(output)) return 'unknown';
+    return replyCallsOf(protocol, reply).length > 0 ? 'tools' : 'final';
+  }
   // 多 choice 无法确定哪一份是回复；choices 形状异常同理。
   if (Array.isArray(record.choices) && record.choices.length !== 1) return 'unknown';
   // 消息块两种落点：anthropic 的 content 数组；chat 单 choice 的 message。
@@ -166,7 +158,7 @@ export function replyShapeOf(reply: unknown): ReplyShape {
     : record.stop_reason;
   const finish = typeof finishValue === 'string' && finishValue !== '' ? finishValue : null;
   if (hasRejectedToolBlock(record)) return 'unknown';
-  const calls = anthropicReplyCalls(reply);
+  const calls = replyCallsOf(protocol, reply);
   if (calls.length > 0) {
     // 调用本身是工具循环的证据，停止原因未报告也判 tools；截断的半截调用除外。
     return finish !== null && REPLY_FINISH_TRUNCATED.has(finish) ? 'unknown' : 'tools';
@@ -176,37 +168,30 @@ export function replyShapeOf(reply: unknown): ReplyShape {
   return REPLY_FINISH_FINAL.has(finish) ? 'final' : 'unknown';
 }
 
-/** 从请求里取工具结果；Anthropic 的 tool_result 与 chat 的 role=tool。 */
-export function anthropicRequestResults(request: unknown): {
+/** 派生侧的工具结果行：失败位压成 0/1，落库列直接可用。 */
+export type RequestResult = {
   id: string; ord: number; path: string; value: unknown; isError: number;
-}[] {  if (request === null || typeof request !== 'object' || Array.isArray(request)) return [];
-  const messages = (request as Record<string, unknown>).messages;
-  if (!Array.isArray(messages)) return [];
-  const out: { id: string; ord: number; path: string; value: unknown; isError: number }[] = [];
-  for (const [ord, message] of messages.entries()) {
-    if (message === null || typeof message !== 'object') continue;
-    const record = message as Record<string, unknown>;
-    if (record.role === 'tool' && typeof record.tool_call_id === 'string') {
-      // chat 协议没有失败通道：结果送达即非失败，与缺席按缺省读的口径一致。
-      out.push({ id: record.tool_call_id, ord, path: `request.messages[${ord}]`, value: record.content ?? null, isError: 0 });
-      continue;
-    }
-    const content = record.content;
-    if (!Array.isArray(content)) continue;
-    for (const [index, block] of content.entries()) {
-      if (block === null || typeof block !== 'object') continue;
-      const entry = block as Record<string, unknown>;
-      if (entry.type !== 'tool_result' || typeof entry.tool_use_id !== 'string') continue;
-      // 失败位按协议缺省读：显式 true 才是失败，false 与缺席都是非失败。
-      out.push({
-        id: entry.tool_use_id, ord,
-        path: `request.messages[${ord}].content[${index}]`,
-        value: entry.content ?? null,
-        isError: entry.is_error === true ? 1 : 0,
-      });
-    }
-  }
-  return out;
+};
+
+function resultsFrom(protocol: string, results: ReturnType<typeof wireResultsOf>): RequestResult[] {
+  return results.map(result => ({
+    id: result.id, ord: result.ord, path: result.path, value: result.value,
+    // 协议没有失败通道时按缺省读成非失败，与既有口径一致。
+    isError: result.isError === true ? 1 : 0,
+  }));
+}
+
+/** 从请求里取工具结果；协议形状由 `protocol-shape` 一份定义。 */
+export function requestResultsOf(protocol: string, request: unknown): RequestResult[] {
+  return resultsFrom(protocol, wireResultsOf(protocol, request));
+}
+
+/**
+ * 已读出消息数组时的工具结果：派生按增量稀疏取消息，手上没有完整请求对象。
+ * `items` 必须按原始 ord 稀疏存放，提取结果的位置才对得上。
+ */
+export function requestResultsIn(protocol: string, items: readonly unknown[]): RequestResult[] {
+  return resultsFrom(protocol, wireResultsIn(protocol, items));
 }
 
 /** 工具结果内容压平；数组形状里只取 text 块。结果正文怎么压平是一条判据。 */
@@ -463,8 +448,8 @@ export function previewOf(messages: readonly (unknown | null)[], agent: string |
 }
 
 /** 回复没有文本时的兜底：这一笔发起的工具调用名，按出现顺序列出。 */
-export function replyToolSummary(reply: unknown): string | null {
-  const calls = anthropicReplyCalls(reply);
+export function replyToolSummary(protocol: string, reply: unknown): string | null {
+  const calls = replyCallsOf(protocol, reply);
   if (calls.length === 0) return null;
   const names = calls.map(call => call.name.length > 0 ? call.name : 'unknown');
   return `工具调用 · ${names.join(', ')}`;
@@ -520,10 +505,10 @@ export function pairOutcome(input: {
  * 对上 path。关联先按 `reqId` 筛到本笔，再按 ord 与 path 对位。
  */
 export function toolResultPreviewOf(messages: readonly unknown[], reqId: number,
-  associations: readonly ResolvedTool[]): string | null {
+  associations: readonly ResolvedTool[], protocol: string): string | null {
   const names: string[] = [];
   let content: string | null = null;
-  for (const result of anthropicRequestResults({ messages })) {
+  for (const result of requestResultsIn(protocol, messages)) {
     const matches = associations.filter(link => link.resultReq === reqId
       && link.resultOrd === result.ord && link.resultPath === result.path
       && link.callId === result.id);

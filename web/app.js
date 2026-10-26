@@ -13,7 +13,9 @@ import {
   renderReplyBlockDetail, renderReplyDetail, renderSystemDetail, renderUnknownBlockDetail,
   roleTag, toolTint,
 } from './body-view.js';
-import { deltaOrdinals, messageCopyText, replyView, toolEntries } from './body-model.js';
+import {
+  deltaOrdinals, messageCopyText, messagesKeyOf, replyView, toolEntries,
+} from './body-model.js';
 import { esc } from './html.js';
 import { createReaderStore } from './reader-store.js';
 import { initLayout, openRail } from './layout.js';
@@ -797,11 +799,11 @@ if (typeof document !== 'undefined') {
     /** @type {string} */
     let body;
     if (source.side === 'request' && source.target === 'system') {
-      body = renderSystemDetail(source.text);
+      body = renderSystemDetail(source.text, source.path);
     } else if (source.side === 'request') {
       const chosen = read.entries.find((/** @type {{ord: number}} */ entry) => entry.ord === source.messageOrd) ?? null;
-      body = chosen !== null ? renderMessageDetail(chosen)
-        : `<div class="rail-empty"><b>消息未读取</b>messages[${source.messageOrd}] 不在已加载的分片里；读取完成后回到这一步。</div>`;
+      body = chosen !== null ? renderMessageDetail(chosen, messagesKeyOf(page))
+        : `<div class="rail-empty"><b>消息未读取</b>${messagesKeyOf(page)}[${source.messageOrd}] 不在已加载的分片里；读取完成后回到这一步。</div>`;
     } else if (source.side === 'reply' && source.target === 'text') {
       body = `${truncNote}${renderReplyBlockDetail(source.path, source.text)}`;
     } else if (source.side === 'reply' && source.target === 'block') {

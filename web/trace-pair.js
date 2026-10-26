@@ -1,4 +1,5 @@
 // @ts-check
+import { messagesKeyOfPath } from './body-model.js';
 import { toolTint } from './body-view.js';
 import { esc } from './html.js';
 
@@ -155,9 +156,11 @@ export function renderTracePair(input) {
   }
   const resultPath = reading !== null && reading.target !== null ? reading.target.path
     : pair !== null ? pair.result_path : null;
+  // 位置标签按实际路径的数组键拼：Responses 是 input[N]，其余是 messages[N]。
+  const resultKey = messagesKeyOfPath(resultPath);
   const metaBits = [
     carrier !== null ? `请求 ${esc(carrier)}` : '',
-    pair !== null && pair.result_ord !== null ? `messages[${pair.result_ord}]` : '',
+    pair !== null && pair.result_ord !== null ? `${resultKey}[${pair.result_ord}]` : '',
   ].filter(Boolean).join('<span>·</span>');
   // 配对确认后面板头沿用 call 的工具色类；未确认保持中性。is_error=true 给整块 warn 软色。
   const resolved = pairState === 'resolved';

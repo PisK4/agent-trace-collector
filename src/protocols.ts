@@ -4,6 +4,7 @@ import type { BodyState } from './store';
 import { interpretMessage, messageText, type MessageView, type UserInputView } from './input-interpretation';
 import { CAPABLE_PROTOCOLS, capabilityView, type CapabilityCoverage, type CapabilityView } from './capabilities';
 import { skeletonLike } from './skeleton';
+import { messageCountOf, wireCallsOf, wireResultsOf } from './protocol-shape';
 
 /**
  * 协议适配层：把已保存的脱敏对象解释成阅读用的辅助视图。
@@ -45,6 +46,8 @@ export type BodyCoverage = {
 
 export type BodyPage = {
   state: BodyState;
+  /** 骨架里记录的协议名；浏览器按它决定 `request.messages[...]` 还是 `request.input[...]`。 */
+  protocol: string;
   parse_state: string | null;
   reply_state: string | null;
   from: number;
@@ -77,16 +80,8 @@ export function bodyRangeError(from: number, to: number): string | null {
   return null;
 }
 
-type Message = { role: string; content: unknown };
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function contentBlocks(message: unknown): unknown[] {
-  if (!isRecord(message)) return [];
-  const content = message.content;
-  return Array.isArray(content) ? content : [];
 }
 
 function responseIdOf(protocol: string, reply: unknown): string | null {
@@ -95,107 +90,20 @@ function responseIdOf(protocol: string, reply: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-function textOf(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  return value.length > 0 ? value : null;
+/**
+ * 调用与结果按协议查表，形状知识只在 `protocol-shape` 一份。
+ * 本模块只把共享形状投影成阅读视图：参数值、路径与序号原样透传。
+ */
+function callsOf(protocol: string, reply: unknown): ToolCallView[] {
+  return wireCallsOf(protocol, reply).map(call => ({
+    id: call.id, name: call.name, ord: call.ord, path: call.path, input: call.input,
+  }));
 }
 
-/** 读取 content 里的 block 数组；字符串 content 视为单块，便于统一遍历。 */
-function blocksOf(content: unknown): unknown[] {
-  if (Array.isArray(content)) return content;
-  if (content === null || content === undefined) return [];
-  return [content];
-}
-
-function anthropicCalls(reply: unknown): ToolCallView[] {
-  if (!isRecord(reply)) return [];
-  const calls: ToolCallView[] = [];
-  for (const [ord, block] of contentBlocks(reply).entries()) {
-    if (!isRecord(block) || block.type !== 'tool_use') continue;
-    const id = textOf(block.id);
-    if (id === null) continue;
-    calls.push({
-      id,
-      name: textOf(block.name) ?? '',
-      ord,
-      path: `reply.content[${ord}]`,
-      input: block.input ?? null,
-    });
-  }
-  return calls;
-}
-
-function anthropicResults(request: unknown): ToolResultView[] {
-  if (!isRecord(request) || !Array.isArray(request.messages)) return [];
-  const results: ToolResultView[] = [];
-  for (let ord = 0; ord < request.messages.length; ord++) {
-    const message: unknown = request.messages[ord];
-    for (const [index, block] of contentBlocks(message).entries()) {
-      if (!isRecord(block) || block.type !== 'tool_result') continue;
-      const id = textOf(block.tool_use_id);
-      if (id === null) continue;
-      results.push({
-        id,
-        ord,
-        path: `request.messages[${ord}].content[${index}]`,
-        value: block.content ?? null,
-      });
-    }
-  }
-  return results;
-}
-
-function chatCalls(reply: unknown): ToolCallView[] {
-  if (!isRecord(reply) || !Array.isArray(reply.choices)) return [];
-  // 多 choice 的调用序号在 choice 内各自从 0 计数：发布出去会撞 (req_id, ord)
-  // 主键，工具结果读取又只按 ord 找 choice0。只发布单 choice 的确定位置。
-  if (reply.choices.length !== 1) return [];
-  const calls: ToolCallView[] = [];
-  for (const [choiceIndex, choice] of reply.choices.entries()) {
-    if (!isRecord(choice) || !isRecord(choice.message)) continue;
-    const toolCalls = choice.message.tool_calls;
-    if (!Array.isArray(toolCalls)) continue;
-    for (const [index, call] of toolCalls.entries()) {
-      if (!isRecord(call)) continue;
-      const id = textOf(call.id);
-      if (id === null) continue;
-      const fn = isRecord(call.function) ? call.function : {};
-      calls.push({
-        id,
-        name: textOf(fn.name) ?? '',
-        ord: index,
-        path: `reply.choices[${choiceIndex}].message.tool_calls[${index}]`,
-        input: fn.arguments ?? null,
-      });
-    }
-  }
-  return calls;
-}
-
-function chatResults(request: unknown): ToolResultView[] {
-  if (!isRecord(request) || !Array.isArray(request.messages)) return [];
-  const results: ToolResultView[] = [];
-  for (const [ord, message] of request.messages.entries()) {
-    if (!isRecord(message) || message.role !== 'tool') continue;
-    const id = textOf(message.tool_call_id);
-    if (id === null) continue;
-    results.push({ id, ord, path: `request.messages[${ord}]`, value: message.content ?? null });
-  }
-  return results;
-}
-
-function anthropicMessageCount(request: unknown): number | null {
-  if (!isRecord(request)) return null;
-  const messages = request.messages;
-  if (messages === undefined) return null;
-  return Array.isArray(messages) ? messages.length : null;
-}
-
-function chatMessageCount(request: unknown): number | null {
-  if (!isRecord(request)) return null;
-  const messages = request.messages;
-  if (messages === undefined) return null;
-  return Array.isArray(messages) ? messages.length : null;
+function resultsOf(protocol: string, request: unknown): ToolResultView[] {
+  return wireResultsOf(protocol, request).map(result => ({
+    id: result.id, ord: result.ord, path: result.path, value: result.value,
+  }));
 }
 
 /**
@@ -220,9 +128,9 @@ export function parseProtocol(protocol: string, request: unknown, reply: unknown
   return {
     parse_state: requestOk ? 'ok' : 'invalid',
     reply_state: replyState,
-    message_count: protocol === 'anthropic' ? anthropicMessageCount(request) : chatMessageCount(request),
-    calls: replyOk ? (protocol === 'anthropic' ? anthropicCalls(reply) : chatCalls(reply)) : [],
-    results: requestOk ? (protocol === 'anthropic' ? anthropicResults(request) : chatResults(request)) : [],
+    message_count: messageCountOf(protocol, request),
+    calls: replyOk ? callsOf(protocol, reply) : [],
+    results: requestOk ? resultsOf(protocol, request) : [],
     response_id: responseIdOf(protocol, reply),
   };
 }
@@ -267,6 +175,8 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
   };
   const page: BodyPage = {
     state,
+    // 骨架还没读到（回收、未到或骨架损坏）时协议名未知，页面按 `messages` 拼路径。
+    protocol: 'unknown',
     parse_state: stateRow.parse_state,
     reply_state: stateRow.reply_state,
     from,
@@ -298,6 +208,7 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
   const fields = isRecord(skeleton.request_without_messages) ? skeleton.request_without_messages : null;
   const protocol = typeof skeleton.protocol === 'string' && skeleton.protocol.length > 0
     ? skeleton.protocol : 'unknown';
+  page.protocol = protocol;
   const systemTexts: string[] = [];
   const system = fields === null ? undefined : fields.system;
   if (typeof system === 'string' && system.length > 0) systemTexts.push(system);
@@ -306,6 +217,10 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
       if (isRecord(block) && typeof block.text === 'string' && block.text.length > 0) systemTexts.push(block.text);
     }
   }
+  // Responses 的系统提示在顶层 instructions，不在消息里：与 system 同源并入，
+  // 否则能力视图读不到技能、轨迹也没有顶层 System。
+  const instructions = fields === null ? undefined : fields.instructions;
+  if (typeof instructions === 'string' && instructions.length > 0) systemTexts.push(instructions);
   // 只解压 system 块：能力提取不需要整份消息，回收后也不该扫描全部正文。
   const systemRows = store.read.query<{ z: Uint8Array }, [number]>(`
     SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
@@ -332,7 +247,10 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
     request: fields,
     systemTexts,
     coverage,
-    systemPresent: fields !== null && ('system' in fields || systemRows.length > 0),
+    // instructions 与消息级 System 同属系统提示来源：只查 system 会把 Responses
+    // 判成「没有 system 字段」，技能视图因此永远停在 empty。
+    systemPresent: fields !== null
+      && ('system' in fields || 'instructions' in fields || systemRows.length > 0),
     agent: stateRow.agent,
   });
 
@@ -362,7 +280,7 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
 export { PAGE_MAX };
 
 /**
- * 回复里的第一段非空文本；两种协议结构都认，不拼工具调用。
+ * 回复里的第一段非空文本；三种协议结构都认，不拼工具调用。
  *
  * 摘要是给折叠行看的，只取首段就够；需要完整判定（例如分类器只认最后一个
  * `<block>`）的调用方应遍历全部文本，不要用这个函数。
@@ -380,6 +298,14 @@ export function assistantText(reply: unknown): string | null {
   };
   const direct = fromBlocks(reply.content);
   if (direct !== null) return direct;
+  // Responses：正文在 output 的 message 项 content 里；工具调用与推理项不出摘要。
+  if (Array.isArray(reply.output)) {
+    for (const item of reply.output) {
+      if (!isRecord(item) || item.type !== 'message') continue;
+      const text = fromBlocks(item.content);
+      if (text !== null) return text;
+    }
+  }
   const choices = reply.choices;
   if (!Array.isArray(choices) || choices.length === 0) return null;
   const first = choices[0];

@@ -23,7 +23,8 @@ const missingCapabilities: CapabilityView = {
 
 function page(overrides: Partial<BodyPage> = {}): BodyPage {
   return {
-    state: 'available', parse_state: 'ok', reply_state: 'ok', from: 0, to: 0, total: 2,
+    state: 'available', protocol: 'anthropic', parse_state: 'ok', reply_state: 'ok',
+    from: 0, to: 0, total: 2,
     messages: [], request_fields: null, reply: null, reason: null,
     interpretations: [],
     coverage: { from: 0, to: 0, total: 2, complete: true, loaded_complete: false, reason: 'available' },
