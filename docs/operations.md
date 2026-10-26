@@ -1,6 +1,6 @@
 # 运维手册
 
-采集器把账本、路由、hook 与 OTLP 四路证据写进同一个 SQLite 库。在线读取走独立只读连接，写入全部走单写者事务。下面这些操作都在**采集器已停止**的前提下进行。
+采集器把账本、路由、hook 与 OTLP 四路证据写进同一个 SQLite 库。在线读取走独立只读连接，写入全部走单写者事务。下面这些操作都在**采集器已停止**的前提下进行，停服务用 `bun run service stop`，见[起停与状态](#起停与状态)。
 
 ## 数据目录
 
@@ -17,7 +17,22 @@
 
 `redaction.salt` 与库必须配对。库里的 `collector_state['privacy:salt']` 记这份盐的标识（加域前缀的 SHA-256，不含盐明文）；有数据却没有绑定、盘上没有盐文件、或盐与标识不符时，采集器拒绝启动，分别报 `redaction_salt_unbound`、`redaction_salt_missing`、`redaction_salt_mismatch`。启动路径不会顺手生成新盐：换盐会让库里已有的占位符再也解释不了。有盐文件却没有绑定同样拒绝启动（`redaction_salt_unbound`）：无法证明历史占位符是这份盐算的，也没有确认绕过的入口，旧库删除后重建。
 
-停服务：`SIGTERM` 或 `SIGINT`。收到信号后先清定时器、停 HTTP 服务、再关库；`SIGKILL` 不会走这套流程，库本身仍然一致（WAL + `synchronous=NORMAL`），只是 WAL 里可能留着未回放的已提交页，下次打开自动回放。
+## 起停与状态
+
+生产采集器由 launchd 托管（label `local.agent-trace-collector`，`KeepAlive=true`、`ThrottleInterval=10`）。这套配置下 `kill` 不安全：进程退出后 10 秒内会被重新拉起，维护命令正好可能落进那个窗口，再手动起一个还会撞端口。起停统一走 `bun run service`：
+
+```sh
+bun run service status     # 只读：作业、pid、代码是否落后、端口、游标与积压
+bun run service stop       # bootout，等到作业消失且端口释放
+bun run service start      # bootstrap，等到 /api/stats 可读
+bun run service restart    # kickstart -k，等到新 pid 可用
+```
+
+退出码 `0` 成功，`1` 失败，`2` 用法错误。失败时 stderr 写 `<命令>_failed:<原因码>` 并带上 err 日志尾部。四者都等到接口答得出来才返回，所以 `restart` 的耗时包含启动任务占用事件循环的窗口，实测从 0.5 秒到 14 秒；慢不等于失败。
+
+服务条目按 plist 的 `ProgramArguments` 认本检出的 `src/main.ts`，不按 label 猜。在 worktree 里跑时找不到就报 `service_not_managed`，不会操作另一份检出的服务。脚本读 plist 的 `EnvironmentVariables` 决定数据目录，不读调用者的 shell 环境。
+
+`stop` 之后采集器不接收新证据，magpie 与 harness 的请求照常走完，只是这段时间没有新记录。手工起停（不走 launchd）时 `SIGTERM` 或 `SIGINT` 仍然可用：收到信号后先清定时器、停 HTTP 服务、再关库；`SIGKILL` 不会走这套流程，库本身仍然一致（WAL + `synchronous=NORMAL`），只是 WAL 里可能留着未回放的已提交页，下次打开自动回放。
 
 ## 维护命令
 
@@ -182,13 +197,13 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 
 恢复始终在**新目录**里验证，不就地覆盖当前 `trace.db`。
 
-1. 停服务。
+1. 停服务：`bun run service stop`。
 2. `verify` 当前库，确认问题不是磁盘或权限。
 3. `bundle` 到数据目录外的一个新目录；只有数据库的 `backup` 不能恢复占位符连续性。
 4. `restore` 到另一个新目录，按 `restore` 的校验顺序确认清单、哈希、盐绑定与结构版本都通过。
 5. 用 `ATC_DATA_DIR` 指向恢复目录启动：首次启动会重新生成 `read.token`、`hook.token` 与 `otlp.token`，插件与 exporter 要用新令牌重新注册。
 6. 先让合成来源跑一遍分页、正文与路由，确认占位符与备份前一致。
-7. 确认无误后再停服务、切换配置。
+7. 确认无误后再停服务、切换配置，然后起回原服务。
 
 游标可能落后于上游：重放按物理身份进行（文件代际 + 偏移），hook 的 best-effort 缺口仍然保留。**不要**把恢复库当成“补回了停机期间的正文”——停机期间没被投递的 hook 就是没投递，缺口表里会一直显示。
 

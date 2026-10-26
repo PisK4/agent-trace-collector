@@ -139,12 +139,13 @@ bun install
 bun run start            # 采集器，127.0.0.1:8320
 bun test
 bun run typecheck
+bun run service <子命令>  # 起停与状态，走 launchd
 bun run maintain <子命令> # 离线维护，要求采集器已停
 bun run verify-cutover   # 只读比较 collector 与旧采集器的正文覆盖
 bun run verify:notes     # 提交前
 ```
 
-`maintain` 与 `verify-cutover` 必须带子命令，裸调用只打印 usage 并退出 2。
+`service`、`maintain` 与 `verify-cutover` 必须带子命令，裸调用只打印 usage 并退出 2。
 
 ## 文档
 
