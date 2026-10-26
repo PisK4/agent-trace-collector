@@ -1,4 +1,6 @@
 import type { Store } from '../store';
+import { addBodyReadStats, emptyBodyReadStats } from '../body-cache';
+import type { BodyReadStats } from '../body-cache';
 import type { DeriveScope, DrainResult } from './sync';
 import { drainDeriveGroupTx } from './sync';
 import { queuePendingSql } from './state';
@@ -30,7 +32,7 @@ function drain(store: Store, limit: number, scope: DeriveScope | undefined,
   const started = performance.now();
   const result: DrainResult = {
     processed: 0, remaining: 0, groups: [], recomputed: 0, retained: 0, discarded: 0,
-    purpose_processed: 0, purpose_remaining: 0, batch_ms: 0,
+    purpose_processed: 0, purpose_remaining: 0, body_read: emptyBodyReadStats(), batch_ms: 0,
   };
   let remaining = remainingWork(store, scope);
   while (remaining.purposes > 0 && performance.now() - started < budgetMs) {
@@ -55,6 +57,7 @@ function drain(store: Store, limit: number, scope: DeriveScope | undefined,
       result.processed += group.processed;
       result.recomputed += group.recomputed;
       result.retained += group.retained;
+      addBodyReadStats(result.body_read, group.body_read);
       result.groups.push(candidate);
     } else {
       const step = sliceGroupStep(store, runtime, Date.now(), scope);
@@ -91,8 +94,13 @@ export function drainDeriveEntry(store: Store, limit = 100, scope?: DeriveScope)
   return drain(store, limit, scope, Number.POSITIVE_INFINITY);
 }
 
+/** 在线工作单元的观测出口；计数器只增，回调不改变调度结果。 */
+export type DeriveUnitOptions = {
+  onBodyRead?: (stats: BodyReadStats) => void;
+};
+
 /** 启动恢复与在线调度共用一个工作单元，未发布代在起定时器前丢弃。 */
-export function createDeriveUnit(store: Store): {
+export function createDeriveUnit(store: Store, unitOptions: DeriveUnitOptions = {}): {
   run(options: { budgetMs: number }): { didWork: boolean; nextDueMs: number };
 } {
   const unfinished = store.read.query(`SELECT 1 FROM derive_queue q
@@ -103,6 +111,7 @@ export function createDeriveUnit(store: Store): {
     run({ budgetMs }) {
       if (!Number.isFinite(budgetMs) || budgetMs <= 0) throw new Error('invalid_derive_budget');
       const result = drain(store, ONLINE_LIMIT, undefined, budgetMs);
+      if (result.body_read.message_decodes > 0) unitOptions.onBodyRead?.(result.body_read);
       const didWork = result.purpose_processed > 0 || result.processed > 0
         || result.groups.length > 0 || result.discarded > 0;
       return {

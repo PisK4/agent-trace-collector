@@ -6,6 +6,7 @@ import {
   REJECT_REASONS, assertCapacityIsolation, createCapacityMetrics, createIngestMetrics,
   metadataSnapshot, summarizeDurations,
 } from '../src/capacity';
+import { emptyBodyReadStats } from '../src/body-cache';
 import { intervalOf, loadConfig, type Config } from '../src/config';
 import {
   createPeakTracker, finalQueueMissing, offeredShortfall, requiresLongRunAck, scenarioPlan, scheduledTicks,
@@ -41,12 +42,14 @@ test('容量快照包含写统计、事件循环、队列年龄与存储', () =>
     const metrics = createCapacityMetrics(f.store, f.dir, 100);
     metrics.jobs.record('derive', 12);
     metrics.jobs.record('derive', 7);
+    metrics.bodyRead.record({ ...emptyBodyReadStats(), message_hits: 4, message_decodes: 3 });
     f.store.write(db => db.run(
       "INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at) VALUES (1,'c','a','known',100,'2026-10-22','hook','pending',0,1,1,1)"));
     f.store.write(db => db.run("INSERT INTO derive_queue(conv_key,actor,from_sort) VALUES ('c','a','')"));
     const snapshot = metrics.snapshot(f.store, f.dir) as any;
     expect(snapshot.writer.count).toBeGreaterThanOrEqual(2);
     expect(snapshot.jobs.derive).toEqual({ count: 2, total_ms: 19, max_ms: 12 });
+    expect(snapshot.body_read).toMatchObject({ message_hits: 4, message_decodes: 3 });
     expect(snapshot.derive_queue.pending_groups).toBe(1);
     expect(snapshot.derive_queue.oldest_request_started_ms).toBe(100);
     expect(snapshot.storage.db_bytes).toBeGreaterThan(0);

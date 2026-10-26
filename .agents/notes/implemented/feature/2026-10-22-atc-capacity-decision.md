@@ -32,6 +32,8 @@ Status: implemented
 - Part V（v6 代际与切片派生）按产品决定触发，不由这份决策触发。5 rps 是必须达成的产品目标，本轮只投递 3.39 rps；主因是 `drainDeriveTx` 每个脏组整组重算。这个触发理由写在这里，与决策文件的 `decision` 分开，脚本不代签。
 - 决策只在预算与报告同时存在且形状合法时生成；两侧任一缺失由加载器退出 2，不产生半份决策。
 
+[派生正文重复解压修复提案](../../proposed/bug-fix/2026-10-26-derive-body-decompression-amplification.md)补充活跃长组的读取放大证据。该提案首步的块级读取复用已交付，本篇容量结论仍然有效。端到端收益与真实流量验收尚未完成，这次修复也不代替容量复测。
+
 ## Testing
 
 `bun test tests/capacity-gate.test.ts` 覆盖：长组主因且别处无绝对失败时 `slice`；无失败时有场景则 `keep-sync`；主因在速率基线或别处存在 `product-target` 失败时 `stop-non-long`；下限类的比值取 `limit / actual` 且长组只有时延类失败时不切片；失败项为空且场景列表为空时抛 `capacity_decision_no_scenarios`；`buildDecisionFile` 写入两侧 sha256、失败项、`decided_at` 与命令，且 JSON 可原样读回。
