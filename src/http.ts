@@ -14,7 +14,7 @@ import { listTurns } from './queries/turns';
 import { listBgJobs } from './queries/bg-jobs';
 import { PAGE_MAX, bodyRangeError, getBodyPage } from './protocols';
 import {
-  getReadingBody, getReadingDetail, getToolResultReading,
+  getReadingBody, getReadingDetail, getToolResultReading, getContextItemReading,
   isValidReadingToken, ReadingConflictError,
 } from './reading';
 import { acceptHook } from './hook';
@@ -488,6 +488,25 @@ export function createHandler(
           return json({ error: 'invalid_reading_token' }, 400);
         }
         const reading = getToolResultReading(store, Number(toolResultMatch[1]), Number(toolResultMatch[2]), expected);
+        if (reading === null) return json({ error: 'not_found' }, 404);
+        return json(reading);
+      }
+
+      const contextItemMatch = /^\/api\/requests\/(\d+)\/context-item$/.exec(path);
+      if (contextItemMatch !== null) {
+        // 目录与正文同规：必须带阅读版本，读取期间派生输入变化一律 409。
+        const expected = url.searchParams.get('if_reading');
+        if (expected === null || !isValidReadingToken(expected)) {
+          return json({ error: 'invalid_reading_token' }, 400);
+        }
+        const kind = url.searchParams.get('kind');
+        if (kind === null || kind.length === 0) return json({ error: 'invalid_context_item_query' }, 400);
+        const reading = getContextItemReading(store, Number(contextItemMatch[1]), {
+          kind,
+          name: url.searchParams.get('name'),
+          tag: url.searchParams.get('tag'),
+          cursor: url.searchParams.get('cursor'),
+        }, expected);
         if (reading === null) return json({ error: 'not_found' }, 404);
         return json(reading);
       }
