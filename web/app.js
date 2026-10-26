@@ -19,6 +19,7 @@ import {
 import { esc } from './html.js';
 import { createReaderStore } from './reader-store.js';
 import { initLayout, openRail } from './layout.js';
+import { fillContextMap } from './context-map.js';
 import {
   kk, ledgerRowsHtml, railFactsHtml, readingChangedNote, renderAttemptChain,
   resolveSelectedSource, secs, structureFoldHtml, systemContextOf, toolOverviewHtml,
@@ -833,6 +834,34 @@ if (typeof document !== 'undefined') {
 
   /** @type {string | null} */
   let lastRailKey = null;
+  /* 上下文矩阵：读数页渲染外壳，这里测量容器填充 tile，并按尺寸变化重排。
+     通知经 rAF 合并，只在有效尺寸变化后重绘，不触发任何正文读取；
+     重绘替换容器后先解除旧观察再观察新容器，避免残留观察离屏节点。 */
+  let ctxMapSize = { w: 0, h: 0 };
+  let ctxMapQueued = false;
+  const ctxMapObserver = new ResizeObserver(() => {
+    if (ctxMapQueued) return;
+    ctxMapQueued = true;
+    requestAnimationFrame(() => { ctxMapQueued = false; refreshContextMap(); });
+  });
+  function refreshContextMap() {
+    const container = /** @type {HTMLElement | null} */ (document.querySelector('[data-ctx-map]'));
+    if (container === null) { ctxMapSize = { w: 0, h: 0 }; return; }
+    const detail = currentRead()?.detail ?? null;
+    const p = detail?.prompt ?? null;
+    if (p === null || !p.parts.some(x => x.tokens > 0)) return;
+    const w = container.clientWidth, h = container.clientHeight;
+    if (w === ctxMapSize.w && h === ctxMapSize.h && container.childElementCount > 0) return;
+    fillContextMap(container, p, Number(container.dataset.ctxMap));
+    ctxMapSize = { w, h };
+  }
+  /** 读数页重绘后调用：替换容器即换观察对象，旧观察一并解除。 */
+  function wireContextMap() {
+    ctxMapObserver.disconnect();
+    refreshContextMap();
+    const container = document.querySelector('[data-ctx-map]');
+    if (container !== null) ctxMapObserver.observe(container);
+  }
   function renderRail() {
     // 选定的工具在调用方读取里已不存在时先清选择再渲染：渲染函数不改 state。
     // 调用方读取未就绪（meta 为空）不算消失，保留选择显示「正在读取」。
@@ -856,6 +885,7 @@ if (typeof document !== 'undefined') {
     restoreFolds(rail);
     restoreScroll(rail, keep);
     lastRailKey = key;
+    wireContextMap();
   }
 
   function renderAll() {

@@ -22,11 +22,11 @@
   --tool-skill:#8f7408; --tool-skill-bg:rgba(143,116,8,.13);
   --tool-agent:#187a52; --tool-agent-bg:rgba(24,122,82,.11);
   --tool-other:#566b7a; --tool-other-bg:rgba(86,107,122,.11);
-  /* 上下文类别槽位：固定不按大小重排，skills 落第七槽；类别按 parts 数据动态渲染，未知 kind 落 --p-unknown */
+  /* 上下文类别槽位：固定不按大小重排，skills 落第七槽；类别按 parts 数据动态渲染，未知 kind 落 --p-unknown。
+     七槽按浅色表面方案校验（dataviz validate_palette）：亮 #6250d6 / 暗 #9085e9 的 skills 紫过亮度带与对比度，
+     旧值 #30287e/#3d3480 按白字高饱和填充设计，在浅色表面方案下越带或近不可见。--p-unknown 保持灰色是有意例外。 */
   --p1:#2a78d6; --p2:#eb6834; --p3:#1baf7a; --p4:#eda100; --p5:#e87ba4; --p6:#008300;
-  --p7:#30287e; --p-unknown:#7a8794;
-  /* treemap tile 文字色（亮色）：绿/金/粉三槽相对亮度高于 0.30 取深字，其余白字 */
-  .ctx-map .ck-p3 text,.ctx-map .ck-p4 text,.ctx-map .ck-p5 text{fill:#0d1b24}
+  --p7:#6250d6; --p-unknown:#7a8794;
   --shadow:0 1px 2px rgba(16,32,48,.06);
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -51,10 +51,7 @@
     --tool-agent:#6fd0a0; --tool-agent-bg:rgba(111,208,160,.13);
     --tool-other:#93a5b3; --tool-other-bg:rgba(147,165,179,.13);
     --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
-    --p7:#3d3480; --p-unknown:#93a5b3;
-    /* treemap tile 文字色（暗色）：七个色槽都取白字，只有灰槽 unknown 取深字 */
-    .ctx-map .ck-p3 text,.ctx-map .ck-p4 text,.ctx-map .ck-p5 text{fill:#fff}
-    .ctx-map .ck-p-unknown text{fill:#0d1b24}
+    --p7:#9085e9; --p-unknown:#93a5b3;
     --shadow:0 1px 2px rgba(0,0,0,.35);
   }
 }
@@ -70,9 +67,7 @@
   --k-system-bg:rgba(182,163,240,.13); --k-user-bg:rgba(143,216,174,.12); --k-assistant-bg:rgba(230,192,122,.13);
   --k-tool-bg:rgba(127,212,217,.12); --k-field-bg:rgba(147,165,179,.12);
   --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
-  --p7:#3d3480; --p-unknown:#93a5b3;
-  .ctx-map .ck-p3 text,.ctx-map .ck-p4 text,.ctx-map .ck-p5 text{fill:#fff}
-  .ctx-map .ck-p-unknown text{fill:#0d1b24}
+  --p7:#9085e9; --p-unknown:#93a5b3;
   --shadow:0 1px 2px rgba(0,0,0,.35);
 }
 
@@ -514,8 +509,6 @@ pre.raw{
 .u-total{display:flex;justify-content:space-between;gap:8px;margin-top:6px;font-size:10.5px;color:var(--muted);flex-wrap:wrap}
 .u-total b{font-family:var(--mono);color:var(--text-2);font-weight:500}
 
-.comp-bar{display:flex;gap:2px;height:9px;margin-bottom:9px}
-.comp-bar i{display:block;border-radius:1px;min-width:2px}
 .comp-legend{display:grid;grid-template-columns:1fr auto auto;gap:3px 8px;font-size:10.5px}
 .comp-legend .name{display:flex;align-items:center;gap:6px;color:var(--text-2);min-width:0}
 .comp-legend .sw{width:7px;height:7px;border-radius:1.5px;flex:none}
@@ -523,15 +516,20 @@ pre.raw{
 .comp-legend .val{font:10.5px var(--mono);color:var(--text-2);text-align:right}
 .comp-legend .pct{font:10.5px var(--mono);color:var(--muted);text-align:right;width:34px}
 
-/* 上下文分布图：构成条之下的 treemap 与内容列表（web/context-map.js 拼装）。
-   SVG 横向用百分比、纵向固定像素：tile 边界随右栏宽度伸缩，文字字号不变。
-   tile 文字色按槽位底色相对亮度取深/白（OKLab 预计算），规则分写三个主题块。 */
-.ctx-map{margin:0 0 9px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--inset)}
-.ctx-map svg{display:block;width:100%}
-.ctx-map .ctx-tile text{fill:#fff}
-.ctx-map .ctx-tile:hover rect,.ctx-map .ctx-tile.ctx-hl rect{filter:brightness(1.12)}
-.ctx-tl{font:10px/1.2 var(--ui);pointer-events:none}
-.ctx-tv{font:10px/1.2 var(--mono);pointer-events:none}
+/* 上下文分布图：读数折叠行内的 treemap 与内容列表（web/context-map.js 拼装）。
+   容器高度 = clamp(160px, 宽/2.4, 240px)，由 aspect-ratio 加 min/max 表达。
+   tile 是绝对定位 button：底色为类别色 16% 混入表面、边界 30% 混入、悬停 28% 加
+   全色边界；文字用主题墨色（16% 底上对比度实测 11–14:1）。窄块按尺寸依次隐藏
+   数值与全部文字，被隐藏的信息由同页列表承担；类别身份另见图例与列表行点。 */
+.ctx-map{position:relative;margin:0 0 9px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface);aspect-ratio:2.4;min-height:160px;max-height:240px}
+.ctx-tile{position:absolute;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:2px;padding:7px 8px;border:1px solid color-mix(in srgb,var(--c) 30%,var(--surface));border-radius:4px;background:color-mix(in srgb,var(--c) 16%,var(--surface));color:var(--text);min-width:0}
+.ctx-tile:hover,.ctx-tile.ctx-hl{background:color-mix(in srgb,var(--c) 28%,var(--surface));border-color:var(--c)}
+.ctx-tile:focus-visible{outline-offset:-2px}
+.ctx-tname{font-size:10.5px;font-weight:550;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctx-tval{font:10px var(--mono);color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctx-tile.low .ctx-tval{display:none}
+.ctx-tile.bare{padding:0;border-radius:3px}
+.ctx-tile.bare .ctx-tname,.ctx-tile.bare .ctx-tval{display:none}
 .ctx-rows{display:flex;flex-direction:column;gap:1px;margin:0 0 6px}
 .ctx-row{display:flex;align-items:center;gap:7px;padding:2.5px 6px;border-radius:4px;font-size:11px}
 .ctx-row:hover,.ctx-row.ctx-hl{background:var(--hover)}
