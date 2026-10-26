@@ -19,7 +19,7 @@ magpie 根据首条用户消息生成的会话指纹，只在没有 session 时�
 ## 证据的坐标
 
 **证据通道**：
-一条逻辑请求由哪几路证据合成，取值 hook / ledger / route / api / otlp_span，落在 request_evidence.source_kind。have 位图（1 hook、2 账本、4 路由、8 OTLP span）是它的读侧影子。
+一条逻辑请求由哪几路证据合成，取值 hook / ledger / route / otlp_span，落在 request_evidence.source_kind。have 位图（1 hook、2 账本、4 路由、8 OTLP span）是它的读侧影子。
 _Avoid_: 来源（单独说「来源」时指代不明）
 
 **物理来源**：

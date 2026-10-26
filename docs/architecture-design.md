@@ -679,8 +679,8 @@ CREATE INDEX i_req_fail ON request(started_ms DESC) WHERE status >= 400;
 ```sql
 CREATE TABLE request_evidence (
   req_id      INTEGER NOT NULL,
-  source_kind TEXT NOT NULL,           -- hook / ledger / route / api
-  ref_key     TEXT NOT NULL,           -- hook_id / 物理记录三元组 / route_id
+  source_kind TEXT NOT NULL,           -- hook / ledger / route / otlp_span
+  ref_key     TEXT NOT NULL,           -- hook_id / 物理记录三元组 / route_id / trace 与 span 的十六进制
   merge_state TEXT NOT NULL,           -- merged / pending；多候选歧义由 pending_hook.candidates 承载
   match_rule  TEXT,                    -- 命中的规范化规则与版本
   added_at    INTEGER NOT NULL,
