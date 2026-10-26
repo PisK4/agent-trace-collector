@@ -3,7 +3,7 @@ import { fixture } from './fixtures';
 import { persistBody } from '../src/body';
 import { drainDerive, enqueueDerive } from '../src/derive/sync';
 import {
-  anthropicReplyCalls, anthropicRequestResults, interruptCountOf,
+  interruptCountOf, replyCallsOf, requestResultsOf,
 } from '../src/derive/decision';
 import { isUserInterruptMessage } from '../src/input-interpretation';
 import { GROUP_ALGORITHM } from '../src/derive/state';
@@ -61,7 +61,7 @@ test('调用提取认 file_path/path 与 skill 键，其余近邻键落 NULL 不
     { type: 'tool_use', id: 'c5', name: 'Write', input: {} },
     { type: 'tool_use', id: 'c6', name: 'read', input: { path: 'README.md', i: 'Reading' } },
   ] };
-  expect(anthropicReplyCalls(reply)).toEqual([
+  expect(replyCallsOf('anthropic', reply)).toEqual([
     { id: 'c1', name: 'Edit', ord: 0, argPath: '/a/b.ts', argSkill: null },
     { id: 'c2', name: 'Skill', ord: 1, argPath: null, argSkill: 'ponytail' },
     // command/pattern 之类仍不是提取词汇；file_path 优先于 path。
@@ -74,7 +74,7 @@ test('调用提取认 file_path/path 与 skill 键，其余近邻键落 NULL 不
 });
 
 test('chat 形状的 arguments 字符串与对象都提取，坏 JSON 不抛错', () => {
-  const objectArgs = anthropicReplyCalls({ choices: [{ message: {
+  const objectArgs = replyCallsOf('chat', { choices: [{ message: {
     role: 'assistant', content: null,
     tool_calls: [{ id: 'k1', type: 'function', function: {
       name: 'edit_file', arguments: { file_path: '/x.py' } },
@@ -83,14 +83,14 @@ test('chat 形状的 arguments 字符串与对象都提取，坏 JSON 不抛错'
   expect(objectArgs).toEqual([
     { id: 'k1', name: 'edit_file', ord: 0, argPath: '/x.py', argSkill: null },
   ]);
-  const stringArgs = anthropicReplyCalls({ choices: [{ message: {
+  const stringArgs = replyCallsOf('chat', { choices: [{ message: {
     role: 'assistant', content: null,
     tool_calls: [{ id: 'k2', type: 'function', function: {
       name: 'skill', arguments: '{"skill":"de-AI-writing"}' } },
     ] },
   }] });
   expect(stringArgs[0]?.argSkill).toBe('de-AI-writing');
-  const broken = anthropicReplyCalls({ choices: [{ message: {
+  const broken = replyCallsOf('chat', { choices: [{ message: {
     role: 'assistant', content: null,
     tool_calls: [{ id: 'k3', type: 'function', function: {
       name: 'x', arguments: '{not json' } },
@@ -100,16 +100,27 @@ test('chat 形状的 arguments 字符串与对象都提取，坏 JSON 不抛错'
 });
 
 test('失败位按协议缺省读：显式 true 才是失败，缺席与 chat 都是非失败', () => {
-  const results = anthropicRequestResults({ messages: [
+  const results = requestResultsOf('anthropic', { messages: [
     { role: 'user', content: [
       { type: 'tool_result', tool_use_id: 'e1', is_error: true, content: 'boom' },
       { type: 'tool_result', tool_use_id: 'e2', is_error: false, content: 'fine' },
       { type: 'tool_result', tool_use_id: 'e3', content: 'field absent' },
     ] },
-    { role: 'tool', tool_call_id: 'e4', content: 'chat result' },
   ] });
   expect(results.map(result => [result.id, result.isError])).toEqual([
-    ['e1', 1], ['e2', 0], ['e3', 0], ['e4', 0],
+    ['e1', 1], ['e2', 0], ['e3', 0],
+  ]);
+  // chat 用整条 role=tool 消息承载结果，没有失败通道。
+  const chat = requestResultsOf('chat', { messages: [
+    { role: 'tool', tool_call_id: 'e4', content: 'chat result' },
+  ] });
+  expect(chat.map(result => [result.id, result.isError])).toEqual([['e4', 0]]);
+  // Responses 的结果项也没有独立失败位。
+  const responses = requestResultsOf('responses', { input: [
+    { type: 'function_call_output', call_id: 'e5', output: 'resp result' },
+  ] });
+  expect(responses.map(result => [result.id, result.isError, result.path])).toEqual([
+    ['e5', 0, 'request.input[0]'],
   ]);
 });
 

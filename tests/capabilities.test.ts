@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
 import { capabilityView, extractSkills, extractTools, protocolSupported } from '../src/capabilities';
 
-test('支持名单谓词：anthropic 与 chat 受支持，名单外一律不支持', () => {
+test('支持名单谓词：anthropic、chat 与 responses 受支持，名单外一律不支持', () => {
   expect(protocolSupported('anthropic')).toBe(true);
   expect(protocolSupported('chat')).toBe(true);
+  expect(protocolSupported('responses')).toBe(true);
   expect(protocolSupported('gemini')).toBe(false);
   expect(protocolSupported('unknown')).toBe(false);
 });
@@ -35,7 +36,7 @@ test('工具缺失、空、未识别与协议缺失分开', () => {
   expect(extractTools('anthropic', {}).state).toBe('missing');
   expect(extractTools('anthropic', { tools: [] }).state).toBe('empty');
   expect(extractTools('anthropic', { tools: 'oops' }).state).toBe('unrecognized');
-  expect(extractTools('responses', {}).state).toBe('missing');
+  expect(extractTools('gemini', {}).state).toBe('missing');
 });
 
 test('技能区分 present、empty、unrecognized、missing 与 partial', () => {
@@ -93,7 +94,7 @@ test('能力数据保留原文，不执行也不转义为 HTML', () => {
 
 test('未适配协议不把未知技能显示为零', () => {
   const view = capabilityView({
-    protocol: 'responses', request: { input: 'synthetic input' },
+    protocol: 'gemini', request: { contents: [] },
     systemTexts: [], coverage: complete, systemPresent: false, agent: null,
   });
   expect(view.tools).toEqual({ state: 'missing', items: [], reason: 'protocol_unsupported' });

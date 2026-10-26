@@ -5,7 +5,8 @@ import { renderTurnBand, renderTurnRail, renderTurnRailHead } from '../web/turn-
 /** 最小可用的正文页：默认 available，回复可注入，其余字段按空场景补齐。 */
 function pageOf(reply: unknown, extra: Partial<BodyPage> = {}): BodyPage {
   return {
-    state: 'available', parse_state: 'ok', reply_state: reply === null ? 'absent' : 'ok',
+    state: 'available', protocol: 'anthropic', parse_state: 'ok',
+    reply_state: reply === null ? 'absent' : 'ok',
     from: 0, to: 0, total: 0, messages: [], request_fields: null, reply,
     reason: null, interpretations: [],
     coverage: { from: 0, to: 0, total: 0, complete: true, loaded_complete: true, reason: 'available' },

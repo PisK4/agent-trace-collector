@@ -39,6 +39,9 @@ bun run maintain restore --bundle '<新路径>/bundle-2026-10-21' --out '<新路
 # 整链重排某个会话的派生结果
 bun run maintain rebuild --db '<dataDir>/trace.db' --session '<conv_key>'
 
+# 把某个协议的历史正文按当前适配器重写
+bun run maintain reparse --db '<dataDir>/trace.db' --protocol responses
+
 # 长期元数据淘汰，默认只预览
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --apply --approval-id '<你的审批标识>'
@@ -141,6 +144,29 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 `derive_no_progress` 表示用途与组阶段连续一轮都没有推进。先查用途落成 `error` 的行与它们正文的可读性：一笔读不出的请求重试三次后会消费修订并记 `error`，不应继续卡住排空；若仍无进展，按正文不可读处理，而不是反复重建同一会话。
 
 正文已回收的请求不会因为重建而丢掉旧标题与已确认的工具配对：没有正文可读时，派生层保留原值，不把它们改写成时间兜底或空。
+
+### reparse
+
+把某个协议的历史正文按当前适配器重写。适配器升级后，旧行仍按写入时的布局保存；重解析把它们改成当前布局，逐条消息视图、分页与块级去重才会生效。
+
+候选是 `adapter_version` 落后于当前版本、且仍有骨架的请求行；协议从骨架的长期字段读取，不看 `raw_hook`。每行一个独立事务：单行失败只记在报告里，其它行照常处理。两种旧布局都先完整恢复成原对象再重写：`has_messages=false` 的整段请求在骨架里，`has_messages=true` 的先从块还原。
+
+拒绝重写的行原样保留，`adapter_version`、`body_state` 与原因都不动：
+
+- `body_partial`：正文不完整，重写会丢掉没读到的部分。
+- `skeleton_invalid`：骨架不符合写入契约；严格校验不通过时不做宽松解释。
+- `body_unreadable`：块引用不完整，读不出原文。
+
+输出字段：
+
+- `scanned`：版本落后且有骨架的行数，含其它协议。
+- `matched`：骨架协议等于 `--protocol` 的行数。
+- `rewritten`：本次重写的行数。
+- `rejected` / `failed`：拒绝与失败的行及原因。失败是单行事务抛错，不影响其它行。
+- `unattributed_skeleton`：骨架读不出协议名的行；无法归属，原样保留。
+- `remaining`：目标协议里仍版本落后的行数；被拒绝的行会留在这里。
+
+重复执行不再处理已经升版的行：第二次运行 `scanned` 为 0，不新增块，也不推进 `input_revision`。重写会推进输入修订并标脏所在分组，派生结论在采集器下一次排空后才按新解释生效；要立刻重算，对受影响的会话再跑一次 `rebuild`。
 
 ### purge-metadata
 

@@ -29,13 +29,18 @@ export type ToolResultReading = {
   target: { req_id: number; ord: number; path: string } | null;
   content: unknown;
   is_error: boolean | null;
-  /** available 时是精确协议对象：Anthropic 为 tool_result 块，Chat 为整条 role=tool 消息。 */
+  /** available 时是精确协议对象：Anthropic 为 tool_result 块，Chat 为整条 role=tool 消息，Responses 为工具结果顶层项。 */
   raw: unknown;
   reason: string | null;
 };
 
 const TOKEN_RE = /^r1-[0-9a-f]{64}$/;
-const RESULT_PATH_RE = /^request\.messages\[(\d+)\](?:\.content\[(\d+)\])?$/;
+/**
+ * 结果位置的三种落点：Anthropic 的内容块 `request.messages[N].content[M]`、
+ * chat 的整条消息 `request.messages[N]`、Responses 的顶层项 `request.input[N]`。
+ * 第二段捕获只对 Anthropic 有意义；键名本身区分协议。
+ */
+const RESULT_PATH_RE = /^request\.(messages|input)\[(\d+)\](?:\.content\[(\d+)\])?$/;
 
 export function isValidReadingToken(value: string): boolean {
   return TOKEN_RE.test(value);
@@ -163,9 +168,11 @@ export function getToolResultReading(
     }
     const match = RESULT_PATH_RE.exec(pair.result_path);
     const targetCanonical = match === null ? null : resolveRequestId(store, pair.result_req);
-    if (match === null || targetCanonical === null || Number(match[1]) !== pair.result_ord) {
+    if (match === null || targetCanonical === null || Number(match[2]) !== pair.result_ord) {
       return { ...base, state:'invalid_location', target:null, content:null, is_error:null, reason:'location_mismatch' };
     }
+    const locationKey = match[1];
+    const blockIndex = match[3];
     const target = store.read.query<{ conv_key: string | null; actor: string | null }, [number]>(
       'SELECT conv_key, actor FROM request WHERE req_id=?').get(targetCanonical);
     if (target === null || target.conv_key !== detail.conv_key || target.actor !== detail.actor) {
@@ -180,7 +187,18 @@ export function getToolResultReading(
       return { ...base, state:'unavailable', target:null, content:null, is_error:null, reason:'message_missing' };
     }
     const located = { req_id: targetCanonical, ord: pair.result_ord, path: pair.result_path };
-    if (match[2] === undefined) {
+    if (locationKey === 'input') {
+      // Responses：目标是带 call_id 的工具结果顶层项，正文在 output 上。
+      const type = (message as { type?: unknown }).type;
+      if ((type !== 'function_call_output' && type !== 'custom_tool_call_output')
+        || (message as { call_id?: unknown }).call_id !== pair.call_id) {
+        return { ...base, state:'invalid_location', target:null, content:null, is_error:null, reason:'call_id_mismatch' };
+      }
+      return { ...base, state:'available', target:located,
+        content:(message as { output?: unknown }).output ?? null, is_error:null,
+        raw: message, reason:null };
+    }
+    if (blockIndex === undefined) {
       // Chat：目标是 role=tool 的整条消息，tool_call_id 必须匹配。
       if ((message as { role?: unknown }).role !== 'tool'
         || (message as { tool_call_id?: unknown }).tool_call_id !== pair.call_id) {
@@ -192,7 +210,7 @@ export function getToolResultReading(
     }
     // Anthropic：目标消息里的第 N 个内容块必须是配对的 tool_result。
     const blocks = (message as { content?: unknown }).content;
-    const block = Array.isArray(blocks) ? blocks[Number(match[2])] : undefined;
+    const block = Array.isArray(blocks) ? blocks[Number(blockIndex)] : undefined;
     if (block === undefined || (block as { type?: unknown }).type !== 'tool_result'
       || (block as { tool_use_id?: unknown }).tool_use_id !== pair.call_id) {
       return { ...base, state:'invalid_location', target:null, content:null, is_error:null, reason:'call_id_mismatch' };

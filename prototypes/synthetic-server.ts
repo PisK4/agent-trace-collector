@@ -618,7 +618,7 @@ function rowOf(r: SynthRequest): RequestRow {
     ms: r.timing.ms, ttft_ms: r.timing.ttft, flow_ms: r.timing.flow,
     body_state: r.bodyState, miss_reason: r.bodyReason,
     input_preview: r.title, input_preview_kind: 'delta', reply_preview: null,
-    reply_shape: r.reply === null ? null : replyShapeOf(r.reply),
+    reply_shape: r.reply === null ? null : replyShapeOf(r.protocol, r.reply),
     context_event: 'none',
     req_kind: r.reqKind, chain_role: r.chainRole, model_title: r.modelTitle,
     purpose_status: 'selected', purpose_version: 1, purpose_rule: null, purpose_chain: r.purposeChain,
@@ -644,7 +644,7 @@ function detailOf(r: SynthRequest): ReadingDetail {
     ms:r.timing.ms, ttft_ms:r.timing.ttft, flow_ms:r.timing.flow,
     body_state:r.bodyState, miss_reason:r.bodyState === 'available' ? null : r.bodyReason,
     input_preview:r.title, input_preview_kind:'delta', reply_preview:null,
-    reply_shape:r.reply === null ? null : replyShapeOf(r.reply),
+    reply_shape:r.reply === null ? null : replyShapeOf(r.protocol, r.reply),
     context_event:'none',
     req_kind:r.reqKind, chain_role:r.chainRole, model_title:r.modelTitle,
     purpose_status:'selected', purpose_version:1, purpose_rule:null, purpose_chain:r.purposeChain,
@@ -708,6 +708,7 @@ function bodyPageOf(r: SynthRequest, from: number, to: number): BodyPage {
     reason:r.bodyState === 'available' ? 'available' : r.bodyState === 'partial' ? 'body_partial' : 'body_unavailable'};
   return {
     state:r.bodyState,
+    protocol:r.protocol,
     parse_state:r.bodyState === 'available' || r.bodyState === 'partial' ? 'ok' : null,
     reply_state:r.bodyState === 'available' || r.bodyState === 'partial' ? (r.reply === null ? 'absent' : 'ok') : null,
     from, to, total, messages:sliced,
