@@ -2,9 +2,10 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fixture, seedTextChain, seedDeriveRound, deriveSnapshot, rebuildDeriveGroup, DERIVE_GROUP, DERIVE_ACTOR } from './fixtures';
+import { fixture, seedPurposeRequest, seedTextChain, seedDeriveRound, deriveSnapshot, rebuildDeriveGroup, DERIVE_GROUP, DERIVE_ACTOR } from './fixtures';
 import { confirmedDeltaOf, matchPredecessor } from '../src/derive/decision';
 import { drainDerive, enqueueDerive } from '../src/derive/sync';
+import { incrementalInputOf } from '../src/derive/read';
 import { messageFingerprint } from '../src/fingerprint';
 import { listSessions } from '../src/queries/sessions';
 import { openStore } from '../src/store';
@@ -96,6 +97,29 @@ for (const state of ['partial', 'available'] as const) {
     });
   }
 }
+
+test('增量输入只凭骨架判定，不读消息块', () => {
+  const f = fixture();
+  try {
+    const incremental = seedPurposeRequest(f.store, {
+      convKey: 'conv-incremental', protocol: 'responses',
+      request: {
+        input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'A' }] }],
+        previous_response_id: 'resp_0',
+      },
+    });
+    expect(incrementalInputOf(f.store.read, incremental)).toBe(true);
+    const full = seedPurposeRequest(f.store, {
+      convKey: 'conv-incremental', protocol: 'responses',
+      request: { input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'B' }] }] },
+    });
+    expect(incrementalInputOf(f.store.read, full)).toBe(false);
+    // 正文不可读（回收）与行不存在都不是增量：没有可读骨架就不下这个结论。
+    expect(incrementalInputOf(f.store.read, 9999)).toBe(false);
+  } finally {
+    f.close();
+  }
+});
 
 test('合法空messages可读但不证明后续请求的父节点', () => {
   const f = fixture();

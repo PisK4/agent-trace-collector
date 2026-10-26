@@ -76,18 +76,35 @@ function imageLabel(block) {
 function blockView(block, index, path) {
   if (!isRecord(block)) return { kind: 'other', text: previewOf(block), index, raw: block, path };
   const type = String(block.type ?? '');
-  if (type === 'text') return { kind: 'text', text: previewOf(block.text), index, raw: block, path };
+  // Responses 的文本块叫 input_text / output_text；消息项与回复项共用这一条。
+  if (type === 'text' || type === 'input_text' || type === 'output_text') {
+    return { kind: 'text', text: previewOf(block.text), index, raw: block, path };
+  }
   if (type === 'thinking') {
     return { kind: 'thinking', text: typeof block.thinking === 'string' ? block.thinking : previewOf(block), index, raw: block, path };
   }
   if (type === 'redacted_thinking') {
     return { kind: 'thinking', text: '（推理内容已被上游加密，只保留占位块）', index, raw: block, path };
   }
+  // Responses 的推理项只有摘要，正文不落明文；摘要缺失时如实说明。
+  if (type === 'reasoning') {
+    const summary = previewOf(block.summary);
+    const text = summary.length > 0 ? summary : '（上游未返回推理摘要）';
+    return { kind: 'thinking', text, index, raw: block, path };
+  }
   if (type === 'tool_use') return { kind: 'call', text: callLabel(block.name, block.input), index, raw: block, path };
+  // Responses 的调用项：参数键分 input（custom）与 arguments（function），身份是 call_id。
+  if (type === 'function_call' || type === 'custom_tool_call') {
+    return { kind: 'call', text: callLabel(block.name, block.input ?? block.arguments), index, raw: block, path };
+  }
   if (type === 'tool_result') {
     // is_error 只在正文里按需读取；缺失保持未报告，不等于成功。
     const failed = typeof block.is_error === 'boolean' ? block.is_error : undefined;
     return { kind: 'result', text: previewOf(block.content), index, raw: block, path, failed };
+  }
+  // Responses 的结果项没有独立失败位：错误写在 output 里，不在这里猜。
+  if (type === 'function_call_output' || type === 'custom_tool_call_output') {
+    return { kind: 'result', text: previewOf(block.output), index, raw: block, path };
   }
   if (type === 'image' || type === 'input_image') return { kind: 'image', text: imageLabel(block), index, raw: block, path };
   // chat 的函数调用块：{id, type:'function', function:{name, arguments}}
@@ -123,6 +140,11 @@ export function messageBlocks(message) {
       out.push(blockView(call, index, `tool_calls[${index}]`));
     }
   }
+  // Responses 的顶层项本身就是一段：调用、结果与推理没有 content。
+  // 只有无 role 的项走这条，带 role 的空消息仍显示为空消息。
+  if (out.length === 0 && typeof message.role !== 'string' && typeof message.type === 'string') {
+    out.push(blockView(message, 0, ''));
+  }
   return out;
 }
 
@@ -132,6 +154,11 @@ export function roleOf(message) {
   const role = String(message.role ?? '');
   if (role === 'developer') return 'system';
   if (role === 'user' || role === 'assistant' || role === 'system' || role === 'tool') return role;
+  if (role.length > 0) return 'unknown';
+  // Responses 的顶层项没有 role，按 type 推断，与服务端 roleNameOfItem 同一份规则。
+  const type = message.type;
+  if (type === 'function_call' || type === 'custom_tool_call' || type === 'reasoning') return 'assistant';
+  if (type === 'function_call_output' || type === 'custom_tool_call_output') return 'tool';
   return 'unknown';
 }
 
@@ -289,6 +316,46 @@ function textOrNull(value) {
 }
 
 /**
+ * Responses 的回复块：`output` 每一项是一段。`message` 项展开 content，
+ * 其余项（调用、推理）整项即块。路径从回复根算起（reply.output[i]），
+ * 序号取项在 output 里的位置，与服务端 tool_call.ord 同源。
+ * @param {Record<string, unknown>} reply
+ * @returns {Block[]}
+ */
+function outputBlocks(reply) {
+  const output = Array.isArray(reply.output) ? reply.output : [];
+  /** @type {Block[]} */
+  const out = [];
+  for (const [index, item] of output.entries()) {
+    if (isRecord(item) && item.type === 'message') {
+      for (const block of messageBlocks(item)) {
+        // 无 content 的 message 项退回整项一块，块路径就是项本身。
+        const path = block.path === ''
+          ? `reply.output[${index}]` : `reply.output[${index}].${block.path}`;
+        out.push({ ...block, index, path });
+      }
+      continue;
+    }
+    out.push(blockView(item, index, `reply.output[${index}]`));
+  }
+  return out;
+}
+
+/**
+ * Responses 的完成状态：`status` 与 Anthropic 的 `stop_reason` 不是同一套词表。
+ * `incomplete` 的原因（max_output_tokens / content_filter）抬到 finish，
+ * 免得页面把已知的截断显示成未知停止。
+ * @param {Record<string, unknown>} reply
+ * @returns {string | null}
+ */
+function responsesFinish(reply) {
+  const status = textOrNull(reply.status);
+  if (status !== 'incomplete') return status;
+  const details = isRecord(reply.incomplete_details) ? reply.incomplete_details : null;
+  return details === null ? status : textOrNull(details.reason) ?? status;
+}
+
+/**
  * 回复归一化，是回复协议形状的唯一拆分点。anthropic 读 content 块数组，chat 读
  * choices[0].message。blocks 按协议原始顺序给出，路径从回复根算起
  * （reply.content[i] / reply.choices[0].message.*），序号沿用协议内位置。
@@ -318,7 +385,10 @@ export function replyView(page) {
     const thinking = [];
     /** @type {ToolCallView[]} */
     const calls = [];
-    const full = blocks.map(block => ({ ...block, path: `${base}.${block.path}` }));
+    // Responses 的块路径已从回复根算起，base 为空时不再拼前缀。
+    const full = blocks.map(block => ({
+      ...block, path: base === '' ? block.path : `${base}.${block.path}`,
+    }));
     for (const block of full) {
       if (block.kind === 'text' && block.text.length > 0) texts.push(block.text);
       if (block.kind === 'thinking' && block.text.length > 0) thinking.push(block.text);
@@ -326,7 +396,8 @@ export function replyView(page) {
         const raw = isRecord(block.raw) ? block.raw : {};
         const fn = isRecord(raw.function) ? raw.function : raw;
         calls.push({
-          id: typeof raw.id === 'string' ? raw.id : '',
+          id: typeof raw.id === 'string' ? raw.id
+            : typeof raw.call_id === 'string' ? raw.call_id : '',
           name: typeof fn.name === 'string' ? fn.name : '',
           inputText: typeof fn.input === 'string' ? fn.input
             : typeof fn.arguments === 'string' ? fn.arguments
@@ -342,6 +413,9 @@ export function replyView(page) {
   if (Array.isArray(reply.content)) {
     const blocks = reply.content.map((block, index) => blockView(block, index, `content[${index}]`));
     return fromBlocks(blocks, 'reply', textOrNull(reply.stop_reason));
+  }
+  if (Array.isArray(reply.output)) {
+    return fromBlocks(outputBlocks(reply), '', responsesFinish(reply));
   }
   const choices = Array.isArray(reply.choices) ? reply.choices : [];
   const first = isRecord(choices[0]) ? choices[0] : null;
