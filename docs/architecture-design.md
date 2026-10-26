@@ -1112,6 +1112,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | `GET /api/requests/:id` | 单笔读数、费用状态、正文状态 | 无 |
 | `GET /api/requests/:id/body?from=0&to=40&if_reading=` | 分页取消息；`if_reading` 可选，携带时校验阅读版本 | 消息序号区间 |
 | `GET /api/requests/:owner/tools/:ord/result?if_reading=` | 按调用位置读取一个工具结果内容块与原始协议对象；token 必填 | 无 |
+| `GET /api/requests/:id/context-item?kind=&name=&if_reading=&cursor=` | 上下文类别的条目目录：已保存正文中的承载块与配对结果位置；token 必填 | 上限 80 条；keyset 游标绑定请求与类别 |
 | `GET /api/requests/:id/route` | 路由决策与尝试链，来自 `route_summary` | 无 |
 | `GET /api/stats` | 体积、覆盖位统计、健康状态、探针结果 | 无 |
 
@@ -1128,6 +1129,8 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 阅读版本（reading token）绑定一笔请求的轨迹输入与派生位置：输入修订、组代际、发布指针、正文状态与用途身份变化都会换发，只改费用不换。token 形如 `r1-` 加 64 位十六进制，只是读取身份，不是认证凭证。详情响应附带 `reading_token`；正文接口的 `if_reading` 可选，携带后与当前身份不符返回 409 `reading_changed`，畸形值 400。工具结果接口必须携带 token：它按 owner 的调用序号定位一次调用，再按记录的 `result_req + result_ord + result_path` 精确取一个内容块，路径只认 `request.messages[N](.content[M])?` 且 N 必须等于 `result_ord`，目标 canonical 与 actor 要和调用方一致；Anthropic 块须是配对 `tool_use_id` 的 `tool_result`，Chat 须是 `role=tool` 且 `tool_call_id` 匹配。关联未确认或组不 current 返回 `pending` / `ambiguous` / `unpaired`，目标不可读返回 `unavailable`，位置或身份不符返回 `invalid_location`；原因用固定词（`body_evicted`、`location_mismatch`、`call_id_mismatch` 等），不回传 SQL 错误。`resolved` 只代表关联已确认，`is_error` 三态表达工具是否报告失败。成功响应另带 `raw` 精确协议对象：Anthropic 是配对的 `tool_result` 块，Chat 是整条 `role=tool` 消息；其余状态 `raw` 为 null。alias 解析、身份与读取在同一个只读事务内完成。
 
 正文按消息序号区间取，一次 40 条，块解码在单次请求内复用缓存。实测取 40 条 0.13 ms，最重的一笔 526 块全取 13.7 ms。正文已回收时返回 `evicted` 与回收原因，不返回空。
+
+上下文明细的条目目录走 `GET /api/requests/:id/context-item`：按 `prompt.parts` 出现的类别（results、files、tools、system、chat、memory、skills）返回已保存正文里的条目位置，响应带解释规则版本 `CTX_EXPLAIN_VERSION`。results 与 files 用 `tool_call` 配对表列定位（结果请求、结果序号与内容块路径），不解压消息块；files 再按调用参数路径与条目名对齐，有对齐行只列对齐行，没有对齐行降级列出全部结果块并说明。tools 读骨架顶层的 `tools`/`functions` 字段；system 合并顶层 `system`/`instructions` 与 role=2 块；chat、memory 与 skills 给承载块并说明片段未分离。同名工具的多个配对结果全部保留；派生只确认一个结果位置的调用，其余结果不进目录，这是配对表的覆盖边界而非全集。类别白名单先于正文状态：未知 kind 返回 `unsupported` 与原因；正文 pending、evicted、summary 与协议不支持按事实返回，不用空数组冒充完整。骨架只解压一次取协议与顶层字段；每响应最多 80 条，keyset 游标绑定请求与类别，跨请求或跨类别复用一律拒绝。`if_reading` 必填，阅读依据变化 409，与正文、工具结果接口同一套语义；条目的正文按落点分流到正文分页与工具结果端点，目录本身不返回正文。alias 解析、身份与目录在同一只读事务内完成。
 
 过期状态要能被调用方区分。原始路由过期但摘要还在时，路由接口照常返回；摘要也没有时返回明确的过期标记，不返回空对象。
 

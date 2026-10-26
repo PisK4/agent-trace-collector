@@ -40,13 +40,13 @@ P1 交付明细视图。后端把 `safePrompt` 白名单扩到 item 级（`name/
 
 ## Consequences
 
-六类旧口径行与七类新口径行在同一会话中并存时各自正确渲染；`memory` 旧行不再标「记忆与技能」，显示精度损失换口径不再漂移。`PromptReading` 扩展后若 magpie 改 items 字段形状仍需跟改——这是吃 magpie 派生事实的固有成本。窄栏下小类压成横条、高占用时空闲块极窄是 squarify 固有形状，靠悬停与图例补位，不为此引入 min-width 撑破右栏预算。item 点击看正文（magpie 有）不做：item 名到正文块的映射有同名歧义与跨请求成本；重开条件是正文定位（`request.system`、消息 ordinal）出现稳定需求。
+六类旧口径行与七类新口径行在同一会话中并存时各自正确渲染；`memory` 旧行不再标「记忆与技能」，显示精度损失换口径不再漂移。`PromptReading` 扩展后若 magpie 改 items 字段形状仍需跟改——这是吃 magpie 派生事实的固有成本。窄栏下小类压成横条、高占用时空闲块极窄是 squarify 固有形状，靠悬停与图例补位，不为此引入 min-width 撑破右栏预算。item 点击看正文（magpie 有）当时不做：item 名到正文块的映射有同名歧义与跨请求成本；重开条件是正文定位（`request.system`、消息 ordinal）出现稳定需求。该缺口已由上述 drilldown note 以配对表定位交付，同名歧义以范围声明而非唯一映射解决。
 
 部分取代[计时与用量并入「用量与上下文」折叠行](../simplification/2026-10-24-usage-ledger-fold.md)的展开态构成区陈述；该篇的折叠键、收起摘要与「异常才提醒」规则不变，已互相链接。
 
 ## Related
 
-[上下文矩阵布局与点击明细提案](../../proposed/feature/2026-10-26-context-treemap-drilldown.md)拟调整面积分母、容器尺寸布局与点击阅读，部分重新评审本文的空闲区、标称宽和暂不提供正文点击的取舍。该提案尚未交付，本文继续描述现行实现。
+[上下文矩阵布局与点击明细](./2026-10-26-context-treemap-drilldown.md)已交付，部分取代本文关于非线性空闲区、面积下限、标称宽布局与暂不提供正文点击的决定：面积改为按真实 token 值铺满绘图区，tile 改为绝对定位 HTML button，内容块与图例项可点开明细弹窗。本文的类别来源、七类颜色身份与只读查询原则继续有效。
 
 ## Testing
 
