@@ -206,14 +206,25 @@ OMP（oh-my-pi）的 feature 语义进读模型与阅读层，五项随 [Agent N
 
 ## OTLP 两步走：Codex 条目与未知服务门铃（2026-10-26）
 
-本轮只有合成验收，真实流量验收未跑：Codex 的键集对齐父知识库固定提交源码考察（锚定 `2b5bdcf675`，漂移核对过上游 main `970111f6cb62`），没有本机抓样。合成验收进 `bun test`（`tests/otlp-ingest.test.ts` 11 例、`tests/web.test.ts` 标签断言，typecheck 通过），与真实验收分开呈报：
+合成验收进 `bun test`（`tests/otlp-ingest.test.ts` 12 例、`tests/web.test.ts` 标签断言，typecheck 通过）：
 
 | 验收项 | 合成结果 |
 | --- | --- |
-| Codex 建行 | `session_task.turn` span（按考察字段清单构造，值全自造）落 `via='otlp'`、`have=8`、`agent='codex'`，session 取 `thread.id`、模型取 `model`、四项用量取 `codex.turn.token_usage.*`；`model_served` 与 `stop` 保持 NULL，non_cached/reasoning/total 三项留原始层 |
-| 旁路任务 | `session_task.compact` 与 `session_task.user_shell` 不建行、不进未知桶（自有键族不在 LLM 形状判据里） |
+| Codex 建行 | `session_task.turn` span（字段清单取自真实流量，值自造）落 `via='otlp'`、`have=8`、`agent='codex'`，session 取 `thread.id`、模型取 `model`、四项用量取 `codex.turn.token_usage.*`；`model_served` 与 `stop` 保持 NULL，non_cached/reasoning/total 三项留原始层 |
+| originator 家族 | `codex_exec`、`codex_cli_rs`、`codex_tui`、`codex_vscode`、`codex_mcp_server`、`codex_app_server` 六个取值都命中同一规则；家族外取值（`codex_unknown_entry`）不建行、记门铃 |
+| 旁路任务 | `session_task.compact` 与 `session_task.user_shell` 不建行、不进未知桶 |
 | 门铃 | 未登记服务 span 落原始层，按服务与接收日聚合记一行 `service_not_registered` issue；同日重发不新增，跨日新记一行；接收结果带 `unknownServices` 计数 |
-| 版本 | `OTLP_MAPPING_VERSION=2`，既有两家规则行为不变（全量旧断言通过） |
+| 版本 | `OTLP_MAPPING_VERSION=3`，既有两家规则行为不变（全量旧断言通过） |
 | 页面 | `agentLabel` 带 `codex`，未知来源原样透出 |
 
-真实流量验收的做法与前提（`~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 直连、真实会话、重试与多候选下七个用量字段的回填语义核对）见[两步走决策](../.agents/notes/implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md)，跑完后在本节补真实结果。
+真实流量验收（2026-10-26，本机 `codex-cli 0.162.0-alpha.17.2`，`codex exec` 直连 `127.0.0.1:8320`，三轮真实会话）。前提：`~/.codex/config.toml` 加 `[otel.trace_exporter.otlp-http]` 段（配置前已备份为 `config.toml.bak-atc-20261026`），令牌由 `otlp.token` 读入 base64url 后写入，未落屏。
+
+| 验收项 | 真实结果 |
+| --- | --- |
+| 建行与用量 | `req_id 13565`：`agent='codex'`、`via='otlp'`、`have=8`、`body_state='summary'`；session 取 `thread.id`（`01a1765f-…`）；`in_tok 17234`、`cache_read 17152`、`out_tok 4` 与源 span 逐项相等，源 `total_tokens 17238 = 17234 + 4` |
+| 证据身份 | `request_evidence` 记 `source_kind='otlp_span'`、`merge_state='merged'`、`match_rule='trace_span.v1'` |
+| 门铃 | 规则修正前 `service/codex_exec/2026-10-26` 记过一行 `service_not_registered`（11:52:56）；修正后同一服务正常建行、不再记 |
+| 旁路任务 | 未触发：三轮会话都没有 `session_task.compact` / `user_shell`，该断言仍只有合成证据 |
+| 双通道并存 | 未验证：Codex 走 magpie 网关（`model_providers.magpie`），但本轮会话的 magpie 侧证据未与 OTLP 行对上，同会话两行形态留待下轮 |
+
+本轮真实流量推翻了三处源码考察读法，全部按实测改写并在同一变更里同步文档与 note：`protocol` 取值是 `binary` / `json`（写 `protobuf` 会在加载配置时报 `unknown variant` 直接拒启）；`service.name` 是 `codex_exec` 而非考察档案的 `codex_cli_rs`（`codex exec` 覆盖 originator）；`OTEL_SERVICE_NAME` 覆盖无效（带该变量重跑仍为 `codex_exec`）。教训写进 note 的 Risks：源码考察不能替代真实流量核对。

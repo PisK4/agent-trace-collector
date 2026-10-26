@@ -23,7 +23,7 @@ Status: implemented
 
 ### 对内：Codex 白名单条目
 
-`SPAN_RULES`（[mapping.ts](../../../../src/sources/otlp/mapping.ts)）加 `codex_cli_rs` 条目，`OTLP_MAPPING_VERSION=2`：按 span 名 `session_task.turn` 选取，session 取 `thread.id`、模型取 `model`（无回复侧模型与终止原因字段，保持 NULL）、四项用量取 `codex.turn.token_usage.*`；`non_cached` / `reasoning` / `total` 三项留原始层。`session_task.compact` / `review` / `user_shell` 不建行，旁路语义留给派生层；分类逻辑、unknown 桶与不猜归属行为不动。页面 `AGENT_LABELS` 带 `codex`；[运维手册](../../../../docs/operations.md)的 OTLP 接入一节带可照抄的 TOML 配置（三个 exporter 独立配、`otlp-http` 外标签枚举、`/v1/traces` 端点、Bearer 头），README 接入段同步。键集对齐父知识库的固定提交源码考察，未抓样实测；本机真实流量验收单独一轮（`~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 指向 127.0.0.1:8320，跑真实会话核对行落位与重试、多候选下的用量回填语义），与合成验收分开记录。
+`SPAN_RULES`（[mapping.ts](../../../../src/sources/otlp/mapping.ts)）加 Codex 条目，`OTLP_MAPPING_VERSION=3`：按 span 名 `session_task.turn` 选取，session 取 `thread.id`、模型取 `model`（无回复侧模型与终止原因字段，保持 NULL）、四项用量取 `codex.turn.token_usage.*`；`non_cached` / `reasoning` / `total` 三项留原始层。`service` 是一族取值而不是单值：Codex 的 `service.name` 取 originator，随入口变化（`codex exec` 为 `codex_exec`，交互 CLI 为 `codex_cli_rs`），`OTEL_SERVICE_NAME` 覆盖实测无效，所以 `SpanRule.service` 支持字符串数组、匹配走 `ruleOwnsService`。`session_task.compact` / `review` / `user_shell` 不建行，旁路语义留给派生层；分类逻辑、unknown 桶与不猜归属行为不动。页面 `AGENT_LABELS` 带 `codex`；[运维手册](../../../../docs/operations.md)的 OTLP 接入一节带可照抄的 TOML 配置（三个 exporter 独立配、`otlp-http` 外标签枚举、`/v1/traces` 端点、Bearer 头），README 接入段同步。键集对齐父知识库的固定提交源码考察，未抓样实测；本机真实流量验收单独一轮（`~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 指向 127.0.0.1:8320，跑真实会话核对行落位与重试、多候选下的用量回填语义），与合成验收分开记录。
 
 ### 对外：接入 profile 文档
 
@@ -61,19 +61,21 @@ ingest 接收结果带 `unknownServices` 计数；未登记 `service.name` 的�
 
 合成验收进 `bun test` 窄集（`tests/otlp-ingest.test.ts`、`tests/web.test.ts`），`bun run typecheck` 通过，锁定以下行为：
 
-1. Codex span（按考察档案字段清单构造）命中建行：`via='otlp'`、`have` 含位 8、`agent='codex'`、`session` 取 `thread.id`、模型与四项用量落位，未映射的三项用量留原始层。
+1. Codex span（按真实流量字段清单构造）命中建行：`via='otlp'`、`have` 含位 8、`agent='codex'`、`session` 取 `thread.id`、模型与四项用量落位，未映射的三项用量留原始层；originator 家族各取值都命中同一规则，家族外取值仍走门铃。
 2. `session_task.compact` 与 `session_task.user_shell` span 不建行、不进未知桶。
 3. 白名单外服务不建行：span 落原始层，按服务与日聚合记 `service_not_registered` issue（同日重发不新增，跨日新记一行）与 `unknownServices` 计数；无会话的 span 保持独立记录，不猜归属。
-4. `OTLP_MAPPING_VERSION` 为 2。
+4. `OTLP_MAPPING_VERSION` 为 3。
 5. 页面 codex 标签就位，未知来源原样透出。
 
-profile 文档的属性清单与 `SPAN_RULES` 键集一致、README 链接可达，是评审核对项。真实流量验收（本机 Codex 直连、重试与多候选下七个用量字段怎么计）单独一轮，结果与合成验收分开记录进[验收记录](../../../../docs/acceptance.md)。
+profile 文档的属性清单与 `SPAN_RULES` 键集一致、README 链接可达，是评审核对项。
+
+真实流量验收已跑（2026-10-26，本机 `codex-cli 0.162.0-alpha.17.2`，`codex exec` 直连采集器）：turn span 建行，用量与 span 原始值逐项相等（input 17234、cached 17152、output 4，total 17238 = 17234 + 4）。这一轮推翻了三处源码考察的读法，全部按实测改写：`protocol` 取 `binary` / `json`（`protobuf` 会在加载配置时被拒），`service.name` 是 `codex_exec` 而非 `codex_cli_rs`，`OTEL_SERVICE_NAME` 覆盖无效。`session_task.compact` 与 `user_shell` 本轮未触发，旁路断言仍只有合成证据。结果记[验收记录](../../../../docs/acceptance.md)。
 
 ## Consequences
 
 收益：OTLP 行落进本机在用的权威 harness；外部 harness 作者有可照做的对接说明，登记成本压到一格 service.name 加一行规则；新 harness 指向端点可被发现。代价与残留风险：
 
-- **Codex schema 漂移**：Aug 到 Oct 之间 turn span 的实现位置已迁移过一次。漂移兜底靠 unknown 桶与版本号；真实流量第一周值得盯。
+- **Codex schema 漂移**：Aug 到 Oct 之间 turn span 的实现位置已迁移过一次；本机实测又推翻了三处源码读法（协议枚举值、originator 取值、`OTEL_SERVICE_NAME` 覆盖）。源码考察不能替代真实流量核对，这条已在两轮之间付过一次代价。漂移兜底靠 unknown 桶与版本号；真实流量第一周值得盯。
 - **originator 边界**：白名单钉 `codex_cli_rs`，IDE 等入口的导出不命中。有意边界，profile 文档与接入文档写明。
 - **无正文行被误读为缺口**：otlp 期望只看 have 位 8、不标缺正文（既有测试锁定），profile 与接入文档各写一句，防止外部读者拿 Langfuse 的口径来对表。
 - **profile 的承诺成本**：文档对外后，语义改动按版本承诺走。第一版只承诺今天真能解析的键集，不写愿景键。

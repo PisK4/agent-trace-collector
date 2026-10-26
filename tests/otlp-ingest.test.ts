@@ -182,7 +182,7 @@ test('Codex turn span 落库：session 取 thread.id，四项用量取自有键�
   const store = fixture();
   try {
     const decoded = decodeTracesBody(tracesProtobuf([
-      { resource: { service: 'codex_cli_rs' }, spans: [CODEX_TURN] },
+      { resource: { service: 'codex_exec' }, spans: [CODEX_TURN] },
     ]), 'protobuf');
     const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
     expect(result.requestsCreated).toBe(1);
@@ -214,11 +214,10 @@ test('Codex turn span 落库：session 取 thread.id，四项用量取自有键�
   }
 });
 
-test('Codex 的 compact 与 user_shell 任务 span 不建行，也不进未知桶', () => {
-  const store = fixture();
+test('Codex 的 compact 与 user_shell 任务 span 不建行，也不进未知桶', () => {  const store = fixture();
   try {
     const decoded = decodeTracesBody(tracesProtobuf([
-      { resource: { service: 'codex_cli_rs' }, spans: [
+      { resource: { service: 'codex_exec' }, spans: [
         { ...CODEX_TURN, name: 'session_task.compact', spanId: SYNTH.spanTool },
         { ...CODEX_TURN, name: 'session_task.user_shell', spanId: SYNTH.spanInteraction },
       ] },
@@ -230,6 +229,36 @@ test('Codex 的 compact 与 user_shell 任务 span 不建行，也不进未知�
     expect(result.unknownShape).toBe(0);
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(0);
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(2);
+  } finally {
+    store.close();
+  }
+});
+
+test('Codex originator 家族各取值都命中同一条规则；家族外的服务仍走门铃', () => {
+  const family = ['codex_exec', 'codex_cli_rs', 'codex_tui', 'codex_vscode', 'codex_mcp_server', 'codex_app_server'];
+  for (const service of family) {
+    const store = fixture();
+    try {
+      const decoded = decodeTracesBody(tracesProtobuf([
+        { resource: { service }, spans: [CODEX_TURN] },
+      ]), 'protobuf');
+      const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
+      expect({ service, created: result.requestsCreated, unknownServices: result.unknownServices })
+        .toEqual({ service, created: 1, unknownServices: 0 });
+      expect((store.store.read.query('SELECT agent FROM request').get() as { agent: string }).agent).toBe('codex');
+    } finally {
+      store.close();
+    }
+  }
+  // 家族外取值不因「看起来像 Codex」而被收：仍只落原始层并记门铃。
+  const store = fixture();
+  try {
+    const decoded = decodeTracesBody(tracesProtobuf([
+      { resource: { service: 'codex_unknown_entry' }, spans: [CODEX_TURN] },
+    ]), 'protobuf');
+    const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
+    expect(result.requestsCreated).toBe(0);
+    expect(result.unknownServices).toBe(1);
   } finally {
     store.close();
   }

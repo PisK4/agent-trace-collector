@@ -28,7 +28,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import type { OtlpLogRecord, OtlpLogsPayload, OtlpTracesPayload } from './decode';
 import { idHex, nanoToMs } from './decode';
-import { OTLP_MAPPING_VERSION, SPAN_RULES, classifySpan, mapSpan } from './mapping';
+import { OTLP_MAPPING_VERSION, SPAN_RULES, classifySpan, mapSpan, ruleOwnsService } from './mapping';
 import { persistBodyTx } from '../../body';
 
 export type AcceptOtlpTracesResult = {
@@ -77,7 +77,7 @@ export function acceptOtlpTraces(
 
     for (const scope of payload.resourceSpans) {
       // 登记检查按 scope 做一次：ref_key 聚合到服务与接收日，主键去重防刷表。
-      const unregisteredDayKey = SPAN_RULES.some(entry => entry.service === scope.service)
+      const unregisteredDayKey = SPAN_RULES.some(entry => ruleOwnsService(entry, scope.service))
         ? null
         : `service/${scope.service ?? '(unset)'}/${localDay(now)}`;
       for (const span of scope.items) {
