@@ -59,7 +59,7 @@ magpie 另有 OTLP 导出，不作为证据源。它只发 `gen_ai.*`、`magpie.
 | --- | --- |
 | `block` | `hash`（字节哈希，只服务去重与还原）、`fingerprint`（语义指纹，服务派生比对）、`z`（zstd 压缩的消息）、`raw_size` |
 | `request_block` | `(req_id, ord)` 指向 `block`，`role` 用 0 user / 1 assistant / 2 system / 3 tool / 4 unknown |
-| `request.skeleton_z` | 去掉 `messages` 的请求骨架与回复，格式 1，带 `protocol`、`has_messages`、`redact_version` |
+| `request.skeleton_z` | 去掉消息数组的请求骨架与回复，格式 1，带 `protocol`、`messages_key`、`messages_form`、`has_messages`、`redact_version` |
 
 两个哈希分工明确。`hash` 只在字节完全相同时复用块；`fingerprint` 去掉 `cache_control`、`signature` 这类传输标记、键排序、统一消息片段形状后取 sha256，用来判断「这一笔是不是上一笔的续写」。拿 `hash` 做比对会把整条链读断：缓存断点移动、`content` 从数组换成字符串、harness 重新包装都会换掉字节。
 
@@ -128,6 +128,6 @@ token 只是读取身份，不是认证凭证。
 
 1. `agent` 标签由 magpie 给出，决定页面上的显示名。
 2. 输入解释层剥包装标签：`<session>` / `<user>` 剥壳留内容，`<system-reminder>` / `<transcript>` / `<command-*>` / OMP 的 `<job>` / `<file>` / `<chat>` 整段丢弃。未知标签整段保留并标 `unrecognized`，不丢用户正文。
-3. 协议适配器认 `anthropic` 与 `chat` 两种请求形状；其余协议正文原样保存，标 `unsupported`，没有逐条消息视图。
+3. 协议适配器认 `anthropic`、`chat` 与 `responses` 三种请求形状；其余协议（如 `gemini`）正文原样保存，标 `unsupported`，没有逐条消息视图。协议形状集中在一张表里，存储、恢复、派生与阅读共用。
 
 这三处都是单向适配：读懂某个 harness 写进 wire 的痕迹。新增 harness 支持意味着新增识别规则或协议适配器。

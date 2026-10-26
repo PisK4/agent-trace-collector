@@ -102,17 +102,19 @@ Codex 还会在请求里带 `additional_tools` 这类自有项，它不属于消
 
 ## 交付状态
 
-第一至三步已交付，第四步（`maintain reparse` 回填）与文档改写未开始。
+四步全部交付。
 
 - `src/protocol-shape.ts` 收下全部形状知识：消息数组键与形态、裸字符串输入的合成与还原、按 `type` 推断角色、文本块类型、回复侧调用、请求侧结果、增量输入判据。名单外协议一律返回空表。
 - 骨架新增 `messages_key` 与 `messages_form`，恢复按记录放回原键与原形态；旧骨架缺这两项时按 `messages`/`array` 读，`validateSkeleton` 同时校验裸字符串形态的条数必须是一条。
 - `persistBodyTx` 改走 `requestItemsOf`：`responses` 的 `input` 数组与裸字符串都拆进块库，骨架只留其余字段，恢复逐字相等。`CAPABLE_PROTOCOLS` 加 `responses`，`ADAPTER_VERSION` 升到 2，新写入的 `responses` 行 `parse_state` 为 `ok`。
 - 指纹、输入解释、角色编码、系统提示（含 `instructions`）、回复文本与形状、派生抽取（`replyCallsOf`、`requestResultsOf`）、结果定位（`request.input[N]`）都已按协议工作；前端以 `BodyPage.protocol` 为准取键，不再写死 `request.messages` 与 `request.system`。
 - 读侧渲染补齐：`replyView` 读 `reply.output`，块路径与序号按项定位（`reply.output[i]`，调用序号与 `tool_call.ord` 同口径）；`messageBlocks` 让无 `role` 的顶层项整项出块；`incomplete` 的原因抬到 finish，`completed` 不再触发「停止原因未知」。
-- 增量输入的判据 `isIncrementalRequest` 住在形状表，同步与切片两条扫描路径都把它当「不可比」：本笔关系落 `unknown`，也不充当后续请求的祖先。端到端断言已随拆块启用落地：增量笔关系为未知，其后的完整历史笔仍能确认到更早的完整祖先。
+- 增量输入的判据 `isIncrementalRequest` 住在形状表，同步与切片两条扫描路径都把它当「不可比」：本笔关系落 `unknown`，也不充当后续请求的祖先。端到端断言已随拆块启用落地。
 - `hook.ts` 搬运正文时补齐 `adapter_version`，按版本筛选的回填不会漏掉有正文的存活行。
+- `bun run maintain reparse --db <path> --protocol <name>` 按版本筛选逐行重写：严格 `validateSkeleton`、两种布局先完整恢复、`partial` 与损坏骨架拒绝并保留原状态、单行失败不影响其它行、重复执行无写入。命令与报告字段见[运维手册](../../../../docs/operations.md#reparse)。
+- 文档同步：`docs/architecture-design.md` 的协议适配一节、`docs/trace-format.md` 的骨架字段与适配器范围、`docs/operations.md` 的 reparse 一节、`docs/acceptance.md` 的合成验收轮次。
 
-回填之前，已有的 `responses` 行仍是旧布局：整段 `input` 留在骨架里、`parse_state` 停在 `unsupported`、`adapter_version` 为 1 或 NULL。`readBodyTx` 能读它们，但逐条消息视图、分页与块级去重要等第四步重写布局后才生效。
+本机库里已有的 `responses` 行尚未执行回填，Codex 会话仍停在旧布局；真实流量验收记录在验收文档里单独标为未做。
 
 ## Alternatives considered
 

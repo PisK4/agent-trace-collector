@@ -175,13 +175,19 @@ test('正文页暴露协议名，系统文本把 instructions 并入其中', () 
   try {
     const id = seedPurposeRequest(f.store, {
       convKey: 'conv-shape-page', protocol: 'responses',
-      request: { instructions: 'be brief', input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }] },
+      request: {
+        instructions: '<skills>\n- anysearch: 实时搜索\n</skills>',
+        input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+      },
       reply: { id: 'resp_1', status: 'completed', output: [] },
     });
     const page = getBodyPage(f.store, id, 0, 0)!;
     expect(page.protocol).toBe('responses');
-    expect(page.request_fields).toMatchObject({ instructions: 'be brief' });
+    expect(page.request_fields).toMatchObject({ instructions: '<skills>\n- anysearch: 实时搜索\n</skills>' });
     expect(page.reply).toMatchObject({ id: 'resp_1' });
+    // 能力视图从 instructions 读技能：只查 system 会让技能永远停在 empty。
+    expect(page.capabilities.skills.state).toBe('present');
+    expect(page.capabilities.skills.items.map(item => item.name)).toEqual(['anysearch']);
   } finally {
     f.close();
   }

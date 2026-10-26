@@ -712,7 +712,7 @@ CREATE INDEX i_block_fp ON block(fingerprint);
 
 CREATE TABLE request_block (
   req_id INTEGER NOT NULL,
-  ord    INTEGER NOT NULL,             -- messages 数组下标
+  ord    INTEGER NOT NULL,             -- 消息数组下标：Anthropic/Chat 是 messages，Responses 是 input
   role   INTEGER NOT NULL,             -- 0 user / 1 assistant / 2 system / 3 tool
   block  INTEGER NOT NULL,             -- block.id
   PRIMARY KEY (req_id, ord)
@@ -727,6 +727,8 @@ CREATE INDEX i_rb_block ON request_block(block);
 不维护 `refs` 引用计数。计数需要与引用删除在同一事务内递减，任何一次中断或迁移都会留下漂移，而对不上账时无法判断是计数错还是数据错。
 
 孤儿改由候选集判定：回收某一天时，先取出该天所有引用指向的块 id，只对这个子集做反连接，没有引用的删掉。全库反连接实测 191 ms（11,187 块 / 971,635 引用），会随规模线性增长；候选集把 N 压到当天涉及的块数，量级完全不同，也不存在漂移。
+
+骨架记录消息数组在原始协议对象里的键与形态（`messages_key` 是 `messages` 或 `input`，`messages_form` 是 `array` 或 `string`），恢复时按这两项把数组放回原键，不按协议名二次推断。Responses 的裸字符串 `input` 合成一条用户消息存块，恢复时逐字还原成字符串。旧骨架缺这两项时按 `messages` / `array` 读。
 
 ### 不做规范哈希
 
@@ -767,7 +769,7 @@ harness 的 Title Generator 是旁路请求：Claude Code 与 OMP 的输入/回�
 
 算法：比较两笔的**语义指纹**序列共同前缀。上一笔的序列是完整前缀时，取本笔的后缀作为新增，`prev_relation = confirmed`。比对不能拿块哈希做，见下一节。
 
-"可比较"由持久化的消息数量判定：`body_state` 为 `available`/`partial`、骨架存在、`msg_count` 为非负整数，且块引用的数量、ordinal 连续性与指纹都符合。真实空消息数组是有效证据，整笔算新增并可以占主链根；没有骨架、缺消息引用或 `msg_count` 为 NULL 的行不可比较，记 `unknown` 并保留旧摘要。
+"可比较"由持久化的消息数量判定：`body_state` 为 `available`/`partial`、骨架存在、`msg_count` 为非负整数，且块引用的数量、ordinal 连续性与指纹都符合。真实空消息数组是有效证据，整笔算新增并可以占主链根；没有骨架、缺消息引用或 `msg_count` 为 NULL 的行不可比较，记 `unknown` 并保留旧摘要。带 `previous_response_id` 的 Responses 请求同样不可比较：本笔只带增量，共同前缀比较会把无关请求连成父子。
 
 零长度序列不当父节点：完整前缀要求公共长度大于零。空序列是任何序列的前缀，认它当父节点等于用"这一笔没有消息"证明"本笔续自它"。
 
@@ -817,7 +819,7 @@ harness 包装留在指纹里：指纹只归一传输标记与内容形状，不
 
 ### 工具配对
 
-从回复里取 `tool_use`（Anthropic）或 `tool_calls`（OpenAI）的 id，到后续同会话同 `actor` 的请求里按 id 找 `tool_result` / `role=tool`。配对是可变状态：
+从回复里取 `tool_use`（Anthropic）、`tool_calls`（Chat）或 `function_call` / `custom_tool_call`（Responses）的 id，到后续同会话同 `actor` 的请求里按 id 找 `tool_result` / `role=tool` / `function_call_output`。配对是可变状态：
 
 ```sql
 CREATE TABLE tool_call (
@@ -857,20 +859,26 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 `reply_state = absent` 与 `parse_state = ok` 可以同时成立，这是最常见的一类中间态。
 
-第一版实现 `anthropic` 与 `chat` 两个适配器，覆盖当前全部流量。`responses` 与 `gemini` 先保存、标记 `unsupported`，不显示成零消息。
+已实现 `anthropic`、`chat` 与 `responses` 三个适配器。`gemini` 先保存、标记 `unsupported`，不显示成零消息。
 
-映射表的形状（以已实现的两个为例）：
+协议形状（消息数组键、文本块类型、工具调用与结果的提取、系统提示来源、增量输入判据）集中在 `src/protocol-shape.ts` 一张表里。存储拆块、无损恢复、解析状态、派生抽取、结果定位与页面取键都读同一份事实，名单外协议返回空表，不按字段猜协议。
 
-| 统一字段 | Anthropic | OpenAI Chat |
-| --- | --- | --- |
-| 角色 | `role` | `role`，工具结果用 `role: tool` |
-| 文本 | `content[].type == text` | `content` 字符串或 `content[].type == text` |
-| 工具调用 | `content[].type == tool_use`，id 在 `id` | `message.tool_calls[]`，id 在 `id` |
-| 工具结果 | `content[].type == tool_result`，指向 `tool_use_id` | `role: tool`，指向 `tool_call_id` |
-| 推理 | `content[].type == thinking` | `reasoning_content` |
-| 系统提示 | 顶层 `system` | `messages[].role == system` |
+映射表的形状：
 
-未实现的两种记录在案，接入时补：Responses 用 `input` / `output` / `instructions`，工具通过 `function_call` / `function_call_output` 与 `call_id` 关联；Gemini 用 `contents[].parts` 与 `systemInstruction`。Responses 的前序响应引用不能解释为本笔包含全会话历史。
+| 统一字段 | Anthropic | OpenAI Chat | OpenAI Responses |
+| --- | --- | --- | --- |
+| 消息数组 | `messages` | `messages` | `input`，可以是数组或裸字符串 |
+| 角色 | `role` | `role`，工具结果用 `role: tool` | `message` 项的 `role`；其余项按 `type` 推断：调用与推理记 assistant，结果记 tool |
+| 文本 | `content[].type == text` | `content` 字符串或 `content[].type == text` | `content[].type == input_text` / `output_text` |
+| 工具调用 | `content[].type == tool_use`，id 在 `id` | `message.tool_calls[]`，id 在 `id` | 回复 `output[].type == function_call` / `custom_tool_call`，id 在 `call_id`，参数在 `arguments` / `input` |
+| 工具结果 | `content[].type == tool_result`，指向 `tool_use_id` | `role: tool`，指向 `tool_call_id` | `input[].type == function_call_output` / `custom_tool_call_output`，指向 `call_id`，正文在 `output` |
+| 推理 | `content[].type == thinking` | `reasoning_content` | `output[].type == reasoning`，正文在摘要项里 |
+| 系统提示 | 顶层 `system` | `messages[].role == system` | 顶层 `instructions`，与 `developer` 消息同源合并 |
+| 回复完成状态 | `stop_reason` | `choices[].finish_reason` | 顶层 `status`；只有 `completed` 判为正常收尾 |
+
+Gemini 用 `contents[].parts` 与 `systemInstruction`，接入时补。
+
+Responses 的前序响应引用（`previous_response_id`）不能解释为本笔包含全会话历史：这时 `input` 只是新增部分，链比对把它当不可比，关系落 `unknown`，也不让它充当后续请求的祖先。
 
 ### 输入解释与能力阅读
 
@@ -893,7 +901,7 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 ### 轨迹阅读布局
 
-中栏每个步骤占 36px 一行；序号槽整个当前窗口共用一个宽度，基准 28px，按窗口内最大序号的位数以等宽字体的 `ch` 加内距扩展，不按单行数字各自撑宽。行内显示窗口内请求序号、英文参与角色标签（`User`/`Assistant`/`Tool`/`System`，辅助与记录用 `Aux`/`Event`）、工具身份着色 chip 与内容摘要：调用行 chip 是工具名，结果行按配对三级显示调用方工具名加参数摘要、仅工具名或中性 `Tool result`；色类只包工具名，工具按 Read/Edit/Write/Bash/Skill/Agent 六色相加中性青灰着色，行内摘要按工具分派（文件参数 basename 化、Read 区间与 Edit 行数是显示折算），不在字符数上截断、超长由列宽省略号处理，`is_error=true` 的结果行整行 warn 软色，悬停给完整参数 JSON 或完整结果正文。步骤携带协议来源：输入消息指向 `request.messages[N]`，顶层 System 指向 `request.system`，回复文本与未知块指向各自内容块（如 `reply.content[i]`、`reply.choices[0].message.tool_calls[i]`）。点击后在右栏定位到该来源：调用步骤与已配对的结果步骤（经 `tool_results` 反向索引取得调用方）直达工具配对页，未配对的结果步骤、输入与 System 步骤打开正文，可信 delta 内的消息级 System 与工具结果内容块各占一行，记录或辅助步骤打开请求读数；右栏已折叠时自动展开。配对页是工具四页的第三页：Call 面板在上、Result 面板在下，默认同时展开，复用正文详情的 `body-panel`/`pre.raw` 组件语言，两端面板头用与中栏同款的工具色类 chip（配对 result 沿用 call 的颜色，未确认保持中性），Edit 调用的 `old_string`/`new_string` 各渲染成红绿对照块、原始参数 JSON 折叠保留，`is_error=true` 的 Result 面板给 warn 软色；进入配对页自动发起一次结果读取（已缓存不重复），调用方在窗口外时按需读取该请求；两端身份与承载请求只以文本标注，不提供跳转到别处阅读的按钮。选中步骤是唯一高亮，请求组只保留轻微边界。顶层 System 的显示由阅读层按同 actor 已确认前驱比较控制：首个已加载主请求提供当前上下文，前驱可读且同值不重复，变化才标明；比较只在阅读层发生，不改变消息 ord、指纹或前驱关系。异常作为记录步骤保留，列表不重复附加状态、结果请求链接、计量占位或展开箭头。结构列表展示已缓存消息的有序并集，相邻序号之间的空洞标明未读取；可信增量未完成或失败时提供显式续读入口（每轮两片，失败不推进消费位置），连续历史上界仍由结构游标表达。工具配对与结果读取都在右栏就地完成，加载更早记录使用行按钮的稳定步骤键保持滚动位置。历史区只保留加载入口、读取反馈与常驻的顺序说明。右栏页签（读数/正文/工具/路由）可由 URL 的 `tab` 参数声明：初始化与历史恢复解析合法页签，无效或缺省落读数；切会话与刷新保留当前页签，仍清除请求内的步骤与工具选择。当前页签为路由时，导航完成处（进入、切会话、刷新、定位）按选中请求自动读取路由，无当前请求不预取，读取失败再次进入页签可重试。用量与上下文折叠行的计时与用量各按标签和值两列展示，数值列右对齐成列，样式只作用于读数范围，不改变其他 chain 文字详情的排版；首 token 与首个文本是两个测量事件，分别成行；构成条与图例共用正值类别，图例按 token 数降序，没有正值类别时不留空的条和图例，总量、窗口、占用与估计说明保留。
+中栏每个步骤占 36px 一行；序号槽整个当前窗口共用一个宽度，基准 28px，按窗口内最大序号的位数以等宽字体的 `ch` 加内距扩展，不按单行数字各自撑宽。行内显示窗口内请求序号、英文参与角色标签（`User`/`Assistant`/`Tool`/`System`，辅助与记录用 `Aux`/`Event`）、工具身份着色 chip 与内容摘要：调用行 chip 是工具名，结果行按配对三级显示调用方工具名加参数摘要、仅工具名或中性 `Tool result`；色类只包工具名，工具按 Read/Edit/Write/Bash/Skill/Agent 六色相加中性青灰着色，行内摘要按工具分派（文件参数 basename 化、Read 区间与 Edit 行数是显示折算），不在字符数上截断、超长由列宽省略号处理，`is_error=true` 的结果行整行 warn 软色，悬停给完整参数 JSON 或完整结果正文。步骤携带协议来源：输入消息按协议指向 `request.messages[N]` 或 `request.input[N]`，顶层 System 指向 `request.system` 或 `request.instructions`，回复文本与未知块指向各自内容块（如 `reply.content[i]`、`reply.choices[0].message.tool_calls[i]`、`reply.output[i]`）。点击后在右栏定位到该来源：调用步骤与已配对的结果步骤（经 `tool_results` 反向索引取得调用方）直达工具配对页，未配对的结果步骤、输入与 System 步骤打开正文，可信 delta 内的消息级 System 与工具结果内容块各占一行，记录或辅助步骤打开请求读数；右栏已折叠时自动展开。配对页是工具四页的第三页：Call 面板在上、Result 面板在下，默认同时展开，复用正文详情的 `body-panel`/`pre.raw` 组件语言，两端面板头用与中栏同款的工具色类 chip（配对 result 沿用 call 的颜色，未确认保持中性），Edit 调用的 `old_string`/`new_string` 各渲染成红绿对照块、原始参数 JSON 折叠保留，`is_error=true` 的 Result 面板给 warn 软色；进入配对页自动发起一次结果读取（已缓存不重复），调用方在窗口外时按需读取该请求；两端身份与承载请求只以文本标注，不提供跳转到别处阅读的按钮。选中步骤是唯一高亮，请求组只保留轻微边界。顶层 System 的显示由阅读层按同 actor 已确认前驱比较控制：首个已加载主请求提供当前上下文，前驱可读且同值不重复，变化才标明；比较只在阅读层发生，不改变消息 ord、指纹或前驱关系。异常作为记录步骤保留，列表不重复附加状态、结果请求链接、计量占位或展开箭头。结构列表展示已缓存消息的有序并集，相邻序号之间的空洞标明未读取；可信增量未完成或失败时提供显式续读入口（每轮两片，失败不推进消费位置），连续历史上界仍由结构游标表达。工具配对与结果读取都在右栏就地完成，加载更早记录使用行按钮的稳定步骤键保持滚动位置。历史区只保留加载入口、读取反馈与常驻的顺序说明。右栏页签（读数/正文/工具/路由）可由 URL 的 `tab` 参数声明：初始化与历史恢复解析合法页签，无效或缺省落读数；切会话与刷新保留当前页签，仍清除请求内的步骤与工具选择。当前页签为路由时，导航完成处（进入、切会话、刷新、定位）按选中请求自动读取路由，无当前请求不预取，读取失败再次进入页签可重试。用量与上下文折叠行的计时与用量各按标签和值两列展示，数值列右对齐成列，样式只作用于读数范围，不改变其他 chain 文字详情的排版；首 token 与首个文本是两个测量事件，分别成行；构成条与图例共用正值类别，图例按 token 数降序，没有正值类别时不留空的条和图例，总量、窗口、占用与估计说明保留。
 
 桌面布局的详情栏范围为 280–640px，并给中栏保留至少 320px；默认宽度为当前窗口允许的最大值。拖拽与方向键调整当前页的首选宽度，方向键每次调整 20px，双击恢复可用最大宽度；窗口缩放和侧栏折叠后重新夹取，首选宽度只存内存。窗口宽度不超过 1000px 时三栏按文档流堆叠，分隔线隐藏。
 
