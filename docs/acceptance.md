@@ -263,7 +263,7 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 
 ## 上下文分布图重排与点击明细（合成，2026-10-27）
 
-本轮只做合成验收，全部进 `bun test`（810 例全绿，`bun run typecheck` 通过，`bun run verify:notes` 通过），没有跑真实统计核对，也没有取得浏览器截图。验收对象是布局重排（真实值面积、HTML tile）与点击明细（目录查询、明细弹窗），见 [Agent Note：上下文矩阵布局与点击明细](../.agents/notes/implemented/feature/2026-10-26-context-treemap-drilldown.md)。
+本轮只做合成验收，全部进 `bun test`（810 例全绿，`bun run typecheck` 通过，`bun run verify:notes` 通过），没有跑真实统计核对。验收对象是布局重排（真实值面积、HTML tile）与点击明细（目录查询、明细弹窗），见 [Agent Note：上下文矩阵布局与点击明细](../.agents/notes/implemented/feature/2026-10-26-context-treemap-drilldown.md)。
 
 | 验收项 | 合成结果 |
 | --- | --- |
@@ -276,4 +276,16 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 | 弹窗渲染 | iid 解析（tag 可空、名字段允许含分隔符）；单项默认展开、集合块列成员；状态行与 notes 原文呈现；文本直接显示、图片与密封推理按事实标注、非文本折叠为原始对象 JSON；读取失败与 409 显示可重试说明 |
 | 页面集成 | tile、图例项与内容列表行同为 button 走同一选择动作；`context-detail.js` 进静态白名单；换请求重绘关闭弹窗 |
 
-真实统计核对（生产库快照上对照 magpie 分解）与浏览器视觉验收（亮暗主题、窄栏、触屏目标尺寸、截图）未执行，合成 DOM 断言不代表视觉通过。
+真实统计核对（生产库快照上对照 magpie 分解）未执行；触屏目标尺寸与像素截图未取得（见下）。
+
+### 浏览器 DOM 验收（合成，2026-10-27）
+
+临时 collector（端口 8771，合成库四笔请求 + 配对 + 七类 parts，生产采集器未动）+ ego lite 逐项断言。像素截图仍不可用：`Page.captureScreenshot` 对该页持续超时（与 2026-10-26 轮一致），视觉项以 DOM 几何与交互断言代替，不代表视觉通过。
+
+| 验收项 | 浏览器实测 |
+| --- | --- |
+| tile 几何 | req 1 十四个 tile 两两零重叠、零越界（容器 576×240）；aria-label 含名称、tokens、占比与「打开明细」 |
+| 图例数值 | 七类 55.1k/47.4k/27.0k/12.0k/8.0k/6.0k/4.0k 与合成 parts 一致 |
+| 明细弹窗 | tile/图例/内容列表行三种入口同动作；item 命中对齐显示「片段」并默认展开，未对齐降级列全部结果块并带说明；类级弹窗列承载块与解释规则 note；条目正文经工具结果端点读出，非文本折叠为原始对象；Esc 关闭后焦点回到触发 tile，键盘 Enter 等效 |
+| 三态读数 | 高占用 95.0% 出「占满」warn；窗口未知不显示占用率；files 两大一碎并出「其余文件引用 30 项」成员集合块与类级余量块 |
+| 主题与窄栏 | 暗色 tile 深底浅字（表面 rgb(16,25,35)）；620px 视口 ResizeObserver 重排（34 → 6 tile） |
