@@ -6,6 +6,8 @@ import { resolveRequestId } from './store';
 import { ADAPTER_VERSION, parseProtocol } from './protocols';
 import { skeletonLike, validateSkeleton } from './skeleton';
 import { fingerprintHash, messageFingerprint } from './fingerprint';
+import { messageOfBlock } from './body-cache';
+import type { BodyReadCache } from './body-cache';
 import { markRequestInputTx } from './derive/state';
 
 /**
@@ -232,8 +234,15 @@ export function readBodyMetaTx(db: Database, reqId: number): BodyMeta | null {
   };
 }
 
-/** 完整读出已保存正文；结构不一致返回 null，不补空位也不抛错。 */
-export function readBodyTx(db: Database, reqId: number): StoredBody | null {
+/**
+ * 完整读出已保存正文；结构不一致返回 null，不补空位也不抛错。
+ *
+ * `cache` 是可选的一次派生作用域读取上下文：消息块按内容哈希复用解压与
+ * JSON 解析，跨请求、跨消费者共享。缓存不替代骨架、状态与引用校验，
+ * 命中前仍逐项检查当前读取条件。
+ */
+export function readBodyTx(db: Database, reqId: number,
+  cache?: BodyReadCache): StoredBody | null {
   const meta = readBodyMetaTx(db, reqId);
   if (meta === null) return null;
   if (!meta.hasMessages) {
@@ -250,15 +259,20 @@ export function readBodyTx(db: Database, reqId: number): StoredBody | null {
   }
   let messages: unknown[] = [];
   if (meta.messageCount > 0) {
-    const refs = db.query<{ z: Uint8Array }, [number]>(`
-      SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    const refs = db.query<{
+      id: number; hash: string; z: Uint8Array; raw_size: number;
+    }, [number]>(`
+      SELECT b.id AS id, hex(b.hash) AS hash, b.z AS z, b.raw_size AS raw_size
+      FROM request_block rb JOIN block b ON b.id = rb.block
       WHERE rb.req_id=? ORDER BY rb.ord`).all(reqId);
     if (refs.length !== meta.messageCount) return null;
-    try {
-      messages = refs.map(ref => JSON.parse(zstdDecompressSync(ref.z).toString('utf8')));
-    } catch {
-      return null;
+    const decoded: unknown[] = [];
+    for (const ref of refs) {
+      const message = messageOfBlock(ref, cache);
+      if (message === undefined) return null;
+      decoded.push(message);
     }
+    messages = decoded;
   }
   return {
     protocol: meta.protocol,
