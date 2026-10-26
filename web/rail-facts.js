@@ -373,7 +373,7 @@ export function usageFoldHtml(r, detail, meta = null) {
     const mapHtml = positive.length > 0 ? contextMapShellHtml(p, r.req_id) : '';
     const rowsHtml = positive.length > 0 ? contextRowsHtml(p, r.req_id) : '';
     const legend = positive.length > 0
-      ? `<div class="comp-legend">${[...positive].sort((a, b) => b.tokens - a.tokens).map(x => `<span class="name"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></span>
+      ? `<div class="comp-legend">${[...positive].sort((a, b) => b.tokens - a.tokens).map(x => `<button type="button" class="name" data-ctx-kind="${esc(String(x.kind))}" data-ctx-req="${r.req_id}" aria-label="${esc(partLabel(String(x.kind)))}，打开明细"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></button>
         <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>`
       : '';
     const full = p.ratio !== null && p.ratio >= 0.9 ? '占满' : p.ratio !== null && p.ratio >= 0.75 ? '接近占满' : '';

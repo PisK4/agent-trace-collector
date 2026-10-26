@@ -17,9 +17,11 @@ import {
   deltaOrdinals, messageCopyText, messagesKeyOf, replyView, toolEntries,
 } from './body-model.js';
 import { esc } from './html.js';
+import { partLabel } from './parts.js';
 import { createReaderStore } from './reader-store.js';
 import { initLayout, openRail } from './layout.js';
-import { fillContextMap } from './context-map.js';
+import { fillContextMap, iidOf, itemLabel } from './context-map.js';
+import { createContextMenu, iidParse } from './context-detail.js';
 import {
   kk, ledgerRowsHtml, railFactsHtml, readingChangedNote, renderAttemptChain,
   resolveSelectedSource, secs, structureFoldHtml, systemContextOf, toolOverviewHtml,
@@ -62,6 +64,11 @@ if (typeof document !== 'undefined') {
   const folds = new Map();
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
   const structureSelected = new Map();
+  /**
+   * 上下文明细弹窗：tile、图例与列表行共用的选择动作。读取走注入的同一 fetcher，
+   * 代次捕获在模块内，晚到响应不进已切换的弹窗。
+   */
+  const contextMenu = createContextMenu({ fetcher: (/** @type {string} */ url) => fetch(url) });
   /** @type {{kind: string, param: string, label: string, loading: boolean, error: string | null, data: import('../src/queries/session-summary').SummaryEntries | null} | null} 会话汇总条目列表：点开条目后右栏的支撑记录清单。 */
   let summaryList = null;
 
@@ -875,6 +882,8 @@ if (typeof document !== 'undefined') {
     }
     // 轮次列表重算后选中的轮不在了：先清再渲染，同 tool-gone 的立场。
     if (state.turn !== null && turnOf(state.turn) === null) dispatch({ kind: 'turn-gone' });
+    // 弹窗身份绑定请求：换请求或清空选择的重绘把它关掉，同请求重绘不受影响。
+    contextMenu.closeIfFor(state.reqId ?? -1);
     el('rail-head').innerHTML = railHead();
     const rail = el('rail-body');
     // 滚动只在「同请求同页签的重绘」里保持；页签切换与换请求都回到顶部，行为可预期。
@@ -1172,6 +1181,46 @@ if (typeof document !== 'undefined') {
 
   document.addEventListener('click', (e) => {
     const t = /** @type {HTMLElement} */ (e.target);
+    // 上下文明细：tile、图例与列表行带同一组 data-ctx-*，统一从这里解析范围。
+    // 范围以统计为准（kind + item 身份），集合块与整类按类别取目录。
+    const ctxSource = /** @type {HTMLElement | null} */ (t.closest('[data-ctx-kind]'));
+    if (ctxSource !== null) {
+      const detail = currentRead()?.detail ?? null;
+      // reading_token 在 ReadingDetail 上；页面侧按未知字段读取，缺 token 不响应。
+      const token = /** @type {{reading_token?: unknown} | null} */ (detail)?.reading_token;
+      if (detail !== null && typeof token === 'string') {
+        const kind = ctxSource.getAttribute('data-ctx-kind') ?? '';
+        const key = ctxSource.getAttribute('data-ctx-key');
+        const scope = ctxSource.getAttribute('data-ctx-scope');
+        const reqId = Number(ctxSource.getAttribute('data-ctx-req') ?? state.reqId);
+        const part = (detail.prompt?.parts ?? []).find(p => p.kind === kind) ?? null;
+        const parsed = key !== null && key !== '' ? iidParse(key) : null;
+        /** @type {{name: string | null, tag: string | null, label: string, tokens: number | null, members?: string[]}} */
+        let sel = { name: null, tag: null, label: partLabel(kind), tokens: part?.tokens ?? null };
+        const itemOfKey = () => (part?.items ?? []).find(x => iidOf(kind, x) === key) ?? null;
+        if (scope === 'item' && parsed !== null) {
+          const it = itemOfKey();
+          sel = { name: parsed.name, tag: parsed.tag,
+            label: it !== null ? itemLabel(it) : parsed.name, tokens: it?.tokens ?? null };
+        } else if (scope === 'rest' || scope === 'category') {
+          // 集合块与整类：目录按类别范围取，成员身份只在弹窗里标注。
+          const its = (ctxSource.getAttribute('data-ctx-its') ?? '').split('\u0002').filter(s => s !== '');
+          sel = { name: null, tag: null,
+            label: ctxSource.querySelector('.ctx-tname')?.textContent ?? partLabel(kind),
+            tokens: part?.tokens ?? null, ...(its.length > 0 ? { members: its } : {}) };
+        } else if (ctxSource.classList.contains('ctx-row') && parsed !== null) {
+          const it = itemOfKey();
+          sel = { name: parsed.name, tag: parsed.tag,
+            label: it !== null ? itemLabel(it) : parsed.name, tokens: it?.tokens ?? null };
+        }
+        contextMenu.openDetail({
+          reqId, kind, name: sel.name, tag: sel.tag, label: sel.label,
+          tokens: sel.tokens, token,
+          ...(sel.members !== undefined ? { members: sel.members } : {}),
+        }, ctxSource);
+      }
+      return;
+    }
     // 会话 ID 复制钮在会话头 facts 行里，随重绘重建，走委托。
     if (t.closest('#copy-session')) { void copySessionId(); return; }
     // 收起行里的失败数在 <summary> 内：先于 summary 早退处理，阻止折叠开合，
@@ -1445,6 +1494,8 @@ if (typeof document !== 'undefined') {
     const target = /** @type {HTMLElement} */ (e.target);
     if (target.matches('input, textarea, summary')) return;
     if (e.key === 'Escape') {
+      // 明细弹窗先于一切页面内退出：它是覆盖层，Esc 语义最直接。
+      if (contextMenu.isOpen()) { contextMenu.close(); return; }
       // 条目列表先于工具页退出：它是从折叠区临时打开的会话级视图。
       if (summaryList !== null) { summaryList = null; renderRail(); return; }
       dispatch({ kind: 'close-tool', andTab: true });

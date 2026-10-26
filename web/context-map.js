@@ -253,14 +253,14 @@ export function contextRowsHtml(p, reqId) {
     const xn = it.n !== null && it.n > 1 && it.tag !== 'turns' && it.tag !== 'more' ? `×${it.n}` : '';
     const tg = tagText(it.tag);
     const title = `${partLabel(kind)} · ${itemLabel(it)} · ${kk(it.tokens)} tokens · ${Math.round(it.tokens / sum * 100)}%`;
-    return `<div class="ctx-row" data-ctx-key="${esc(iidOf(kind, it))}" title="${esc(title)}">
+    return `<button type="button" class="ctx-row" data-ctx-key="${esc(iidOf(kind, it))}" data-ctx-kind="${esc(kind)}" data-ctx-req="${reqId}" aria-label="${esc(title)}，打开明细" title="${esc(title)}">
       <i class="dot" style="background:${partColor(kind)}"></i>
       <span class="nm"><b>${esc(base)}</b>${dir !== '' ? ` <small>${esc(dir)}</small>` : ''}</span>
       ${xn !== '' ? `<span class="xn">${xn}</span>` : ''}
       ${tg !== '' ? `<span class="tg">${esc(tg)}</span>` : ''}
       <span class="bar"><i style="width:${Math.max(2, it.tokens / most * 100).toFixed(1)}%;background:${partColor(kind)}"></i></span>
       <span class="v">${kk(it.tokens)}</span>
-    </div>`;
+    </button>`;
   };
   const head = rows.slice(0, 8).map(rowHtml).join('');
   const tail = rows.slice(8);
