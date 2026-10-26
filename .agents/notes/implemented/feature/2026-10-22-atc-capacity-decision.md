@@ -32,7 +32,7 @@ Status: implemented
 - Part V（v6 代际与切片派生）按产品决定触发，不由这份决策触发。5 rps 是必须达成的产品目标，本轮只投递 3.39 rps；主因是 `drainDeriveTx` 每个脏组整组重算。这个触发理由写在这里，与决策文件的 `decision` 分开，脚本不代签。
 - 决策只在预算与报告同时存在且形状合法时生成；两侧任一缺失由加载器退出 2，不产生半份决策。
 
-[派生正文重复解压修复提案](../../proposed/bug-fix/2026-10-26-derive-body-decompression-amplification.md)补充活跃长组的读取放大证据，拟先减少正文提取成本；本篇容量结论仍有效，提案未实施，也不代替容量复测。
+[派生正文重复解压修复提案](../../proposed/bug-fix/2026-10-26-derive-body-decompression-amplification.md)补充活跃长组的读取放大证据，首步的块级读取复用已交付；本篇容量结论仍有效，端到端收益与真实流量验收未完成，也不代替容量复测。
 
 ## Testing
 
