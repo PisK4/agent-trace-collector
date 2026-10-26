@@ -88,7 +88,7 @@ magpie 另有 OTLP 导出，但它的属性白名单里没有 `response_id`、`c
 
 ## trace 模型
 
-记录单位是一笔请求，阅读单位是会话。数据形状的完整说明见 [ATC trace 格式](docs/trace-format.md)，术语边界见 [CONTEXT.md](CONTEXT.md)。六个概念够起步：
+记录单位是一笔请求，阅读单位是会话。数据形状的完整说明见 [ATC trace 格式](docs/trace-format.md)，术语边界见 [领域术语表](GLOSSARY.md)。下面六个概念只做起步导读，字段定义以 trace 格式为准：
 
 | 概念 | 含义 |
 | --- | --- |
@@ -155,7 +155,7 @@ bun run verify:notes     # 提交前
 - [OTLP exporter 接入 profile](docs/otlp-exporter-profile.md)：harness 作者的对接规范与登记方式
 - [验收记录](docs/acceptance.md)：各轮合成与真实流量的验收结果
 - [项目定位](docs/project-overview.md)：记录单位与阅读入口的取舍
-- [运行词汇表](CONTEXT.md)：术语定义与边界
+- [领域术语表](GLOSSARY.md)：术语定义与边界
 - [文档索引](docs/README.md)
 - [Demo 与合成场景](prototypes/README.md)
 - [Agent Note 规则与决策记录](.agents/notes/README.md)

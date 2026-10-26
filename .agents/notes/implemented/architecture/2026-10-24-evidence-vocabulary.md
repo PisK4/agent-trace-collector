@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-have 的 1/2/4 位义在 CONTEXT.md 与架构文档有定义，代码里却散用字面量：写入侧五处 `have=have|1/2/4`（hook、账本、路由、投影），读侧 queries 的 SQL `(have & 1)` 与页面的七处位判断。request_evidence 的三条 INSERT 各自拼同样的语句。conv_key 的三种回退前缀散在 hook 与 reconcile 的局部函数里。改写形状等于改变派生组身份，却没有一处把它当作契约钉住。
+have 的 1/2/4 位义在 GLOSSARY.md 与架构文档有定义，代码里却散用字面量：写入侧五处 `have=have|1/2/4`（hook、账本、路由、投影），读侧 queries 的 SQL `(have & 1)` 与页面的七处位判断。request_evidence 的三条 INSERT 各自拼同样的语句。conv_key 的三种回退前缀散在 hook 与 reconcile 的局部函数里。改写形状等于改变派生组身份，却没有一处把它当作契约钉住。
 
 ## Decision
 
