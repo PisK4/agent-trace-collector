@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
-import { zstdDecompressSync } from 'node:zlib';
 import { readBodyTx } from '../body';
+import { messageOfBlock } from '../body-cache';
+import type { BlockMessageRow, BodyReadCache } from '../body-cache';
 import { assistantText } from '../protocols';
 import { interpretMessage, isOmpArchiveMessage, ompDroppedCharsOf } from '../input-interpretation';
 import { clip, interruptCountOf, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './decision';
@@ -113,20 +114,18 @@ export function fingerprintsOf(db: Database, reqId: number): string[] | null {
 }
 
 /** 首段或末段用户文本：两个方向的唯一差别是扫描次序，取值判据只有一份。 */
-function userPreview(db: Database, reqId: number, end: 'first' | 'tail'): string | null {
+function userPreview(db: Database, reqId: number, end: 'first' | 'tail',
+  cache?: BodyReadCache): string | null {
   const agent = db.query<{ agent: string | null }, [number]>(
     'SELECT agent FROM request WHERE req_id=?',
   ).get(reqId)?.agent ?? null;
-  const rows = db.query<{ ord: number; z: Uint8Array }, [number]>(`
-    SELECT rb.ord AS ord, b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+  const rows = db.query<{ ord: number } & BlockMessageRow, [number]>(`
+    SELECT rb.ord AS ord, b.id AS id, hex(b.hash) AS hash, b.z AS z, b.raw_size AS raw_size
+    FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord ${end === 'first' ? 'ASC' : 'DESC'} LIMIT 5`).all(reqId);
   for (const row of rows) {
-    let message: unknown;
-    try {
-      message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
-    } catch {
-      continue;
-    }
+    const message = messageOfBlock(row, cache);
+    if (message === undefined) continue;
     const input = interpretMessage(message, agent, row.ord).input;
     if (input !== null && input.state === 'text' && input.text.trim().length > 0) {
       return clip(input.text.trim());
@@ -141,13 +140,15 @@ function userPreview(db: Database, reqId: number, end: 'first' | 'tail'): string
  * 这不是"新增"——界面不能把它标成新增，否则会把旧上下文读成本轮输入。
  * 但折叠行空着同样有害：读者无从判断这笔请求在做什么。
  */
-export function tailUserPreview(db: Database, reqId: number): string | null {
-  return userPreview(db, reqId, 'tail');
+export function tailUserPreview(db: Database, reqId: number,
+  cache?: BodyReadCache): string | null {
+  return userPreview(db, reqId, 'tail', cache);
 }
 
 /** 标题生成请求的输入里只有被 harness 包起来的用户文本；取第一段可读的。 */
-export function firstUserPreview(db: Database, reqId: number): string | null {
-  return userPreview(db, reqId, 'first');
+export function firstUserPreview(db: Database, reqId: number,
+  cache?: BodyReadCache): string | null {
+  return userPreview(db, reqId, 'first', cache);
 }
 
 /**
@@ -156,24 +157,24 @@ export function firstUserPreview(db: Database, reqId: number): string | null {
  */
 export type ReplyInfo = { preview: string | null; shape: ReplyShape | null };
 
-export function replyInfoOf(db: Database, reqId: number): ReplyInfo {
-  const body = readBodyTx(db, reqId);
+export function replyInfoOf(db: Database, reqId: number,
+  cache?: BodyReadCache): ReplyInfo {
+  const body = readBodyTx(db, reqId, cache);
   if (body === null) return { preview: null, shape: null };
   const text = assistantText(body.reply) ?? replyToolSummary(body.reply);
   return { preview: text === null ? null : clip(text), shape: replyShapeOf(body.reply) };
 }
 
 /** 按消息位置取一行正文消息；缺失或解压失败返回 null。导出给切片摘要阶段复用。 */
-export function messageAt(db: Database, reqId: number, ordinal: number): unknown | null {
-  const row = db.query<{ z: Uint8Array }, [number, number]>(`
-    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+export function messageAt(db: Database, reqId: number, ordinal: number,
+  cache?: BodyReadCache): unknown | null {
+  const row = db.query<BlockMessageRow, [number, number]>(`
+    SELECT b.id AS id, hex(b.hash) AS hash, b.z AS z, b.raw_size AS raw_size
+    FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.ord=?`).get(reqId, ordinal);
   if (row == null) return null;
-  try {
-    return JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
-  } catch {
-    return null;
-  }
+  const message = messageOfBlock(row, cache);
+  return message === undefined ? null : message;
 }
 
 /**
@@ -182,9 +183,9 @@ export function messageAt(db: Database, reqId: number, ordinal: number): unknown
  * 不走这条读取路径。
  */
 export function interruptCountTx(db: Database, reqId: number,
-  delta: readonly number[]): number {
+  delta: readonly number[], cache?: BodyReadCache): number {
   const messages: unknown[] = [];
-  for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal);
+  for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal, cache);
   return interruptCountOf(messages, delta);
 }
 
@@ -206,20 +207,17 @@ export type ContextEventFacts = {
  * （bounded 扫描 user 消息）；其余关系没有"新增"可言，返回 null。
  */
 export function contextEventTx(db: Database, reqId: number, relation: string | null,
-  delta: readonly number[] | null): ContextEventFacts {
+  delta: readonly number[] | null, cache?: BodyReadCache): ContextEventFacts {
   if (relation === 'aux') return { event: 'none', droppedChars: null };
   if (relation === 'branch') {
-    const rows = db.query<{ z: Uint8Array }, [number, number]>(`
-      SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    const rows = db.query<{ ord: number } & BlockMessageRow, [number, number]>(`
+      SELECT rb.ord AS ord, b.id AS id, hex(b.hash) AS hash, b.z AS z, b.raw_size AS raw_size
+      FROM request_block rb JOIN block b ON b.id = rb.block
       WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord LIMIT ?`)
       .all(reqId, ARCHIVE_SCAN_MESSAGES);
     for (const row of rows) {
-      let message: unknown;
-      try {
-        message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
-      } catch {
-        continue;
-      }
+      const message = messageOfBlock(row, cache);
+      if (message === undefined) continue;
       if (isOmpArchiveMessage(message)) {
         return { event: 'omp_compaction', droppedChars: ompDroppedCharsOf(message) };
       }
@@ -228,7 +226,7 @@ export function contextEventTx(db: Database, reqId: number, relation: string | n
   }
   if ((relation === 'first' || relation === 'confirmed') && delta !== null) {
     for (const ordinal of delta) {
-      const message = messageAt(db, reqId, ordinal);
+      const message = messageAt(db, reqId, ordinal, cache);
       if (isOmpArchiveMessage(message)) {
         return { event: 'omp_compaction', droppedChars: ompDroppedCharsOf(message) };
       }
@@ -240,10 +238,10 @@ export function contextEventTx(db: Database, reqId: number, relation: string | n
 
 /** db 版工具结果摘要：按 delta 的原始 ord 稀疏取消息，判定交给共享实现。 */
 function toolResultPreview(db: Database, reqId: number, delta: readonly number[],
-  associations: readonly ResolvedTool[]): string | null {
+  associations: readonly ResolvedTool[], cache?: BodyReadCache): string | null {
   // 稀疏位留给结果提取跳过：ord 必须保持原位置，不能压缩。
   const messages: unknown[] = [];
-  for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal);
+  for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal, cache);
   return toolResultPreviewOf(messages, reqId, associations);
 }
 
@@ -251,12 +249,12 @@ function toolResultPreview(db: Database, reqId: number, delta: readonly number[]
  * 展示判定的 db 适配：两条路径的正文读取只有这一份实现，
  * 切片路径与同步路径传同一个构造结果给 `presentationDecision`。
  */
-export function presentationPortsOf(db: Database): PresentationPorts {
+export function presentationPortsOf(db: Database, cache?: BodyReadCache): PresentationPorts {
   return {
-    firstUserPreview: reqId => firstUserPreview(db, reqId),
-    messageAt: (reqId, ordinal) => messageAt(db, reqId, ordinal),
+    firstUserPreview: reqId => firstUserPreview(db, reqId, cache),
+    messageAt: (reqId, ordinal) => messageAt(db, reqId, ordinal, cache),
     toolResultPreview: (reqId, delta, associations) =>
-      toolResultPreview(db, reqId, delta, associations),
-    tailUserPreview: reqId => tailUserPreview(db, reqId),
+      toolResultPreview(db, reqId, delta, associations, cache),
+    tailUserPreview: reqId => tailUserPreview(db, reqId, cache),
   };
 }
