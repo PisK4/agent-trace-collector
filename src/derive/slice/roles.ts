@@ -6,7 +6,7 @@ import type { Store } from '../../store';
 import {
   chainTrunk, chainTrunkRoot, commonPrefix, confirmedDeltaOf, settleRelation,
 } from '../decision';
-import { fingerprintsOf } from '../read';
+import { fingerprintsOf, incrementalInputOf } from '../read';
 import { assertQueueRevision, one, sliceDiscardReason, type SliceStep } from './generation';
 import { requestUncertain } from './requests';
 
@@ -143,8 +143,11 @@ function openRoleWork(db: Database, generation: string): StageOutcome {
     throw new Error('slice_purpose_revision_changed');
   }
   const participating = next.purpose_chain === 'participate' ? 1 : 0;
+  // 增量输入不含完整历史：与顺序未证实同档，指纹留空让关系落 unknown，
+  // 同时让后续请求把这条祖先记为不可比。
   const comparable = participating === 1
-    && !requestUncertain(db, generation, next.started_ms, next.req_id);
+    && !requestUncertain(db, generation, next.started_ms, next.req_id)
+    && !incrementalInputOf(db, next.req_id);
   const fingerprints = comparable ? fingerprintsOf(db, next.req_id) : null;
   db.run(`INSERT INTO derive_role_work(generation,req_id,traversal_ord,started_ms,
     participating,parent_req_id,relation,fingerprints_json,scan_ord,best_parent_req,

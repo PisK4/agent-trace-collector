@@ -117,6 +117,16 @@ export function isTextBlockType(type: unknown): boolean {
   return type === 'text' || type === 'input_text' || type === 'output_text';
 }
 
+/**
+ * 本笔请求是否只带增量输入：Responses 用 `previous_response_id` 引用前序响应，
+ * 这时的 `input` 只是新增部分，不包含完整会话历史。链比对必须跳过它——拿增量
+ * 当整段历史去找共同前缀，会把无关请求连成父子。
+ */
+export function isIncrementalRequest(protocol: string, request: unknown): boolean {
+  if (protocol !== 'responses' || !isRecord(request)) return false;
+  return textOf(request.previous_response_id) !== null;
+}
+
 // ---------------------------------------------------------------------------
 // 工具调用与结果：协议形状的唯一提取点。只发布能精确定位的位置。
 // ---------------------------------------------------------------------------

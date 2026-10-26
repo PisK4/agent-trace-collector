@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { fixture, seedPurposeRequest } from './fixtures';
 import { messageFingerprint } from '../src/fingerprint';
 import { interpretMessage } from '../src/input-interpretation';
-import { messagesKeyOf, requestItemsOf, withItems } from '../src/protocol-shape';
+import { isIncrementalRequest, messagesKeyOf, requestItemsOf, withItems } from '../src/protocol-shape';
 import { getBodyPage } from '../src/protocols';
 import { replyTextsOf, systemTextsOf } from '../src/semantics';
 import { restoreBody } from '../src/body';
@@ -158,6 +158,16 @@ test('回复文本：只取 output 里的 output_text，推理与调用项不算
   };
   expect(replyTextsOf(reply)).toEqual(['answer']);
   expect(replyTextsOf({ output: [] })).toEqual([]);
+});
+
+test('只有 Responses 的 previous_response_id 算增量输入', () => {
+  expect(isIncrementalRequest('responses', { input: [], previous_response_id: 'resp_1' })).toBe(true);
+  // 空串与缺失都不算：没有指向具体前序响应，输入本身就是当时发出的全部历史。
+  expect(isIncrementalRequest('responses', { input: [], previous_response_id: '' })).toBe(false);
+  expect(isIncrementalRequest('responses', { input: [] })).toBe(false);
+  // 其它协议里同名键不具这个含义，不读。
+  expect(isIncrementalRequest('anthropic', { messages: [], previous_response_id: 'x' })).toBe(false);
+  expect(isIncrementalRequest('responses', null)).toBe(false);
 });
 
 test('正文页暴露协议名，系统文本把 instructions 并入其中', () => {

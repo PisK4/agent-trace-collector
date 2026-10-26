@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import { readBodyMetaTx, readBodyTx } from '../body';
 import { assistantText } from '../protocols';
+import { isIncrementalRequest } from '../protocol-shape';
 import { interpretMessage, isOmpArchiveMessage, ompDroppedCharsOf } from '../input-interpretation';
 import { clip, interruptCountOf, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './decision';
 import type { PresentationPorts, ResolvedTool, ReplyShape } from './decision';
@@ -110,6 +111,17 @@ export function fingerprintsOf(db: Database, reqId: number): string[] | null {
   if (refs.length !== row.msg_count || refs.some((ref, i) =>
       ref.ord !== i || ref.fingerprint.length === 0)) return null;
   return refs.map(ref => ref.fingerprint);
+}
+
+/**
+ * 本笔是否只带增量输入（Responses 的 `previous_response_id`）。
+ *
+ * 只读骨架，不碰块；正文不可读时返回 false，那条路径已由指纹为 null 拦下。
+ * 判据住在形状表里，两条扫描路径（同步与切片）都问这一处。
+ */
+export function incrementalInputOf(db: Database, reqId: number): boolean {
+  const meta = readBodyMetaTx(db, reqId);
+  return meta !== null && isIncrementalRequest(meta.protocol, meta.request);
 }
 
 /** 首段或末段用户文本：两个方向的唯一差别是扫描次序，取值判据只有一份。 */

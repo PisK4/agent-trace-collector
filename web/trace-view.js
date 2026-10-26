@@ -46,8 +46,10 @@ import { esc } from './html.js';
  * @typedef {{text: string, changed: boolean | null} | null} SystemContext
  */
 
-const LENGTH_FINISH = new Set(['length', 'max_tokens']);
-const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use']);
+// 三种协议的结束词表并集：Responses 的 status 只有 completed，截断原因在
+// incomplete_details.reason 里（replyView 已把它抬到 finish）。
+const LENGTH_FINISH = new Set(['length', 'max_tokens', 'max_output_tokens']);
+const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use', 'completed']);
 
 /** 压缩归档的预算丢弃量读数：basis 由派生写，缺字段不冒充 0。 @param {string | null} basis */
 function droppedCharsOf(basis) {
