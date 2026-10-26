@@ -1,6 +1,20 @@
-# CONTEXT.md — collector 运行词汇表
+# 领域术语表
 
-运行模型术语的定义与边界。字段清单、值域细节与默认值归 [docs/architecture-design.md](docs/architecture-design.md)；定位级入门名词（请求、session、conv、trace）归 [docs/project-overview.md](docs/project-overview.md) 的名词节。
+本仓领域术语的定义与边界。词条只收含义与容易混淆的边界；字段清单、值域细节与默认值归 [docs/architecture-design.md](docs/architecture-design.md)，决策理由归 [.agents/notes/](.agents/notes/README.md)。
+
+## 基础名词
+
+**请求**：
+主实体，一笔客户端提交给 magpie 的请求，可包含多次上游尝试；direct/reported 记录按其来源另外标识。
+
+**session**：
+客户端自己声明的会话 id，magpie 原样记录。
+
+**conv**：
+magpie 根据首条用户消息生成的会话指纹，只在没有 session 时使用。
+
+**trace**：
+本项目的展示单位，等价于一笔请求。
 
 ## 证据的坐标
 

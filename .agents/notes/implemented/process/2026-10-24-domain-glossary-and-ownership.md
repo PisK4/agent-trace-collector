@@ -14,7 +14,7 @@ Status: implemented
 
 ## Decision
 
-仓库根新增 [CONTEXT.md](../../../../CONTEXT.md) 作为运行词汇的唯一词汇表，本变更交付首批词条五组：
+仓库根设置 [GLOSSARY.md](../../../../GLOSSARY.md) 作为运行词汇的唯一词汇表，本变更交付首批词条五组：
 
 - 证据的坐标：证据通道、物理来源、流量种类、出生通路 via、关联、请求折叠
 - 递增计数家族
@@ -22,7 +22,7 @@ Status: implemented
 - 销毁动词
 - kind 三族
 
-管辖权分三条：术语定义与边界归 CONTEXT.md；字段清单、值域细节与默认值仍归 [architecture-design.md](../../../../docs/architecture-design.md)；定位级入门名词（请求、session、conv、trace）的定义留在 [project-overview.md](../../../../docs/project-overview.md) 名词节，CONTEXT.md 不重复定义。merge_state 的 ambiguous 从 DDL 注释移除，文档写现状。CONTEXT.md 登记进 [docs/AGENTS.md](../../../../docs/AGENTS.md) 分层表，project-overview.md 名词节补一行指向。
+管辖权分三条：术语定义与边界归 [GLOSSARY.md](../../../../GLOSSARY.md)；字段清单、值域细节与默认值仍归 [architecture-design.md](../../../../docs/architecture-design.md)；基础名词的归属已由[术语表命名与文档职责统一](2026-10-26-glossary-naming-and-document-ownership.md)调整，其余分层原则继续适用。merge_state 的 ambiguous 从 DDL 注释移除，文档写现状。GLOSSARY.md 登记进 [docs/AGENTS.md](../../../../docs/AGENTS.md) 分层表，project-overview.md 名词节补一行指向。
 
 词条准入按场景压测：压测中能逼出边界混淆的词才收进词汇表，不追求全量。
 
@@ -39,3 +39,7 @@ Status: implemented
 ## Consequences
 
 词汇表不接门禁，腐化靠评审与场景压测捕捉。与「一个事实一个家」的边界由管辖权三条维持，执行靠的是分层表里的登记行。via 与 merge_state 的词形若继续造成误读，改名是独立决策，走 architecture 或 process 类 note 并带迁移方案。
+
+## Related
+
+[术语表命名与文档职责统一](2026-10-26-glossary-naming-and-document-ownership.md)调整了本文的词汇表文件名与基础名词归属，保留词条准入及其他分层原则。现行入口以该记录与 GLOSSARY.md 为准。

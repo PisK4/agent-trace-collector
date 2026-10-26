@@ -8,7 +8,7 @@
 - **两个进路。** 记录的对象主要是经过 magpie 网关的请求；harness 侧 OTLP 导出的 LLM span 也建行（`via='otlp'`），独立存在、不与 magpie 行合并。`agent` 标签对 magpie 行来自 magpie（`claude`、`omp` 等），对 OTLP 行按 `service.name` 映射到同一值域；派生规则是 harness 通用的，识别某个 harness 的 wire 痕迹是个别规则，不是插件体系。
 - **版本会变。** v6 库打开时原地升到 v7，更早的 schema 拒绝启动、由操作者重建；派生算法号变化会让旧结论标成 `legacy` 或 `retained`，不冒充新结论。
 
-字段清单、值域细节与默认值的权威在[架构设计](architecture-design.md)；术语定义与边界在 [CONTEXT.md](../CONTEXT.md)。
+字段清单、值域细节与默认值的权威在[架构设计](architecture-design.md)；术语定义与边界在 [GLOSSARY.md](../GLOSSARY.md)。
 
 ## 主实体：一笔请求
 

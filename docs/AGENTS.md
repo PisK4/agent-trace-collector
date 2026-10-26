@@ -8,8 +8,8 @@
 |---|---|---|
 | 根 [AGENTS.md](../AGENTS.md) | 常备规则：每个会话都要在上下文里的规则，每条一到三行并链接出处 | 故事、案例、流程细节、从链接出处复述的内容 |
 | [architecture-design.md](architecture-design.md) | 组成、证据身份、存储模型、派生、接口、容量与安全边界的设计权威 | 事故叙事、任务步骤、过期状态 |
-| [project-overview.md](project-overview.md) | 项目定位、记录单位、数据来源与名词 | 实现细节、决策 rationale |
-| [CONTEXT.md](../CONTEXT.md) | 运行词汇表：术语定义与边界（证据坐标、递增计数、认识论、销毁动词、kind 三族），管辖权与准入规则见[仓库词汇表与术语管辖权](../.agents/notes/implemented/process/2026-10-24-domain-glossary-and-ownership.md) | 字段清单与默认值（归 architecture-design.md）、定位级名词（归 project-overview.md） |
+| [project-overview.md](project-overview.md) | 项目定位、记录单位与数据来源；名词定义链接到 GLOSSARY.md | 实现细节、决策 rationale、基础名词定义（归 GLOSSARY.md） |
+| [GLOSSARY.md](../GLOSSARY.md) | 领域术语表：术语定义与边界（基础名词、证据坐标、递增计数、认识论、销毁动词、kind 三族），管辖权与准入规则见[术语表命名与文档职责统一](../.agents/notes/implemented/process/2026-10-26-glossary-naming-and-document-ownership.md) | 字段清单与默认值（归 architecture-design.md）、研究 caveat（归 project-overview.md 与调研文档） |
 | [architecture-review.md](architecture-review.md)、[agent-request-kind-review.md](agent-request-kind-review.md) | 落地前评审记录与证据 | 现行行为的权威描述 |
 | [architecture-evolution-v2.md](architecture-evolution-v2.md) | 本轮架构演进的目标约束与阶段划分：目标职责、依赖、阶段与容量验收；交付记录见实施入口 | 已交付行为、来源证据表的副本 |
 | [magpie-integration-research.md](magpie-integration-research.md)、[magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 对 magpie 机制的研究证据，带锚定版本与证据标签 | 本项目已交付行为的描述 |
@@ -19,7 +19,7 @@
 | [superpowers/plans/](superpowers/plans/) | 执行计划：步骤、复选框、验收清单 | 常备规则、已交付事实的权威 |
 | [.agents/notes/](../.agents/notes/README.md) | 活跃决策记录：why、放弃了什么、必需的验证 | 迁移计划、验收清单、spec 腔 |
 | [.agents/notes/archived/](../.agents/notes/archived/AGENTS.md) | 冻结的历史快照 | 现行权威 |
-| [README.md](../README.md) | 对外介绍：项目作用、能看到什么、试跑与接入步骤、边界与非目标、命令与文档入口 | 常备规则、设计 rationale、验收记录（归 acceptance.md） |
+| [README.md](../README.md) | 对外介绍：项目作用、能看到什么、试跑与接入步骤、边界与非目标、命令与文档入口；起步表只做导读 | 术语定义（归 GLOSSARY.md）、常备规则、设计 rationale、验收记录（归 acceptance.md） |
 | [acceptance.md](acceptance.md) | 各轮验收的做法与结果：合成验收、真实流量暴露的问题、容量与保留实测；合成与真实分开写 | 现行行为权威（归 architecture-design.md 与代码） |
 | [trace-format.md](trace-format.md) | ATC trace 格式现状：主实体、身份、正文切块、派生结论、置信度与版本字段 | 对外稳定协议承诺、字段默认值清单（归 architecture-design.md） |
 | [../prototypes/README.md](../prototypes/README.md) | Demo 数据源与合成场景：两个入口加载生产页面，不维护第二套界面 | 生产契约（归 `web/` 与 architecture-design.md） |
@@ -38,7 +38,7 @@ note 的 `## Decision` 不复述 schema 字段、默认值、接口形状与表�
 - **注释与 JSDoc 写完整契约**：行为、失败、时机、所有权、后果、非显然的定位；删推理转写、代码复述、评审分析。
 - **直接写，点名施动者与事实。** contract、boundary、shape、gate 这类词先过一遍：更精确的名词存在就用它。
 - **同步另起句。** 文档吸收新事实（尤其 implemented note 的同步维护）时，新增内容另起一句或一个列表项，不往既有句子的中段插从句；旧句确需变动就整句重写，一句只装一个事实。三项以上的并列细节进列表，不用顿号串进句子。
-- **压缩词首现带所指。** 不在 [CONTEXT.md](../CONTEXT.md) 的自造压缩词（口径、在场、身份行）与非代码标识符的英文行话（seam、depth、locality），首次出现写明具体所指；哪个词反复需要解释，就是它按准入判据该进词汇表的信号，见[仓库词汇表与术语管辖权](../.agents/notes/implemented/process/2026-10-24-domain-glossary-and-ownership.md)。
+- **压缩词首现带所指。** 不在 [GLOSSARY.md](../GLOSSARY.md) 的自造压缩词（口径、在场、身份行）与非代码标识符的英文行话（seam、depth、locality），首次出现写明具体所指；哪个词反复需要解释，就是它按准入判据该进词汇表的信号，见[术语表命名与文档职责统一](../.agents/notes/implemented/process/2026-10-26-glossary-naming-and-document-ownership.md)。
 
 ## slop 清单
 
