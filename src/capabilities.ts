@@ -46,7 +46,7 @@ function textOf(value: unknown): string | null {
  * 能力提取支持的协议名单与谓词：能力视图、协议适配与 response 关联共用。
  * 名单外的协议（如 gemini）仍能按各自形状提取响应身份，只是不做消息解析。
  */
-export const CAPABLE_PROTOCOLS = ['anthropic', 'chat'] as const;
+export const CAPABLE_PROTOCOLS = ['anthropic', 'chat', 'responses'] as const;
 
 export function protocolSupported(protocol: string): boolean {
   return (CAPABLE_PROTOCOLS as readonly string[]).includes(protocol);

@@ -9,7 +9,7 @@ import { fingerprintHash, messageFingerprint } from './fingerprint';
 import {
   requestItemsOf, roleNameOfItem, withItems, withoutItems,
 } from './protocol-shape';
-import type { MessageForm, MessagesKey } from './protocol-shape';
+import type { MessageForm, MessagesKey, RequestItems } from './protocol-shape';
 import { markRequestInputTx } from './derive/state';
 
 /**
@@ -66,29 +66,24 @@ export function roleCode(message: unknown): number {
   return typeof code === 'number' ? code : ROLE_UNKNOWN;
 }
 
-/** messages 只有真的是数组才拆块；存在但不是数组时留在骨架里，避免还原丢字段。 */
-function messagesOf(request: unknown): unknown[] | null {
-  if (request === null || typeof request !== 'object' || Array.isArray(request)) return null;
-  const messages = (request as Record<string, unknown>).messages;
-  return Array.isArray(messages) ? messages : null;
-}
-
-function withoutMessages(request: unknown): unknown {
-  return withoutItems(request, 'messages');
-}
-
-function skeletonOf(body: BodyInput, messages: unknown[] | null): Skeleton {
+/**
+ * 骨架只描述拆块方式：消息数组按形状表的键与形态存进块，其余字段原样留在
+ * `request_without_messages` 里。键与形态一并记录，恢复时按记录放回，
+ * 不按协议名二次推断。
+ */
+function skeletonOf(body: BodyInput, items: RequestItems): Skeleton {
   if (typeof body.protocol !== 'string' || body.protocol.length === 0) throw new Error('body_protocol_missing');
   if (!Number.isInteger(body.redact_version) || body.redact_version < 1) throw new Error('body_redact_version_invalid');
   return {
     format: 1,
     protocol: body.protocol,
-    request_without_messages: messages === null ? body.request : withoutMessages(body.request),
-    messages_key: 'messages',
-    messages_form: 'array',
+    request_without_messages: items.items === null
+      ? body.request : withoutItems(body.request, items.key),
+    messages_key: items.key,
+    messages_form: items.form,
     reply: body.reply,
     redact_version: body.redact_version,
-    has_messages: messages !== null,
+    has_messages: items.items !== null,
   };
 }
 
@@ -100,8 +95,9 @@ export function persistBodyTx(db: Database, reqId: number, body: BodyInput): voi
   const exists = db.query('SELECT req_id FROM request WHERE req_id=?').get(reqId);
   if (exists == null) throw new Error('body_request_missing');
 
-  const messages = messagesOf(body.request);
-  const skeleton = skeletonOf(body, messages);
+  const items = requestItemsOf(body.protocol, body.request);
+  const messages = items.items;
+  const skeleton = skeletonOf(body, items);
   const skeletonZ = compress(serialize(skeleton));
   // 解析状态跟着正文一起写：读取端只查 request 的一行就能同时拿到两者。
   const parsed = parseProtocol(body.protocol, body.request, body.reply);

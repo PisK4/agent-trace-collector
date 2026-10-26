@@ -63,7 +63,7 @@ export type BodyPage = {
 };
 
 /** 适配器版本写进 request 的长期列；语义变化时升版。 */
-export const ADAPTER_VERSION = 1;
+export const ADAPTER_VERSION = 2;
 /** 支持消息解析的协议名单：能力提取的同一份名单（capabilities.protocolSupported）。 */
 export const SUPPORTED_PROTOCOLS = CAPABLE_PROTOCOLS;
 const PAGE_MAX = 40;

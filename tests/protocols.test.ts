@@ -10,12 +10,13 @@ test('请求有效而回复缺失仍可阅读请求', () => {
 });
 
 test('未知协议保存能力不被解释成零消息', () => {
-  const parsed = parseProtocol('responses', { input: 'hello' }, { id: 'resp_x', output: [] });
+  const parsed = parseProtocol('gemini', { input: 'hello' }, { id: 'resp_x', output: [] });
   expect(parsed.parse_state).toBe('unsupported');
   expect(parsed.message_count).toBeNull();
   expect(parsed.reply_state).toBe('unsupported');
-  // 已知字段仍可提取，不能发明其他字段。
-  expect(parsed.response_id).toBe('resp_x');
+  // 已知字段仍可提取，不能发明其他字段：gemini 的响应 id 在 responseId。
+  expect(parsed.response_id).toBeNull();
+  expect(parseProtocol('gemini', {}, { responseId: 'gem_x' }).response_id).toBe('gem_x');
 });
 
 test('Chat 的工具调用与结果各自带路径', () => {
