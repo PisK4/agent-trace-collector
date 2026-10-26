@@ -5,6 +5,10 @@ import {
 } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
 import { readBodyTx } from '../body';
+import {
+  addBodyReadStats, bodyReadCounters, createBodyReadCache, emptyBodyReadStats,
+} from '../body-cache';
+import type { BodyReadCache, BodyReadStats } from '../body-cache';
 import { pairBackgroundJobsTx } from './bg-jobs';
 import {
   anthropicReplyCalls, anthropicRequestResults, chainTrunk, chainTrunkRoot,
@@ -76,9 +80,9 @@ type PresentationInput = {
  * 原样保留——那是当时按正文算出来的，没有正文重算只会把它们降级成时间兜底。
  */
 function writePresentationTx(db: Database, input: PresentationInput,
-  associations: readonly ResolvedTool[], group: QueuedGroup): void {
+  associations: readonly ResolvedTool[], group: QueuedGroup, bodyCache: BodyReadCache): void {
   const { row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts, context } = input;
-  const decision = presentationDecision(presentationPortsOf(db), {
+  const decision = presentationDecision(presentationPortsOf(db, bodyCache), {
     reqId: row.req_id,
     agent: row.agent,
     modelServed: row.model_served,
@@ -176,6 +180,8 @@ export type DrainResult = {
   purpose_remaining: number;
   /** 本批被丢弃的未发布代际数：只有切片入口会丢，同步入口恒为 0。 */
   discarded: number;
+  /** 本批同步组派生的消息块解码计数；切片路径暂不计入。 */
+  body_read: BodyReadStats;
   /** 本批耗时（毫秒），供调度与容量观测使用。 */
   batch_ms: number;
 };
@@ -224,12 +230,14 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
   let processed = 0;
   let recomputed = 0;
   let retained = 0;
+  const bodyRead = emptyBodyReadStats();
   for (const group of groups) {
     const result = drainDeriveGroupTx(db, group.conv_key, group.actor);
     if (result === null) continue;
     processed += result.processed;
     recomputed += result.recomputed;
     retained += result.retained;
+    addBodyReadStats(bodyRead, result.body_read);
     touched.push({ conv_key: group.conv_key, actor: group.actor });
   }
   const remaining = scope === undefined
@@ -239,13 +247,17 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
   return {
     processed, remaining, groups: touched, recomputed, retained,
     purpose_processed: purposeProcessed, purpose_remaining: purposeRemaining,
-    discarded: 0, batch_ms: performance.now() - started,
+    discarded: 0, body_read: bodyRead, batch_ms: performance.now() - started,
   };
 }
 
+/** 组派生可注入读取上下文：受控测量可换成小预算缓存，生产调用不传。 */
+export type DeriveGroupOptions = { bodyCache?: BodyReadCache };
+
 /** 组内全部阶段与 CAS 在调用方的同一个事务内完成；失败回滚当前事务。 */
-export function drainDeriveGroupTx(db: Database, convKey: string, actor: string):
-  { processed: number; recomputed: number; retained: number } | null {
+export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
+  groupOptions: DeriveGroupOptions = {}):
+  { processed: number; recomputed: number; retained: number; body_read: BodyReadStats } | null {
   const group = db.query<QueuedGroup, [string, string]>(`
     SELECT conv_key,actor,group_epoch,input_revision,target_algorithm FROM derive_queue
     WHERE conv_key=? AND actor=? AND ${queuePendingSql()}`).get(convKey, actor);
@@ -267,6 +279,9 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
       WHERE conv_key=? AND actor=? AND ${purposePendingSql()}`)
       .get(group.conv_key, group.actor)!.n;
     if (waiting > 0) return null;
+    // 一轮组派生只建立一个块级读取作用域：链、工具、后台作业与展示阶段
+    // 共享同一份解压结果，组结束或失败即随局部变量一起释放。
+    const bodyCache = groupOptions.bodyCache ?? createBodyReadCache();
     const rows = db.query<ChainRow, [string, string]>(`
       SELECT req_id, actor, agent, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
              title_source, title, model_served, req_kind, model_title, purpose_chain,
@@ -289,7 +304,7 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
       const current = fingerprintsOf(db, row.req_id);
       const replyInfo = current === null
         ? { preview: row.reply_preview, shape: null }
-        : replyInfoOf(db, row.req_id);
+        : replyInfoOf(db, row.req_id, bodyCache);
       // 用途已在请求阶段定下来：组阶段只消费 purpose_chain 与 req_kind，
       // 不再自己认一遍标题或分类器请求。两处各认一次就会出现"用途说是 chat、
       // 关系却按 title 算"的分裂。
@@ -331,11 +346,11 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
       // 确定增量在手（first/confirmed，隐含正文可读且参与）时按本次增量重算；
       // 关系未知与分支没有"新增"可言，保留旧值，不冒充 0。
       const interrupts = isAux ? 0
-        : delta === null ? null : interruptCountTx(db, row.req_id, delta);
+        : delta === null ? null : interruptCountTx(db, row.req_id, delta, bodyCache);
       // 上下文事件位：排除用途判 none（标题请求不压缩）；正文可读时按关系与
       // 增量判定，其余场合 null 保留旧值。
       const context = current === null ? null
-        : contextEventTx(db, row.req_id, match.relation, match.delta);
+        : contextEventTx(db, row.req_id, match.relation, match.delta, bodyCache);
       presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts, context });
       if (current === null) retained += 1;
       else recomputed += 1;
@@ -345,11 +360,11 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
       processed += 1;
     }
     assignChainRoles(db, group.conv_key, group.actor);
-    const paired = pairToolCallsTx(db, group, pairRows, uncertain);
+    const paired = pairToolCallsTx(db, group, pairRows, uncertain, bodyCache);
     // 背景作业配对与工具配对同批：都在组完成事务里按当前可读正文重建。
-    pairBackgroundJobsTx(db, group, pairRows);
+    pairBackgroundJobsTx(db, group, pairRows, bodyCache);
     for (const input of presentations) {
-      writePresentationTx(db, input, paired.associations, group);
+      writePresentationTx(db, input, paired.associations, group, bodyCache);
     }
     // CAS 失败回滚本组的全部阶段。在线已提交组保留，维护由外层事务决定整批回滚。
     const changed = db.run(
@@ -360,7 +375,7 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string)
         group.group_epoch, group.input_revision, group.target_algorithm],
     ).changes;
     if (changed !== 1) throw new Error('derive_input_changed');
-    return { processed, recomputed, retained };
+    return { processed, recomputed, retained, body_read: bodyReadCounters(bodyCache.snapshot()) };
 }
 
 /** 显式批事务入口；在线调度由 derive-unit 按组提交并检查预算。 */
@@ -395,7 +410,7 @@ type PairResult = {
  * 它保证配对之后还有摘要与队列确认。
  */
 function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[],
-  uncertain: ReadonlySet<number>): PairResult {
+  uncertain: ReadonlySet<number>, bodyCache: BodyReadCache): PairResult {
   const rows = ordered;
   if (rows.length === 0) return { resolved: 0, ambiguous: 0, pending: 0, associations: [] };
 
@@ -421,7 +436,7 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
   for (const [index, row] of rows.entries()) {
     // 排除用途是旁路：不进入工具候选，与它不进祖先集合同一个理由。
     if (row.purpose_chain === 'exclude') continue;
-    const body = readBodyTx(db, row.req_id);
+    const body = readBodyTx(db, row.req_id, bodyCache);
     if (body === null) continue;
     // 结果是否落在确定增量的 ord 上：first 整笔新增、confirmed 只看增量的规则
     // 住在 derive-decision，切片结算走同一判据。

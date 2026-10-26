@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite';
-import { zstdDecompressSync } from 'node:zlib';
+import { messageOfBlock } from '../body-cache';
+import type { BlockMessageRow, BodyReadCache } from '../body-cache';
 import { flattenToolContent } from './decision';
 
 /**
@@ -24,27 +25,25 @@ const NOTICE_PLURAL = /background jobs have completed\./;
 const NOTICE_JOB_LINE = /──\s*Job (bg_\d+)\s*──/g;
 
 /** 请求块行：ord 是消息序号，与 request_block 的 ord 同一空间。 */
-type BlockRow = { ord: number; z: Uint8Array };
+type BlockRow = { ord: number } & BlockMessageRow;
 
-function decode(row: BlockRow): unknown {
-  try {
-    return JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
-  } catch {
-    return null;
-  }
+function decode(row: BlockRow, cache?: BodyReadCache): unknown | undefined {
+  return messageOfBlock(row, cache);
 }
 
 function blockRows(db: Database, reqId: number, role: number): BlockRow[] {
   return db.query<BlockRow, [number, number]>(`
-    SELECT rb.ord AS ord, b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    SELECT rb.ord AS ord, b.id AS id, hex(b.hash) AS hash, b.z AS z, b.raw_size AS raw_size
+    FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.role=? ORDER BY rb.ord`).all(reqId, role);
 }
 
 /** 一笔请求里的发起痕迹：每个 job 只记最早的（本笔内按消息序号先到先得）。 */
-function scanSpawns(db: Database, reqId: number, into: Map<string, { req: number; ord: number }>): void {
+function scanSpawns(db: Database, reqId: number,
+  into: Map<string, { req: number; ord: number }>, cache?: BodyReadCache): void {
   for (const row of blockRows(db, reqId, 3)) {
-    const message = decode(row);
-    if (message === null || typeof message !== 'object') continue;
+    const message = decode(row, cache);
+    if (message === undefined || typeof message !== 'object') continue;
     const text = flattenToolContent((message as Record<string, unknown>).content ?? null);
     for (const match of text.matchAll(SPAWN_MARK)) {
       const job = match[1]!;
@@ -54,10 +53,11 @@ function scanSpawns(db: Database, reqId: number, into: Map<string, { req: number
 }
 
 /** 一笔请求里的完成通知：单数直接认，复数公告下的 Job 行整组认。 */
-function scanNotices(db: Database, reqId: number, into: Map<string, { req: number; ord: number }>): void {
+function scanNotices(db: Database, reqId: number,
+  into: Map<string, { req: number; ord: number }>, cache?: BodyReadCache): void {
   for (const row of blockRows(db, reqId, 0)) {
-    const message = decode(row);
-    if (message === null || typeof message !== 'object') continue;
+    const message = decode(row, cache);
+    if (message === undefined || typeof message !== 'object') continue;
     const record = message as Record<string, unknown>;
     if (record.role !== 'user') continue;
     const blocks = Array.isArray(record.content) ? record.content : [];
@@ -89,14 +89,15 @@ export type BgPairRow = { req_id: number; purpose_chain: string };
  * 两端正文都已回收的保留行原样留在表里。
  */
 export function pairBackgroundJobsTx(db: Database,
-  group: { conv_key: string; actor: string }, rows: readonly BgPairRow[]): void {
+  group: { conv_key: string; actor: string }, rows: readonly BgPairRow[],
+  cache?: BodyReadCache): void {
   const spawns = new Map<string, { req: number; ord: number }>();
   const notices = new Map<string, { req: number; ord: number }>();
   for (const row of rows) {
     // 排除用途是旁路：发起与通知都不从它取，与工具候选同一条判据。
     if (row.purpose_chain === 'exclude') continue;
-    scanSpawns(db, row.req_id, spawns);
-    scanNotices(db, row.req_id, notices);
+    scanSpawns(db, row.req_id, spawns, cache);
+    scanNotices(db, row.req_id, notices, cache);
   }
   // 重算范围只盖两端落在可读正文上的行；正文已回收的端点拿不回证据，行保留。
   db.run(`DELETE FROM bg_job WHERE conv_key=? AND (

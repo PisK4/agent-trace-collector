@@ -932,6 +932,16 @@ hook 保留客户端协议形状。源码里四种 `Protocol` 都存在（`inter
 
 摘要与工具配对也记自己的依据。`summary_state='recomputed'` 时写 `summary_algorithm` 与 `summary_basis`（输入修订、组世代、算法）；正文不可读时 `summary_state='retained'`，原算法与 basis 原样保留。工具行写 `algorithm_version` 与 `basis_json`，正文已回收、本轮没有重建的行只标 `retention_state='retained'`。`derive_version` 不再逐次累加，也不再被当作"当前算法"读：维护报告用 `target_algorithm`、`actual_algorithms`（按实际算法分组计数，null 归 `legacy`）与 `legacy_requests` 分开回答目标、实际与保留。
 
+### 正文块读取复用
+
+派生读取正文先校验骨架、`body_state` 与引用，再按 `request_block.ord` 取块。一次读取作用域可带一个块级缓存：同步路径的作用域是一次组派生事务，切片路径是请求物化页或摘要页的一页事务，作用域结束缓存即释放。
+
+缓存键是 `hex(block.hash)`，即块的内容身份；`block.id` 只是当前库的代理键，删除后可能复用，不能拿它当内容身份。命中跳过解压与 JSON 解析，但仍按当前行重新校验状态、骨架与引用，回收或缺块不会被命中绕过。
+
+默认预算 64 MiB，按块的 `raw_size` 加固定条目开销计；单块超过 8 MiB 不入缓存。预算不足时按 LRU 淘汰并如实重读；解压失败或 JSON 解析失败不入缓存，下一次读取仍按坏块处理。缓存条目递归冻结，多个消费者共享同一份只读消息；未带缓存的读取每次单独解压，失败语义相同。
+
+`DrainResult.body_read` 汇报命中、未命中、解码、超大、跳过、不可读与淘汰计数；在线工作单元把它汇总进容量快照的 `body_read`。切片页的计数当前不进入进程快照。
+
 ### 组完成与输入修订
 
 派生按 `(conv_key, actor)` 成组重算整条链，所以"这一组的产物是不是最新的"必须由持久状态回答，不能靠队列里还有没有这一行。判定只有一份实现：`src/derive/state.ts` 的 `groupCurrentSql` / `queuePendingSql` / `groupIsCurrent`，读模型、组选取、切片认领、维护报告与容量探测都引用同一片段，理由见[组待办与当前判定收进 derive-state](../.agents/notes/implemented/architecture/2026-10-23-group-current-predicate-single-home.md)。
