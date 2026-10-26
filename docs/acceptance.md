@@ -260,3 +260,20 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 | 历史回填 | 旧布局（整段 `input` 在骨架里、`adapter_version` 为 NULL 或 1）重写后逐字恢复、消息进块、`parse_state` 转 `ok`；裸字符串形态记 `messages_form=string`；`partial` 与损坏骨架拒绝并原样保留；其它协议不动；第二次执行无写入、不推进 `input_revision` |
 
 真实流量验收未做：本机库里已有的 `responses` 行还没跑 [reparse](operations.md#reparse)，Codex 会话的逐条消息与工具配对仍停在旧布局。
+
+## 上下文分布图重排与点击明细（合成，2026-10-27）
+
+本轮只做合成验收，全部进 `bun test`（810 例全绿，`bun run typecheck` 通过，`bun run verify:notes` 通过），没有跑真实统计核对，也没有取得浏览器截图。验收对象是布局重排（真实值面积、HTML tile）与点击明细（目录查询、明细弹窗），见 [Agent Note：上下文矩阵布局与点击明细](../.agents/notes/implemented/feature/2026-10-26-context-treemap-drilldown.md)。
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| 面积守恒 | 三档宽度 × 六状态：tile 界内不重叠、每类有面积、tile 总量等于 parts 和、有窗口必有空闲块；每类 tile 面积和等于该类份额 × 全图面积（0.5px² 容差），`share^0.35` 缓动与面积下限的旧口径断言删除 |
+| 未逐项余量 | item 清单不覆盖类总量时差额渲染为显式余量块参与该类布局；逐块 token 合计与 parts 合计不一致是设计内事实，几何按类别守恒 |
+| 碎项与整类 | 布局面积低于阈值的碎项并成员集合块后重排；类别矩形过小时整类一块不硬拆；成员身份随块保存并在明细列出 |
+| 文字取舍 | 按实测尺寸判定：高度不足去数值行、更小全隐，无像素级字宽估算；名称与数值走正常文本布局、单行省略 |
+| 目录查询定位 | results 用配对表列按输入顺序（result_ord → 内容块下标 → 调用序号）零消息块解压；files 按调用参数路径对齐、无对齐降级列全部结果块并说明；tools 读骨架 `tools`/`functions`；system 合并顶层字段与 role=2 块；chat/memory/skills 给承载块并说明未分离；未知 kind 返回 `unsupported` |
+| 目录查询语义 | 同名工具多行全部保留；85 条消息按 80 条分页，游标绑定请求与类别，跨 kind 复用拒绝；pending/evicted/summary 按事实返回；阅读依据变化 409；HTTP 端点缺 `if_reading` 或 `kind` 返回 400 |
+| 弹窗渲染 | iid 解析（tag 可空、名字段允许含分隔符）；单项默认展开、集合块列成员；状态行与 notes 原文呈现；文本直接显示、图片与密封推理按事实标注、非文本折叠为原始对象 JSON；读取失败与 409 显示可重试说明 |
+| 页面集成 | tile、图例项与内容列表行同为 button 走同一选择动作；`context-detail.js` 进静态白名单；换请求重绘关闭弹窗 |
+
+真实统计核对（生产库快照上对照 magpie 分解）与浏览器视觉验收（亮暗主题、窄栏、触屏目标尺寸、截图）未执行，合成 DOM 断言不代表视觉通过。
