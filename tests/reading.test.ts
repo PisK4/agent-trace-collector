@@ -218,6 +218,44 @@ test('Chat 工具结果按 role=tool 消息与 tool_call_id 校验', () => {
   } finally { f.close(); }
 });
 
+test('Responses 工具结果按 call_id 定位 input 项并读 output', () => {
+  const f = fixture();
+  try {
+    const common = { convKey: 'responses-tool-reading', actor: 'actor-resp', purposePending: 0,
+      cleanGroup: true, summaryState: 'recomputed', summaryAlgorithm: 1 } as const;
+    const owner = seedPurposeRequest(f.store, {
+      ...common, protocol: 'responses', startedMs: 100,
+      request: { input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'run' }] }] },
+      reply: { id: 'resp_1', status: 'completed', output: [
+        { type: 'function_call', call_id: 'call_b', name: 'bash', arguments: '{}' },
+      ] },
+    });
+    const target = seedPurposeRequest(f.store, {
+      ...common, protocol: 'responses', startedMs: 200,
+      request: { input: [{ type: 'function_call_output', call_id: 'call_b', output: 'resp output' }] },
+    });
+    f.store.write(db => {
+      db.run(`UPDATE request SET purpose_revision=input_revision WHERE req_id IN (?,?)`, [owner, target]);
+      db.run(`INSERT INTO tool_call(req_id,ord,call_id,tool_name,result_req,
+        result_ord,result_path,state) VALUES (?,0,'call_b','bash',?,0,
+        'request.input[0]','resolved')`, [owner, target]);
+    });
+    const token = getReadingDetail(f.store, owner)!.reading_token;
+    const reading = getToolResultReading(f.store, owner, 0, token)!;
+    expect(reading).toMatchObject({ state: 'available', content: 'resp output', is_error: null });
+    // raw 是整条结果项，不只是 output 字段。
+    expect(reading.raw).toMatchObject({ type: 'function_call_output', call_id: 'call_b' });
+    // call_id 不匹配：invalid_location，不按位置硬读。
+    f.store.write(db => db.run(
+      `UPDATE tool_call SET call_id='call_x' WHERE req_id=? AND ord=0`, [owner]));
+    expect(getToolResultReading(f.store, owner, 0, token)).toMatchObject({
+      state: 'invalid_location', reason: 'call_id_mismatch',
+    });
+  } finally {
+    f.close();
+  }
+});
+
 test('未确认关系返回对应状态且不读正文', () => {
   const f = fixture();
   try {

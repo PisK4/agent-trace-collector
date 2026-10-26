@@ -32,7 +32,7 @@ Status: implemented
 
 ### 前端结构
 
-第一轮继续平铺在 `web/`：`session-view.js`（会话头、合计行、汇总折叠区、条目列表的纯展示，函数签名改显式输入，附 `clock`/`dayTime`/`agentLabel` 展示格式化）；`layout.js`（主题偏好、首选宽度与拖拽指针由模块持有，暴露 `initLayout`、`openRail`、`applyTheme`、`syncPanelButtons`；轨迹锚点、选中步骤焦点与轮次带定位留在控制器）；`body-model.js`（消息归一化、块视图、回复拆分、工具条目与类型，两种协议的 ord/path 归一化同一实现）；`html.js`（`esc` 与 `mdToHtml`，转义策略唯一实现，`trace-view` 删除逐字副本）；`app.css`（页面全部样式从 `index.html` 整体外置，规则顺序不变）。`reader-store.js` 改为只依赖 `body-model.js`，读取层不再依赖展示层。`body-view.js` 只留字符串渲染、详情面板与能力清单；`roleTag`/`roleClass` 随渲染留下，`toolTint` 是跨轨迹与配对页的工具身份规则，留在 `body-view.js`。`renderAttemptChain`、`PARTS`、`partLabel`、`partColor` 只服务右栏展示，归 `rail-facts.js`。
+第一轮继续平铺在 `web/`：`session-view.js`（会话头、合计行、汇总折叠区、条目列表的纯展示，函数签名改显式输入，附 `clock`/`dayTime`/`agentLabel` 展示格式化）；`layout.js`（主题偏好、首选宽度与拖拽指针由模块持有，暴露 `initLayout`、`openRail`、`applyTheme`、`syncPanelButtons`；轨迹锚点、选中步骤焦点与轮次带定位留在控制器）；`body-model.js`（消息归一化、块视图、回复拆分、工具条目与类型，各协议的 ord/path 归一化同一实现）；`html.js`（`esc` 与 `mdToHtml`，转义策略唯一实现，`trace-view` 删除逐字副本）；`app.css`（页面全部样式从 `index.html` 整体外置，规则顺序不变）。`reader-store.js` 改为只依赖 `body-model.js`，读取层不再依赖展示层。`body-view.js` 只留字符串渲染、详情面板与能力清单；`roleTag`/`roleClass` 随渲染留下，`toolTint` 是跨轨迹与配对页的工具身份规则，留在 `body-view.js`。`renderAttemptChain`、`PARTS`、`partLabel`、`partColor` 只服务右栏展示，归 `rail-facts.js`。
 
 `web/app.js` 保留页面控制器：store 装配、dispatch/runEffects、导航生命周期、DOM 提交与事件入口，现约 1440 行——低于拆分前的 1771，但仍超过 500 行。接受这个结果：验收看职责归属与状态所有权，不看行数。
 
