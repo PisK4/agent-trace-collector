@@ -2,6 +2,7 @@
 
 import type { Database } from 'bun:sqlite';
 import { readBodyTx } from '../../body';
+import { createBodyReadCache } from '../../body-cache';
 import type { DeriveBudget } from '../../config';
 import type { Store } from '../../store';
 import {
@@ -85,13 +86,15 @@ function materializePage(db: Database, generation: string, budget: DeriveBudget)
   }
 
   let writes = 0;
+  // 一页一个读取作用域：同页请求的共享块只解一次，页事务结束即释放。
+  const bodyCache = createBodyReadCache();
   // 暂存行占用按行数估算：每笔结果行 512 字节、每笔候选行 256 字节。
   // 这是给发布前磁盘上界用的粗估（预览文本有长度上界，512 覆盖得住），
   // 真正的硬闸门是 ready 阶段的 WAL 检查——它量的是真实字节。
   let staged = 0;
   for (const row of page) {
     const rowStarted = performance.now();
-    const body = readBodyTx(db, row.req_id);
+    const body = readBodyTx(db, row.req_id, bodyCache);
     const readable = body !== null;
     const calls = body === null ? [] : anthropicReplyCalls(body.reply);
     const results = body === null ? [] : anthropicRequestResults(body.request);

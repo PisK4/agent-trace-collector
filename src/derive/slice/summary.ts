@@ -1,6 +1,7 @@
 /** 摘要阶段：标题、输入摘要与回复摘要。 */
 
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
+import { createBodyReadCache } from '../../body-cache';
 import type { DeriveBudget } from '../../config';
 import type { Store } from '../../store';
 import { presentationDecision, type ResolvedTool } from '../decision';
@@ -95,7 +96,9 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
     return { kind: 'advanced', stage: 'ready', rows: 0, writes: 1 };
   }
   const associations = pageAssociations(db, generation, page.map(row => row.req_id));
-  const ports = presentationPortsOf(db);
+  // 一页一个读取作用域：同一笔的回复摘要、增量消息、展示取数共享解压结果。
+  const bodyCache = createBodyReadCache();
+  const ports = presentationPortsOf(db, bodyCache);
   let writes = 0;
   for (const row of page) {
     const rowStarted = performance.now();
@@ -110,19 +113,19 @@ function summaryStep(db: Database, generation: string, budget: DeriveBudget): St
     const current = fingerprintsOf(db, row.req_id);
     const replyInfo = current === null
       ? { preview: row.live_reply_preview }
-      : replyInfoOf(db, row.req_id);
+      : replyInfoOf(db, row.req_id, bodyCache);
     // 中断计数：排除用途按规则贡献 0（排除是判定，改判行不带旧值）；确定增量
     // 在手（first/confirmed，隐含正文可读且参与）时按本次增量重算；其余场合
     // 保留物化时暂存的旧值，不冒充 0。
     const delta = row.delta_ordinals === null ? null : JSON.parse(row.delta_ordinals) as number[];
     const interruptCount = row.purpose_chain === 'exclude' ? 0
-      : delta === null ? row.staged_interrupt_count : interruptCountTx(db, row.req_id, delta);
+      : delta === null ? row.staged_interrupt_count : interruptCountTx(db, row.req_id, delta, bodyCache);
     // 上下文事件位同一套保留语义：排除用途判 none；正文可读且关系可判时按
     // 本次判定，其余场合保留暂存旧值。压缩行把丢弃量写进 basis（字符数）。
     const context = row.purpose_chain === 'exclude'
       ? { event: 'none' as const, droppedChars: null }
       : current === null ? null
-        : contextEventTx(db, row.req_id, row.prev_relation, delta);
+        : contextEventTx(db, row.req_id, row.prev_relation, delta, bodyCache);
     const contextEvent = context?.event ?? row.staged_context_event;
     const contextBasis = context !== null && context.event !== null
       ? JSON.stringify({ context_event: context.event, dropped_chars: context.droppedChars })

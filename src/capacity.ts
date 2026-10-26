@@ -4,6 +4,8 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type { Config } from './config';
 import type { Store } from './store';
+import { addBodyReadStats, emptyBodyReadStats } from './body-cache';
+import type { BodyReadStats } from './body-cache';
 import { measureStorage } from './retention';
 import type { StorageUsage } from './retention';
 import { queuePendingSql } from './derive/state';
@@ -107,6 +109,11 @@ export type CapacityMetrics = {
   jobs: {
     record(name: string, ms: number): void;
     snapshot(): Record<string, { count: number; total_ms: number; max_ms: number }>;
+  };
+  /** 同步派生消息块解码的进程累计；切片路径暂不计入。 */
+  bodyRead: {
+    record(stats: BodyReadStats): void;
+    snapshot(): BodyReadStats;
   };
   eventLoop: {
     start(): void;
@@ -228,6 +235,7 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
   const ingest = createIngestMetrics(startedAt);
   const route = { polls: 0, files_seen: 0, decoded: 0, unchanged: 0, errors: 0 };
   const jobs = new Map<string, { count: number; total_ms: number; max_ms: number }>();
+  const bodyRead = emptyBodyReadStats();
   const intervalMs = 50;
   const limit = 8192;
   const ring = new Float64Array(limit);
@@ -263,6 +271,10 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
       },
       snapshot() { return Object.fromEntries(jobs); },
     },
+    bodyRead: {
+      record(stats) { addBodyReadStats(bodyRead, stats); },
+      snapshot() { return { ...bodyRead }; },
+    },
     eventLoop: {
       start() {
         if (timer !== null) return;
@@ -295,6 +307,7 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
         ingest: ingest.snapshot(),
         route: { ...route },
         jobs: Object.fromEntries(jobs),
+        body_read: { ...bodyRead },
         writer: { ...target.writeStats,
           by_name: Object.fromEntries(Object.entries(target.writeStats.by_name)
             .map(([name, stats]) => [name, { ...stats }])),
