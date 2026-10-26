@@ -650,3 +650,42 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 @media(prefers-reduced-motion:no-preference){
   .req-open-mark svg,.disclosures summary::before{transition:transform .12s}
 }
+
+/* 上下文明细弹窗（web/context-detail.js）：居中面板，遮罩即宿主容器。
+   打开不改右栏；关闭三途径（Esc/关闭钮/遮罩），焦点回触发控件。 */
+.ctx-dialog-root{position:fixed;inset:0;z-index:70;background:rgba(10,18,26,.42);display:flex;align-items:flex-start;justify-content:center;padding:7vh 16px 16px}
+.ctx-dialog-root[hidden]{display:none}
+.ctx-dialog{width:100%;max-width:860px;max-height:80vh;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 12px 40px rgba(10,18,26,.25);overflow:hidden}
+.ctx-d-head{display:flex;align-items:center;gap:9px;padding:10px 14px;border-bottom:1px solid var(--line);flex:none}
+.ctx-d-head .t{display:flex;align-items:center;gap:7px;font-size:12.5px;min-width:0}
+.ctx-d-head .t b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctx-d-head .dot{width:9px;height:9px;border-radius:2.5px;flex:none}
+.ctx-d-head .v{font:11px var(--mono);color:var(--text-2);flex:none}
+.ctx-d-head .grow{flex:1}
+.ctx-d-head .x{border:0;background:none;font-size:16px;line-height:1;color:var(--muted);padding:2px 6px;border-radius:4px;cursor:pointer}
+.ctx-d-head .x:hover{background:var(--hover);color:var(--text)}
+.ctx-d-body{padding:10px 14px 14px;overflow:auto}
+.ctx-d-status{font-size:11px;color:var(--warn);margin:0 0 6px}
+.ctx-d-note{font-size:10.5px;color:var(--muted);line-height:1.6;margin:0 0 6px}
+.ctx-d-entries{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+.ctx-d-entry{border:1px solid var(--line);border-radius:5px;background:var(--inset)}
+.ctx-d-entry>summary{display:flex;align-items:baseline;gap:8px;padding:6px 9px;font-size:11px;cursor:pointer;list-style:none}
+.ctx-d-entry>summary::-webkit-details-marker{display:none}
+.ctx-d-entry>summary::before{content:"▸";color:var(--muted);font-size:9px;flex:none;transition:transform .12s}
+.ctx-d-entry[open]>summary::before{transform:rotate(90deg)}
+.ctx-d-entry>summary:hover{background:var(--hover)}
+.ctx-d-entry .p{font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 4px;flex:none}
+.ctx-d-entry .p.located{color:var(--good);border-color:var(--good)}
+.ctx-d-entry .who{font-weight:550;white-space:nowrap}
+.ctx-d-entry .path{font:10px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ctx-d-content{padding:2px 9px 9px;border-top:1px solid var(--line)}
+.ctx-d-text{font:10.5px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:7px 9px;margin:6px 0 0}
+.ctx-d-raw{margin-top:6px}
+.ctx-d-raw>summary{font-size:10.5px;color:var(--accent);cursor:pointer;list-style:none}
+.ctx-d-raw summary::-webkit-details-marker{display:none}
+.ctx-d-raw pre{font:10px/1.5 var(--mono);max-height:240px;overflow:auto;background:var(--inset);border:1px solid var(--line);border-radius:4px;padding:7px 9px;margin:5px 0 0}
+
+/* 图例项与内容列表行是 button：与 tile 走同一选择动作，样式按行还原。 */
+.comp-legend .name{font:inherit;border:0;background:none;padding:0;cursor:pointer;text-align:left}
+.comp-legend .name:hover{color:var(--text)}
+button.ctx-row{width:100%;font:inherit;border:0;background:none;text-align:left;cursor:pointer}
