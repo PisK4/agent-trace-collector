@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
-import { readBodyTx } from '../body';
+import { readBodyMetaTx, readBodyTx } from '../body';
 import { assistantText } from '../protocols';
 import { interpretMessage, isOmpArchiveMessage, ompDroppedCharsOf } from '../input-interpretation';
 import { clip, interruptCountOf, replyShapeOf, replyToolSummary, toolResultPreviewOf } from './decision';
@@ -159,8 +159,11 @@ export type ReplyInfo = { preview: string | null; shape: ReplyShape | null };
 export function replyInfoOf(db: Database, reqId: number): ReplyInfo {
   const body = readBodyTx(db, reqId);
   if (body === null) return { preview: null, shape: null };
-  const text = assistantText(body.reply) ?? replyToolSummary(body.reply);
-  return { preview: text === null ? null : clip(text), shape: replyShapeOf(body.reply) };
+  const text = assistantText(body.reply) ?? replyToolSummary(body.protocol, body.reply);
+  return {
+    preview: text === null ? null : clip(text),
+    shape: replyShapeOf(body.protocol, body.reply),
+  };
 }
 
 /** 按消息位置取一行正文消息；缺失或解压失败返回 null。导出给切片摘要阶段复用。 */
@@ -241,10 +244,13 @@ export function contextEventTx(db: Database, reqId: number, relation: string | n
 /** db 版工具结果摘要：按 delta 的原始 ord 稀疏取消息，判定交给共享实现。 */
 function toolResultPreview(db: Database, reqId: number, delta: readonly number[],
   associations: readonly ResolvedTool[]): string | null {
+  // 协议从骨架的长期字段取：稀疏消息数组没有请求对象可查键名。
+  const meta = readBodyMetaTx(db, reqId);
+  if (meta === null) return null;
   // 稀疏位留给结果提取跳过：ord 必须保持原位置，不能压缩。
   const messages: unknown[] = [];
   for (const ordinal of delta) messages[ordinal] = messageAt(db, reqId, ordinal);
-  return toolResultPreviewOf(messages, reqId, associations);
+  return toolResultPreviewOf(messages, reqId, associations, meta.protocol);
 }
 
 /**

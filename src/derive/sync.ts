@@ -7,8 +7,8 @@ import { drainRequestPurposesTx } from '../request-purpose';
 import { readBodyTx } from '../body';
 import { pairBackgroundJobsTx } from './bg-jobs';
 import {
-  anthropicReplyCalls, anthropicRequestResults, chainTrunk, chainTrunkRoot,
-  confirmedDeltaOf, initialPairState, matchPredecessor, pairOutcome, presentationDecision,
+  chainTrunk, chainTrunkRoot, confirmedDeltaOf, initialPairState, matchPredecessor, pairOutcome,
+  presentationDecision, replyCallsOf, requestResultsOf,
 } from './decision';
 import type { PredecessorMatch, ResolvedTool } from './decision';
 import {
@@ -429,13 +429,13 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     const confirmedDelta = confirmedDeltaOf(row.prev_relation, delta);
     const ordinalConfirmed = (ord: number): boolean =>
       confirmedDelta.all || confirmedDelta.ords.includes(ord);
-    for (const block of anthropicReplyCalls(body.reply)) {
+    for (const block of replyCallsOf(body.protocol, body.reply)) {
       calls.push({
         req_id: row.req_id, ord: block.ord, call_id: block.id, name: block.name, index,
         arg_path: block.argPath, arg_skill: block.argSkill,
       });
     }
-    for (const result of anthropicRequestResults(body.request)) {
+    for (const result of requestResultsOf(body.protocol, body.request)) {
       results.push({
         req_id: row.req_id, index, ord: result.ord, path: result.path,
         call_id: result.id, value: result.value, confirmed: ordinalConfirmed(result.ord),

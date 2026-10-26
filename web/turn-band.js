@@ -1,6 +1,6 @@
 // @ts-check
 import { bodyNotice, renderReplyDetail } from './body-view.js';
-import { replyView } from './body-model.js';
+import { messagesKeyOf, replyView } from './body-model.js';
 import { esc } from './html.js';
 import { bodyLabelText, bodyStateText } from './row-summary.js';
 
@@ -64,10 +64,10 @@ export function renderTurnRailHead(turn) {
  * @param {number} ownerId 复制原文按 owner 请求读取：轮次态的 owner 与当前请求可以不同
  * @param {BodyRow | null} ownerRow
  */
-function commandPanel(entry, ord, ownerId, ownerRow) {
+function commandPanel(entry, ord, ownerId, ownerRow, arrayKey = 'messages') {
   const head = `<div class="bp-head">
     <span class="kind user bp-kind">User</span>
-    <span class="bp-path">messages[${ord}]</span>
+    <span class="bp-path">${esc(arrayKey)}[${ord}]</span>
     ${entry !== null ? `<button class="chip-btn" data-copy-msg="${ord}" data-copy-owner="${ownerId}">复制原文</button>` : ''}
   </div>`;
   if (entry === null) {
@@ -118,8 +118,10 @@ function replyPanel(read, row, foldKey) {
  * }} input
  */
 export function renderTurnRail(input) {
+  // 位置标签按协议的数组键拼：Responses 是 input，其余是 messages。
+  const arrayKey = messagesKeyOf(input.startRead?.meta ?? null);
   const commands = input.turn.ordinals.map(ord =>
-    commandPanel(input.startRead?.entries.find(entry => entry.ord === ord) ?? null, ord, input.turn.start_req, input.startRow),
+    commandPanel(input.startRead?.entries.find(entry => entry.ord === ord) ?? null, ord, input.turn.start_req, input.startRow, arrayKey),
   ).join('');
   return `${commands}${replyPanel(input.replyRead, input.replyRow, String(input.replyRow?.req_id ?? ''))}`;
 }

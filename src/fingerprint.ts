@@ -43,24 +43,35 @@ function partOf(value: unknown): string | null {
   if (!isRecord(value)) return null;
   const type = value.type;
 
-  if (type === 'text' && typeof value.text === 'string') return `t:${value.text}`;
+  if ((type === 'text' || type === 'input_text' || type === 'output_text')
+    && typeof value.text === 'string') return `t:${value.text}`;
   if (type === 'thinking' && typeof value.thinking === 'string') return `h:${value.thinking}`;
   if (type === 'redacted_thinking') return `h:${String(value.data ?? '')}`;
+  // Responses 的推理项不落 thinking 文本，只有摘要与加密载体；按整项计入。
+  if (type === 'reasoning') return `h:${canonical(value)}`;
   if (type === 'tool_use' || type === 'tool_call' || type === 'function') {
     const fn = isRecord(value.function) ? value.function : null;
     const name = value.name ?? fn?.name;
     const input = value.input ?? fn?.arguments;
     return `u:${String(value.id ?? '')}:${String(name ?? '')}:${canonical(input ?? null)}`;
   }
+  // Responses 的调用项用 call_id 做身份，参数键是 input（custom）或 arguments（function）。
+  if (type === 'function_call' || type === 'custom_tool_call') {
+    return `u:${String(value.call_id ?? '')}:${String(value.name ?? '')}:${canonical(value.input ?? value.arguments ?? null)}`;
+  }
   if (type === 'tool_result') {
     return `r:${String(value.tool_use_id ?? '')}:${canonical(value.content ?? null)}`;
+  }
+  // Responses 的结果项：输出可能是字符串，也可能是内容块数组。
+  if (type === 'function_call_output' || type === 'custom_tool_call_output') {
+    return `r:${String(value.call_id ?? '')}:${canonical(value.output ?? null)}`;
   }
   // 图片、文档等认不出的块：整块计入，cache_control 之外的差异都算不同。
   return `j:${canonical(value)}`;
 }
 
 /**
- * @param message 一条已脱敏的协议消息（anthropic 或 chat 形状均可）
+ * @param message 一条已脱敏的协议消息（anthropic、chat 或 responses 形状均可）
  * @returns 稳定指纹；结构不可读时退回规范化 JSON
  */
 export function messageFingerprint(message: unknown): string {
@@ -81,6 +92,9 @@ export function messageFingerprint(message: unknown): string {
   push(message.content);
   // chat 协议把工具调用挂在 message.tool_calls 上，不在 content 里。
   push(message.tool_calls);
+  // Responses 的顶层项本身就是一段：工具调用、工具结果与推理都不在 content 里。
+  // 少了这一条，两笔只在工具往返上有差的请求会得到同一个空指纹。
+  if (parts.length === 0) return `${role}|j:${canonical(message)}`;
 
   return `${role}|${parts.join('\u0001')}`;
 }

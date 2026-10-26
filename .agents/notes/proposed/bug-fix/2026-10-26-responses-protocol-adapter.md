@@ -100,6 +100,17 @@ Codex 还会在请求里带 `additional_tools` 这类自有项，它不属于消
 
 回填的契约：逐笔独立事务；先用 `validateSkeleton` 严格校验，不用只判断是不是对象的 `skeletonLike`；两种布局都要覆盖（`has_messages=false` 时完整请求在骨架里，`has_messages=true` 时先从块完整恢复再重写）；`partial` 明确拒绝，保留原状态与原因；失败行原样不动并报告原因；重复执行不新增块，也不无故推进输入修订。协议从骨架里的长期字段取，不依赖可能已过期的 `raw_hook`。
 
+## 交付状态
+
+第一步（形状读取与无损恢复）已交付。
+
+- `src/protocol-shape.ts` 收下全部形状知识：消息数组键与形态、裸字符串输入的合成与还原、按 `type` 推断角色、文本块类型、回复侧调用、请求侧结果。名单外协议一律返回空表。
+- 骨架新增 `messages_key` 与 `messages_form`，恢复按记录放回原键与原形态；旧骨架缺这两项时按 `messages`/`array` 读，`validateSkeleton` 同时校验裸字符串形态的条数必须是一条。
+- 写入布局本步未动：`messagesOf` 仍只认 `request.messages`，所以 `responses` 的历史行照旧整段留在骨架里，恢复逐字相等。`CAPABLE_PROTOCOLS` 未加 `responses`，`ADAPTER_VERSION` 仍为 1，`parse_state` 还停在 `unsupported`。
+- 指纹、输入解释、角色编码、系统提示（含 `instructions`）、回复文本与形状、派生抽取（`replyCallsOf`、`requestResultsOf`）、结果定位（`request.input[N]`）都已按协议工作；前端以 `BodyPage.protocol` 为准取键，不再写死 `request.messages` 与 `request.system`。
+
+第二至四步未开始：`replyView` 与 `messageBlocks` 的 Responses 支、`previous_response_id` 的派生判据、拆块启用与版本升级、`maintain reparse` 回填，以及 `docs/architecture-design.md` 与 `docs/acceptance.md` 的改写。
+
 ## Alternatives considered
 
 **按字段猜协议，不按 `protocol` 分派。** 见到 `input` 数组就当 Responses，见到 `messages` 就当 chat。少一张表，但 `input` 在别的协议里可以合法指别的东西，猜错时错得很安静：消息照样进块，只是按错的角色与路径解释。架构评审已经定过按实际 `protocol` 分派，这里不翻案。

@@ -239,7 +239,7 @@ export function systemContextOf(row, readOf) {
  * 未配对的结果、System 与其余输入步骤打开正文来源；记录步骤打开请求读数。
  * @param {import('./trace-view.js').TraceStep | null} step
  * @returns {{side:'none'}
- *   | {side:'request', target:'system', path:'request.system', text:string}
+ *   | {side:'request', target:'system', path:string, text:string}
  *   | {side:'request', target:'message', path:string, messageOrd:number}
  *   | {side:'reply', target:'text', path:string, blockIndex:number, text:string}
  *   | {side:'reply', target:'block', path:string, blockIndex:number, raw:unknown}
@@ -257,7 +257,8 @@ export function resolveSelectedSource(step) {
     if (typeof s.messageOrd === 'number') {
       return { side: 'request', target: 'message', path: s.path, messageOrd: s.messageOrd };
     }
-    return { side: 'request', target: 'system', path: 'request.system', text: String(step.raw ?? '') };
+    // 系统提示的路径随协议不同（request.system / request.instructions），原样透传。
+    return { side: 'request', target: 'system', path: s.path, text: String(step.raw ?? '') };
   }
   if (step.kind === 'tool' && step.callOrd !== null) {
     return { side: 'reply', target: 'call', path: s.path, callOrd: step.callOrd, ownerReq: step.reqId };

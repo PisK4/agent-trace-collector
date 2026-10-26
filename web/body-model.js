@@ -147,23 +147,80 @@ export function displayRoleOf(entry) {
 }
 
 /**
- * 顶层 system 字段的文本。Chat 与 Anthropic 都保存在 request_fields.system：
- * 字符串直读，块数组取 text 块拼接。缺失或为空返回 null，不从相邻字段补猜。
+ * 顶层 system 字段的文本。Anthropic 与 Chat 保存在 `request_fields.system`，
+ * Responses 在 `instructions`：字符串直读，块数组取 text 块拼接。两者都存在时
+ * 按 system 在前合并，与服务端 `systemTextsOf` 的顺序一致。缺失或为空返回 null。
  * @param {BodyPage | null | undefined} page
  * @returns {string | null}
  */
 export function topSystemText(page) {
   const fields = page === null || page === undefined ? null : page.request_fields;
-  const system = fields !== null && typeof fields === 'object' && !Array.isArray(fields)
-    ? /** @type {Record<string, unknown>} */ (fields).system ?? null : null;
-  if (typeof system === 'string') return system.length > 0 ? system : null;
-  if (Array.isArray(system)) {
-    const texts = system
+  const source = fields !== null && typeof fields === 'object' && !Array.isArray(fields)
+    ? /** @type {Record<string, unknown>} */ (fields) : null;
+  const parts = [fieldsText(source === null ? null : source.system),
+    fieldsText(source === null ? null : source.instructions)]
+    .filter(text => text !== null && text.length > 0);
+  return parts.length > 0 ? parts.join('\n\n') : null;
+}
+
+/**
+ * 单个系统提示字段的文本：字符串直读，块数组取 text 块拼接。
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function fieldsText(value) {
+  if (typeof value === 'string') return value.length > 0 ? value : null;
+  if (Array.isArray(value)) {
+    const texts = value
       .map(block => isRecord(block) && typeof block.text === 'string' ? block.text : '')
       .filter(text => text.length > 0);
     return texts.length > 0 ? texts.join('\n\n') : null;
   }
   return null;
+}
+
+/**
+ * 消息数组在原始请求对象里的键：Responses 用 `input`，其余协议用 `messages`。
+ * 浏览器不打包 `protocol-shape`，协议名从 `BodyPage.protocol` 取；正文页还没读到
+ * 时协议未知，按 `messages` 拼路径，与读取端旧布局的缺省一致。
+ * @param {BodyPage | null | undefined} page
+ * @returns {'messages' | 'input'}
+ */
+export function messagesKeyOf(page) {
+  const protocol = page === null || page === undefined ? null : page.protocol;
+  return protocol === 'responses' ? 'input' : 'messages';
+}
+
+/**
+ * 消息在原始请求对象里的路径前缀，如 `request.messages[3]` 或 `request.input[3]`。
+ * 轨迹与配对页都用它拼与后端 `result_path` 比对的位置。
+ * @param {BodyPage | null | undefined} page
+ * @param {number} ord
+ * @returns {string}
+ */
+export function messagePathOf(page, ord) {
+  return `request.${messagesKeyOf(page)}[${ord}]`;
+}
+
+/**
+ * 从已有协议路径认消息数组键：`request.input[3]` → `input`，其余按 `messages`。
+ * 只认路径前缀，不看内容。
+ * @param {string | null | undefined} path
+ * @returns {'messages' | 'input'}
+ */
+export function messagesKeyOfPath(path) {
+  return typeof path === 'string' && path.startsWith('request.input[') ? 'input' : 'messages';
+}
+
+/**
+ * 顶层系统提示在原始对象里的路径：Responses 是 `request.instructions`，
+ * 其余协议是 `request.system`。轨迹步骤与右栏详情共用这一份。
+ * @param {BodyPage | null | undefined} page
+ * @returns {'request.system' | 'request.instructions'}
+ */
+export function systemPathOf(page) {
+  const protocol = page === null || page === undefined ? null : page.protocol;
+  return protocol === 'responses' ? 'request.instructions' : 'request.system';
 }
 
 /** @param {Block[]} blocks */

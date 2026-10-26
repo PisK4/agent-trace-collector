@@ -1,3 +1,5 @@
+import { isTextBlockType, roleNameOfItem } from './protocol-shape';
+
 /**
  * 请求输入的纯解释：把 harness 包装与注入文本从用户真正说的话里分开。
  *
@@ -140,7 +142,9 @@ function textBlocks(message: unknown): string[] {
   for (const block of content) {
     if (block === null || typeof block !== 'object' || Array.isArray(block)) continue;
     const record = block as Record<string, unknown>;
-    if (record.type === 'text' && typeof record.text === 'string' && record.text.length > 0) {
+    // Responses 的文本块叫 input_text / output_text；认不出它们，用户消息的
+    // is_input 为假，轨迹里没有用户步骤，标题与轮次命令识别一起落空。
+    if (isTextBlockType(record.type) && typeof record.text === 'string' && record.text.length > 0) {
       out.push(record.text);
     }
   }
@@ -262,12 +266,13 @@ export function interpretMessage(message: unknown, agent: string | null, ord: nu
   if (message === null || typeof message !== 'object' || Array.isArray(message)) {
     return { ord, role: 'unknown', role_state: 'unknown', input: null };
   }
-  const rawRole = (message as Record<string, unknown>).role;
-  const role: MessageView['role'] = typeof rawRole === 'string'
-    ? rawRole === 'developer' ? 'system'
+  // 显式 role 之外还有按 type 推断（Responses 的调用项与工具结果项没有 role）。
+  const rawRole = roleNameOfItem(message);
+  const role: MessageView['role'] = rawRole === null
+    ? 'unknown'
+    : rawRole === 'developer' ? 'system'
       : rawRole === 'user' || rawRole === 'assistant' || rawRole === 'system' || rawRole === 'tool'
-        ? rawRole as 'user' | 'assistant' | 'system' | 'tool' : 'unknown'
-    : 'unknown';
+        ? rawRole as 'user' | 'assistant' | 'system' | 'tool' : 'unknown';
   return {
     ord,
     role,
