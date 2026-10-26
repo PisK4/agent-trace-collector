@@ -65,7 +65,7 @@ Claude Code 与 OMP 带这两个环境变量启动即可，都按 OTel 标准变
 
 - **Claude Code**：LLM span 落成请求行；要逐笔正文再加 `OTEL_LOG_RAW_API_BODIES=file`，harness 把完整请求与回复写成文件、事件里带指针，采集器按指针读入并落库，正文完整不截断。
 - **OMP**：span 落成请求行，正文一栏是结构化摘要（页面标「OTLP 摘要」）；它的 OTLP 不带逐笔正文通路。
-- **Codex**：不读环境变量，`~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 指向本机端点（可照抄的片段见[运维手册](docs/operations.md)的 OTLP 接入一节）；turn span 落成请求行，有会话、模型与用量读数。它的导出不带逐笔正文，逐笔正文仍由 magpie 路承担。
+- **Codex**：不读环境变量，`~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 指向本机端点（可照抄的片段见[运维手册](docs/operations.md)的 OTLP 接入一节，`protocol` 写 `binary`）；turn span 落成请求行，有会话、模型与用量读数。它的导出不带逐笔正文，逐笔正文仍由 magpie 路承担。
 
 同一会话同时开 magpie 与 OTLP 时，时间线里每笔调用会出现两行，一行 magpie 一行 OTLP，行上来源可区分；第一批不做自动合并。验证命令、错误码表与磁盘档位行为见[运维手册](docs/operations.md)的 OTLP 接入一节。
 

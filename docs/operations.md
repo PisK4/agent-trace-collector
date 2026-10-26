@@ -305,18 +305,18 @@ export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $ATC_TOKEN"
 
 Claude Code 与 OMP 按 OTel 标准环境变量配置，endpoint 给到根、SDK 自己拼 `/v1/traces`。Claude Code 要正文文件指针时再开 `OTEL_LOG_RAW_API_BODIES=file`（logs 走 `http/json`，事件里带 `body_ref` 路径，采集器按指针读文件落正文）；OMP 的 logs 只有 run 级汇总，开了也不产逐笔正文。协议按 harness 各自支持的选择：`application/x-protobuf` 与 `application/json` 两种都收。
 
-Codex 不读 OTel 标准变量，配置在 `~/.codex/config.toml`——三个 exporter 各管一个信号，traces 是 `trace_exporter`，默认关；端点是信号各自的完整 URL：
+Codex 不读 OTel 标准变量，配置在 `~/.codex/config.toml`——三个 exporter 各管一个信号，traces 是 `trace_exporter`，默认关；端点是信号各自的完整 URL。`protocol` 的取值是 `binary` 或 `json`（不是 `protobuf`，写错会在加载配置时直接报 `unknown variant`）：
 
 ```toml
 [otel.trace_exporter.otlp-http]
 endpoint = "http://127.0.0.1:8320/v1/traces"
-protocol = "protobuf"
+protocol = "binary"
 
 [otel.trace_exporter.otlp-http.headers]
 authorization = "Bearer $ATC_TOKEN"
 ```
 
-turn span（`session_task.turn`）落成请求行，带会话（`thread.id`）、模型与七项用量里的四项；Codex 的导出不带逐笔正文（logs 的用户提示默认 REDACTED，没有任何事件携带模型回复），正文读数仍由 magpie 路承担。
+turn span（`session_task.turn`）落成请求行，带会话（`thread.id`）、模型与七项用量里的四项。`service.name` 取 originator，随入口变化（`codex exec` 是 `codex_exec`，交互 CLI 是 `codex_cli_rs`），`OTEL_SERVICE_NAME` 覆盖无效，白名单按这一族取值收。Codex 的导出不带逐笔正文（logs 的用户提示默认 REDACTED，没有任何事件携带模型回复），正文读数仍由 magpie 路承担。
 
 验证（空载荷也应回 200）：
 

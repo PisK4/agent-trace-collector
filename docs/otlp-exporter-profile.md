@@ -33,9 +33,11 @@
 | --- | --- | --- |
 | `claude-code` | Claude Code | span 名 `claude_code.llm_request` |
 | `oh-my-pi` | OMP | `gen_ai.operation.name='chat'` |
-| `codex_cli_rs` | Codex CLI | span 名 `session_task.turn` |
+| `codex_exec`、`codex_cli_rs` 等 originator 族 | Codex CLI | span 名 `session_task.turn` |
 
 已登记的三家用各自的原生键族（Claude Code 是平铺 `input_tokens` 一族，OMP 用 `gen_ai.usage.*`，Codex 用 `codex.turn.token_usage.*`），登记按实际导出形状写规则，不要求改成上面的 profile。未登记的服务不建行：span 全量落原始层不丢，并按服务与日聚合记一行 `service_not_registered` issue——exporter 指过来就会被看见，补一行规则即建行。
+
+Codex 是例外形态：它的 `service.name` 取 originator，同一份导出随入口变化（`codex exec` 为 `codex_exec`，交互 CLI 为 `codex_cli_rs`），且 `OTEL_SERVICE_NAME` 覆盖无效（2026-10-26 实测）。规范希望 exporter 报一个稳定值；做不到时，在登记时把这一族取值列进同一行规则。
 
 ## 版本承诺
 

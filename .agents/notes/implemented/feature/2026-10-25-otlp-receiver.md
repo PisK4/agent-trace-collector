@@ -186,7 +186,7 @@ harness 面的文档级扫描（同日）：
   - 双通道并存两行的提示
 
   错误码表与磁盘档位仍以运维手册为家。
-- 2026-10-26 Codex 白名单条目已交付（`OTLP_MAPPING_VERSION` 升 2）。`codex_cli_rs` 按 span 名 `session_task.turn` 建行：session 取 `thread.id`、模型取 `model`（无回复侧模型与终止原因字段，保持 NULL）、四项用量取自有 `codex.turn.token_usage.*` 族（non_cached / reasoning / total 三项留原始层）；`session_task.compact` / `review` / `user_shell` 不建行也不进未知桶。键集对齐父知识库固定提交源码考察，未抓样实测，真实流量验收单独一轮，决策归[两步走提案](../../implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md)。页面标签 `codex`、运维手册的 TOML 配置段与 README 接入段同步。
+- 2026-10-26 Codex 白名单条目已交付（`OTLP_MAPPING_VERSION` 升 3）。按 span 名 `session_task.turn` 建行：session 取 `thread.id`、模型取 `model`（无回复侧模型与终止原因字段，保持 NULL）、四项用量取自有 `codex.turn.token_usage.*` 族（non_cached / reasoning / total 三项留原始层）；`session_task.compact` / `review` / `user_shell` 不建行也不进未知桶。`service` 是一族 originator 取值（`codex_exec` / `codex_cli_rs` / `codex_tui` / `codex_vscode` / `codex_mcp_server` / `codex_app_server`），`SpanRule.service` 支持字符串数组、匹配走 `ruleOwnsService`。本机真实流量验收（`codex exec` 直连，用量与 span 原始值逐项相等）推翻了三处源码考察读法：`protocol` 是 `binary` / `json` 而非 `protobuf`，`service.name` 是 `codex_exec` 而非 `codex_cli_rs`，`OTEL_SERVICE_NAME` 覆盖无效。页面标签 `codex`、运维手册的 TOML 配置段与 README 接入段同步。
 - 2026-10-26 未知服务可见性已交付。traces 接收结果加 `unknownServices` 计数；未登记 `service.name` 的 span 照旧只落原始层，另按服务与接收日聚合记一行 `service_not_registered` issue（`ingest_issue` 主键去重，同日重发不刷表），健康接口的 issues 列表自然可见，运维手册补了按 service 分组查 `raw_otlp_span` 的 SQL。这是对外 profile 的门铃，决策归[两步走提案](../../implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md)。
 
 ## Alternatives considered

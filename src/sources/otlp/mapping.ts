@@ -8,14 +8,14 @@
  *
  * 键名以抓样实测或固定提交源码考察为准，不以语义约定文档为准：Claude Code 的
  * 用量键是平铺的 `input_tokens` 一族（不是 `gen_ai.usage.*`，实测），OMP 用
- * `gen_ai.usage.*`（实测），Codex 用自有 `codex.turn.token_usage.*`（源码
- * 考察，真实流量验收单独一轮）。方言差异全部收在这张表里，改表即升
- * OTLP_MAPPING_VERSION。
+ * `gen_ai.usage.*`（实测），Codex 用自有 `codex.turn.token_usage.*`（2026-10-26
+ * 本机真实流量实测，`codex exec` 与交互 CLI 两种入口）。方言差异全部收在这张表里，
+ * 改表即升 OTLP_MAPPING_VERSION。
  */
 
 import type { OtlpAttrs, OtlpSpan } from './decode';
 
-export const OTLP_MAPPING_VERSION = 2;
+export const OTLP_MAPPING_VERSION = 3;
 
 /** 属性键按序回退取值；空数组表示该列本版不映射（保持 NULL）。 */
 type AttrKeys = {
@@ -30,15 +30,26 @@ type AttrKeys = {
 };
 
 export type SpanRule = {
-  /** service.name 精确匹配；白名单外的服务不建行。 */
-  service: string;
-  /** request.agent 标签（claude-code→claude、oh-my-pi→omp、codex_cli_rs→codex）。 */
+  /**
+   * service.name 精确匹配；白名单外的服务不建行。
+   *
+   * 单值是常态。Codex 例外：`service.name` 取 originator，同一份导出随入口
+   * 变化（`codex exec` 为 `codex_exec`，交互 CLI 为 `codex_cli_rs`），
+   * `OTEL_SERVICE_NAME` 覆盖在 2026-10-26 实测无效，所以一族取值共享一条规则。
+   */
+  service: string | readonly string[];
+  /** request.agent 标签（claude-code→claude、oh-my-pi→omp、codex_*→codex）。 */
   agent: string;
   /** 选取规则名，随 OTLP_MAPPING_VERSION 一起版本化。 */
   ruleId: string;
   matches(span: OtlpSpan): boolean;
   keys: AttrKeys;
 };
+
+/** 规则是否认这个 service.name。 */
+export function ruleOwnsService(rule: SpanRule, service: string | null): boolean {
+  return typeof rule.service === 'string' ? rule.service === service : rule.service.includes(service ?? '');
+}
 
 export const SPAN_RULES: readonly SpanRule[] = [
   {
@@ -74,7 +85,9 @@ export const SPAN_RULES: readonly SpanRule[] = [
     },
   },
   {
-    service: 'codex_cli_rs',
+    // originator 家族：exec 与非交互入口是 codex_exec，交互 CLI 是 codex_cli_rs，
+    // 其余为二进制里的其他入口名。取值以实测与二进制枚举为准。
+    service: ['codex_exec', 'codex_cli_rs', 'codex_tui', 'codex_vscode', 'codex_mcp_server', 'codex_app_server'],
     agent: 'codex',
     ruleId: 'span_name',
     matches: span => span.name === 'session_task.turn',
@@ -102,7 +115,7 @@ export type SpanClassification =
 const LLM_SHAPE_KEYS = ['gen_ai.usage.input_tokens', 'input_tokens', 'gen_ai.request.model'];
 
 export function classifySpan(service: string | null, span: OtlpSpan): SpanClassification {
-  const rule = SPAN_RULES.find(entry => entry.service === service);
+  const rule = SPAN_RULES.find(entry => ruleOwnsService(entry, service));
   if (rule === undefined) return { kind: 'skipped' };
   if (rule.matches(span)) return { kind: 'llm', rule };
   const shapeLikeLlm = LLM_SHAPE_KEYS.some(key => span.attrs[key] !== undefined);
