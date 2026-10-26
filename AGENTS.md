@@ -17,7 +17,8 @@ bun run verify:notes   # 提交前
 ```
 
 - 每个行为变更只跑能对该回归失败的最窄测试，提交前不重复已经通过的检查；全量套件与平台矩阵留给显式动作。
-- `bun run maintain` 与 `bun run verify-cutover` 必须带子命令，裸调用只打印 usage 并退出 2；命令与恢复步骤见[运维手册](docs/operations.md)。
+- `bun run service`、`bun run maintain` 与 `bun run verify-cutover` 必须带子命令，裸调用只打印 usage 并退出 2；命令与恢复步骤见[运维手册](docs/operations.md)。
+- 生产采集器由 launchd（`KeepAlive`）托管：起停走 `bun run service restart|stop|start`，不要 `kill`，也不要再手动起一个。见[起停与状态](docs/operations.md#起停与状态)。
 - `verify:notes` 检查活跃 note 格式、归档封印与本次改动是否带 note。纯机械改动豁免：提交信息写 `Agent-Note: none — <reason>`，暂存阶段用 `ATC_NOTE_EXEMPT=<reason>` 放行。来由见[变更闸门](.agents/notes/implemented/process/2026-10-21-change-note-gate.md)。
 
 ## 常备约定

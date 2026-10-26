@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "bun src/main.ts",
+    "service": "bun scripts/service.ts",
     "maintain": "bun src/maintenance/cli.ts",
     "verify-cutover": "bun scripts/verify-cutover.ts",
     "test": "bun test",
