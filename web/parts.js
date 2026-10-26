@@ -25,6 +25,12 @@ export function partSlot(kind) {
   return PARTS.find(part => part.kind === kind)?.slot ?? 'p-unknown';
 }
 
+/** 类别语义次序：已知类别按登记序，未知类别返回登记数（调用方再按数据出现序稳定排序）。 @param {string} kind */
+export function partRank(kind) {
+  const i = PARTS.findIndex(part => part.kind === kind);
+  return i === -1 ? PARTS.length : i;
+}
+
 /** 未知 kind 使用独立颜色变量，避免落到某个已知类别上。 @param {string} kind */
 export function partColor(kind) {
   return `var(--${partSlot(kind)})`;
