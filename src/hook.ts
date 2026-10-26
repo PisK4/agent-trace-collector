@@ -322,15 +322,18 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
 
   // 4) 目标缺正文而源有正文时搬过去，不覆盖已有正文。
   const targetBody = db.query<{ body_state: string }, [number]>('SELECT body_state FROM request WHERE req_id=?').get(targetId);
-  const sourceBody = db.query<{ skeleton_z: Uint8Array | null; body_state: string; parse_state: string | null; reply_state: string | null; msg_count: number | null; miss_reason: string | null }, [number]>(
-    'SELECT skeleton_z, body_state, parse_state, reply_state, msg_count, miss_reason FROM request WHERE req_id=?',
+  // adapter_version 一并搬：漏掉它会让有正文的存活请求留着 NULL 版本，
+  // 按版本筛选的回填因此跳过这些行。
+  const sourceBody = db.query<{ skeleton_z: Uint8Array | null; body_state: string; parse_state: string | null; reply_state: string | null; adapter_version: number | null; msg_count: number | null; miss_reason: string | null }, [number]>(
+    'SELECT skeleton_z, body_state, parse_state, reply_state, adapter_version, msg_count, miss_reason FROM request WHERE req_id=?',
   ).get(sourceId);
   let bodyState = targetBody?.body_state ?? null;
   if (targetBody?.body_state !== 'available' && sourceBody?.skeleton_z != null) {
     db.run(
       `UPDATE request SET skeleton_z=?, body_state=?, parse_state=COALESCE(parse_state,?), reply_state=COALESCE(reply_state,?),
-         msg_count=COALESCE(msg_count,?) WHERE req_id=?`,
-      [sourceBody.skeleton_z, sourceBody.body_state, sourceBody.parse_state, sourceBody.reply_state, sourceBody.msg_count, targetId],
+         adapter_version=COALESCE(adapter_version,?), msg_count=COALESCE(msg_count,?) WHERE req_id=?`,
+      [sourceBody.skeleton_z, sourceBody.body_state, sourceBody.parse_state, sourceBody.reply_state,
+        sourceBody.adapter_version, sourceBody.msg_count, targetId],
     );
     db.run('UPDATE request SET skeleton_z=NULL WHERE req_id=?', [sourceId]);
     bodyState = sourceBody.body_state;

@@ -68,7 +68,25 @@ test('cache_control 不同则不是同一块', () => {
   }
 });
 
-test('无 messages 的协议对象整份进骨架并可无损还原', () => {
+test('无消息数组的协议对象整份进骨架并可无损还原', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, 1);
+    const body: BodyInput = {
+      protocol: 'gemini',
+      request: { contents: [{ role: 'user', parts: [{ text: 'hello' }] }] },
+      reply: { responseId: 'gem_x', candidates: [] },
+      redact_version: 1,
+    };
+    persistBody(f.store, 1, body);
+    expect(restoreBody(f.store, 1)).toEqual(body);
+    expect(f.store.read.query('SELECT count(*) AS n FROM request_block').get()).toEqual({ n: 0 });
+  } finally {
+    f.close();
+  }
+});
+
+test('Responses 的裸字符串输入拆成一条消息并逐字还原', () => {
   const f = fixture();
   try {
     seedRequest(f.store, 1);
@@ -80,7 +98,8 @@ test('无 messages 的协议对象整份进骨架并可无损还原', () => {
     };
     persistBody(f.store, 1, body);
     expect(restoreBody(f.store, 1)).toEqual(body);
-    expect(f.store.read.query('SELECT count(*) AS n FROM request_block').get()).toEqual({ n: 0 });
+    // 裸字符串不是不可拆的形状：合成一条用户消息进块库，骨架只留其余字段。
+    expect(f.store.read.query('SELECT count(*) AS n FROM request_block').get()).toEqual({ n: 1 });
   } finally {
     f.close();
   }

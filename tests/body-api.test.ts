@@ -180,16 +180,16 @@ test('unsupported 协议原对象仍可整份读出', async () => {
   const f = fixture();
   try {
     seed(f.store, 1, {
-      protocol: 'responses',
-      request: { input: 'hello', messages: undefined },
-      reply: { id: 'resp_1', output: [] },
+      protocol: 'gemini',
+      request: { contents: [{ role: 'user', parts: [{ text: 'hello' }] }] },
+      reply: { responseId: 'gem_1', candidates: [] },
       redact_version: 1,
     });
     const page = await (await handlerFor(f)('/api/requests/1/body')).json() as Record<string, unknown>;
     expect(page.state).toBe('available');
     expect(page.parse_state).toBe('unsupported');
-    expect(page.request_fields).toEqual({ input: 'hello' });
-    expect(page.reply).toEqual({ id: 'resp_1', output: [] });
+    expect(page.request_fields).toEqual({ contents: [{ role: 'user', parts: [{ text: 'hello' }] }] });
+    expect(page.reply).toEqual({ responseId: 'gem_1', candidates: [] });
     // 原文完整保存不等于协议可解释：消息总数与能力都不从保存覆盖推导。
     expect(page.total).toBeNull();
     const caps = page.capabilities as Record<string, { state: string; items: unknown[]; reason: string | null }>;
