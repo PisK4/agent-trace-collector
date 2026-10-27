@@ -14,14 +14,22 @@ import {
   type DerivationReading, type ProjectionMetaReading, type PromptReading, type SourceFactsReading,
 } from './readings';
 
-export type ToolCallRow = {
+/** 调用行与结果行的位置事实；由正文解析的调用与反向索引共用这一组列。 */
+type PairColumns = {
   call_id: string; ord: number; tool_name: string | null;
   result_req: number | null; result_ord: number | null;
   result_path: string | null; state: string;
 };
 
+/**
+ * 执行段：结果请求开始 − 调用请求结束（调用请求的 started_ms + ms）。
+ * 两笔时长都在且窗口非负才算，负值是时钟或结算异常，留空不显示。窗口包含
+ * 客户端处理、权限确认与会话中断，是上界，不是工具进程自己的耗时。
+ */
+export type ToolCallRow = PairColumns & { exec_ms: number | null };
+
 /** 反向配对：本请求承载的结果块指向的调用，owner_req 是发起调用的请求。 */
-export type ToolResultIndexRow = ToolCallRow & { owner_req: number };
+export type ToolResultIndexRow = PairColumns & { owner_req: number };
 
 export type RequestDetail = RequestRow & {
   prev_req_id: number | null;
@@ -70,13 +78,23 @@ export type RequestDetail = RequestRow & {
   historical: HistoricalResult | null;
 };
 
+/**
+ * 推理段守卫：末次尝试报告了 firstReasoning，才说明首个内容是推理。
+ * CASE 先判 json_valid，非法 JSON 下 json_extract 会抛错；`$[#-1]` 对非数组
+ * （空数组、对象、标量）返回 NULL，不抛错。摘要层缺行时整列 NULL。
+ */
+const LAST_FIRST_REASONING_COL = `(SELECT CASE WHEN json_valid(s.tries_json)
+    THEN json_extract(s.tries_json, '$[#-1].firstReasoning') END
+  FROM route_summary s WHERE s.route_id = r.route_id)`;
+
 /** 列表不带摘要版本列：它是详情给 E 用的依据，列表只判断 `derived_state`。 */
 const REQUEST_COLUMNS = `r.req_id, r.conv_key, r.actor, r.agent, r.actor_state, r.started_ms, r.via,
   ${derivedColSql('g', 'd', 'r', 'title')} AS title,
   ${derivedColSql('g', 'd', 'r', 'title_source')} AS title_source,
   r.status, r.model_requested, r.model_served, r.in_tok, r.out_tok,
   r.cache_read, r.cache_write, r.cost, r.cost_state, r.have,
-  r.ms, r.ttft_ms, r.flow_ms, r.body_state, r.miss_reason, r.req_kind,
+  r.ms, r.ttft_ms, r.flow_ms, r.first_text_ms,
+  ${LAST_FIRST_REASONING_COL} AS first_reasoning, r.body_state, r.miss_reason, r.req_kind,
   ${derivedColSql('g', 'd', 'r', 'chain_role')} AS chain_role,
   r.model_title, r.purpose_status, r.purpose_version, r.purpose_rule, r.purpose_chain,
   ${derivedColSql('g', 'd', 'r', 'input_preview')} AS input_preview,
@@ -217,19 +235,32 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
                   ELSE 'unavailable' END AS derive_source,
              g.published_generation,
              (SELECT 1 FROM route_summary s WHERE s.route_id = r.route_id) AS summary_exists,
+             ${LAST_FIRST_REASONING_COL} AS first_reasoning,
              (SELECT z FROM route_summary s WHERE s.route_id = r.route_id) AS summary_z
       FROM request r ${deriveJoinSql('g', 'd', 'r')} WHERE r.req_id = ?`).get(canonical) as DetailDbRow | null;
     if (row == null) return null;
     // 工具同样按来源整组读取：发布代查代际结果表；发布代缺行或无指针时回退
     // 同步旧表——它仍是调用身份的家。配对是否可信由 current 屏蔽决定。
     const toolCallsFromSync = () => store.read.query<ToolCallRow, [number]>(`
-      SELECT call_id, ord, tool_name, result_req, result_ord, result_path, state
-      FROM tool_call WHERE req_id = ? ORDER BY ord`).all(canonical);
+      SELECT c.call_id, c.ord, c.tool_name, c.result_req, c.result_ord, c.result_path, c.state,
+             CASE WHEN rr.started_ms IS NOT NULL AND o.ms IS NOT NULL
+                       AND rr.started_ms >= o.started_ms + o.ms
+                  THEN rr.started_ms - (o.started_ms + o.ms) END AS exec_ms
+      FROM tool_call c
+      JOIN request o ON o.req_id = c.req_id
+      LEFT JOIN request rr ON rr.req_id = c.result_req
+      WHERE c.req_id = ? ORDER BY c.ord`).all(canonical);
     let toolCalls: ToolCallRow[] = toolCallsFromSync();
     if (row.published_generation !== null) {
       const generational = store.read.query<ToolCallRow, [string, number]>(`
-        SELECT call_id, ord, tool_name, result_req, result_ord, result_path, state
-        FROM derive_tool_result WHERE generation = ? AND req_id = ? ORDER BY ord`)
+        SELECT c.call_id, c.ord, c.tool_name, c.result_req, c.result_ord, c.result_path, c.state,
+               CASE WHEN rr.started_ms IS NOT NULL AND o.ms IS NOT NULL
+                         AND rr.started_ms >= o.started_ms + o.ms
+                    THEN rr.started_ms - (o.started_ms + o.ms) END AS exec_ms
+        FROM derive_tool_result c
+        JOIN request o ON o.req_id = c.req_id
+        LEFT JOIN request rr ON rr.req_id = c.result_req
+        WHERE c.generation = ? AND c.req_id = ? ORDER BY c.ord`)
         .all(row.published_generation, canonical);
       if (generational.length > 0) toolCalls = generational;
     }
@@ -316,7 +347,7 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     // 工具候选同样是组结果：非当前时只保留调用身份，结果位置不外露。
     tool_calls: current ? toolCalls : toolCalls.map(call => ({
       ...call, result_req: null, result_ord: null, result_path: null,
-      state: 'pending',
+      state: 'pending', exec_ms: null,
     })),
     // 反向索引整条都是组结果：非当前时没有可保留的身份，直接为空。
     tool_results: current ? toolResults : [],

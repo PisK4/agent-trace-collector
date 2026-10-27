@@ -60,7 +60,6 @@ export type AttemptItem = {
   done: boolean | null;
   tier_served: string | null;
   reasoning_hidden: boolean | null;
-  queued_ms: number | null;
 };
 
 export type AttemptChain = {
@@ -212,7 +211,6 @@ export function attemptChainOf(tries: unknown): AttemptChain {
       done: typeof entry.done === 'boolean' ? entry.done : null,
       tier_served: stringOrNull(entry.tierServed),
       reasoning_hidden: typeof entry.reasoningHidden === 'boolean' ? entry.reasoningHidden : null,
-      queued_ms: finite(entry.queued),
     });
   }
   if (items.length === 0) {

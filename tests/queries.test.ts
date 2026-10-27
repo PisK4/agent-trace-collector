@@ -160,11 +160,13 @@ test('已完成的组在列表与详情里都是current', () => {
     expect(detail.derived_state).toBe('current');
     expect(detail.prev_relation).toBe('confirmed');
     expect(detail.delta_ordinals).toEqual([1, 2]);
-    // 工具行挂在发起调用的那一笔上，配对结果指向第二笔。
+    // 工具行挂在发起调用的那一笔上，配对结果指向第二笔；执行段是调用侧读数，
+    // 反向索引只有位置事实，两者只差这一列。
     const caller = getRequest(f.store, 1)!;
     expect(caller.tool_calls[0]?.state).toBe('resolved');
     expect(caller.tool_calls[0]?.result_req).toBe(2);
-    expect(detail.tool_results).toEqual([{ owner_req: 1, ...caller.tool_calls[0] }]);
+    const { exec_ms: _callExec, ...callFacts } = caller.tool_calls[0]!;
+    expect(detail.tool_results).toEqual([{ owner_req: 1, ...callFacts }]);
     // 当前行不需要 historical：当前值已经在顶层。
     expect(detail.historical).toBeNull();
   } finally { f.close(); }
@@ -541,9 +543,11 @@ test('尝试链按真实键读取并丢掉读不到的键', () => {
     status: 200, ms: 3176, model: 'step-5-preview', done: true,
     served: 'step-5-preview', effort: 'high', ttft_ms: 1555, flow_ms: 670,
     first_reasoning_ms: 1555, tier_served: 'default', first_text_ms: 2603,
-    reasoning_hidden: true, queued_ms: 188, fail: null, error: null,
+    reasoning_hidden: true, fail: null, error: null,
   });
   expect(chain.items[0]?.start_ms).not.toBeNull();
+  // 排队量本地网关从不上报，渲染与读模型都不再保留它。
+  expect(chain.items[0]).not.toHaveProperty('queued_ms');
   expect(chain.items[0]).not.toHaveProperty('provider');
   expect(chain.items[0]).not.toHaveProperty('replan');
   expect(chain.items[0]).not.toHaveProperty('gone');
@@ -793,7 +797,8 @@ test('发布代存在时整套读取发布结果，标题列表详情工具同�
     expect(detail.summary_state).toBe('recomputed');
     expect(detail.summary_basis).toBe('{"why":"synthetic"}');
     expect(detail.tool_calls[0]?.result_path).toBe('request.messages[4].content[1]');
-    expect(detail.tool_results).toEqual([{ owner_req: id, ...detail.tool_calls[0] }]);
+    const { exec_ms: _publishedExec, ...publishedCallFacts } = detail.tool_calls[0]!;
+    expect(detail.tool_results).toEqual([{ owner_req: id, ...publishedCallFacts }]);
     expect(listRequests(f.store, 'conv-reading').items[0]?.title).toBe('published title');
     expect(listSessions(f.store).items.find(s => s.conv_key === 'conv-reading')?.title)
       .toBe('published title');
@@ -864,5 +869,53 @@ test('older 方向查询计划沿用会话时间索引', () => {
       .all(SEED_GROUP.convKey, 1_700_000_000_000, 5, 30);
     expect(JSON.stringify(details)).toContain('i_req_session_time');
     expect(JSON.stringify(details)).not.toContain('SCAN request');
+  } finally { f.close(); }
+});
+
+test('推理段只认末次尝试的首个推理，缺守卫、非法 JSON 与缺摘要都留空', () => {
+  const f = fixture();
+  try {
+    seedSettledGroup(f.store);
+    f.store.write(db => {
+      db.run('UPDATE request SET route_id=100, ttft_ms=1000, first_text_ms=3100 WHERE req_id=1');
+      db.run('UPDATE request SET route_id=101, ttft_ms=1000, first_text_ms=3100 WHERE req_id=2');
+      db.run(`INSERT INTO request(req_id,conv_key,conv_source,actor,actor_state,started_ms,day,via,
+        body_state,derive_version,have,created_at,updated_at,route_id,ttft_ms,first_text_ms)
+        VALUES (3,?,'session','actor-a','known',3000,'2026-10-20','through','pending',0,1,1,1,102,1000,3100)`,
+        [GROUP_KEY]);
+      const summary = db.prepare('INSERT INTO route_summary(route_id,time_ms,tries_json) VALUES (?,1,?)');
+      // 末次尝试报告了首个推理，差值才是思考时间。
+      summary.run(100, JSON.stringify([{ model: 'm1' }, { model: 'm2', firstReasoning: 1400 }]));
+      // 末次尝试没有 firstReasoning：首个内容可能直接是文本或工具调用。
+      summary.run(101, JSON.stringify([{ model: 'm1', firstReasoning: 1400 }, { model: 'm2' }]));
+      // 非法 JSON 由 json_valid 短路成 NULL，不让读列表抛错。
+      summary.run(102, 'not json');
+    });
+    const page = listRequests(f.store, GROUP_KEY, 10, null);
+    expect(page.items.map(r => r.req_id)).toEqual([1, 2, 3]);
+    expect(page.items.map(r => r.reasoning_span_ms)).toEqual([2100, null, null]);
+    // 详情与列表同一口径。
+    expect(getRequest(f.store, 1)!.reasoning_span_ms).toBe(2100);
+  } finally { f.close(); }
+});
+
+test('执行段取结果请求开始减调用请求结束，负值与未结算留空', () => {
+  const f = fixture();
+  try {
+    seedSettledGroup(f.store);
+    f.store.write(db => {
+      db.run('UPDATE request SET ms=1200 WHERE req_id=1');
+      db.run('UPDATE request SET started_ms=6000 WHERE req_id=2');
+    });
+    // 调用请求 1001 开始 + 1200 结束 = 2201；结果请求 6000 开始。
+    expect(getRequest(f.store, 1)!.tool_calls.map(c => c.exec_ms)).toEqual([3799]);
+    // 结果先于调用结束：时钟或结算异常，留空而不是画负数。
+    f.store.write(db => db.run('UPDATE request SET started_ms=1100 WHERE req_id=2'));
+    expect(getRequest(f.store, 1)!.tool_calls.map(c => c.exec_ms)).toEqual([null]);
+    // 组不再当前时配对与执行段一起收起，旧读数不外露。
+    f.store.write(db => markGroupDirtyTx(db, GROUP_KEY, 'actor-a', ''));
+    const stale = getRequest(f.store, 1)!;
+    expect(stale.derived_state).not.toBe('current');
+    expect(stale.tool_calls.map(c => c.exec_ms)).toEqual([null]);
   } finally { f.close(); }
 });
