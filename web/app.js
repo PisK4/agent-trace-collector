@@ -24,9 +24,10 @@ import { fillContextMap, iidOf, itemLabel } from './context-map.js';
 import { createContextMenu, iidParse } from './context-detail.js';
 import {
   kk, ledgerRowsHtml, railFactsHtml, readingChangedNote, renderAttemptChain,
-  resolveSelectedSource, secs, structureFoldHtml, systemContextOf, toolOverviewHtml,
+  resolveSelectedSource, structureFoldHtml, systemContextOf, toolOverviewHtml,
   toolSchemaSection, usageFoldHtml,
 } from './rail-facts.js';
+import { secs } from './duration.js';
 import { bodyLabelText, bodyStateText, replyCompleteness } from './row-summary.js';
 import {
   agentLabel, clock, dayTime,

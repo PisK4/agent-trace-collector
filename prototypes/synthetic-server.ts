@@ -36,7 +36,7 @@ type SynthAttempt = {
   fail: string | null; error: string | null; start_ms: number | null; ms: number | null;
   ttft_ms: number | null; flow_ms: number | null; first_text_ms: number | null;
   first_reasoning_ms: number | null; served: string | null; done: boolean | null;
-  tier_served: string | null; reasoning_hidden: boolean | null; queued_ms: number | null;
+  tier_served: string | null; reasoning_hidden: boolean | null;
 };
 type SynthRequest = {
   id: number; title: string; status: number | null;
@@ -151,10 +151,10 @@ const REQUESTS: SynthRequest[] = [
     attempts:[
       {index:0, model:'synth-a', effort:null, status:429, fail:'上游限流，随后尝试下一候选', error:null,
         start_ms:startOf({id:107})-12800, ms:360, ttft_ms:null, flow_ms:null, first_text_ms:null,
-        first_reasoning_ms:null, served:null, done:true, tier_served:null, reasoning_hidden:null, queued_ms:38},
+        first_reasoning_ms:null, served:null, done:true, tier_served:null, reasoning_hidden:null},
       {index:1, model:'synth-c', effort:null, status:500, fail:'上游返回 500，客户端请求最终失败', error:null,
         start_ms:startOf({id:107})-12100, ms:12100, ttft_ms:640, flow_ms:null, first_text_ms:700,
-        first_reasoning_ms:null, served:null, done:true, tier_served:null, reasoning_hidden:null, queued_ms:52},
+        first_reasoning_ms:null, served:null, done:true, tier_served:null, reasoning_hidden:null},
     ] },
 
   { id:108, title:'继续列改动（长度上限截断）', status:200, protocol:'chat',
@@ -268,10 +268,10 @@ const REQUESTS: SynthRequest[] = [
     attempts:[
       {index:0, model:'synth-a', effort:null, status:429, fail:'上游限流，随后尝试下一候选', error:null,
         start_ms:startOf({id:117})-4810, ms:360, ttft_ms:null, flow_ms:null, first_text_ms:null,
-        first_reasoning_ms:null, served:null, done:true, tier_served:null, reasoning_hidden:null, queued_ms:41},
+        first_reasoning_ms:null, served:null, done:true, tier_served:null, reasoning_hidden:null},
       {index:1, model:'synth-a', effort:null, status:200, fail:null, error:null,
         start_ms:startOf({id:117})-4450, ms:4450, ttft_ms:512, flow_ms:3938, first_text_ms:604,
-        first_reasoning_ms:null, served:'synth-a', done:true, tier_served:null, reasoning_hidden:null, queued_ms:44},
+        first_reasoning_ms:null, served:'synth-a', done:true, tier_served:null, reasoning_hidden:null},
     ] },
 
   { id:118, title:'查文档建议（未声明工具）', status:200, protocol:'anthropic',
@@ -615,7 +615,8 @@ function rowOf(r: SynthRequest): RequestRow {
     status: r.status, model_requested: 'synth-group', model_served: r.protocol === 'chat' ? 'synth-c' : 'synth-a',
     in_tok: r.usage.in, out_tok: r.usage.out, cache_read: r.usage.read, cache_write: r.usage.write,
     cost: r.usage.cost, cost_state: costStateOf(r), have: haveOf(r),
-    ms: r.timing.ms, ttft_ms: r.timing.ttft, flow_ms: r.timing.flow,
+    ms: r.timing.ms, ttft_ms: r.timing.ttft, flow_ms: r.timing.flow, first_text_ms: r.timing.firstText,
+    reasoning_span_ms: reasoningSpanOf(r),
     body_state: r.bodyState, miss_reason: r.bodyReason,
     input_preview: r.title, input_preview_kind: 'delta', reply_preview: null,
     reply_shape: r.reply === null ? null : replyShapeOf(r.protocol, r.reply),
@@ -624,6 +625,21 @@ function rowOf(r: SynthRequest): RequestRow {
     purpose_status: 'selected', purpose_version: 1, purpose_rule: null, purpose_chain: r.purposeChain,
     derived_state: 'current',
   };
+}
+
+/** 推理段：合成数据没有尝试链守卫，按「首个文本晚于首 token」直接相减。 */
+function reasoningSpanOf(r: SynthRequest): number | null {
+  const firstText = r.timing.firstText;
+  const ttft = r.timing.ttft;
+  return firstText !== null && ttft !== null && firstText > ttft ? firstText - ttft : null;
+}
+
+/** 执行段：结果请求开始减调用请求结束；合成数据缺结果请求或时长时留空。 */
+function execMsOf(owner: SynthRequest, call: SynthCall): number | null {
+  const target = call.result_req === null ? null : byId.get(call.result_req) ?? null;
+  if (target === null || owner.timing.ms === null) return null;
+  const span = startOf(target) - (startOf(owner) + owner.timing.ms);
+  return span >= 0 ? span : null;
 }
 
 /** 阅读版本：合成稳定值；同一请求的输入与正文状态不变时不变。 */
@@ -652,7 +668,7 @@ function detailOf(r: SynthRequest): ReadingDetail {
     prev_req_id:mainPrevOf(r), prev_relation:r.prevRelation, delta_ordinals:r.delta,
     parse_state:r.bodyState === 'available' || r.bodyState === 'partial' ? 'ok' : null,
     reply_state:r.bodyState === 'available' || r.bodyState === 'partial' ? (r.reply === null ? 'absent' : 'ok') : null,
-    first_text_ms:r.timing.firstText, reasoning:null,
+    first_text_ms:r.timing.firstText, reasoning_span_ms: reasoningSpanOf(r), reasoning:null,
     prompt_tokens:prompt.tokens, prompt_counted:prompt.counted === null ? null : prompt.counted ? 1 : 0,
     prompt_window:prompt.window, prompt_turns:null,
     attempt_count:r.attempts?.length ?? 1, attempt_billed:null, attempt_in:null, attempt_out:null,
@@ -665,7 +681,7 @@ function detailOf(r: SynthRequest): ReadingDetail {
       state:prompt.state, reason:prompt.reason, basis:[]}},
     prompt,
     derivation:{state:'clean', chain_state:'current', summary_state:'current', reason:null},
-    tool_calls:r.toolCalls, tool_results:toolResultsOf(r), historical:null, reading_token: readingToken,
+    tool_calls:r.toolCalls.map(c => ({ ...c, exec_ms: execMsOf(r, c) })), tool_results:toolResultsOf(r), historical:null, reading_token: readingToken,
   };
 }
 

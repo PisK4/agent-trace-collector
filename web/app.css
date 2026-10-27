@@ -264,6 +264,20 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-row.step-error{background:var(--warn-soft)}
 .compact-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:11px}
 .compact-preview code{font-size:10px;color:var(--text-2)}
+/* 行尾读数槽：定宽右对齐，没有读数的行也占位，读数右边缘在所有行上成一条竖线。
+   标签带角色底色（推理=Assistant 琥珀、执行=Tool 青），只有数字按档位换色；
+   等待型工具没有档位，整枚标签退成中性色。正常态不加边框、图标或说明。 */
+.compact-reading{flex:none;margin-left:auto;min-width:78px;display:flex;justify-content:flex-end}
+.row-reading{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 5px;border-radius:3px;font:9.5px var(--mono);white-space:nowrap}
+.row-reading.reason{color:var(--k-assistant);background:var(--k-assistant-bg)}
+.row-reading.exec{color:var(--k-tool);background:var(--k-tool-bg)}
+.row-reading.wait{color:var(--muted);background:var(--inset)}
+.row-reading .k{font-size:9px}
+.row-reading .v{font-weight:600;font-variant-numeric:tabular-nums}
+/* 时长档位：中栏读数槽的数值与右栏尝试链共用同一组色类。 */
+.t-good{color:var(--good)}
+.t-warn{color:var(--warn)}
+.t-bad{color:var(--bad)}
 .timeline-end{display:flex;align-items:center;justify-content:center;gap:6px;padding:22px 0 5px;color:var(--muted);font-size:10px}
 .timeline-end span{width:5px;height:5px;background:var(--line-strong);border-radius:50%}
 
@@ -325,7 +339,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 /* 轮次面板的空态比整栏空态紧凑。 */
 .turn-panel-empty{padding:10px 4px;text-align:left}
 @media(max-width:1300px){.compact-meta{font-size:8px}}
-@media(max-width:620px){.compact-row{gap:5px}.compact-select{gap:5px}.compact-preview{font-size:11px}.row-label{width:56px;font-size:9px}.row-tint{max-width:120px;font-size:9px}}
+@media(max-width:620px){.compact-row{gap:5px}.compact-select{gap:5px}.compact-preview{font-size:11px}.row-label{width:56px;font-size:9px}.row-tint{max-width:120px;font-size:9px}.compact-reading{min-width:64px}.row-reading{font-size:9px;gap:3px;padding:2px 4px}.row-reading .k{font-size:8.5px}}
 
 .msg-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
 .msg{border-bottom:1px solid var(--line)}
