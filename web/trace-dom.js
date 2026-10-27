@@ -13,14 +13,19 @@ import { planCommit } from './trace-commit.js';
  * 这里只做 DOM 装配：模型由 app 组装（不读 store、不改选择）。
  *
  * @typedef {{key: string, html: string}} CommitItem
- * @typedef {{reqId: number, status: string, current: boolean, rows: CommitItem[]}} GroupModel
+ * @typedef {{reqId: number, status: string, current: boolean, stale: 'reading' | 'failed' | null,
+ *   rows: CommitItem[]}} GroupModel
  * @typedef {{headHtml: string, bandHtml: string, listClass: string, ordDigits: number,
  *   loaderHtml: string, emptyHtml: string, endHtml: string, groups: GroupModel[],
  *   selectedStep: string | null}} MainModel
  * @typedef {{node: Element, html: string}} Shown
- * @typedef {{node: HTMLElement, rows: Map<string, Shown>, order: string[], status: string, current: boolean}} GroupState
+ * @typedef {{node: HTMLElement, rows: Map<string, Shown>, order: string[], status: string, current: boolean,
+ *   stale: 'reading' | 'failed' | null}} GroupState
  * @typedef {{kind: 'step' | 'group', key: string, top: number}} Anchor 提交前首条可见稳定步骤（或目标组）及其视口偏移
  */
+
+/** 旧版本标记文案：绝对定位、不占高度；读取中与读取失败分开说。 @type {Record<'reading' | 'failed', string>} */
+const STALE_LABELS = { reading: '旧版本 · 重读中', failed: '旧版本 · 重读失败' };
 
 /** @param {string} html @returns {Element | null} */
 function elementOf(html) {
@@ -179,7 +184,7 @@ export function createMainView(main) {
     node.setAttribute('aria-current', 'false');
     /** @type {Map<string, Shown>} */
     const rows = new Map();
-    return { node, rows, order: [], status: '', current: false };
+    return { node, rows, order: [], status: '', current: false, stale: null };
   }
 
   /** 选择是独立 UI 状态：只改高亮，不参与可见结果比较。 @param {string | null} stepKey */
@@ -276,6 +281,12 @@ export function createMainView(main) {
       state.current = model.current;
       state.node.setAttribute('aria-current', String(model.current));
     }
+    // 旧版本标记只在这组显示的不是当前读取结果时出现；不占高度，由样式让位。
+    if (state.stale !== model.stale) {
+      state.stale = model.stale;
+      if (model.stale === null) state.node.removeAttribute('data-stale');
+      else state.node.setAttribute('data-stale', STALE_LABELS[model.stale]);
+    }
     const plan = planCommit(shownHtml(state.rows), model.rows);
     /** @type {Map<string, string>} */
     const desired = new Map(model.rows.map(item => /** @type {[string, string]} */ ([item.key, item.html])));
@@ -322,7 +333,7 @@ export function createMainView(main) {
     for (const group of model.groups) {
       const state = groupStates.get(group.reqId);
       if (state === undefined) { structural = true; continue; }
-      if (state.status !== group.status || state.current !== group.current) structural = true;
+      if (state.status !== group.status || state.current !== group.current || state.stale !== group.stale) structural = true;
       const rows = planCommit(shownHtml(state.rows), group.rows);
       if (rows.remove.length > 0 || rows.create.length > 0 || rows.replace.length > 0) structural = true;
       if (!sameOrder(rows.order, state.order)) structural = true;

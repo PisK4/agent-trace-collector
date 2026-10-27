@@ -66,6 +66,12 @@ if (typeof document !== 'undefined') {
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
   const structureSelected = new Map();
   /**
+   * 最近一次完整投影：详情在手时更新；作废或读取失败期间退回它显示，由组上的
+   * 旧版本标记声明归属。它是显示缓存，不参与证据判定，换会话与刷新即清。
+   * @type {Map<number, import('./trace-view.js').TraceStep[]>}
+   */
+  const retainedSteps = new Map();
+  /**
    * 上下文明细弹窗：tile、图例与列表行共用的选择动作。读取走注入的同一 fetcher，
    * 代次捕获在模块内，晚到响应不进已切换的弹窗。
    */
@@ -439,6 +445,28 @@ if (typeof document !== 'undefined') {
   }
 
   /**
+   * 一笔请求的步骤投影。详情在手时用当前读取并更新保留投影；读不到详情时
+   * 退回最近一次完整投影，旧结果由 stale 声明归属，不冒充当前事实。
+   * @param {RequestRow} r
+   * @returns {{steps: import('./trace-view.js').TraceStep[], stale: 'reading' | 'failed' | null}}
+   */
+  function stepsOf(r) {
+    const read = store.peekRequest(r.req_id);
+    const project = () => projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
+      store.peekBgJobs().items);
+    if (read !== null && read.detail !== null) {
+      const steps = project();
+      retainedSteps.set(r.req_id, steps);
+      return { steps, stale: null };
+    }
+    const retained = retainedSteps.get(r.req_id);
+    if (retained !== undefined) {
+      return { steps: retained, stale: read !== null && read.status === 'failed' ? 'failed' : 'reading' };
+    }
+    return { steps: project(), stale: null };
+  }
+
+  /**
    * 中栏模型：会话头、轮次带与步骤列表一次读齐，交给 trace-dom 键控提交。
    * 步骤行的 HTML 不含选择（默认 false），选择由视图单独写回高亮；
    * 请求组容器自身的可见结果为空串，内容按稳定步骤键逐行比较。
@@ -465,16 +493,10 @@ if (typeof document !== 'undefined') {
         ? '<div class="history-loader"><button id="load-earlier" class="history-button">↑ 加载更早记录</button></div>'
         : '';
     const groups = rows.map(r => {
-      const read = store.peekRequest(r.req_id);
-      const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
-        store.peekBgJobs().items);
+      const { steps, stale } = stepsOf(r);
       const ordinal = ordinalOf(r.req_id);
       /** @type {import('./trace-dom.js').CommitItem[]} */
       const items = [];
-      // 自动重读换新后的组级「已更新」：点进组里即清除，正常态不出现。
-      if (read !== null && read.updatedSinceSeen) {
-        items.push({ key: 'flag', html: '<div class="group-flag"><span class="state-chip warn"><span class="d"></span>已更新 · 自动重读换新</span></div>' });
-      }
       for (const step of steps) {
         items.push({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) });
       }
@@ -482,6 +504,7 @@ if (typeof document !== 'undefined') {
         reqId: r.req_id,
         status: r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success',
         current: r.req_id === state.reqId,
+        stale,
         rows: items,
       };
     });
@@ -764,9 +787,7 @@ if (typeof document !== 'undefined') {
   /** 当前请求的选中步骤对象；无选择或选中的是别的请求时返回 null。 @param {RequestRow} r */
   function currentSelectedStep(r) {
     if (state.selectedStep === null || !state.selectedStep.startsWith(`${r.req_id}:`)) return null;
-    const read = store.peekRequest(r.req_id);
-    return projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)))
-      .find(item => item.key === state.selectedStep) ?? null;
+    return stepsOf(r).steps.find(item => item.key === state.selectedStep) ?? null;
   }
 
   function railBody() {
@@ -947,6 +968,8 @@ if (typeof document !== 'undefined') {
     const myNav = ++navEpoch;
     state.refreshedAt = Date.now();
     state.revealed = false;
+    // 显式刷新按用户要求换新：旧版本显示一并清掉，不从上一版接着画。
+    retainedSteps.clear();
     dispatch({ kind: 'refresh-start' });
     await store.selectSession(state.session, windowLimit());
     if (myNav !== navEpoch) return;
@@ -1084,8 +1107,8 @@ if (typeof document !== 'undefined') {
       dispatch({ kind: 'select-delta', reqId: id });
       return;
     }
-    const step = projectSteps(row, store.peekRequest(id), systemContextOf(row, x => store.peekRequest(x)))
-      .find(item => item.key === key) ?? null;
+    // 旧版本显示期间点保留步骤：来源取最近一次完整投影，右栏按当前读取态如实说明。
+    const step = stepsOf(row).steps.find(item => item.key === key) ?? null;
     const source = resolveSelectedSource(step);
     // 配对判定与页签映射在选择转换里：这里只解析步骤来源。
     dispatch({ kind: 'select-step', reqId: id, stepKey: String(key), source });
@@ -1150,6 +1173,8 @@ if (typeof document !== 'undefined') {
     dispatch({ kind: 'open-session', sessionKey: key, wantedTrace });
     state.pendingSession = key;
     state.revealed = false;
+    // 换会话不复用上一场的旧版本显示：保留投影只服务当前会话的恢复过程。
+    retainedSteps.clear();
     renderMain();
     await store.selectSession(key, windowLimit());
     if (myNav !== navEpoch) return;
@@ -1233,15 +1258,6 @@ if (typeof document !== 'undefined') {
       return;
     }
     if (t.closest('summary')) return;
-    // 组级「已更新」标记：点进组里即视为已看到，随后的选择处理照常重绘。
-    const flaggedGroup = /** @type {HTMLElement | null} */ (t.closest('.trace-group'));
-    if (flaggedGroup !== null) {
-      const flaggedId = Number(flaggedGroup.dataset.req);
-      if (store.peekRequest(flaggedId)?.updatedSinceSeen === true) {
-        store.clearUpdated(flaggedId);
-        renderMain();
-      }
-    }
     if (t.closest('#load-earlier')) { void loadEarlier(); return; }
     if (t.closest('#refresh-window')) { void refreshWindow(); return; }
     if (t.closest('#jump-latest')) { void jumpLatest(); return; }
