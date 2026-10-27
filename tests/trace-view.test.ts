@@ -668,3 +668,63 @@ test('背景作业配对标注：发起结果行带配对读数，完成通知�
   expect(plain.find(s => s.kind === 'tool_result')?.bgNote).toBeUndefined();
   expect(plain.find(s => s.key === '7:message:3:bg')).toBeUndefined();
 });
+
+test('行尾读数：文本行挂推理段、调用行挂执行段，其余行留空', () => {
+  const r = row({ reasoning_span_ms: 2100 });
+  const entries = [entry(2, { state: 'text', text: '问题', original: '问题' }, true)];
+  const reply = { stop_reason: 'tool_use', content: [
+    { type: 'text', text: '先看文件' },
+    { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'bun test' } },
+    { type: 'text', text: '看完再说' },
+  ] };
+  const d = detail({ tool_calls: [{ call_id: 'c1', ord: 1, tool_name: 'Bash', result_req: 8, result_ord: 0, result_path: 'p', state: 'resolved', exec_ms: 2400 }] });
+  const steps = projectSteps(r, read(d, entries, reply));
+  expect(steps.map(s => s.kind)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+  // 推理段属于整笔请求：每块文本都标同一个数，不是只标第一块。
+  expect(steps.filter(s => s.kind === 'assistant').map(s => s.reading))
+    .toEqual([{ kind: 'reason', ms: 2100 }, { kind: 'reason', ms: 2100 }]);
+  expect(steps.find(s => s.kind === 'tool')?.reading).toEqual({ kind: 'exec', ms: 2400 });
+  expect(steps.find(s => s.kind === 'user')?.reading).toBeUndefined();
+
+  const html = renderTraceRows(r, steps, 1, null);
+  expect(html).toContain('<span class="row-reading reason"><span class="k">思考</span><b class="v t-good">2.1s</b></span>');
+  expect(html).toContain('<span class="row-reading exec"><span class="k">执行</span><b class="v t-good">2.4s</b></span>');
+  // 每行都有读数槽，只有 User 行留空：槽宽不随内容跳。
+  expect(html.match(/class="compact-reading"/g)?.length).toBe(4);
+  expect(html.match(/class="compact-reading"><\/span>/g)?.length).toBe(1);
+});
+
+test('读数按工具类别取档位，等待型工具不上色', () => {
+  const r = row();
+  const reply = { stop_reason: 'tool_use', content: [
+    { type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: {} },
+    { type: 'tool_use', id: 'r', name: 'Read', input: { file_path: '/x' } },
+    { type: 'tool_use', id: 'a', name: 'Agent', input: {} },
+  ] };
+  const d = detail({ tool_calls: [
+    { call_id: 'q', ord: 0, tool_name: 'AskUserQuestion', result_req: 8, result_ord: 0, result_path: 'p', state: 'resolved', exec_ms: 45_000 },
+    { call_id: 'r', ord: 1, tool_name: 'Read', result_req: 8, result_ord: 1, result_path: 'p', state: 'resolved', exec_ms: 12_000 },
+    { call_id: 'a', ord: 2, tool_name: 'Agent', result_req: 8, result_ord: 2, result_path: 'p', state: 'resolved', exec_ms: 95_000 },
+  ] });
+  const html = renderTraceRows(r, projectSteps(r, read(d, [], reply)), 1, null);
+  // 等人回答的 45s 不上档：数值照常显示，整枚标签退成中性色。
+  expect(html).toContain('<span class="row-reading exec wait"><span class="k">执行</span><b class="v">45.0s</b></span>');
+  // 读 12s 超过 1s/10s 的第二档。
+  expect(html).toContain('<b class="v t-bad">12.0s</b>');
+  // 子代理 95s 落在 30s/120s 之间。
+  expect(html).toContain('<b class="v t-warn">1m 35s</b>');
+});
+
+test('读不出时不写 0：推理段与执行段缺值都留空槽', () => {
+  const r = row();
+  const reply = { stop_reason: 'tool_use', content: [
+    { type: 'text', text: '只有文本' },
+    { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } },
+  ] };
+  const d = detail({ tool_calls: [{ call_id: 'c1', ord: 1, tool_name: 'Bash', result_req: null, result_ord: null, result_path: null, state: 'pending', exec_ms: null }] });
+  const steps = projectSteps(r, read(d, [], reply));
+  expect(steps.map(s => s.reading ?? null)).toEqual([null, null]);
+  const html = renderTraceRows(r, steps, 1, null);
+  expect(html).not.toContain('class="row-reading');
+  expect(html.match(/<span class="compact-reading"><\/span>/g)?.length).toBe(2);
+});

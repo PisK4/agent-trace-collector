@@ -17,6 +17,7 @@ import { contextMapShellHtml, contextRowsHtml } from './context-map.js';
 import { topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
 import { bodyLabelText } from './row-summary.js';
+import { secs, tierOf, TIER_LIMITS } from './duration.js';
 
 // 类别口径与 token 缩写的定义在 parts.js（与 context-map 共用），这里转发既有消费者。
 export { kk, partColor, partLabel };
@@ -32,24 +33,29 @@ export function renderAttemptChain(chain) {
     return '<p class="note">没有可读取的尝试记录。</p>';
   }
   const rows = chain.items.map(item => {
-    const bits = [item.model ?? '模型未报告'];
-    if (item.served !== null && item.served !== item.model) bits.push(`served ${item.served}`);
-    if (item.status !== null) bits.push(`HTTP ${item.status}`);
-    if (item.fail !== null) bits.push(`fail ${item.fail}`);
-    if (item.effort !== null) bits.push(`effort ${item.effort}`);
-    if (item.tier_served !== null) bits.push(`tier ${item.tier_served}`);
-    if (item.reasoning_hidden === true) bits.push('推理隐藏');
-    if (item.done === false) bits.push('未结束');
+    /** @type {string[]} 已转义的片段；只有尝试时长按档位换成 HTML。 */
+    const bits = [esc(item.model ?? '模型未报告')];
+    const text = (/** @type {string} */ v) => bits.push(esc(v));
+    if (item.served !== null && item.served !== item.model) text(`served ${item.served}`);
+    if (item.status !== null) text(`HTTP ${item.status}`);
+    if (item.fail !== null) text(`fail ${item.fail}`);
+    if (item.effort !== null) text(`effort ${item.effort}`);
+    if (item.tier_served !== null) text(`tier ${item.tier_served}`);
+    if (item.reasoning_hidden === true) text('推理隐藏');
+    if (item.done === false) text('未结束');
     if (item.start_ms !== null) {
       const started = new Date(item.start_ms);
-      if (!Number.isNaN(started.getTime())) bits.push(started.toISOString());
+      if (!Number.isNaN(started.getTime())) text(started.toISOString());
     }
-    if (item.ms !== null) bits.push(`${item.ms} ms`);
-    if (item.ttft_ms !== null) bits.push(`首 token ${item.ttft_ms} ms`);
-    if (item.first_reasoning_ms !== null) bits.push(`首个推理 ${item.first_reasoning_ms} ms`);
-    if (item.first_text_ms !== null) bits.push(`首个文本 ${item.first_text_ms} ms`);
-    if (item.queued_ms !== null) bits.push(`排队 ${item.queued_ms} ms`);
-    return `<span class="attempt-name">${item.index + 1}. ${bits.map(esc).join(' · ')}</span>`;
+    if (item.ms !== null) {
+      const tier = tierOf(item.ms, TIER_LIMITS.attempt);
+      const value = esc(`${item.ms} ms`);
+      bits.push(tier === 'good' ? value : `<b class="t-${tier}">${value}</b>`);
+    }
+    if (item.ttft_ms !== null) text(`首 token ${item.ttft_ms} ms`);
+    if (item.first_reasoning_ms !== null) text(`首个推理 ${item.first_reasoning_ms} ms`);
+    if (item.first_text_ms !== null) text(`首个文本 ${item.first_text_ms} ms`);
+    return `<span class="attempt-name">${item.index + 1}. ${bits.join(' · ')}</span>`;
   }).join('<br>');
   const note = chain.timing.state === 'partial'
     ? `<p class="note">${esc(chain.timing.note)}</p>` : '';
@@ -164,7 +170,7 @@ export function toolOverviewHtml(ownerReq, pair, reading) {
     ${row('正文加载', esc(loadStateText(loadState)))}
     ${reading !== null && reading.state === 'available' ? row('错误标记', esc(isErrorText(reading.is_error))) : ''}
   </div>
-  <p class="rail-note">模型响应时长归属承载它的请求；工具执行时长未采集。</p>`;
+  <p class="rail-note">模型响应时长归属承载它的请求；执行段按结果请求开始减调用请求结束推算，含客户端处理与人工确认，是上界。</p>`;
 }
 
 /**
@@ -271,8 +277,6 @@ export function resolveSelectedSource(step) {
 
 /** @param {number | null | undefined} v */
 const n = (v) => (v == null ? '—' : v.toLocaleString('en-US'));
-/** @param {number | null | undefined} ms */
-export const secs = (ms) => (ms == null ? '—' : (ms / 1000).toFixed(2) + ' s');
 /** 费用按 6 位有效数字渲染，去掉上游浮点尾差（账本存原始 float）。 @param {number} v */
 const fmtCost = (v) => String(Number(v.toPrecision(6)));
 
@@ -313,7 +317,7 @@ export function ledgerParts(r, detail = null) {
       r.cost_state === 'zero' ? row('费用', '$0', '费用（上游报告）') : '',
     ].join('');
     headline = [
-      ms !== null ? `总 ${(ms / 1000).toFixed(2)}s` : '',
+      ms !== null ? `总 ${secs(ms)}` : '',
       r.out_tok !== null ? `出 ${n(r.out_tok)}` : '',
     ].filter(Boolean).join(' · ');
   }

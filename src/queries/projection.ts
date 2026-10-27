@@ -28,6 +28,13 @@ export type RequestRow = {
   /** 证据来源通道：through / rejected / hook / otlp；读侧按它区分 magpie 行与 OTLP 行。 */
   via: string;
   ms: number | null; ttft_ms: number | null; flow_ms: number | null;
+  /** 第一个文本块到达的时刻；与首 token（第一个内容）是两个测量事件。 */
+  first_text_ms: number | null;
+  /**
+   * 推理段：首个文本 − 首 token。只在首个内容是推理（末次尝试带 firstReasoning）
+   * 且差值大于零时成立；读不出留 null，不写 0。
+   */
+  reasoning_span_ms: number | null;
   body_state: BodyState; miss_reason: string | null;
   /** 折叠行摘要：派生时写入，不读正文块。kind 说明摘要来自新增还是末轮输入。 */
   input_preview: string | null;
@@ -156,11 +163,25 @@ export type ProjectableRow = StateColumns & DerivedColumns & {
   purpose_status: string; purpose_version: number | null; purpose_rule: string | null;
   purpose_chain: string;
   ttft_ms: number | null; flow_ms: number | null;
+  first_text_ms: number | null;
+  /** route_summary 末次尝试的 firstReasoning：非空才说明首个内容是推理。 */
+  first_reasoning: number | null;
 };
 
 /** 标题兜底：时间与模型构成的占位标题从不依赖正文，任何状态都能读。 */
 function fallbackTitle(modelServed: string | null, startedMs: number): string {
   return modelTimeTitle(modelServed, startedMs);
+}
+
+/**
+ * 推理段：首个文本减首 token。账本的首 token 是第一个内容事件，首个内容是
+ * 工具调用或直接文本时，这个差值不含推理，不能当思考时间；首 token 早于
+ * 首个文本只是必要条件，末次尝试报告 firstReasoning 才确认。零值与负值留白。
+ */
+function reasoningSpanOf(row: ProjectableRow): number | null {
+  if (row.first_reasoning === null || row.first_text_ms === null || row.ttft_ms === null) return null;
+  const span = row.first_text_ms - row.ttft_ms;
+  return span > 0 ? span : null;
 }
 
 /**
@@ -215,6 +236,8 @@ export function projectRow(row: ProjectableRow): {
     ms: row.ms,
     ttft_ms: row.ttft_ms,
     flow_ms: row.flow_ms,
+    first_text_ms: row.first_text_ms,
+    reasoning_span_ms: reasoningSpanOf(row),
     body_state: row.body_state as BodyState,
     miss_reason: row.miss_reason,
     input_preview: current ? row.input_preview : null,

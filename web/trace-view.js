@@ -1,6 +1,7 @@
 // @ts-check
 import { deltaOrdinals, messagePathOf, replyView, systemPathOf } from './body-model.js';
 import { toolTint } from './body-view.js';
+import { compact, secs, tierOf, TIER_LIMITS, toolCategory } from './duration.js';
 import { esc } from './html.js';
 
 /**
@@ -38,6 +39,7 @@ import { esc } from './html.js';
  * @property {string | null} [toolInput] 调用步的完整参数 JSON，供悬停展示；其余步骤缺省
  * @property {boolean | null} [isError] 结果内容块的 is_error：true/false，未报告为 null；其余步骤缺省
  * @property {string | null} [bgNote] 背景作业配对标注：发起结果行与通知事件行携带，其余步骤缺省
+ * @property {{kind: 'reason'|'exec', ms: number} | null} [reading] 行尾读数：文本行是推理段，调用行是执行段；其余步骤缺省
  */
 
 /**
@@ -62,9 +64,6 @@ function droppedCharsOf(basis) {
 
 /* ---------- 背景作业配对：发起结果行与完成通知行的标注 ---------- */
 
-/** @param {number | null} ms */
-const bgSecs = (ms) => ms === null ? null : `${(ms / 1000).toFixed(2)} s`;
-
 /**
  * 一条 bg_job 的配对读数。时延按两笔请求的 started_ms 差；发起与通知同笔
  * 时没有请求级时延，写「同一请求内」而不印一个 0。
@@ -73,7 +72,7 @@ const bgSecs = (ms) => ms === null ? null : `${(ms / 1000).toFixed(2)} s`;
 function bgJobNote(job) {
   if (job.state !== 'resolved' || job.notice_req === null) return `${job.job_id} 等待完成通知`;
   if (job.spawn_req === job.notice_req) return `${job.job_id} 已配对 · 同一请求内`;
-  return `${job.job_id} 已配对 · ${bgSecs((job.notice_ms ?? 0) - (job.spawn_ms ?? 0))}`;
+  return `${job.job_id} 已配对 · ${secs((job.notice_ms ?? 0) - (job.spawn_ms ?? 0))}`;
 }
 
 /**
@@ -322,6 +321,27 @@ export function toolSummary(name, inputText) {
 }
 
 /**
+ * 推理段挂在文本行上：读数属于整笔请求，一段回复有多块文本时每块都标同一个数。
+ * 口径与守卫在投影层（reasoning_span_ms），这里只搬运。
+ * @param {import('../src/queries/projection').RequestRow} row
+ * @returns {{kind: 'reason', ms: number} | null}
+ */
+function reasoningReading(row) {
+  const ms = row.reasoning_span_ms;
+  return typeof ms === 'number' && ms > 0 ? { kind: 'reason', ms } : null;
+}
+
+/**
+ * 执行段挂在调用行上：结果请求开始减调用请求结束，负值与未结算在查询层已留空。
+ * @param {import('../src/queries/requests').ToolCallRow | null} pair
+ * @returns {{kind: 'exec', ms: number} | null}
+ */
+function execReading(pair) {
+  const ms = pair?.exec_ms;
+  return typeof ms === 'number' ? { kind: 'exec', ms } : null;
+}
+
+/**
  * @param {import('../src/queries/projection').RequestRow} row
  * @param {import('./reader-store.js').RequestRead | null} read
  * @param {SystemContext} [systemContext] 顶层 System 的当前值与比较结果；由装配层按
@@ -486,7 +506,8 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
         steps.push({ key:`${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
           text: block.text, messageOrd: null, callOrd: null,
           source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
-          raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null });
+          raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null,
+          reading: reasoningReading(row) });
       } else if (block.kind === 'call') {
         const call = view.calls.find(item => item.ord === index) ?? null;
         const pair = detail.tool_calls?.find(item => item.ord === index) ?? null;
@@ -499,7 +520,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
           raw: block.raw,
           unrecognized: false, status: null,
           result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
-          pairOwner: null });
+          pairOwner: null, reading: execReading(pair) });
       } else if (block.kind !== 'thinking') {
         // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
         steps.push({ key: `${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
@@ -567,6 +588,23 @@ const clipPreview = (text, max = 140) => [...String(text)].length <= max ? Strin
   : `${[...String(text)].slice(0, max).join('')}…`;
 
 /**
+ * 行尾读数：标签带角色底色（推理用 Assistant 琥珀、执行用 Tool 青），只有数字按
+ * 档位换色。等待型工具没有阈值，整枚标签退成中性色，数值照常显示——长窗口来自
+ * 等人回答，不是工具开销。读不出时槽位留空，不写 0 或短横。
+ * @param {{kind: 'reason'|'exec', ms: number}} reading
+ * @param {TraceStep} step
+ * @returns {string}
+ */
+function readingChip(reading, step) {
+  const reason = reading.kind === 'reason';
+  const limits = reason ? TIER_LIMITS.reason : TIER_LIMITS[toolCategory(step.toolName)];
+  const tier = limits === undefined ? '' : ` t-${tierOf(reading.ms, limits)}`;
+  return `<span class="row-reading ${reason ? 'reason' : 'exec'}${limits === undefined ? ' wait' : ''}">`
+    + `<span class="k">${reason ? '思考' : '执行'}</span>`
+    + `<b class="v${tier}">${compact(reading.ms)}</b></span>`;
+}
+
+/**
  * 单行轨迹只显示请求序号、角色、工具身份 chip 与内容，点击行在右栏阅读详情。
  * 工具行的预览不做字符截断：参数摘要与结果正文完整进 DOM，超长由中栏列宽的
  * 省略号处理；其余行仍按 140 字符截断。输出不包含状态摘要（选中由
@@ -599,13 +637,15 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
   // 背景作业配对读数跟在行尾；发起行与通知事件行各有自己的内容，不重复正文。
   const bgNoteHtml = step.bgNote === undefined || step.bgNote === null
     ? '' : ` <span class="bg-note" title="${esc(step.bgNote)}">${esc(step.bgNote)}</span>`;
+  // 读数槽定宽右对齐：有读数才出标签，没读数的行留空，列宽与右边缘不跳。
+  const readingHtml = step.reading === undefined || step.reading === null ? '' : readingChip(step.reading, step);
   return `<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
 <div class="compact-row${step.isError === true ? ' step-error' : ''}">
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${selected}">
     <span class="compact-meta" title="序号表示当前窗口内的请求 · 请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
     ${chip}
-    <span class="compact-preview"${titleAttr}>${previewHtml}</span>${bgNoteHtml}
+    <span class="compact-preview"${titleAttr}>${previewHtml}</span>${bgNoteHtml}<span class="compact-reading">${readingHtml}</span>
   </button>
 </div>
 </div>`;
