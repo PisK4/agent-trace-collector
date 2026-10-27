@@ -14,13 +14,13 @@ import { planCommit } from './trace-commit.js';
  *
  * @typedef {{key: string, html: string}} CommitItem
  * @typedef {{reqId: number, status: string, current: boolean, stale: 'reading' | 'failed' | null,
- *   rows: CommitItem[]}} GroupModel
+ *   placeholder: boolean, rows: CommitItem[]}} GroupModel
  * @typedef {{headHtml: string, bandHtml: string, listClass: string, ordDigits: number,
  *   loaderHtml: string, emptyHtml: string, endHtml: string, groups: GroupModel[],
  *   selectedStep: string | null}} MainModel
  * @typedef {{node: Element, html: string}} Shown
  * @typedef {{node: HTMLElement, rows: Map<string, Shown>, order: string[], status: string, current: boolean,
- *   stale: 'reading' | 'failed' | null}} GroupState
+ *   stale: 'reading' | 'failed' | null, placeholder: boolean}} GroupState
  * @typedef {{kind: 'step' | 'group', key: string, top: number}} Anchor 提交前首条可见稳定步骤（或目标组）及其视口偏移
  */
 
@@ -111,16 +111,20 @@ function captureAnchor(main, scroller, preferredReq) {
     const groupRect = node.getBoundingClientRect();
     /** @type {Anchor | null} */
     let found = null;
-    for (const step of node.querySelectorAll('.compact-step')) {
-      const rect = step.getBoundingClientRect();
-      if (rect.bottom <= top || rect.top >= bottom) continue;
-      const select = /** @type {HTMLElement | null} */ (step.querySelector('[data-step-key]'));
-      const key = select?.dataset.stepKey ?? null;
-      if (key !== null) found = { kind: 'step', key, top: rect.top };
-      break;
+    // 准备行在组备齐时整行消失；锚在组上，提交后组顶回原位，读者看到的仍是同一笔请求。
+    if (!node.hasAttribute('data-placeholder')) {
+      for (const step of node.querySelectorAll('.compact-step')) {
+        const rect = step.getBoundingClientRect();
+        if (rect.bottom <= top || rect.top >= bottom) continue;
+        const select = /** @type {HTMLElement | null} */ (step.querySelector('[data-step-key]'));
+        const key = select?.dataset.stepKey ?? null;
+        if (key !== null) found = { kind: 'step', key, top: rect.top };
+        break;
+      }
     }
     // 目标组整组可见却还没有步骤（读取中的空组）：以组本身为锚，补读不会把它推走。
-    if (found === null && wanted && groupRect.top < bottom && groupRect.bottom > top) {
+    if (found === null && (wanted || node.hasAttribute('data-placeholder'))
+      && groupRect.top < bottom && groupRect.bottom > top) {
       found = { kind: 'group', key: String(node.dataset.req ?? ''), top: groupRect.top };
     }
     if (found === null) continue;
@@ -184,7 +188,7 @@ export function createMainView(main) {
     node.setAttribute('aria-current', 'false');
     /** @type {Map<string, Shown>} */
     const rows = new Map();
-    return { node, rows, order: [], status: '', current: false, stale: null };
+    return { node, rows, order: [], status: '', current: false, stale: null, placeholder: false };
   }
 
   /** 选择是独立 UI 状态：只改高亮，不参与可见结果比较。 @param {string | null} stepKey */
@@ -287,6 +291,12 @@ export function createMainView(main) {
       if (model.stale === null) state.node.removeAttribute('data-stale');
       else state.node.setAttribute('data-stale', STALE_LABELS[model.stale]);
     }
+    // 准备行只是占位：组内交互（锚点、文本选择）按「还没有真实步骤」处理。
+    if (state.placeholder !== model.placeholder) {
+      state.placeholder = model.placeholder;
+      if (model.placeholder) state.node.setAttribute('data-placeholder', '');
+      else state.node.removeAttribute('data-placeholder');
+    }
     const plan = planCommit(shownHtml(state.rows), model.rows);
     /** @type {Map<string, string>} */
     const desired = new Map(model.rows.map(item => /** @type {[string, string]} */ ([item.key, item.html])));
@@ -333,7 +343,8 @@ export function createMainView(main) {
     for (const group of model.groups) {
       const state = groupStates.get(group.reqId);
       if (state === undefined) { structural = true; continue; }
-      if (state.status !== group.status || state.current !== group.current || state.stale !== group.stale) structural = true;
+      if (state.status !== group.status || state.current !== group.current || state.stale !== group.stale
+        || state.placeholder !== group.placeholder) structural = true;
       const rows = planCommit(shownHtml(state.rows), group.rows);
       if (rows.remove.length > 0 || rows.create.length > 0 || rows.replace.length > 0) structural = true;
       if (!sameOrder(rows.order, state.order)) structural = true;

@@ -525,6 +525,36 @@ test('delta 分片消费与未确认关系不读消息', async () => {
   expect(h3.urls.filter(u => u.includes('/body?from=') && !u.includes('to=0')).length).toBe(0);
 });
 
+test('并发增量消费合并为一条任务：不各自推进消费位置', async () => {
+  let release: ((value: Response) => void) | null = null;
+  const gated = new Promise<Response>(resolve => { release = resolve; });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { delta_ordinals: [0, 1, 2, 3] }));
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 4));
+    if (url.includes('/body?from=0&to=4')) return gated;
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  // 第一片在飞时第二个消费者进来：共享同一任务，不再发第二条增量请求。
+  const first = store.loadDelta(1, 2);
+  const second = store.loadDelta(1, 2);
+  await delay(5);
+  expect(h.count('/body?from=0&to=4')).toBe(1);
+  release!(respond(bodyPage(0, 4, 4)));
+  const [a, b] = await Promise.all([first, second]);
+  expect(a.delta.next).toBe(4);
+  expect(a.delta.done).toBe(true);
+  expect(b.delta.next).toBe(4);
+  expect(h.count('/body?from=0&to=4')).toBe(1);
+  // 任务结束后释放：下一次调用仍从已推进的位置消费，可直接完成。
+  const third = await store.loadDelta(1, 2);
+  expect(third.delta.done).toBe(true);
+  expect(h.count('/body?from=0&to=4')).toBe(1);
+});
+
 test('同会话作废后迟到的路由成功响应不可用，新缓存保留', async () => {
   let routeCalls = 0;
   const releases: Array<(value: Response) => void> = [];
