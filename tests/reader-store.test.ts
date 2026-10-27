@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createReaderStore } from '../web/reader-store.js';
+import { resolveSelectedSource } from '../web/rail-facts.js';
+import { projectSteps, renderTraceRows } from '../web/trace-view.js';
 
 const TOKEN = 'r1-' + 'a'.repeat(64);
 const TOKEN2 = 'r1-' + 'b'.repeat(64);
@@ -553,6 +555,278 @@ test('并发增量消费合并为一条任务：不各自推进消费位置', as
   const third = await store.loadDelta(1, 2);
   expect(third.delta.done).toBe(true);
   expect(h.count('/body?from=0&to=4')).toBe(1);
+});
+
+test('切换会话后同 id 的增量不等待旧任务', async () => {
+  let release: (value: Response) => void = () => {};
+  let started: () => void = () => {};
+  const gated = new Promise<Response>(resolve => { release = resolve; });
+  const firstStarted = new Promise<void>(resolve => { started = resolve; });
+  let session = 'old';
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { conv_key: session, delta_ordinals: [0], reading_token: session === 'old' ? TOKEN : TOKEN2 }));
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    if (url.includes('/body?from=0&to=1')) {
+      if (session === 'old') { started(); return gated; }
+      return respond(bodyPage(0, 1, 1, { messages: [{ ord: 0, value: { role: 'user', content: 'fresh' } }] }));
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession(session, 30);
+  await store.readRequest(1);
+  const old = store.loadDelta(1);
+  const oldResult = old.catch(error => error);
+  await firstStarted;
+  session = 'new';
+  await store.selectSession(session, 30);
+  await store.readRequest(1);
+  const fresh = store.loadDelta(1);
+  const outcome = await Promise.race([fresh, delay(100).then(() => null)]);
+  release(respond(bodyPage(0, 1, 1)));
+  expect(await oldResult).toBeInstanceOf(Error);
+  expect(outcome?.entries[0]?.preview).toBe('fresh');
+  expect(outcome?.delta.done).toBe(true);
+});
+
+test('验证换版本后增量不等待旧版本任务', async () => {
+  let token = TOKEN;
+  let release: (value: Response) => void = () => {};
+  let started: () => void = () => {};
+  const gated = new Promise<Response>(resolve => { release = resolve; });
+  const firstStarted = new Promise<void>(resolve => { started = resolve; });
+  const h = harness(url => {
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { delta_ordinals: [0], reading_token: token }));
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    if (url.includes('/body?from=0&to=1')) {
+      if (url.includes(TOKEN)) { started(); return gated; }
+      return respond(bodyPage(0, 1, 1, { messages: [{ ord: 0, value: { role: 'user', content: 'new version' } }] }));
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.readRequest(1);
+  const oldResult = store.loadDelta(1).catch(error => error);
+  await firstStarted;
+  token = TOKEN2;
+  await store.readRequest(1, true);
+  const fresh = store.loadDelta(1);
+  const outcome = await Promise.race([fresh, delay(100).then(() => null)]);
+  release(respond(bodyPage(0, 1, 1)));
+  expect(await oldResult).toBeInstanceOf(Error);
+  expect(outcome?.entries[0]?.preview).toBe('new version');
+  expect(outcome?.delta.done).toBe(true);
+});
+
+test('孤立回调的请求正文可在轨迹中读取且不冒充新增', async () => {
+  const request = detail(1, {
+    conv_key: '["hook","synthetic"]', actor: null, actor_state: 'unknown', via: 'hook',
+    status: null, have: 1, derived_state: 'dirty', prev_relation: null, delta_ordinals: null,
+    reply_state: 'absent', source_facts: { hook: { successes: ['failure'] } },
+    derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
+  });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(request);
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1, { protocol: 'chat', reply: null, reply_state: 'absent' }));
+    if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 1, {
+      protocol: 'chat', reply: null, reply_state: 'absent',
+      messages: [{ ord: 0, value: { role: 'user', content: 'synthetic question' } }],
+      interpretations: [{ ord: 0, role: 'user', role_state: 'known', input: { state: 'text', text: 'synthetic question', original: 'synthetic question' }, is_input: true }],
+    }));
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession(request.conv_key, 30);
+  await store.readRequest(1);
+  const read = await store.loadDelta(1, 2);
+  expect(read.delta.unconfirmed).toBe(true);
+  expect(read.entries.map(entry => entry.preview)).toEqual(['synthetic question']);
+  const steps = projectSteps(request as never, read);
+  expect(steps.find(step => step.key === '1:uncertain')?.text).toContain('会话归属未确认');
+  const user = steps.find(step => step.kind === 'user');
+  expect(user?.text).toBe('synthetic question');
+  expect(resolveSelectedSource(user ?? null)).toEqual({ side: 'request', target: 'message', path: 'request.messages[0]', messageOrd: 0 });
+  expect(steps.some(step => step.status === 'missing_reply')).toBe(true);
+  expect(steps.some(step => step.text === 'HTTP 状态未知')).toBe(true);
+  expect(steps.some(step => step.text === '回调报告失败 · 未提供失败原因')).toBe(true);
+  await store.loadDelta(1, 2);
+  expect(h.count('/body?from=0&to=40')).toBe(1);
+});
+
+test('孤立请求元信息读取失败后可重试正文', async () => {
+  let failMeta = true;
+  const request = detail(5, {
+    actor: null, actor_state: 'unknown', derived_state: 'dirty', prev_relation: null, delta_ordinals: null,
+    derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
+  });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.endsWith('/api/requests/5')) return respond(request);
+    if (url.includes('/body?from=0&to=0')) return failMeta ? respond({ error: 'unavailable' }, 503) : respond(bodyPage(0, 0, 1));
+    if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 1));
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession(request.conv_key, 30);
+  await expect(store.readRequest(5)).rejects.toThrow('http_503');
+  const waiting = await store.loadDelta(5);
+  expect(waiting.delta.done).toBe(false);
+  const steps = projectSteps(request as never, waiting);
+  expect(steps.find(step => step.key === '5:body-metadata')?.text).toContain('点击重试');
+  expect(steps.some(step => step.text === '未收到回复')).toBe(false);
+  failMeta = false;
+  await store.readRequest(5);
+  const retry = await store.loadDelta(5);
+  expect(retry.entries.map(entry => entry.preview)).toEqual(['m0']);
+  expect(h.count('/body?from=0&to=0')).toBe(2);
+});
+
+test('孤立请求原文分页失败可重试，工具结果不伪造配对', async () => {
+  let failFirstPage = true;
+  const request = detail(2, {
+    actor: null, actor_state: 'unknown', via: 'hook', status: null, have: 1,
+    derived_state: 'dirty', prev_relation: null, delta_ordinals: null,
+    derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
+    tool_results: [{ owner_req: 9, ord: 0, result_ord: 0, result_path: 'request.messages[0]', state: 'resolved', tool_name: 'Bash' }],
+  });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.endsWith('/api/requests/2')) return respond(request);
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 41, { protocol: 'chat' }));
+    if (url.includes('/body?from=0&to=40') && failFirstPage) return respond({ error: 'unavailable' }, 503);
+    if (url.includes('/body?from=0&to=40')) {
+      const page = bodyPage(0, 40, 41, { protocol: 'chat' });
+      page.messages[0]!.value = { role: 'tool', content: '<script>synthetic result</script>' };
+      return respond(page);
+    }
+    if (url.includes('/body?from=40&to=41')) return respond(bodyPage(40, 41, 41, { protocol: 'chat' }));
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  await store.readRequest(2);
+  const failed = await store.loadDelta(2);
+  expect(failed.structure.next).toBe(0);
+  expect(failed.structure.error).toBe('http_503');
+  expect(projectSteps(request as never, failed).find(step => step.key === '2:unassigned-more')?.text).toContain('点击重试');
+  failFirstPage = false;
+  const first = await store.loadStructure(2);
+  expect(first.structure.next).toBe(40);
+  const steps = projectSteps(request as never, first);
+  expect(steps.find(step => step.key === '2:unassigned-more')?.text).toContain('还有 1 条请求消息未读取');
+  const result = steps.find(step => step.kind === 'tool_result');
+  expect(result?.pairOwner).toBeNull();
+  expect(resolveSelectedSource(result ?? null)).toEqual({ side: 'request', target: 'message', path: 'request.messages[0]', messageOrd: 0 });
+  const html = renderTraceRows(request as never, steps, 1, null);
+  expect(html).not.toContain('<script>synthetic result</script>');
+  expect(html).toContain('&lt;script&gt;synthetic result&lt;/script&gt;');
+  const last = await store.loadStructure(2);
+  expect(last.structure.next).toBe(41);
+  expect(projectSteps(request as never, last).some(step => step.key === '2:unassigned-more')).toBe(false);
+  expect(h.count('/body?from=0&to=40')).toBe(2);
+});
+
+test('孤立请求结构页部分缺失时重试不丢弃已读消息', async () => {
+  let missing = true;
+  let pageReads = 0;
+  const request = detail(6, {
+    actor: null, actor_state: 'unknown', derived_state: 'dirty', prev_relation: null, delta_ordinals: null,
+    derivation: { state: 'dirty', chain_state: 'unavailable' },
+  });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.endsWith('/api/requests/6')) return respond(request);
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 2));
+    if (url.includes('/body?from=0&to=40') || url.includes('/body?from=0&to=2')) {
+      pageReads += 1;
+      const page = bodyPage(0, url.includes('to=40') ? 40 : 2, 2);
+      if (missing) page.messages = page.messages.filter(message => message.ord === 0);
+      return respond(page);
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession(request.conv_key, 30);
+  await store.readRequest(6);
+  const partial = await store.loadDelta(6);
+  expect(partial.structure.next).toBe(0);
+  expect(partial.structure.error).toBe('body_page_gap');
+  expect(partial.entries.map(entry => entry.ord)).toEqual([0]);
+  const repeated = await store.loadStructure(6);
+  expect(repeated.structure.error).toBe('body_page_gap');
+  missing = false;
+  const recovered = await store.loadStructure(6);
+  expect(recovered.structure.next).toBe(2);
+  expect(recovered.structure.error).toBeNull();
+  expect(recovered.entries.map(entry => entry.ord)).toEqual([0, 1]);
+  expect(pageReads).toBe(3);
+});
+
+test('孤立请求结构页缺少消息时保留位置并可重试', async () => {
+  let missingPage = true;
+  const request = detail(3, {
+    actor: null, actor_state: 'unknown', derived_state: 'dirty', prev_relation: null, delta_ordinals: null,
+    derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
+  });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.endsWith('/api/requests/3')) return respond(request);
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 41));
+    if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 41));
+    if (url.includes('/body?from=40&to=41')) {
+      return respond(bodyPage(40, 41, 41, missingPage ? { messages: [], interpretations: [] } : {}));
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession(request.conv_key, 30);
+  await store.readRequest(3);
+  await store.loadDelta(3);
+  const failed = await store.loadStructure(3);
+  expect(failed.structure.next).toBe(40);
+  expect(failed.structure.error).toBe('body_page_empty');
+  expect(projectSteps(request as never, failed).find(step => step.key === '3:unassigned-more')?.text).toContain('点击重试');
+  missingPage = false;
+  const retry = await store.loadStructure(3);
+  expect(retry.structure.next).toBe(41);
+  expect(retry.entries).toHaveLength(41);
+  expect(h.count('/body?from=40&to=41')).toBe(2);
+});
+
+test('孤立请求正文换版本后自动重读新消息', async () => {
+  let token = TOKEN;
+  let conflict = false;
+  let notify: () => void = () => {};
+  const refreshed = new Promise<void>(resolve => { notify = resolve; });
+  const request = detail(4, {
+    actor: null, actor_state: 'unknown', derived_state: 'dirty', prev_relation: null, delta_ordinals: null,
+    derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
+  });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.endsWith('/api/requests/4')) return respond({ ...request, reading_token: token });
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    if (url.includes('/body?from=0&to=40')) {
+      if (conflict) { conflict = false; token = TOKEN2; return respond({ error: 'reading_changed' }, 409); }
+      return respond(bodyPage(0, 40, 1, { messages: [{ ord: 0, value: { role: 'user', content: token === TOKEN ? 'before' : 'after' } }] }));
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher, id => {
+    const read = store.peekRequest(id);
+    if (read?.token === TOKEN2 && read.entries[0]?.preview === 'after') notify();
+  }, { autoRereadCooldownMs: 0 });
+  await store.selectSession(request.conv_key, 30);
+  await store.readRequest(4);
+  conflict = true;
+  await expect(store.loadDelta(4)).rejects.toThrow('reading_changed');
+  await Promise.race([refreshed, delay(1000).then(() => { throw new Error('auto_reread_timeout'); })]);
+  const read = store.peekRequest(4);
+  expect(read?.token).toBe(TOKEN2);
+  expect(read?.entries[0]?.preview).toBe('after');
+  expect(read?.structure.next).toBe(1);
 });
 
 test('同会话作废后迟到的路由成功响应不可用，新缓存保留', async () => {

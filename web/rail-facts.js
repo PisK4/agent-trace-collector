@@ -14,7 +14,7 @@ import {
 import { esc } from './html.js';
 import { kk, partColor, partLabel } from './parts.js';
 import { contextMapShellHtml, contextRowsHtml } from './context-map.js';
-import { topSystemText } from './body-model.js';
+import { messagePathOf, topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
 import { bodyLabelText } from './row-summary.js';
 import { secs, tierOf, TIER_LIMITS } from './duration.js';
@@ -244,6 +244,8 @@ export function systemContextOf(row, readOf) {
  * 调用与已配对的结果步骤都解析成配对目标（owner + 调用序号），右栏就地同屏阅读；
  * 未配对的结果、System 与其余输入步骤打开正文来源；记录步骤打开请求读数。
  * @param {import('./trace-view.js').TraceStep | null} step
+ * @param {string | null} [selectedKey] 消息列表选中的稳定键，主轨迹未投影时用于定位缓存原文。
+ * @param {RequestRead | null} [read]
  * @returns {{side:'none'}
  *   | {side:'request', target:'system', path:string, text:string}
  *   | {side:'request', target:'message', path:string, messageOrd:number}
@@ -252,7 +254,15 @@ export function systemContextOf(row, readOf) {
  *   | {side:'reply', target:'call', path:string, callOrd:number, ownerReq:number}
  *   | {side:'pair', ownerReq:number, callOrd:number}}
  */
-export function resolveSelectedSource(step) {
+export function resolveSelectedSource(step, selectedKey = null, read = null) {
+  if (step === null && read?.detail !== null && read?.detail !== undefined && selectedKey !== null) {
+    const prefix = `${read.detail.req_id}:message:`;
+    const ordText = selectedKey.startsWith(prefix) ? selectedKey.slice(prefix.length) : '';
+    const ord = /^\d+$/.test(ordText) ? Number(ordText) : -1;
+    if (read.entries.some(entry => entry.ord === ord)) {
+      return { side: 'request', target: 'message', path: messagePathOf(read.meta, ord), messageOrd: ord };
+    }
+  }
   if (step === null || step.source === null) return { side: 'none' };
   const s = step.source;
   // 已配对的结果步骤优先解析成配对目标：它虽然落在 request 侧，阅读入口是两端同屏。

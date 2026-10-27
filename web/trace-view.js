@@ -407,15 +407,18 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
     gapText ?? '读取中');
     return steps;
   }
-  // 可信新增：输入解释、System 消息与工具结果都只认 delta；dirty/unknown/branch 不升级。
+  // 可信新增只认 delta；归属未知时按请求展示原文，不推断会话关系。
   const trusted = deltaOrdinals(detail);
+  const unassigned = trusted === null && detail.actor_state === 'unknown'
+    && read.meta !== null && (read.meta.state === 'available' || read.meta.state === 'partial');
   if (trusted === null) {
     record('uncertain', detail.prev_relation === 'unknown' || detail.derived_state !== 'current'
       ? 'unknown' : null,
-    `新增输入未确认 · ${detail.prev_relation ?? detail.derived_state}`);
-  } else {
+    unassigned ? '会话归属未确认 · 以下为本次请求的消息' : `新增输入未确认 · ${detail.prev_relation ?? detail.derived_state}`);
+  }
+  if (trusted !== null || unassigned) {
     for (const entry of read.entries) {
-      if (!trusted.has(entry.ord)) continue;
+      if (trusted !== null && !trusted.has(entry.ord)) continue;
       // 路径按协议的数组键拼（messages / input），不写死键名。
       const msgBase = messagePathOf(read.meta, entry.ord);
       // 工具结果块按内容块出独立步骤；混合消息的真实用户文本只产生一次。
@@ -424,10 +427,10 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
         // Chat 的 role=tool 结果按整条协议消息配对（后端 result_path 到 messages[N] 为止）；
         // Anthropic 的结果块配对到内容块路径。反向配对只认已确认的精确位置。
         const wholeMessage = entry.rawRole === 'tool';
-        const path = wholeMessage ? msgBase : `${msgBase}.${block.path}`;
-        const indexed = (detail.tool_results ?? []).find(item => item.state === 'resolved'
+        const path = wholeMessage || block.path === '' ? msgBase : `${msgBase}.${block.path}`;
+        const indexed = trusted === null ? null : (detail.tool_results ?? []).find(item => item.state === 'resolved'
           && item.result_ord === entry.ord && item.result_path === path) ?? null;
-        const bgSpawn = bg.bySpawn.get(`${row.req_id}:${entry.ord}`) ?? [];
+        const bgSpawn = trusted === null ? [] : bg.bySpawn.get(`${row.req_id}:${entry.ord}`) ?? [];
         steps.push({
           key: `${row.req_id}:message:${entry.ord}:result:${block.index}`, reqId: row.req_id,
           kind: 'tool_result',
@@ -444,7 +447,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
       }
       // 背景作业完成通知：解释层判 injected 不占用户气泡，配对信息在这里出
       // Event 步骤，让「作业在哪一笔被唤醒」可读。
-      const bgNotice = bg.byNotice.get(`${row.req_id}:${entry.ord}`) ?? [];
+      const bgNotice = trusted === null ? [] : bg.byNotice.get(`${row.req_id}:${entry.ord}`) ?? [];
       if (bgNotice.length > 0) {
         steps.push({
           key: `${row.req_id}:message:${entry.ord}:bg`, reqId: row.req_id, kind: 'record',
@@ -466,7 +469,18 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
         });
         continue;
       }
-      if (!entry.isInput) continue;
+      if (!entry.isInput) {
+        if (unassigned && resultBlocks.length === 0) {
+          const role = entry.role === 'assistant' ? 'Assistant' : entry.rawRole ?? 'Unknown';
+          steps.push({ key: `${row.req_id}:message:${entry.ord}`, reqId: row.req_id,
+            kind: entry.role === 'assistant' ? 'assistant' : 'record',
+            text: `请求中的 ${role} · ${entry.preview}`, messageOrd: entry.ord, callOrd: null,
+            source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
+            raw: entry.blocks.map(block => block.text).join('\n\n'), unrecognized: false,
+            status: null, result: null, pairOwner: null });
+        }
+        continue;
+      }
       if (entry.input?.state === 'text') {
         steps.push({ key:`${row.req_id}:message:${entry.ord}`, reqId: row.req_id, kind: 'user',
           text: entry.input.text, messageOrd: entry.ord, callOrd: null,
@@ -474,13 +488,22 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
           raw: entry.input.original ?? entry.input.text, unrecognized: false,
           status: null, result: null, pairOwner: null });
       } else {
-        // unrecognized 输入也是新增事实：占一行，原文进详情。
+        // 未识别的输入占一行，原文进详情；是否为新增由可信增量决定。
         steps.push({ key:`${row.req_id}:message:${entry.ord}`, reqId: row.req_id, kind: 'user',
           text: entry.input?.text ?? '未识别的用户输入', messageOrd: entry.ord, callOrd: null,
           source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
           raw: entry.input?.original ?? null, unrecognized: true,
           status: null, result: null, pairOwner: null });
       }
+    }
+  }
+  if (unassigned) {
+    const { next, total, loading, error } = read.structure;
+    const count = total ?? read.meta?.total ?? null;
+    if (error !== null) {
+      record('unassigned-more', 'unknown', `请求消息读取失败 · ${error} · 点击重试`);
+    } else if (count !== null && next < count) {
+      record('unassigned-more', null, loading ? '正在读取请求消息' : `还有 ${count - next} 条请求消息未读取 · 点击续读`);
     }
   }
   // 增量读取未完成或失败：一条事件记录显示剩余与失败，点击续读两片；完成时不出现。
@@ -495,7 +518,13 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
   // thinking 不常驻，多 choice 不结构化拆行，只出一条保留原始对象的记录。
   const meta = read?.meta ?? null;
   const view = meta === null ? null : replyView(meta);
-  if (view === null || view.state === 'absent') {
+  const unknownBody = trusted === null && detail.actor_state === 'unknown';
+  if (view === null && unknownBody && (detail.body_state === 'available' || detail.body_state === 'partial')) {
+    record('body-metadata', 'unknown', '正文信息未读到 · 点击重试');
+  } else if (unknownBody && (meta === null || (meta.state !== 'available' && meta.state !== 'partial'))
+    && detail.reply_state !== 'absent') {
+    record('reply', 'unknown', '回复状态未知');
+  } else if (view === null || view.state === 'absent') {
     record('reply', 'missing_reply', '未收到回复');
   } else if (view.choiceCount !== null && view.choiceCount > 1) {
     record('choices', null, `多 choice 回复（${view.choiceCount} 项）：保留原始对象，不按冲突序号提供工具定位`);
@@ -530,6 +559,15 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
       }
     }
   }
+  // 回调只报告自身观察，不由 success 推断 HTTP 状态或具体原因。
+  const hookReports = detail.source_facts?.hook?.successes ?? [];
+  if (hookReports.includes('failure')) {
+    if (hookReports.includes('success')) record('hook', 'unknown', '回调的成功与失败报告冲突');
+    else if (detail.source_facts?.selected?.error == null) record('hook', 'unknown', '回调报告失败 · 未提供失败原因');
+    else record('hook', 'unknown', '回调报告失败');
+  }
+  const ledgerError = detail.source_facts?.selected?.error;
+  if (ledgerError) record('ledger-error', 'failed', `账本报告错误 · ${ledgerError}`);
   // 请求级记录：已有内容步骤也保留，不用 !steps.length 当唯一条件。
   if (row.status !== null && row.status >= 400) {
     record('http', 'failed', `请求失败 · HTTP ${row.status}；已收到的输入与回复仍保留在步骤里`);
