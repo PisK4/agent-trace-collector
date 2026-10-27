@@ -19,6 +19,15 @@ export const HAVE_OTLP = 8;
 export type ConvRef = { key: string; source: string };
 
 /**
+ * 上游把"没有会话"写成空串。空串不是会话身份：组键、session 列与 actor
+ * 都按缺失处理；原始值只在 raw_hook 保留。账本与路由的映射层已经先转成
+ * null，这条规则服务于保留原值的 hook 入口。
+ */
+export function sessionIdentity(session: string | null): string | null {
+  return session !== null && session.length > 0 ? session : null;
+}
+
+/**
  * 会话归属引用：投影确认身份后把组提升到 session。
  */
 export function sessionRef(session: string): ConvRef {
@@ -31,8 +40,9 @@ export function sessionRef(session: string): ConvRef {
 
 /** hook 阶段只知道会话：有会话用 session，否则回退 hook 自身。 */
 export function hookConv(session: string | null, hookId: string): ConvRef {
-  return session !== null
-    ? sessionRef(session)
+  const identity = sessionIdentity(session);
+  return identity !== null
+    ? sessionRef(identity)
     : { key: JSON.stringify(['hook', hookId]), source: 'hook' };
 }
 

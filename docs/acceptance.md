@@ -309,3 +309,20 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 | 工具 | 924 次调用，resolved 893、pending 31 |
 
 存量 Hermes 行不执行用途重建，按项目所有人的决定直接删除；上面是删除前的只读记录。新流量按 `PURPOSE_VERSION=5` 结算，v5 的真实流量验收要等新代码部署后另行记录。
+
+## 空 session 身份修复与迁移（合成，2026-10-27）
+
+随 [Agent Note：空 session 不是会话身份](../.agents/notes/implemented/bug-fix/2026-10-27-empty-session-identity-migration.md)交付。本轮全部是合成数据，`tests/evidence.test.ts`、`tests/hook.test.ts`、`tests/hook-identity.test.ts`、`tests/maintenance.test.ts` 共 76 项通过，`tsc --noEmit` 通过。真实库上未执行迁移，也没有删除任何行。
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| 新请求身份 | 空 session 的 hook 请求落 `["hook", hook_id]`、`conv_source='hook'`、`session` 与 `actor` 为 NULL、`actor_state='unknown'`；`raw_hook.session` 仍为空串；不产生派生队列行 |
+| 有效 session | 非空 session 的 hook 请求保持 `["session", session]` 与既有 actor |
+| 预览 | 五行种子给出 1 个候选与 4 个拒绝（`ownership_attached`、`hook_evidence_ambiguous`、`hook_session_present`、`hook_source_missing`）；`agents` 按桶内分布计数；预览不改库 |
+| 命令闸门 | 预览退出 0 且 `applied:false`；`--apply` 缺 `--approval-id` 时退出 1、错误码 `approval_id_required`，不迁移 |
+| 执行 | `migrated:1`、`remaining:1`、`conservation.conserved:true`；迁移行 `conv_key` 为 `["hook","hook-a"]`、`session` 与 `actor` 为 NULL、`actor_state='unknown'`、`have` 不变；`SUM(input_revision)` 恰好 +1，无派生队列行 |
+| 重复执行 | 第二次 `migrated:0`，`SUM(input_revision)` 不变 |
+| 迁移后关联 | 唯一 response ID 到达后按 `mergeHookInto` 合并：源行删除，证据 `merged` 落目标，`request_alias` 记旧 id，目标 `conv_key` 与 `actor` 不被 hook 回退覆盖 |
+| helper 回退 | `hookConv('', 'h1')` 与 `hookConv(null, 'h1')` 同为 `["hook","h1"]` |
+
+真实库验证待执行：生产空桶的形状记录在上一节的只读快照里，候选数、拒绝原因分布与守恒对账要在维护窗口跑预览后另行记录。`PURPOSE_VERSION` 升到 5 与本次身份修复是两件事：新流量按 v5 结算，旧 Hermes 行按既定决定删除，不经过迁移。

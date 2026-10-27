@@ -379,6 +379,8 @@ CREATE TABLE source_cursor (
 
 所以读模型保留 `subagent` 与 `parent_agent` 两列。会话导航仍按 `conv_key` 统一，但前驱计算与工具配对按 `(conv_key, actor)` 做，`actor` 取 `subagent` 优先、否则是会话本身。身份不足以判定归属时明确标不确定，不按名称或时间猜。
 
+空串是上游对"没有会话"的写法。会话身份在入口按缺失处理：`session`、`actor` 都留 NULL，组键回退到该条证据自己的前缀（hook 用 `["hook", id]`），`raw_hook.session` 保留上游原值。账本与路由的映射层先把空串转 NULL；hook envelope 保留原值，规范化在 `insertHookRequest` 读取时完成。旧行落在 `["session",""]` 空桶，只能用显式身份迁移拆回各自的 hook 回退键，见[运维手册](operations.md#migrate-hook-identity)。
+
 ### 合并规则
 
 每个 `req_id` 维护一个来源位图 `have`：1 为 hook，2 为账本，4 为路由，8 为 OTLP span。

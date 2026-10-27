@@ -5,6 +5,7 @@ import { openStore } from '../store';
 import type { Store } from '../store';
 import { backupBundle, backupDatabase, restoreBundle } from './backup';
 import { acquireMaintenanceLock, type LockHandle } from './lock';
+import { previewHookIdentityMigration, migrateHookIdentity } from './identity';
 import { previewMetadataPurge, purgeMetadata } from './purge';
 import { rebuildSession } from './rebuild';
 import { reparseProtocol } from './reparse';
@@ -38,6 +39,7 @@ const USAGE = `usage:
   maintain restore --bundle <bundleDir> --out <new-dir>
   maintain rebuild --db <path> --session <conv_key>
   maintain reparse --db <path> --protocol <name>
+  maintain migrate-hook-identity --db <path> [--apply --approval-id <id>]
   maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --approval-id <id>]
 `;
 
@@ -108,7 +110,7 @@ export async function runMaintenance(argv: string[], io: {
   }
 
   if (command === 'verify' || command === 'purge-metadata' || command === 'rebuild'
-    || command === 'reparse') {
+    || command === 'reparse' || command === 'migrate-hook-identity') {
     // verify 只读，不需要锁；其余命令写库，必须有。
     let store: Store | null = null;
     let lock: LockHandle | null = null;
@@ -137,6 +139,27 @@ export async function runMaintenance(argv: string[], io: {
           const report = reparseProtocol(store, argument);
           out(JSON.stringify({ ok: true, ...report }));
         }
+        return 0;
+      }
+      if (command === 'migrate-hook-identity') {
+        lock = acquireMaintenanceLock(dirname(dbPath), `migrate-hook-identity:${process.pid}`);
+        if (lock === null) {
+          err('maintenance_lock_held');
+          return 1;
+        }
+        store = openStore(dbPath);
+        const preview = previewHookIdentityMigration(store);
+        if (flags.get('apply') !== true) {
+          out(JSON.stringify({ ok: true, applied: false, ...preview }));
+          return 0;
+        }
+        const approvalId = stringFlag(flags, 'approval-id');
+        if (approvalId === null) {
+          out(JSON.stringify({ ok: false, error: 'approval_id_required', ...preview }));
+          return 1;
+        }
+        const report = migrateHookIdentity(store);
+        out(JSON.stringify({ ok: true, applied: true, approval_id: approvalId, ...report }));
         return 0;
       }
       const before = stringFlag(flags, 'before');
