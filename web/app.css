@@ -117,6 +117,11 @@ code,pre,.mono{font-family:var(--mono)}
 .col{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain}
 .col-sessions{background:var(--page);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
 .col-main{background:var(--canvas)}
+/* 中栏阅读位置由 trace-dom 每次键控提交时统一补偿；原生滚动锚定会在同一处
+   位置变化上再补一次，两套机制叠加会来回跳。窄屏中栏走文档滚动，根元素
+   一并关掉。 */
+.col-main{overflow-anchor:none}
+html{overflow-anchor:none}
 .col-rail{background:var(--surface);border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
 /* 折叠用 body 类 + visibility：分隔线与可聚焦后代一并退出可访问树，不用 opacity 假装隐藏。 */
 body.sidebar-collapsed .app{grid-template-columns:0 minmax(0,1fr) 6px var(--rail-width)}
