@@ -4,6 +4,17 @@
 
 验收结果描述的是当时的代码与数据。现行行为以[架构设计](architecture-design.md)与代码为准；本文件回答的是「这条路径验证过没有、怎么验的」。
 
+## 链角色不确定闭包（真实流量 rebuild，2026-10-28）
+
+前提：master `cf7c2b3`（`GROUP_ALGORITHM=5`）已合并、采集器已重启加载新代码后，对调查报告的 hermes 会话（51 笔请求）执行 `maintain rebuild`。做法与动机见[链角色 note](../.agents/notes/implemented/bug-fix/2026-10-27-chain-role-uncertainty-propagation.md)；这里只记录聚合计数，会话正文、账号与令牌不进本文件。
+
+| 项 | 结果 |
+| --- | --- |
+| rebuild 报告 | queued 1、recomputed 47、retained 4（`body_pending` 4）、unavailable 4（`body_pending` 4）、target_algorithm 5、actual_algorithms `{"5":47}`、queue_remaining 0 |
+| 角色分布（rebuild 前） | branch 44（全部 prev_relation=confirmed）、main 6（first 1 + unknown 5）、aux 1 |
+| 角色分布（rebuild 后） | unknown 49（confirmed 44 + unknown 5）、main 1（first）、aux 1 |
+| 判定核对 | confirmed 后继不再标 branch，与不确定闭包规则一致；关系 unknown 的行显式落 unknown，不再借用 main |
+
 ## 单一轨迹阅读界面（合成，2026-10-24）
 
 合成服务端口 8770，18 笔状态会话 + 42 笔窗口会话 + 45 条消息深样本：
