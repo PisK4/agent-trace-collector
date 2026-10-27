@@ -314,7 +314,7 @@ if (typeof document !== 'undefined') {
       for (let spent = 0; spent < DELTA_PIECE_BUDGET; spent += 2) {
         const current = store.peekRequest(id);
         const delta = current?.delta ?? null;
-        if (current === null || current.detail === null || delta === null || delta.done || delta.error !== null) break;
+        if (current === null || current.detail === null || current.meta === null || delta === null || delta.done || delta.error !== null) break;
         try { await store.loadDelta(id, 2); } catch { break; }
         if (epoch !== readingEpoch || !inWindow(id)) return;
       }
@@ -997,7 +997,7 @@ if (typeof document !== 'undefined') {
     const truncNote = completeness.key === 'truncated'
       ? `<p class="rail-note">回复在长度上限被截断（finish=${esc(view.finish ?? '')}）；请求本身仍是成功状态。</p>` : '';
     // 选中来源是右栏的唯一导航依据：System、输入消息、回复块各自定位，不回退整份回复。
-    const source = resolveSelectedSource(currentSelectedStep(r));
+    const source = resolveSelectedSource(currentSelectedStep(r), state.selectedStep, read);
     /** @type {string} */
     let body;
     if (source.side === 'request' && source.target === 'system') {
@@ -1265,6 +1265,16 @@ if (typeof document !== 'undefined') {
   async function selectRequest(id, key) {
     const row = currentRows().find(row => row.req_id === id);
     if (row === undefined) return;
+    if (key === `${id}:unassigned-more`) {
+      if (stepsOf(row).stale === null) await loadStructure(id);
+      else await ensureRead(id);
+      return;
+    }
+    if (key === `${id}:body-metadata`) {
+      readyRequests.delete(id);
+      await ensureRead(id);
+      return;
+    }
     // 增量事件行是续读入口：打开读数页并再消费两片，不当作步骤选择。
     if (key === `${id}:delta`) {
       dispatch({ kind: 'select-delta', reqId: id });

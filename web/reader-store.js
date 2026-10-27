@@ -166,6 +166,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
 
   /** @param {any} rec 清空正文缓存：作废与 validate 换版本共用的原地重置。 */
   function clearRecordContent(rec) {
+    deltaInflight.delete(rec.id);
     rec.token = null;
     rec.detail = null;
     rec.detailError = null;
@@ -346,6 +347,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     bgJobs = { status: 'idle', items: [] };
     summary = { status: 'idle', data: null };
     reads.clear();
+    deltaInflight.clear();
     routes.clear();
     routeValues.clear();
     try {
@@ -540,12 +542,21 @@ export function createReaderStore(fetcher, onReadChanged, options) {
       for (const entry of entries) ords.add(entry.ord);
       state.ords = [...ords].sort((a, b) => a - b);
       state.total = page.total;
-      if (entries.length === 0 && page.total !== null && page.to < page.total) {
-        // 空页且未到起点：next 不动，调用方按错误重试，不把空洞当已读。
-        state.error = 'body_page_empty';
+      const end = Math.min(page.to, page.total ?? page.to);
+      const got = new Set(entries.map(entry => entry.ord));
+      let gap = false;
+      if (page.total !== null) {
+        for (let ord = state.next; ord < end; ord += 1) {
+          if (!got.has(ord)) { gap = true; break; }
+        }
+      }
+      if (gap) {
+        // 缺口不推进游标，丢掉本片缓存让重试重新读取。
+        rec.pages.delete(JSON.stringify([id, rec.token, state.next, to]));
+        state.error = entries.length === 0 ? 'body_page_empty' : 'body_page_gap';
       } else {
         // 只有结构读取成功才推进 next：定点读与增量读不影响连续历史上界。
-        state.next = Math.min(page.to, page.total ?? page.to);
+        state.next = end;
       }
     } catch (error) {
       // 整笔已作废（409 路径）：结构失败不落在孤立记录上，交给调用方统一处理。
@@ -581,9 +592,17 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     if (rec.detail === null) return assemble(rec);
     const trusted = deltaOrdinals(rec.detail);
     if (trusted === null) {
-      // 关系未确认：不标新增、不读消息，调用方展示关系状态。
+      if (state.done) return assemble(rec);
       state.unconfirmed = true;
+      // 元信息尚未读到时先保留重试机会，不能提前标记完成。
+      if (rec.detail.actor_state === 'unknown' && rec.meta === null) return assemble(rec);
       state.done = true;
+      // 未知归属没有可派生的组；按请求自身读取一片，不把正文当作新增。
+      if (rec.detail.actor_state === 'unknown' && rec.meta !== null
+        && rec.meta.total !== null && rec.meta.total > 0
+        && (rec.meta.state === 'available' || rec.meta.state === 'partial')) {
+        return loadStructure(id);
+      }
       return assemble(rec);
     }
     if (state.loading || state.done) return assemble(rec);

@@ -361,6 +361,88 @@ test('dirty、branch、unknown 没有确定用户步骤', () => {
   expect(branch.some(s => s.text.includes('分支链请求'))).toBe(true);
 });
 
+test('已确认归属但关系未确认时不把已缓存历史当成新增', () => {
+  const cached = [entry(0, { state: 'text', text: 'historical', original: 'historical' }, true)];
+  for (const d of [
+    detail({ derived_state: 'dirty', derivation: { chain_state: 'unavailable' }, delta_ordinals: null }),
+    detail({ prev_relation: 'unknown', delta_ordinals: null }),
+    detail({ prev_relation: 'branch', delta_ordinals: null }),
+  ]) {
+    const steps = projectSteps(row(), read(d, cached, { stop_reason: 'end_turn', content: [] }));
+    expect(steps.some(step => step.kind === 'user')).toBe(false);
+    expect(steps.some(step => step.text.includes('新增输入未确认'))).toBe(true);
+  }
+});
+
+test('回调失败与冲突只作来源报告，不推断 HTTP 状态', () => {
+  const snapshot = read(detail({ source_facts: { hook: { successes: ['failure'] } } }), [], null)!;
+  const failed = projectSteps(row({ status: null }), snapshot);
+  expect(failed.some(step => step.text === '回调报告失败 · 未提供失败原因')).toBe(true);
+  expect(failed.some(step => step.text === 'HTTP 状态未知')).toBe(true);
+  expect(failed.some(step => step.text.includes('HTTP 失败'))).toBe(false);
+  snapshot.detail = { ...snapshot.detail!, source_facts: { hook: { successes: ['success', 'failure'] } } } as never;
+  expect(projectSteps(row({ status: null }), snapshot).some(step => step.text === '回调的成功与失败报告冲突')).toBe(true);
+});
+
+test('账本错误显示来源与原文，正文缺失不影响错误展示', () => {
+  const snapshot = read(detail({ actor_state: 'unknown', body_state: 'pending', reply_state: null,
+    delta_ordinals: null, prev_relation: 'unknown',
+    source_facts: { selected: { error: '<unknown model>' }, hook: null } }), [], null)!;
+  const r = row({ status: 404, body_state: 'pending', miss_reason: 'hook_absent' });
+  const steps = projectSteps(r, snapshot);
+  expect(steps.some(step => step.text === '账本报告错误 · <unknown model>')).toBe(true);
+  expect(steps.some(step => step.text.includes('HTTP 404'))).toBe(true);
+  expect(steps.some(step => step.text.includes('hook_absent'))).toBe(true);
+  expect(steps.some(step => step.text === '回复状态未知')).toBe(true);
+  expect(steps.some(step => step.text.includes('正文信息未读到'))).toBe(false);
+  snapshot.meta = { state: 'pending', reply: null } as never;
+  expect(projectSteps(r, snapshot).some(step => step.text === '回复状态未知')).toBe(true);
+  expect(renderTraceRows(r, steps, 1, null)).toContain('&lt;unknown model&gt;');
+});
+
+test('消息列表选择未投影的历史时仍定位请求原文', () => {
+  const historical = {
+    ord: 0, role: 'assistant', rawRole: 'assistant',
+    blocks: [{ kind: 'text', text: 'earlier', index: 0, raw: 'earlier', path: 'content' }],
+    preview: 'earlier', input: null, isInput: false,
+  };
+  const snapshot = read(detail({ prev_relation: 'unknown', delta_ordinals: null }), [historical], { output: [] })!;
+  snapshot.meta = { ...snapshot.meta!, state: 'available', protocol: 'responses', total: 1 };
+  expect(resolveSelectedSource(null, '7:message:0', snapshot)).toEqual({ side: 'request', target: 'message', path: 'request.input[0]', messageOrd: 0 });
+  expect(resolveSelectedSource(null, '7:message:1', snapshot)).toEqual({ side: 'none' });
+  expect(resolveSelectedSource(null, '9:message:0', snapshot)).toEqual({ side: 'none' });
+});
+
+test('孤立请求按详情归属显示携带的历史，其他快照不冒充新增', () => {
+  const history = {
+    ord: 0, role: 'assistant', rawRole: 'assistant',
+    blocks: [{ kind: 'text', text: 'earlier reply', index: 0, raw: 'earlier reply', path: 'content' }],
+    preview: 'earlier reply', input: null, isInput: false,
+  };
+  const injected = {
+    ord: 1, role: 'user', rawRole: 'user',
+    blocks: [{ kind: 'text', text: '<system-reminder>context</system-reminder>', index: 0, raw: 'context', path: 'content' }],
+    preview: '<system-reminder>context</system-reminder>', input: { state: 'injected' }, isInput: false,
+  };
+  const unknown = detail({ actor_state: 'unknown', derived_state: 'dirty', derivation: { chain_state: 'unavailable' }, delta_ordinals: null });
+  const snapshot = read(unknown, [history, injected], { choices: [] })!;
+  snapshot.meta = { ...snapshot.meta!, state: 'available', protocol: 'chat', total: 2 };
+  snapshot.structure = { next: 2, total: 2, ords: [0, 1], loading: false, error: null };
+  const steps = projectSteps(row({ actor_state: 'known' }), snapshot);
+  const pastAssistant = steps.find(step => step.key === '7:message:0');
+  expect(pastAssistant?.kind).toBe('assistant');
+  expect(pastAssistant?.text).toContain('请求中的 Assistant');
+  expect(resolveSelectedSource(pastAssistant ?? null)).toEqual({ side: 'request', target: 'message', path: 'request.messages[0]', messageOrd: 0 });
+  const pastInjected = steps.find(step => step.key === '7:message:1');
+  expect(pastInjected?.kind).toBe('record');
+  expect(pastInjected?.text).toContain('system-reminder');
+  expect(steps.some(step => step.kind === 'user')).toBe(false);
+  const knownSnapshot = { ...snapshot, detail: { ...snapshot.detail!, actor_state: 'known' as const } };
+  const knownSteps = projectSteps(row({ actor_state: 'unknown' }), knownSnapshot);
+  expect(knownSteps.some(step => step.key === '7:message:0')).toBe(false);
+  expect(knownSteps.some(step => step.text.includes('新增输入未确认'))).toBe(true);
+});
+
 test('辅助请求只有一条辅助记录；同 call_id 不同请求的键不冲突', () => {
   const aux = projectSteps(row({ purpose_chain: 'exclude', req_kind: 'title' }), null);
   expect(aux.length).toBe(1);
