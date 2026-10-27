@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-`web/reader-store.js` 的 `loadEarlier()` 把请求页大小 clamp 到 200：`Math.min(windowRows.length || 30, 200)`。翻倍照常进行，到顶后每次点击按上限继续加载，直到 `next_cursor` 为 null。初始窗口大小不受影响（`windowLimit()` 上限 100，低于服务端上限）。
+`web/reader-store.js` 的窗口扩展函数（原名 `loadEarlier`，[窗口锚点调转](../feature/2026-10-28-start-anchored-trace-window.md)后为 `loadLater`，方向由 `older` 换为 `forward`）把请求页大小 clamp 到 200：`Math.min(windowRows.length || 30, 200)`。翻倍照常进行，到顶后每次点击按上限继续加载，直到 `next_cursor` 为 null。初始窗口大小不受影响（`windowLimit()` 上限 100，低于服务端上限）。
 
 ## Alternatives considered
 

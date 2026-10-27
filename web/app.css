@@ -221,7 +221,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 
 /* ---------- 单一轨迹：单行步骤、默认折叠、窗口导航 ---------- */
 .step-list{padding:0 24px 28px}
-.history-loader{display:flex;align-items:center;flex-wrap:wrap;gap:9px;justify-content:center;padding:14px 0 15px;border-bottom:1px solid var(--line)}
+/* 加载入口在列表尾部：与从头往下读的方向一致，上边框与末组分隔。 */
+.history-loader{display:flex;align-items:center;flex-wrap:wrap;gap:9px;justify-content:center;padding:14px 0 15px;border-top:1px solid var(--line)}
 .history-button{border:1px solid var(--line);border-radius:5px;padding:7px 13px;background:var(--surface);font-size:11px;color:var(--text-2)}
 .history-button:hover{border-color:var(--accent);color:var(--accent)}
 .history-start{font-size:11px;color:var(--muted)}

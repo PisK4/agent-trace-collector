@@ -48,16 +48,17 @@ function sameOrder(left, right) {
 }
 
 /**
- * 步骤列表的子节点：加载入口、请求组、空态与结尾标记。组容器自身的可见结果
- * 传空串——容器的内容是它的子节点，换容器会连子节点与焦点一起丢掉。
+ * 步骤列表的子节点：请求组、空态、加载入口与结尾标记。加载入口在列表尾部，
+ * 与从头往下读的方向一致；组容器自身的可见结果传空串——容器的内容是它的
+ * 子节点，换容器会连子节点与焦点一起丢掉。
  * @param {MainModel} model @returns {CommitItem[]}
  */
 function listItems(model) {
   /** @type {CommitItem[]} */
   const items = [];
-  if (model.loaderHtml !== '') items.push({ key: 'loader', html: model.loaderHtml });
   for (const group of model.groups) items.push({ key: `group:${group.reqId}`, html: '' });
   if (model.emptyHtml !== '') items.push({ key: 'empty', html: model.emptyHtml });
+  if (model.loaderHtml !== '') items.push({ key: 'loader', html: model.loaderHtml });
   items.push({ key: 'end', html: model.endHtml });
   return items;
 }

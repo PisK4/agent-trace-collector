@@ -63,21 +63,29 @@ test('trace-resolved 三分支：canonical 跳转、off-page 与 missing 互斥�
   expect(inPage.state).toEqual(base());
 });
 
-test('session-default 只在无 trace 且无窗口外目标时选最新，不用最新顶替', () => {
-  const defaulted = applyIntent(base({ reqId: null, toolOrd: null, toolOwner: null, selectedStep: null, railTab: 'facts' }), { kind: 'session-default', latestReqId: 42 });
+test('session-default 只在无 trace 且无窗口外目标时选第一笔，不用它顶替', () => {
+  const defaulted = applyIntent(base({ reqId: null, toolOrd: null, toolOwner: null, selectedStep: null, railTab: 'facts' }), { kind: 'session-default', firstReqId: 42 });
   expect(defaulted.state.reqId).toBe(42);
 
-  const kept = applyIntent(base({ offPageReqId: 55, reqId: null, selectedStep: null, toolOrd: null, toolOwner: null }), { kind: 'session-default', latestReqId: 42 });
+  const kept = applyIntent(base({ offPageReqId: 55, reqId: null, selectedStep: null, toolOrd: null, toolOwner: null }), { kind: 'session-default', firstReqId: 42 });
   expect(kept.state.reqId).toBeNull();
   expect(kept.state.offPageReqId).toBe(55);
 
-  const selected = applyIntent(base(), { kind: 'session-default', latestReqId: 42 });
+  const selected = applyIntent(base(), { kind: 'session-default', firstReqId: 42 });
   expect(selected.state.reqId).toBe(7);
 });
 
-test('select-latest 无条件回最新并清选择（显式刷新）', () => {
+test('select-latest 无条件回最新并清选择（尾锚点刷新）', () => {
   const result = applyIntent(base(), { kind: 'select-latest', latestReqId: 42 });
   expect(result.state.reqId).toBe(42);
+  expect(result.state.selectedStep).toBeNull();
+  expect(result.state.toolOrd).toBeNull();
+  expect(result.state.toolOwner).toBeNull();
+});
+
+test('select-first 无条件回第一笔并清选择（头锚点刷新）', () => {
+  const result = applyIntent(base(), { kind: 'select-first', firstReqId: 3 });
+  expect(result.state.reqId).toBe(3);
   expect(result.state.selectedStep).toBeNull();
   expect(result.state.toolOrd).toBeNull();
   expect(result.state.toolOwner).toBeNull();
