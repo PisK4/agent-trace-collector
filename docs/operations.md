@@ -67,6 +67,10 @@ bun run maintain migrate-hook-identity --db '<dataDir>/trace.db' --apply --appro
 # 长期元数据淘汰，默认只预览
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --apply --approval-id '<你的审批标识>'
+
+# 按 agent 拆除一次来源的全部落库痕迹，默认只预览
+bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes
+bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --approval-id '<你的审批标识>'
 ```
 
 路径与会话键都是示意，执行前换成已检查过的目标。不要把真实账号、令牌或正文写进命令历史、截图和工单。
@@ -239,9 +243,19 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 
 一个批次在一个事务里完成，顺序是：固定本批目标（临时表）→ 按目标证据删 `cost_observation` → 写 `retention_event` 与逐证据墓碑 `purged_evidence` → 删工具链接 → 删块引用与随之没有引用的块 → 删证据 → 清指向目标的 `prev_req_id` → 按 `new_id` 删别名 → 删请求 → 清没有其他引用的 `route_summary`。外键是 `NO ACTION`，顺序错了会直接失败而不是留下悬空引用，整个批次回滚。
 
-墓碑按**证据键**记录，不按日期整日跳过：同一天里只淘汰了一部分请求时，剩下的仍然可以继续采。来源再回放命中墓碑时计 `purged_skip`，不复活。
+墓碑按**证据键**记录，不按日期整日跳过：同一天里只淘汰了一部分请求时，剩下的仍然可以继续采。来源再回放命中墓碑时计 `purged_skip`，不复活。墓碑绑定文件代际：上游重写或收缩导致代际变化后旧键不再匹配，重放按新证据处理，请求与原始行都可能重新落库。
 
 墓碑本身也会增长。这一版不做墓碑压缩；真的到了需要压缩的规模，按可证明连续的物理偏移区间另做迁移，不要就地删墓碑。
+
+### purge-agent
+
+按 `agent` 拆除一次对话来源的全部落库痕迹，默认只预览，不改任何东西。预览输出 `requests`、`conv_keys`、`shared_conv_keys`、`groups`、`groups_with_remaining`、`first_day`、`last_day`、`estimated_bytes`，以及 `evidence` 与 `raw` 两组可删行数。`estimated_bytes` 计入请求正文、骨架、原始行与可删的路由摘要，共享正文块按引用去重后不计。加 `--apply` 必须同时给 `--approval-id`，否则退出码 1 且错误码 `approval_id_required`；缺 `--agent` 是用法错误，退出码 2。
+
+请求侧与 `purge-metadata` 共用同一套删除主干：固定目标 → 按证据键删 `cost_observation` → 写 `retention_event`（`action=purge_agent`，`reason=agent_removal:<agent>`）与墓碑 → 删工具链接、块引用与孤儿块 → 删证据 → 清 `prev_req_id` → 按 `new_id` 删别名 → 删请求 → 清没有其他引用的 `route_summary`。之外还清来源层：`raw_ledger`、`raw_route`、`raw_hook`、等待队列里对应的 `pending_hook`、指向被删请求的 `bg_job` 与 `otlp_body_ref`，以及派生快照里属于这些请求的逐行结果。
+
+共享守卫按证据键判断：原始行、路由或摘要仍被删除集合之外的请求引用时保留。`shared_conv_keys` 是被别的 agent 同时使用的会话桶数量；这些桶里剩下的成员在同一事务里按剩余请求重算派生组，空掉的组同步成 clean。
+
+墓碑语义与 `purge-metadata` 相同。route 重放只把路由应用到已存在的请求，不为删除的请求建行；hook 被上游重投时按新请求落库，因为 hook 摄入不查墓碑。`ingest_issue` 与 `source_gap` 是诊断记录，不随拆除删除。
 
 ## 恢复流程
 
