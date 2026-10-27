@@ -35,8 +35,9 @@ import {
   sessionsListBypassHtml,
 } from './session-view.js';
 import { applyIntent } from './selection.js';
+import { createMainView } from './trace-dom.js';
 import { renderTracePair } from './trace-pair.js';
-import { projectSteps, renderTraceRows } from './trace-view.js';
+import { projectSteps, renderTraceRow } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
 import { railTabFromParam, railTabParam, resolveTraceTarget } from './url-route.js';
 
@@ -71,6 +72,8 @@ if (typeof document !== 'undefined') {
   const contextMenu = createContextMenu({ fetcher: (/** @type {string} */ url) => fetch(url) });
   /** @type {{kind: string, param: string, label: string, loading: boolean, error: string | null, data: import('../src/queries/session-summary').SummaryEntries | null} | null} 会话汇总条目列表：点开条目后右栏的支撑记录清单。 */
   let summaryList = null;
+  /** 中栏键控提交：节点身份、选择高亮与滚动锚点都在视图内维护，装配层只给模型。 */
+  const mainView = createMainView(el('main'));
 
   const qp = new URLSearchParams(location.search);
   const state = {
@@ -96,8 +99,6 @@ if (typeof document !== 'undefined') {
     pendingSession: /** @type {string | null} */ (null),
     /** 最近一次显式刷新时间；刷新会重建最近窗口并清掉旧阅读版本。 */
     refreshedAt: /** @type {number | null} */ (null),
-    /** 用户主动滚动后不再强制补偿过期锚点。 */
-    userScrolled: false,
     /** 首载批次是否已把选中组带入可见区；加载更早不再重复居中。 */
     revealed: false,
   };
@@ -239,8 +240,6 @@ if (typeof document !== 'undefined') {
       renderMain();
       // 读数页的数量与计数也依赖这些读取：每批同步刷新右栏。
       renderRail();
-      // 首载批次会让选中组下移：初始载入期间保持它可见；加载更早不重复居中。
-      if (!state.userScrolled && !state.revealed) ensureSelectedVisible();
     }
     if (epoch === loadEpoch) state.revealed = true;
   }
@@ -439,10 +438,16 @@ if (typeof document !== 'undefined') {
     <p class="note" style="margin-top:8px">只显示已记录的决策与尝试。窗口过滤不保证完整留痕；用量条目数量也不等于尝试次数。</p>`;
   }
 
-  /** 单一轨迹：每请求一个组，点击步骤在右栏阅读；顶部提供历史入口。 @param {boolean} withBand 轮次带在场时挂让位标记类 */
-  function traceHtml(withBand) {
+  /**
+   * 中栏模型：会话头、轮次带与步骤列表一次读齐，交给 trace-dom 键控提交。
+   * 步骤行的 HTML 不含选择（默认 false），选择由视图单独写回高亮；
+   * 请求组容器自身的可见结果为空串，内容按稳定步骤键逐行比较。
+   * @returns {import('./trace-dom.js').MainModel}
+   */
+  function mainModel() {
     const window = store.getWindow();
     const rows = currentRows();
+    const band = turnBandHtml();
     // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载更早
     // 记录后 rows.length 累计，重绘时重算，不按首次加载上限截断。
     const ordDigits = Math.max(1, String(rows.length).length);
@@ -453,33 +458,46 @@ if (typeof document !== 'undefined') {
       const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
       return call === null ? null : { name: call.name, inputText: call.inputText };
     };
-    // 轮次带吸顶后滚动定位要让它出带的高度：给步骤列表挂标记类，由 CSS 取让位值。
-    let html = `<div class="step-list${withBand ? ' band-above' : ''}" style="--ord-digits:${ordDigits}">`;
     // 历史入口只在有更早记录或正在读取时出现；序号口径在数字本身的悬停说明里。
-    if (window.loading || window.olderCursor !== null) {
-      html += '<div class="history-loader">';
-      html += window.loading
-        ? '<span class="history-start">正在读取更早记录…</span>'
-        : '<button id="load-earlier" class="history-button">↑ 加载更早记录</button>';
-      html += '</div>';
-    }
-    for (const r of rows) {
+    const loaderHtml = window.loading
+      ? '<div class="history-loader"><span class="history-start">正在读取更早记录…</span></div>'
+      : window.olderCursor !== null
+        ? '<div class="history-loader"><button id="load-earlier" class="history-button">↑ 加载更早记录</button></div>'
+        : '';
+    const groups = rows.map(r => {
       const read = store.peekRequest(r.req_id);
       const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
         store.peekBgJobs().items);
       const ordinal = ordinalOf(r.req_id);
-      html += `<section class="trace-group" data-req="${r.req_id}" data-status="${r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success'}" aria-current="${r.req_id === state.reqId}">`;
+      /** @type {import('./trace-dom.js').CommitItem[]} */
+      const items = [];
       // 自动重读换新后的组级「已更新」：点进组里即清除，正常态不出现。
       if (read !== null && read.updatedSinceSeen) {
-        html += '<div class="group-flag"><span class="state-chip warn"><span class="d"></span>已更新 · 自动重读换新</span></div>';
+        items.push({ key: 'flag', html: '<div class="group-flag"><span class="state-chip warn"><span class="d"></span>已更新 · 自动重读换新</span></div>' });
       }
-      html += renderTraceRows(r, steps, ordinal, state.selectedStep, callOf);
-      html += '</section>';
-    }
-    if (rows.length === 0) {
-      html += `<p class="sess-empty">${state.pendingSession !== null ? '正在读取请求…' : '这个会话没有已记录的请求。'}</p>`;
-    }
-    return html + `<div class="timeline-end"><span></span> 已是最新记录</div></div>`;
+      for (const step of steps) {
+        items.push({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) });
+      }
+      return {
+        reqId: r.req_id,
+        status: r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success',
+        current: r.req_id === state.reqId,
+        rows: items,
+      };
+    });
+    return {
+      headHtml: sessionHead(),
+      bandHtml: band,
+      listClass: `step-list${band !== '' ? ' band-above' : ''}`,
+      ordDigits,
+      loaderHtml,
+      emptyHtml: rows.length === 0
+        ? `<p class="sess-empty">${state.pendingSession !== null ? '正在读取请求…' : '这个会话没有已记录的请求。'}</p>`
+        : '',
+      endHtml: '<div class="timeline-end"><span></span> 已是最新记录</div>',
+      groups,
+      selectedStep: state.selectedStep,
+    };
   }
 
   /**
@@ -534,16 +552,16 @@ if (typeof document !== 'undefined') {
 
   function renderMain() {
     const main = el('main');
-    const keep = main.scrollTop;
     if (state.pendingSession !== null) {
+      mainView.reset();
       main.innerHTML = `<p class="sess-empty" style="padding:24px">正在读取${esc(shortSession(state.pendingSession))}的请求…</p>`;
-      restoreScroll(main, keep);
       return;
     }
-    const band = turnBandHtml();
-    main.innerHTML = sessionHead() + band + traceHtml(band !== '');
+    // 首载未定位完成时以选中组为锚，避免补读把它挤出视口；用户主动滚动后
+    // 改锚首条可见步骤，阅读位置不再被选中组牵走。
+    const preferred = state.revealed ? null : state.reqId;
+    mainView.commit(mainModel(), scroller(), preferred);
     restoreFolds(main);
-    restoreScroll(main, keep);
     syncBandTop();
     revealSelectedChip();
   }
@@ -907,45 +925,20 @@ if (typeof document !== 'undefined') {
   }
 
   /* ---------------- 窗口导航 ---------------- */
-  /** 当前滚动容器：main 独立滚动时用 main，窄屏文档流用 scrollingElement。 */
+  /** 当前滚动容器：main 独立滚动时用 main，窄屏文档流用滚动根；根元素缺失时退回 main。 */
   function scroller() {
     const main = el('main');
-    return getComputedStyle(main).overflowY === 'visible' ? document.scrollingElement : main;
-  }
-  /** 记录当前可见的第一条稳定步骤键与其视口位置，作为 prepend 的锚点。 */
-  function anchorSnapshot() {
-    const step = /** @type {HTMLElement | null} */ (document.querySelector('.compact-step'));
-    if (step === null) return null;
-    const select = /** @type {HTMLElement | null} */ (step.querySelector('[data-step-key]'));
-    return { key: select?.dataset.stepKey ?? null, top: step.getBoundingClientRect().top };
-  }
-  /** @param {ReturnType<typeof anchorSnapshot>} before */
-  function compensateAnchor(before) {
-    if (before === null || before.key === null || state.userScrolled) return;
-    const key = before.key;
-    const expected = before.top;
-    // 两帧各校一次：首帧布局未稳的亚像素漂移在第二帧补齐。
-    /** @param {number} pass */
-    const adjust = (pass) => {
-      const restored = document.querySelector(`[data-step-key="${CSS.escape(key)}"]`)?.closest('.compact-step');
-      if (restored == null) return;
-      const sc = scroller();
-      if (sc !== null) sc.scrollTop += restored.getBoundingClientRect().top - expected;
-      if (pass < 1) requestAnimationFrame(() => adjust(pass + 1));
-    };
-    requestAnimationFrame(() => adjust(0));
+    return getComputedStyle(main).overflowY === 'visible' ? (document.scrollingElement ?? main) : main;
   }
 
   async function loadEarlier() {
     const button = document.getElementById('load-earlier');
     if (button !== null) (/** @type {HTMLButtonElement} */ (button)).disabled = true;
-    const before = anchorSnapshot();
     await store.loadEarlier();
+    // prepend 的位置由每次提交自带的锚点补偿保持，不再手接快照。
     renderMain();
     renderSessions();
-    compensateAnchor(before);
-    // 新载入请求的批次会让上方行高增长：批次结束后再补一次锚点。
-    void loadWindowReads().then(() => compensateAnchor(before));
+    void loadWindowReads();
   }
 
   /** 显式刷新：重建最近窗口、清掉旧展开，记录读取时间；记录缓存随窗口重建。 */
@@ -1156,7 +1149,6 @@ if (typeof document !== 'undefined') {
     // 顶层页签；请求内的步骤与工具选择仍清除。
     dispatch({ kind: 'open-session', sessionKey: key, wantedTrace });
     state.pendingSession = key;
-    state.userScrolled = false;
     state.revealed = false;
     renderMain();
     await store.selectSession(key, windowLimit());
@@ -1485,10 +1477,6 @@ if (typeof document !== 'undefined') {
     if (to instanceof Element && to.closest('[data-ctx-key]') !== null) return;
     unlitCtx();
   });
-
-  // 用户主动滚动后，prepend 不再强行补偿旧锚点。
-  el('main').addEventListener('wheel', () => { state.userScrolled = true; }, { passive: true });
-  el('main').addEventListener('touchmove', () => { state.userScrolled = true; }, { passive: true });
 
   document.addEventListener('keydown', (e) => {
     const target = /** @type {HTMLElement} */ (e.target);
