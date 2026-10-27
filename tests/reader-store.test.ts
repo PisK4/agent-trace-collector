@@ -525,6 +525,36 @@ test('delta 分片消费与未确认关系不读消息', async () => {
   expect(h3.urls.filter(u => u.includes('/body?from=') && !u.includes('to=0')).length).toBe(0);
 });
 
+test('并发增量消费合并为一条任务：不各自推进消费位置', async () => {
+  let release: ((value: Response) => void) | null = null;
+  const gated = new Promise<Response>(resolve => { release = resolve; });
+  const h = harness(url => {
+    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) return respond(detail(1, { delta_ordinals: [0, 1, 2, 3] }));
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 4));
+    if (url.includes('/body?from=0&to=4')) return gated;
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  await store.readRequest(1);
+  // 第一片在飞时第二个消费者进来：共享同一任务，不再发第二条增量请求。
+  const first = store.loadDelta(1, 2);
+  const second = store.loadDelta(1, 2);
+  await delay(5);
+  expect(h.count('/body?from=0&to=4')).toBe(1);
+  release!(respond(bodyPage(0, 4, 4)));
+  const [a, b] = await Promise.all([first, second]);
+  expect(a.delta.next).toBe(4);
+  expect(a.delta.done).toBe(true);
+  expect(b.delta.next).toBe(4);
+  expect(h.count('/body?from=0&to=4')).toBe(1);
+  // 任务结束后释放：下一次调用仍从已推进的位置消费，可直接完成。
+  const third = await store.loadDelta(1, 2);
+  expect(third.delta.done).toBe(true);
+  expect(h.count('/body?from=0&to=4')).toBe(1);
+});
+
 test('同会话作废后迟到的路由成功响应不可用，新缓存保留', async () => {
   let routeCalls = 0;
   const releases: Array<(value: Response) => void> = [];
@@ -675,7 +705,7 @@ test('peek 同步读取入口：不发网、无快照为 null、失败占位与�
   expect(store.peekRoute(1)).toBeNull();
 });
 
-test('作废即自动重读：换新置已更新标记，冷却内不重复发起', async () => {
+test('作废即自动重读：冷却内不重复发起', async () => {
   let token = TOKEN;
   const h = harness(url => {
     if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
@@ -688,20 +718,14 @@ test('作废即自动重读：换新置已更新标记，冷却内不重复发�
   const store = createReaderStore(h.fetcher, undefined, { autoRereadCooldownMs: 80 });
   await store.selectSession('k', 30);
   await store.readRequest(1);
-  expect(store.peekRequest(1)?.updatedSinceSeen).toBe(false);
   token = TOKEN2;
   await expect(store.readRange(1, 0, 1)).rejects.toThrow('reading_changed');
   expect(store.peekRequest(1)?.status).toBe('invalidated');
   expect(store.peekRequest(1)?.detail).toBeNull();
-  // 自动重读在定时器里发起：换新成功后 fresh、带新 token，并置「已更新」。
+  // 自动重读在定时器里发起：换新成功后 fresh、带新 token；显示层不设成功标记。
   await delay(20);
   expect(store.peekRequest(1)?.status).toBe('fresh');
   expect(store.peekRequest(1)?.token).toBe(TOKEN2);
-  expect(store.peekRequest(1)?.updatedSinceSeen).toBe(true);
-  // 页面交互清除标记；记录保持 fresh。
-  store.clearUpdated(1);
-  expect(store.peekRequest(1)?.updatedSinceSeen).toBe(false);
-  expect(store.peekRequest(1)?.status).toBe('fresh');
   // 冷却内再次作废：不立即重发；冷却到期后才再发起并换新。
   const detailCalls = h.urls.filter(u => u.endsWith('/api/requests/1')).length;
   token = TOKEN;

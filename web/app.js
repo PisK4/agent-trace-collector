@@ -36,8 +36,9 @@ import {
   sessionsListBypassHtml,
 } from './session-view.js';
 import { applyIntent } from './selection.js';
+import { createMainView } from './trace-dom.js';
 import { renderTracePair } from './trace-pair.js';
-import { projectSteps, renderTraceRows } from './trace-view.js';
+import { projectSteps, renderTraceRow } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
 import { railTabFromParam, railTabParam, resolveTraceTarget } from './url-route.js';
 
@@ -56,8 +57,8 @@ export function restoreScroll(element, previous) {
 if (typeof document !== 'undefined') {
   // store 是唯一的读取缓存：页面同步渲染经 peek* 消费，副本不作第二份真相。
   const store = createReaderStore((/** @type {string} */ url) => fetch(url),
-    // 记录快照异步变化（409 作废、自动重读换新或失败）时重绘两栏；迟到响应不进来。
-    () => { renderMain(); renderRail(); },
+    // 记录快照异步变化（409 作废、自动重读换新或失败）按影响面响应；迟到响应不进来。
+    (/** @type {number} */ id) => { onStoreChange(id); },
     // 轮次快照与会话汇总落地（出现/消失、折叠区就绪）同样重绘两栏。
     { onTurnsChanged: () => { renderMain(); renderRail(); },
       onSummaryChanged: () => { renderMain(); renderRail(); } });
@@ -66,12 +67,20 @@ if (typeof document !== 'undefined') {
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
   const structureSelected = new Map();
   /**
+   * 最近一次完整投影：详情在手时更新；作废或读取失败期间退回它显示，由组上的
+   * 旧版本标记声明归属。它是显示缓存，不参与证据判定，换会话与刷新即清。
+   * @type {Map<number, import('./trace-view.js').TraceStep[]>}
+   */
+  const retainedSteps = new Map();
+  /**
    * 上下文明细弹窗：tile、图例与列表行共用的选择动作。读取走注入的同一 fetcher，
    * 代次捕获在模块内，晚到响应不进已切换的弹窗。
    */
   const contextMenu = createContextMenu({ fetcher: (/** @type {string} */ url) => fetch(url) });
   /** @type {{kind: string, param: string, label: string, loading: boolean, error: string | null, data: import('../src/queries/session-summary').SummaryEntries | null} | null} 会话汇总条目列表：点开条目后右栏的支撑记录清单。 */
   let summaryList = null;
+  /** 中栏键控提交：节点身份、选择高亮与滚动锚点都在视图内维护，装配层只给模型。 */
+  const mainView = createMainView(el('main'));
 
   const qp = new URLSearchParams(location.search);
   const state = {
@@ -97,15 +106,21 @@ if (typeof document !== 'undefined') {
     pendingSession: /** @type {string | null} */ (null),
     /** 最近一次显式刷新时间；刷新会重建最近窗口并清掉旧阅读版本。 */
     refreshedAt: /** @type {number | null} */ (null),
-    /** 用户主动滚动后不再强制补偿过期锚点。 */
-    userScrolled: false,
-    /** 首载批次是否已把选中组带入可见区；加载更早不再重复居中。 */
+    /** 首载窗口是否已准备完成：完成后提交不再以选中组为锚，加载更早不重复居中。 */
     revealed: false,
   };
-  /** 载入窗口详情的轮次：换会话或刷新时自增，作废在跑的批次。 */
-  let loadEpoch = 0;
+  /** 阅读代次：换会话与显式刷新时自增，旧代次的准备完成不提交。 */
+  let readingEpoch = 0;
   /** 导航代次：换会话或显式刷新时自增，旧导航的 await 后续不再覆盖当前选择。 */
   let navEpoch = 0;
+  /** @type {Set<number>} 当前窗口内已备齐的请求：失败也是准备结论，作废不在其中。 */
+  const readyRequests = new Set();
+  /** @type {Map<number, {epoch: number, task: Promise<void>}>} 在跑的准备任务：同一笔同一代次只准备一次。 */
+  const preparing = new Map();
+  /** 每组准备阶段自动消费的可信增量片数预算：单片跨度小于 40 条消息。 */
+  const DELTA_PIECE_BUDGET = 20;
+  /** 窗口准备的并发组数：目标组先单独准备，其余按窗口顺序四笔一组。 */
+  const PREPARE_CHUNK = 4;
 
   /* ---------------- 选择状态：唯一写者与效果执行器 ---------------- */
   const SELECTION_KEYS = ['session', 'reqId', 'selectedStep', 'toolOrd', 'toolOwner', 'toolPage', 'railTab', 'missingReqId', 'offPageReqId', 'turn'];
@@ -217,33 +232,167 @@ if (typeof document !== 'undefined') {
     return Math.min(100, Math.max(30, Math.ceil(window.innerHeight / 34)));
   }
 
-  /** 批量载入窗口内请求的详情、元信息与最多两片可信增量；每批完成重绘一次。 */
-  async function loadWindowReads() {
-    const epoch = ++loadEpoch;
-    // 作废项归 store 的自动重读管，批次不重复发起；失败项随批次重试（瞬时故障可自愈）。
+  /* ---------------- 窗口准备：先备齐再提交 ---------------- */
+
+  /** 窗口内请求：只有窗口内的组参与准备与提交。 @param {number} id */
+  function inWindow(id) {
+    return currentRows().some(row => row.req_id === id);
+  }
+
+  /**
+   * 准备中的组先示一条记录行：证据未齐不画半份投影，本组在窗口中的位置由它占住。
+   * 行高与正常步骤一致，备齐替换时组顶不移位。
+   * @param {RequestRow} r
+   * @returns {import('./trace-view.js').TraceStep}
+   */
+  function preparingStep(r) {
+    return {
+      key: `${r.req_id}:preparing`, reqId: r.req_id, kind: 'record', text: '正在读取请求…',
+      messageOrd: null, callOrd: null, source: null, raw: null, unrecognized: false,
+      status: r.status !== null && r.status >= 400 ? 'failed'
+        : r.body_state !== 'available' && r.body_state !== 'partial' ? 'missing_body' : null,
+      result: null, pairOwner: null,
+    };
+  }
+
+  /**
+   * 一笔请求的显示依赖：System 与已确认前驱的比较要用前驱元信息，工具结果摘要
+   * 要用调用方元信息。依赖只读详情与元信息，不消费增量；失败降级显示、不阻塞本组。
+   * 只补窗口内的依赖，不为此扩大缓存边界。返回是否动到了右栏正在看的读取。
+   * @param {number} id
+   * @returns {Promise<boolean>}
+   */
+  async function settleDependencies(id) {
+    const detail = store.peekRequest(id)?.detail ?? null;
+    if (detail === null) return false;
+    /** @type {Set<number>} */
+    const deps = new Set();
+    if (detail.prev_relation === 'confirmed' && detail.prev_req_id !== null) deps.add(detail.prev_req_id);
+    for (const item of detail.tool_results) {
+      // 只有已配对结果引用调用方摘要；未配对结果按中性显示，不猜归属。
+      if (item.state === 'resolved') deps.add(item.owner_req);
+    }
+    deps.delete(id);
+    /** @type {number[]} */
+    const wanted = [...deps].filter(depId => inWindow(depId));
+    if (wanted.length === 0) return false;
+    await Promise.all(wanted.map(async depId => {
+      try { await store.readRequest(depId); } catch { /* 依赖失败：比较与摘要降级显示 */ }
+    }));
+    return wanted.some(affectsRail);
+  }
+
+  /** @param {number} id @returns {Promise<void>} */
+  function prepareGroup(id) {
+    const pending = preparing.get(id);
+    if (pending !== undefined && pending.epoch === readingEpoch) return pending.task;
+    const epoch = readingEpoch;
+    const task = runPrepare(id, epoch);
+    preparing.set(id, { epoch, task });
+    const release = () => {
+      const current = preparing.get(id);
+      if (current !== undefined && current.task === task) preparing.delete(id);
+    };
+    void task.then(release, release);
+    return task;
+  }
+
+  /**
+   * 一笔窗口内请求的准备：详情、依赖与增量预算都到位后才登记为可提交。
+   * 失败不抛给调用方：作废归 store 自动重读，其余失败留在快照上如实显示。
+   * @param {number} id @param {number} epoch
+   */
+  async function runPrepare(id, epoch) {
+    try { await store.readRequest(id); } catch { /* 失败态由快照自身表达，见下方登记 */ }
+    if (epoch !== readingEpoch || !inWindow(id)) return;
+    const read = store.peekRequest(id);
+    let railTouched = false;
+    if (read !== null && read.detail !== null) {
+      railTouched = await settleDependencies(id);
+      if (epoch !== readingEpoch || !inWindow(id)) return;
+      // 预算内自动补齐；出错即停，剩余缺口交回组内事件行的显式续读。
+      for (let spent = 0; spent < DELTA_PIECE_BUDGET; spent += 2) {
+        const current = store.peekRequest(id);
+        const delta = current?.delta ?? null;
+        if (current === null || current.detail === null || delta === null || delta.done || delta.error !== null) break;
+        try { await store.loadDelta(id, 2); } catch { break; }
+        if (epoch !== readingEpoch || !inWindow(id)) return;
+      }
+    }
+    const final = store.peekRequest(id);
+    // 换场或组已离开窗口的准备结果不落地：提交集只服务当场窗口。
+    if (epoch !== readingEpoch || !inWindow(id)) return;
+    // 失败也是准备结论：失败行如实可见，显式刷新与点击重读才重新准备。
+    // 作废仍在自动重读，不登记；恢复换新后由 onStoreChange 接着备齐。
+    if (final !== null && (final.detail !== null || final.status === 'failed')) readyRequests.add(id);
+    // 点占位行留下的选择随占位行一起消失：留着会在下次出现准备行时凭空亮起。
+    if (state.selectedStep === `${id}:preparing`) dispatch({ kind: 'clear-step' });
+    renderMain();
+    if (railTouched || affectsRail(id)) renderRail();
+  }
+
+  /**
+   * 当前窗口的准备：目标组先单独准备并提交，其余按窗口顺序四笔一组。
+   * 已登记的组不重复准备，失败组随每次窗口导航重试；作废组归 store 的自动重读。
+   */
+  async function prepareWindow() {
+    const epoch = readingEpoch;
     const wanted = currentRows().filter(row => {
       const read = store.peekRequest(row.req_id);
-      return read === null || read.status === 'failed';
+      // 作废项归自动重读管，批次不抢；其它失败项随批次重试（瞬时故障可自愈）。
+      if (read !== null && read.status === 'invalidated') return false;
+      if (!readyRequests.has(row.req_id)) return true;
+      return read !== null && read.status === 'failed';
     });
-    for (let index = 0; index < wanted.length; index += 4) {
-      if (epoch !== loadEpoch) return;
-      const chunk = wanted.slice(index, index + 4);
-      await Promise.all(chunk.map(async row => {
-        try {
-          const read = await store.readRequest(row.req_id);
-          if (!read.delta.done) await store.loadDelta(row.req_id, 2);
-        } catch {
-          /* reading_changed 的作废与自动重读由 store 负责；其余单笔失败保留占位记录，刷新可重试 */
-        }
-      }));
-      if (epoch !== loadEpoch) return;
-      renderMain();
-      // 读数页的数量与计数也依赖这些读取：每批同步刷新右栏。
-      renderRail();
-      // 首载批次会让选中组下移：初始载入期间保持它可见；加载更早不重复居中。
-      if (!state.userScrolled && !state.revealed) ensureSelectedVisible();
+    const target = state.revealed ? null : state.reqId;
+    const first = target === null ? undefined : wanted.find(row => row.req_id === target);
+    if (first !== undefined) {
+      await prepareGroup(first.req_id);
+      if (epoch !== readingEpoch) return;
     }
-    if (epoch === loadEpoch) state.revealed = true;
+    const rest = wanted.filter(row => row !== first);
+    for (let index = 0; index < rest.length; index += PREPARE_CHUNK) {
+      if (epoch !== readingEpoch) return;
+      await Promise.all(rest.slice(index, index + PREPARE_CHUNK).map(row => prepareGroup(row.req_id)));
+    }
+    if (epoch === readingEpoch) state.revealed = true;
+  }
+
+  /** 换会话与显式刷新清空准备结论：提交集与保留投影都不跨场复用。 */
+  function resetReading() {
+    readingEpoch += 1;
+    readyRequests.clear();
+    retainedSteps.clear();
+  }
+
+  /**
+   * 一笔读取落地是否影响右栏：当前请求、工具配对调用方与选中轮次两端之外的组，
+   * 准备完成只提交中栏，右栏不随批次重建。
+   * @param {number} id
+   */
+  function affectsRail(id) {
+    if (id === state.reqId || id === state.toolOwner) return true;
+    if (state.turn !== null) {
+      const turn = turnOf(state.turn);
+      if (turn !== null && (id === turn.start_req || id === turn.reply_req)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 记录快照异步变化（作废、自动重读换新或失败）的页面响应：作废撤下提交资格，
+   * 组回到保留投影；自动重读把详情换新后在窗口内接着备齐，已提交的组不自动扩量。
+   * @param {number} id
+   */
+  function onStoreChange(id) {
+    const read = store.peekRequest(id);
+    if (read !== null && read.detail !== null) {
+      if (!readyRequests.has(id) && inWindow(id)) void prepareGroup(id);
+    } else {
+      readyRequests.delete(id);
+    }
+    renderMain();
+    if (affectsRail(id)) renderRail();
   }
 
   /* ---------------- 顶栏与左栏 ---------------- */
@@ -440,10 +589,47 @@ if (typeof document !== 'undefined') {
     <p class="note" style="margin-top:8px">只显示已记录的决策与尝试。窗口过滤不保证完整留痕；用量条目数量也不等于尝试次数。</p>`;
   }
 
-  /** 单一轨迹：每请求一个组，点击步骤在右栏阅读；顶部提供历史入口。 @param {boolean} withBand 轮次带在场时挂让位标记类 */
-  function traceHtml(withBand) {
+  /**
+   * 一笔请求的步骤投影。准备完成的组用当前读取投影并更新保留投影；未备齐时
+   * 退回最近一次完整投影，旧结果由 stale 声明归属；两者都没有才显示准备行。
+   * @param {RequestRow} r
+   * @returns {{steps: import('./trace-view.js').TraceStep[], stale: 'reading' | 'failed' | null,
+   *   placeholder: boolean}}
+   */
+  function stepsOf(r) {
+    const read = store.peekRequest(r.req_id);
+    const project = () => projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
+      store.peekBgJobs().items);
+    if (readyRequests.has(r.req_id) && read !== null && read.detail !== null) {
+      const steps = project();
+      retainedSteps.set(r.req_id, steps);
+      return { steps, stale: null, placeholder: false };
+    }
+    const retained = retainedSteps.get(r.req_id);
+    if (retained !== undefined) {
+      return {
+        steps: retained, placeholder: false,
+        stale: read !== null && read.status === 'failed' ? 'failed' : 'reading',
+      };
+    }
+    if (read !== null && (read.status === 'failed' || read.status === 'invalidated')) {
+      // 失败与作废没有可显示的新投影：缺口行如实给原因与重试入口，不当成读取中。
+      // 作废项归 store 自动重读，本组在恢复前一直停在这一行。
+      return { steps: project(), stale: null, placeholder: false };
+    }
+    return { steps: [preparingStep(r)], stale: null, placeholder: true };
+  }
+
+  /**
+   * 中栏模型：会话头、轮次带与步骤列表一次读齐，交给 trace-dom 键控提交。
+   * 步骤行的 HTML 不含选择（默认 false），选择由视图单独写回高亮；
+   * 请求组容器自身的可见结果为空串，内容按稳定步骤键逐行比较。
+   * @returns {import('./trace-dom.js').MainModel}
+   */
+  function mainModel() {
     const window = store.getWindow();
     const rows = currentRows();
+    const band = turnBandHtml();
     // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载更早
     // 记录后 rows.length 累计，重绘时重算，不按首次加载上限截断。
     const ordDigits = Math.max(1, String(rows.length).length);
@@ -454,33 +640,42 @@ if (typeof document !== 'undefined') {
       const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
       return call === null ? null : { name: call.name, inputText: call.inputText };
     };
-    // 轮次带吸顶后滚动定位要让它出带的高度：给步骤列表挂标记类，由 CSS 取让位值。
-    let html = `<div class="step-list${withBand ? ' band-above' : ''}" style="--ord-digits:${ordDigits}">`;
     // 历史入口只在有更早记录或正在读取时出现；序号口径在数字本身的悬停说明里。
-    if (window.loading || window.olderCursor !== null) {
-      html += '<div class="history-loader">';
-      html += window.loading
-        ? '<span class="history-start">正在读取更早记录…</span>'
-        : '<button id="load-earlier" class="history-button">↑ 加载更早记录</button>';
-      html += '</div>';
-    }
-    for (const r of rows) {
-      const read = store.peekRequest(r.req_id);
-      const steps = projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
-        store.peekBgJobs().items);
+    const loaderHtml = window.loading
+      ? '<div class="history-loader"><span class="history-start">正在读取更早记录…</span></div>'
+      : window.olderCursor !== null
+        ? '<div class="history-loader"><button id="load-earlier" class="history-button">↑ 加载更早记录</button></div>'
+        : '';
+    const groups = rows.map(r => {
+      const { steps, stale, placeholder } = stepsOf(r);
       const ordinal = ordinalOf(r.req_id);
-      html += `<section class="trace-group" data-req="${r.req_id}" data-status="${r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success'}" aria-current="${r.req_id === state.reqId}">`;
-      // 自动重读换新后的组级「已更新」：点进组里即清除，正常态不出现。
-      if (read !== null && read.updatedSinceSeen) {
-        html += '<div class="group-flag"><span class="state-chip warn"><span class="d"></span>已更新 · 自动重读换新</span></div>';
+      /** @type {import('./trace-dom.js').CommitItem[]} */
+      const items = [];
+      for (const step of steps) {
+        items.push({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) });
       }
-      html += renderTraceRows(r, steps, ordinal, state.selectedStep, callOf);
-      html += '</section>';
-    }
-    if (rows.length === 0) {
-      html += `<p class="sess-empty">${state.pendingSession !== null ? '正在读取请求…' : '这个会话没有已记录的请求。'}</p>`;
-    }
-    return html + `<div class="timeline-end"><span></span> 已是最新记录</div></div>`;
+      return {
+        reqId: r.req_id,
+        status: r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success',
+        current: r.req_id === state.reqId,
+        stale,
+        placeholder,
+        rows: items,
+      };
+    });
+    return {
+      headHtml: sessionHead(),
+      bandHtml: band,
+      listClass: `step-list${band !== '' ? ' band-above' : ''}`,
+      ordDigits,
+      loaderHtml,
+      emptyHtml: rows.length === 0
+        ? `<p class="sess-empty">${state.pendingSession !== null ? '正在读取请求…' : '这个会话没有已记录的请求。'}</p>`
+        : '',
+      endHtml: '<div class="timeline-end"><span></span> 已是最新记录</div>',
+      groups,
+      selectedStep: state.selectedStep,
+    };
   }
 
   /**
@@ -535,16 +730,16 @@ if (typeof document !== 'undefined') {
 
   function renderMain() {
     const main = el('main');
-    const keep = main.scrollTop;
     if (state.pendingSession !== null) {
+      mainView.reset();
       main.innerHTML = `<p class="sess-empty" style="padding:24px">正在读取${esc(shortSession(state.pendingSession))}的请求…</p>`;
-      restoreScroll(main, keep);
       return;
     }
-    const band = turnBandHtml();
-    main.innerHTML = sessionHead() + band + traceHtml(band !== '');
+    // 首载窗口准备完成前以选中组为锚，其余组提交不把它挤出视口；准备完成后
+    // 改锚首条可见步骤，阅读位置不再被选中组牵走。
+    const preferred = state.revealed ? null : state.reqId;
+    mainView.commit(mainModel(), scroller(), preferred);
     restoreFolds(main);
-    restoreScroll(main, keep);
     syncBandTop();
     revealSelectedChip();
   }
@@ -747,9 +942,7 @@ if (typeof document !== 'undefined') {
   /** 当前请求的选中步骤对象；无选择或选中的是别的请求时返回 null。 @param {RequestRow} r */
   function currentSelectedStep(r) {
     if (state.selectedStep === null || !state.selectedStep.startsWith(`${r.req_id}:`)) return null;
-    const read = store.peekRequest(r.req_id);
-    return projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)))
-      .find(item => item.key === state.selectedStep) ?? null;
+    return stepsOf(r).steps.find(item => item.key === state.selectedStep) ?? null;
   }
 
   function railBody() {
@@ -908,45 +1101,20 @@ if (typeof document !== 'undefined') {
   }
 
   /* ---------------- 窗口导航 ---------------- */
-  /** 当前滚动容器：main 独立滚动时用 main，窄屏文档流用 scrollingElement。 */
+  /** 当前滚动容器：main 独立滚动时用 main，窄屏文档流用滚动根；根元素缺失时退回 main。 */
   function scroller() {
     const main = el('main');
-    return getComputedStyle(main).overflowY === 'visible' ? document.scrollingElement : main;
-  }
-  /** 记录当前可见的第一条稳定步骤键与其视口位置，作为 prepend 的锚点。 */
-  function anchorSnapshot() {
-    const step = /** @type {HTMLElement | null} */ (document.querySelector('.compact-step'));
-    if (step === null) return null;
-    const select = /** @type {HTMLElement | null} */ (step.querySelector('[data-step-key]'));
-    return { key: select?.dataset.stepKey ?? null, top: step.getBoundingClientRect().top };
-  }
-  /** @param {ReturnType<typeof anchorSnapshot>} before */
-  function compensateAnchor(before) {
-    if (before === null || before.key === null || state.userScrolled) return;
-    const key = before.key;
-    const expected = before.top;
-    // 两帧各校一次：首帧布局未稳的亚像素漂移在第二帧补齐。
-    /** @param {number} pass */
-    const adjust = (pass) => {
-      const restored = document.querySelector(`[data-step-key="${CSS.escape(key)}"]`)?.closest('.compact-step');
-      if (restored == null) return;
-      const sc = scroller();
-      if (sc !== null) sc.scrollTop += restored.getBoundingClientRect().top - expected;
-      if (pass < 1) requestAnimationFrame(() => adjust(pass + 1));
-    };
-    requestAnimationFrame(() => adjust(0));
+    return getComputedStyle(main).overflowY === 'visible' ? (document.scrollingElement ?? main) : main;
   }
 
   async function loadEarlier() {
     const button = document.getElementById('load-earlier');
     if (button !== null) (/** @type {HTMLButtonElement} */ (button)).disabled = true;
-    const before = anchorSnapshot();
     await store.loadEarlier();
+    // prepend 的位置由每次提交自带的锚点补偿保持，不再手接快照。
     renderMain();
     renderSessions();
-    compensateAnchor(before);
-    // 新载入请求的批次会让上方行高增长：批次结束后再补一次锚点。
-    void loadWindowReads().then(() => compensateAnchor(before));
+    void prepareWindow();
   }
 
   /** 显式刷新：重建最近窗口、清掉旧展开，记录读取时间；记录缓存随窗口重建。 */
@@ -955,6 +1123,8 @@ if (typeof document !== 'undefined') {
     const myNav = ++navEpoch;
     state.refreshedAt = Date.now();
     state.revealed = false;
+    // 显式刷新按用户要求换新：准备结论与旧版本显示一并清掉，不从上一版接着画。
+    resetReading();
     dispatch({ kind: 'refresh-start' });
     await store.selectSession(state.session, windowLimit());
     if (myNav !== navEpoch) return;
@@ -963,7 +1133,7 @@ if (typeof document !== 'undefined') {
     renderAll();
     // 导航完成：路由页随重建后的选中请求读取（效果经 nav-settled 统一发出）。
     dispatch({ kind: 'nav-settled' });
-    void loadWindowReads();
+    void prepareWindow();
     void ensureSelectedVisible();
   }
 
@@ -996,21 +1166,29 @@ if (typeof document !== 'undefined') {
     } catch { /* 补读失败保留现有内容，可再次触发 */ }
   }
 
-  /** 确保某请求的读取与右栏数据在手；重读成功后取得新 detail/meta 并按当前选中来源补读所需块。 @param {number} id */
+  /**
+   * 确保某请求的读取与右栏数据在手。窗口内走准备流水线（详情、依赖与增量
+   * 一次备齐再提交），已提交的组不因点击重新扩量；窗口外只读详情、元信息与
+   * 两片增量。重读成功后取得新 detail/meta 并按当前选中来源补读所需块。
+   * @param {number} id
+   */
   async function ensureRead(id) {
-    let read;
-    try {
-      read = await store.readRequest(id);
-    } catch {
-      /* reading_changed 的作废与自动重读由 store 负责；失败态由快照如实渲染 */
-      renderMain();
-      renderRail();
-      return;
-    }
-    // 重读与初始装载同深：详情到手后补最多两片可信增量；
-    // 409 作废塌掉的组由 store 自动重读恢复，这里只补选择所需的定点块。
-    if (!read.delta.done) {
-      try { read = await store.loadDelta(id, 2); } catch { /* 失败保留增量事件行，可再次续读 */ }
+    if (inWindow(id)) {
+      const read = store.peekRequest(id);
+      // 增量剩余交回组内「点击续读」的显式入口；这里只保证组本身备齐。
+      if (!(readyRequests.has(id) && read !== null && read.detail !== null)) await prepareGroup(id);
+    } else {
+      try {
+        let read = await store.readRequest(id);
+        if (!read.delta.done) {
+          try { read = await store.loadDelta(id, 2); } catch { /* 失败保留增量事件行，可再次续读 */ }
+        }
+      } catch {
+        /* reading_changed 的作废与自动重读由 store 负责；失败态由快照如实渲染 */
+        renderMain();
+        renderRail();
+        return;
+      }
     }
     const selected = state.selectedStep;
     // 结果步骤键是 message:N:result:M，序号取 message: 后的第一段，不能用最后一段。
@@ -1092,8 +1270,8 @@ if (typeof document !== 'undefined') {
       dispatch({ kind: 'select-delta', reqId: id });
       return;
     }
-    const step = projectSteps(row, store.peekRequest(id), systemContextOf(row, x => store.peekRequest(x)))
-      .find(item => item.key === key) ?? null;
+    // 旧版本显示期间点保留步骤：来源取最近一次完整投影，右栏按当前读取态如实说明。
+    const step = stepsOf(row).steps.find(item => item.key === key) ?? null;
     const source = resolveSelectedSource(step);
     // 配对判定与页签映射在选择转换里：这里只解析步骤来源。
     dispatch({ kind: 'select-step', reqId: id, stepKey: String(key), source });
@@ -1157,8 +1335,9 @@ if (typeof document !== 'undefined') {
     // 顶层页签；请求内的步骤与工具选择仍清除。
     dispatch({ kind: 'open-session', sessionKey: key, wantedTrace });
     state.pendingSession = key;
-    state.userScrolled = false;
     state.revealed = false;
+    // 换会话不复用上一场的准备结论与保留投影：它们只服务当场阅读。
+    resetReading();
     renderMain();
     await store.selectSession(key, windowLimit());
     if (myNav !== navEpoch) return;
@@ -1169,7 +1348,7 @@ if (typeof document !== 'undefined') {
     const rows = currentRows();
     dispatch({ kind: 'session-default', latestReqId: rows[rows.length - 1]?.req_id ?? null });
     renderAll();
-    void loadWindowReads();
+    void prepareWindow();
     // 导航完成处补路由读取：URL 直达与切会话后路由页不要求再点一次页签。
     dispatch({ kind: 'nav-settled' });
     if (state.offPageReqId !== null) {
@@ -1242,15 +1421,6 @@ if (typeof document !== 'undefined') {
       return;
     }
     if (t.closest('summary')) return;
-    // 组级「已更新」标记：点进组里即视为已看到，随后的选择处理照常重绘。
-    const flaggedGroup = /** @type {HTMLElement | null} */ (t.closest('.trace-group'));
-    if (flaggedGroup !== null) {
-      const flaggedId = Number(flaggedGroup.dataset.req);
-      if (store.peekRequest(flaggedId)?.updatedSinceSeen === true) {
-        store.clearUpdated(flaggedId);
-        renderMain();
-      }
-    }
     if (t.closest('#load-earlier')) { void loadEarlier(); return; }
     if (t.closest('#refresh-window')) { void refreshWindow(); return; }
     if (t.closest('#jump-latest')) { void jumpLatest(); return; }
@@ -1486,10 +1656,6 @@ if (typeof document !== 'undefined') {
     if (to instanceof Element && to.closest('[data-ctx-key]') !== null) return;
     unlitCtx();
   });
-
-  // 用户主动滚动后，prepend 不再强行补偿旧锚点。
-  el('main').addEventListener('wheel', () => { state.userScrolled = true; }, { passive: true });
-  el('main').addEventListener('touchmove', () => { state.userScrolled = true; }, { passive: true });
 
   document.addEventListener('keydown', (e) => {
     const target = /** @type {HTMLElement} */ (e.target);

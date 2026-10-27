@@ -380,3 +380,18 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 | 事件 | — | `purge_agent` · `agent_removal:hermes` · 1,536 笔 · approval `purge-hermes-2026-10-27` |
 
 执行后 `integrity_check` 为 `ok`，`dangling_blocks` 与 `duplicate_evidence` 为 0，`foreign_key_check` 为空。采集器重启后正常接收新请求（请求数从 17,192 增至 17,207），采集问题仍为既有的 4 条 OTLP span 记录，没有新增。
+
+## 中栏准备流水线与键控提交（合成，2026-10-27）
+
+见 [Agent Note：中栏窗口读取的准备流水线](../.agents/notes/implemented/architecture/2026-10-27-trace-window-preparation.md)与[中栏键控提交与视口锚点](../.agents/notes/implemented/architecture/2026-10-27-keyed-trace-main-view.md)。合成用例进 `bun test`（105 项，`bun run typecheck` 通过）；浏览器项用 ego lite 打开 `prototypes/synthetic-server.ts`（端口 8770，生产采集器未动），生产页面与生产读取实现，数据全部来自合成场景。
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| 首屏占位与备齐 | 进入会话先出占位组，随后全部换成真实步骤：结束态占位 0、旧版本标记 0、增量续读行 0 |
+| 选择不动节点 | 连续点选两步后 70 个步骤节点全部仍连接，只有被点行带 `aria-current`；视口内点选前后滚动位置 1416 → 1416、锚点像素 435.078 → 435.078 |
+| prepend 锚点 | 「加载更早」把窗口从 30 组扩到 52 组，同一步骤的视口位置 78.125 → 78.078（< 0.5px 门槛内） |
+| 换场清理 | 换会话与显式刷新后占位与旧版本标记都为 0，窗口按新会话重建 |
+| 占位可点 | 网络延迟下点中占位行，该组就地备齐（步骤 2 条），其余 29 组仍在准备；选中不留在已消失的准备行上 |
+| 版本恢复 | 对工具结果读取注入一次 409 并把详情响应放慢 2.5 秒：该组保留 3 条旧步骤、标「旧版本 · 重读中」；自动重读换新后标记消失、步骤数仍为 3 |
+
+像素截图本轮未采集（ego lite 的 `Page.captureScreenshot` 在前几轮已被记录为对该页超时），视觉项以 DOM 几何与属性断言代替。真实流量验收未执行。

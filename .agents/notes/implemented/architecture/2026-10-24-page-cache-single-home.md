@@ -27,7 +27,7 @@ store 是唯一的读取缓存，页面删除三个副本 Map。
 
 ## Consequences
 
-reader-store 的对外形状实质变更：`RequestRead.structure` 收窄为 `{next, total, ords, loading, error}`，新增三个 peek 入口与作废通知参数（现 `onReadChanged`）。渲染语义：peek null 即「未读到」（2026-10-25 起为「没有这笔记录」，作废与失败经快照 `status` 区分），工具失败占位可见，409 后重读入口由待重读标记驱动。导航竞态在 await 边界被代次挡住。`loadWindowReads` 的批次代次（loadEpoch）继续独立于导航代次。
+reader-store 的对外形状实质变更：`RequestRead.structure` 收窄为 `{next, total, ords, loading, error}`，新增三个 peek 入口与作废通知参数（现 `onReadChanged`）。渲染语义：peek null 即「未读到」（2026-10-25 起为「没有这笔记录」，作废与失败经快照 `status` 区分），工具失败占位可见，409 后重读入口由待重读标记驱动。导航竞态在 await 边界被代次挡住。窗口批次代次（`loadEpoch`）曾独立于导航代次；2026-10-27 起由准备流水线的 `readingEpoch` 接替，见[中栏窗口读取的准备流水线](2026-10-27-trace-window-preparation.md)。
 
 ## Testing
 

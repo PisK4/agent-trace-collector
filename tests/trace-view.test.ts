@@ -35,7 +35,7 @@ function entry(ord: number, input: unknown, isInput: boolean) {
 type ProjectableRead = Parameters<typeof projectSteps>[1];
 function read(detailJson: unknown, entries: unknown[], reply: unknown): ProjectableRead {
   return {
-    status: 'fresh', detailError: null, updatedSinceSeen: false,
+    status: 'fresh', detailError: null,
     detail: detailJson, meta: reply === null ? null : { reply, capabilities: null },
     messages: new Map(), entries,
     structure: { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null },
@@ -47,7 +47,7 @@ function read(detailJson: unknown, entries: unknown[], reply: unknown): Projecta
 /** 缺口快照：记录存在但没有详情，status 区分作废与失败。 */
 function gapRead(status: 'invalidated' | 'failed', detailError: string | null = null): ProjectableRead {
   return {
-    status, detailError, updatedSinceSeen: false,
+    status, detailError,
     detail: null, meta: null, messages: new Map(), entries: [],
     structure: { next: 0, total: null, ords: [], loading: false, error: null },
     delta: { next: 0, done: true, loading: false, error: null, unconfirmed: false },
