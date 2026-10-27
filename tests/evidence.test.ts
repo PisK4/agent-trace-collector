@@ -5,6 +5,8 @@ import { fixture, seedRequest } from './fixtures';
 test('会话键回退前缀逐字固定：三种来源各自的组键形状', () => {
   expect(hookConv('s1', 'h1')).toEqual({ key: JSON.stringify(['session', 's1']), source: 'session' });
   expect(hookConv(null, 'h1')).toEqual({ key: JSON.stringify(['hook', 'h1']), source: 'hook' });
+  // 空串是上游对"没有会话"的写法，不是会话身份。
+  expect(hookConv('', 'h1')).toEqual({ key: JSON.stringify(['hook', 'h1']), source: 'hook' });
   expect(ledgerConv('s1', 'r1')).toEqual({ key: JSON.stringify(['session', 's1']), source: 'session' });
   expect(ledgerConv(null, 'r1')).toEqual({ key: JSON.stringify(['request', 'r1']), source: 'request' });
   expect(routeConv('s1', 'c1')).toEqual({ key: JSON.stringify(['session', 's1']), source: 'session' });

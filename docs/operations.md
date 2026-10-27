@@ -57,6 +57,10 @@ bun run maintain rebuild --db '<dataDir>/trace.db' --session '<conv_key>'
 # 把某个协议的历史正文按当前适配器重写
 bun run maintain reparse --db '<dataDir>/trace.db' --protocol responses
 
+# 空 session 身份迁移，默认只预览
+bun run maintain migrate-hook-identity --db '<dataDir>/trace.db'
+bun run maintain migrate-hook-identity --db '<dataDir>/trace.db' --apply --approval-id '<你的审批标识>'
+
 # 长期元数据淘汰，默认只预览
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --apply --approval-id '<你的审批标识>'
@@ -182,6 +186,27 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 - `remaining`：目标协议里仍版本落后的行数；被拒绝的行会留在这里。
 
 重复执行不再处理已经升版的行：第二次运行 `scanned` 为 0，不新增块，也不推进 `input_revision`。重写会推进输入修订并标脏所在分组，派生结论在采集器下一次排空后才按新解释生效；要立刻重算，对受影响的会话再跑一次 `rebuild`。
+
+### migrate-hook-identity
+
+把 `["session",""]` 空桶里的 hook 孤儿行拆回各自的 hook 回退身份 `["hook", hook_id]`。新请求已在身份入口把空 session 当缺失，这个命令只处理旧行；`raw_hook.session` 保留上游空值，不改原始证据。
+
+默认只预览：输出 `bucket`、`scanned`（桶内请求数）、`candidates`（可迁移行，含 `req_id`、`agent`、`hook_id`）、`agents`（桶内按 agent 分布）与 `rejected`（不可迁移行与原因）。加 `--apply` 必须同时给 `--approval-id`，否则退出码 1 且错误码 `approval_id_required`。
+
+拒绝原因：
+
+- `ownership_attached`：已有账本、路由或 OTLP 证据，或 `have` 位图带账本/路由位；已关联行不套用 hook 回退，单列核查。
+- `not_hook_born`：不是 hook 初建的行（`via<>'hook'`）。
+- `actor_known` / `actor_present`：归属已经确认或存在有效 actor，不回退。
+- `session_present`：请求行自己带着有效 session，与空桶矛盾。
+- `hook_evidence_missing` / `hook_evidence_ambiguous`：没有 hook 证据或多份 hook 证据，无法确定唯一回退身份，不取首条猜测。
+- `hook_evidence_merged`：hook 证据已并入别的目标。
+- `hook_source_missing` / `hook_session_present`：`raw_hook` 不存在，或原始 session 非空，来源与空桶矛盾。
+- `identity_changed`：执行期间身份已变化。
+
+每行一个独立事务，事务内重新校验；迁移只改 `conv_key`、`conv_source`、`session`、`actor` 与 `updated_at`，随后按现有归属规则处理旧组并推进输入修订。`actor_state` 仍是 `unknown`，未知归属行不凭空建派生组。报告里的 `conservation` 对账请求、证据、块、别名、工具链接的行数与费用合计，`conserved` 必须为真。
+
+重复执行时桶里只剩被拒绝的行：`migrated` 为 0，不推进修订。迁移不改变后续关联：hook 证据与等待队列不动，唯一 response ID 到达时仍按 `mergeHookInto` 并入账本目标。
 
 ### purge-metadata
 

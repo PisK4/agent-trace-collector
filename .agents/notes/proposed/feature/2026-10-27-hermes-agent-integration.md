@@ -112,9 +112,11 @@ Status: proposed
 
 迁移作用域由缺陷条件决定，不限定 Hermes。实施前统计各 agent 的影响，并核对已关联行是否存在同类错误；已关联行不符合上述孤儿迁移条件，应单列核查，不套用 hook 回退。不得直接改写原始证据来掩盖派生身份错误。
 
+本批已交付，实际决定、拒绝判据与验证见[空 session 不是会话身份](../../implemented/bug-fix/2026-10-27-empty-session-identity-migration.md)。
+
 ### 交付边界
 
-第一批完成后，用途识别决定及其实际验证结果转为 implemented，未完成的投递验证与身份迁移保留在独立 proposed 记录并互链。不得只因 adapter 已交付就将三批工作整篇标为 implemented。
+第一批与第三批已交付，决定分别在[Hermes 用途识别](../../implemented/feature/2026-10-27-hermes-purpose-recognition.md)与[空 session 不是会话身份](../../implemented/bug-fix/2026-10-27-empty-session-identity-migration.md)；剩余投递验证保留在[分层验证 hook 投递](2026-10-27-hermes-hook-delivery-diagnostics.md)。不得只因已交付部分就将三批工作整篇标为 implemented。
 
 本次不新增协议适配。无压缩重写和 subagent 样本时不加识别规则；Hermes 自定义字段保持原样保存。工具名称、参数、失败语义与路径汇总的额外适配由后续证据决定，不由协议兼容结论代替。
 

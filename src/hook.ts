@@ -13,7 +13,7 @@ import {
   resetRequestInputEpochTx,
 } from './derive/state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
-import { HAVE_BODY, MATCH_BY_RESPONSE_ID, hookConv, insertEvidenceTx } from './evidence';
+import { HAVE_BODY, MATCH_BY_RESPONSE_ID, hookConv, insertEvidenceTx, sessionIdentity } from './evidence';
 
 /**
  * hook 回调的接收与证据关联。
@@ -119,9 +119,13 @@ function insertHookRequest(
   now: number,
   responseIdNorm: string | null,
 ): number {
-  const conv = hookConv(envelope.session, envelope.hook_id);
+  // 上游的 session 空串表示"没报会话"，不是会话身份：组键、session 与 actor
+  // 都按缺失处理，原始空值只留在 raw_hook。账本或路由后来确认身份时，
+  // COALESCE 才能把真实的会话补进来。
+  const session = sessionIdentity(envelope.session);
+  const conv = hookConv(session, envelope.hook_id);
   // hook 阶段只知道会话，不知道 actor；actor_state 留 unknown，等账本或路由确认。
-  const actor = envelope.session;
+  const actor = session;
   const started = Number.isFinite(envelope.observed_start_ms) ? envelope.observed_start_ms : now;
   const title = modelTimeTitle(envelope.model, started);
   const result = db.run(
@@ -132,7 +136,7 @@ function insertHookRequest(
        cost_state,attempt_state,sort_source,sort_key,magpie_version,parse_state,reply_state
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
-      responseIdNorm, envelope.agent, envelope.session, conv.key, conv.source,
+      responseIdNorm, envelope.agent, session, conv.key, conv.source,
       actor, 'unknown',
       // HTTP 状态与模型列只来自账本实得；hook 的成功标记进 raw_hook，不合成 200。
       started, localDay(started), 'hook', null,
