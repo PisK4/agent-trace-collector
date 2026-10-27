@@ -41,14 +41,14 @@ function envelope(overrides: Partial<HookEnvelope> = {}): HookEnvelope {
   };
 }
 
-function ctx(state: Record<string, unknown> = {}): HookContext {
+function ctx(state: Record<string, unknown> = {}, signal: AbortSignal = new AbortController().signal): HookContext {
   return {
     origin: 'local',
     protocol: 'chat',
     path: '/v1/chat/completions',
     state,
     options: { endpoint: 'http://127.0.0.1:8320/hook/ingest', token: 'synthetic-hook-token' },
-    signal: new AbortController().signal,
+    signal,
     report: () => {},
   };
 }
@@ -584,6 +584,81 @@ test('后回复500会重试一次，4xx不重试', async () => {
     globalThis.fetch = original;
   }
 });
+
+test('投递码区分单次超时、宿主中止、网络错误与成功', async () => {
+  const original = globalThis.fetch;
+  const never = (_url: string, init: RequestInit): Promise<Response> => new Promise((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  });
+  try {
+    // 单次截止被自己的计时器触发：两次都超时，重试后仍记单次超时。
+    globalThis.fetch = never as unknown as typeof fetch;
+    const timedOut = ctx({});
+    onRequest({}, timedOut);
+    await onResponse({ id: 'msg_t', content: [] }, timedOut);
+    expect(timedOut.state.collector_code).toBe('collector_attempt_timeout');
+
+    // 宿主中止：不重试，原因归宿主，不冒充单次超时。
+    let hostCalls = 0;
+    globalThis.fetch = ((url: string, init: RequestInit) => {
+      hostCalls += 1;
+      return never(url, init);
+    }) as unknown as typeof fetch;
+    const hostAbort = new AbortController();
+    const hosted = ctx({}, hostAbort.signal);
+    onRequest({}, hosted);
+    const pending = onResponse({ id: 'msg_h', content: [] }, hosted);
+    setTimeout(() => hostAbort.abort(), 20);
+    await pending;
+    expect(hostCalls).toBe(1);
+    expect(hosted.state.collector_code).toBe('collector_host_abort');
+
+    // 连接失败：可重试，两次都失败后记网络错误。
+    let netCalls = 0;
+    globalThis.fetch = (async () => {
+      netCalls += 1;
+      throw new TypeError('fetch failed');
+    }) as unknown as typeof fetch;
+    const net = ctx({});
+    onRequest({}, net);
+    await onResponse({ id: 'msg_n', content: [] }, net);
+    expect(netCalls).toBe(2);
+    expect(net.state.collector_code).toBe('collector_network_error');
+
+    // 成功：记投递完成，不留失败码。
+    globalThis.fetch = (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    const ok = ctx({});
+    onRequest({}, ok);
+    await onResponse({ id: 'msg_ok', content: [] }, ok);
+    expect(ok.state.collector_code).toBe('collector_delivered');
+    expect(ok.state.collector_status).toBeUndefined();
+  } finally {
+    globalThis.fetch = original;
+  }
+}, 10_000);
+
+test('接收方晚于单次截止返回成功仍记为失败', async () => {
+  const original = globalThis.fetch;
+  try {
+    // 模拟接收方在单次 600 ms 截止之后才处理完：宿主预算再大也不改写结论。
+    let calls = 0;
+    globalThis.fetch = (() => {
+      calls += 1;
+      return new Promise(resolve => setTimeout(() => resolve(new Response('{}', { status: 200 })), 650));
+    }) as unknown as typeof fetch;
+    const context = ctx({});
+    onRequest({}, context);
+    const started = Date.now();
+    await onResponse({ id: 'msg_late', content: [] }, context);
+    expect(calls).toBe(2);
+    expect(context.state.collector_code).toBe('collector_attempt_timeout');
+    expect(context.state.collector_status).toBeUndefined();
+    // 两次尝试各自等到截止，总耗时不短于一次单次截止。
+    expect(Date.now() - started).toBeGreaterThanOrEqual(600);
+  } finally {
+    globalThis.fetch = original;
+  }
+}, 10_000);
 
 test('正文超32MiB时发metadata envelope', async () => {
   let sent: string | null = null;

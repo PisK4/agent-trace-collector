@@ -497,5 +497,6 @@ test('agent 标签覆盖三条通道的已知来源，未知来源原样透出',
   expect(agentLabel('claude')).toBe('Claude Code');
   expect(agentLabel('omp')).toBe('OMP');
   expect(agentLabel('codex')).toBe('Codex');
+  expect(agentLabel('hermes')).toBe('Hermes');
   expect(agentLabel('someone-new')).toBe('someone-new');
 });
