@@ -42,6 +42,9 @@ bun run service restart    # kickstart -k，等到新 pid 可用
 # 只读校验：完整性与三类容易悄悄积累的结构问题
 bun run maintain verify --db '<dataDir>/trace.db'
 
+# hook 投递的只读窗口诊断：缺口、等待队列与已到达回调
+bun run maintain hook-delivery --db '<dataDir>/trace.db' --since '2026-10-26T00:00:00Z' --until '2026-10-27T00:00:00Z'
+
 # 离线备份到不存在的目标（只含数据库，不能恢复占位符连续性）
 bun run maintain backup --db '<dataDir>/trace.db' --out '<新路径>/backup-2026-10-21.db'
 
@@ -56,6 +59,10 @@ bun run maintain rebuild --db '<dataDir>/trace.db' --session '<conv_key>'
 
 # 把某个协议的历史正文按当前适配器重写
 bun run maintain reparse --db '<dataDir>/trace.db' --protocol responses
+
+# 空 session 身份迁移，默认只预览
+bun run maintain migrate-hook-identity --db '<dataDir>/trace.db'
+bun run maintain migrate-hook-identity --db '<dataDir>/trace.db' --apply --approval-id '<你的审批标识>'
 
 # 长期元数据淘汰，默认只预览
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01
@@ -75,6 +82,28 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 | `pending_derivations` | `derive_queue` 里的分组数 | 采集器启动后会自行清空；停服务时看到的数字只说明停机前有积压 |
 
 `integrity` 只有一项 `ok` 才算通过。损坏的库会直接抛错，不会被当成合格备份。
+
+### hook-delivery
+
+只读窗口诊断，用独立只读连接，不取维护锁、不停采集器。`--since` 与 `--until` 都要给，接受 epoch 毫秒或 ISO 8601；`--until` 同时是观察时点。
+
+请求侧按 `started_ms` 落窗，`raw_hook` 与 `ingest_issue` 按到达与观察时间落窗。输出分四组：
+
+| 组 | 字段 | 读法 |
+| --- | --- | --- |
+| `requests` | `total`、`with_hook`、`missing_hook` | 缺 hook 证据的行数，不等于回调没送达 |
+| | `settled_missing`、`young_missing` | 以窗口右端退一个等待阈值（1 小时）为界；`young_missing` 只是还没等到 |
+| | `missing_with_sources` | 已有账本、路由或 OTLP 的行也缺 hook：回调阶段没接上，不是请求没发生 |
+| | `missing_without_response_id` | 回调即使到达也按 ID 对不上，只能留在未知 |
+| | `awaiting_candidate` | 等待队列里已有指向本行的回调，差一次合并，不是投递缺失 |
+| | `by_agent`、`by_status`、`by_kind`、`by_prompt_tokens`、`miss_reasons` | 缺口的分组计数；未知值单列，不归并进已知档 |
+| `raw_hooks` | `received`、`reply_absent`、`body_omitted`、`by_agent` | 已到达的回调：回复缺失与正文降级分开计数 |
+| `pending_hooks` | `total`、`without_response_id` | `first_seen` 早于窗口右端的等待项，含历史累积 |
+| `issues` | 按来源与原因的计数 | `raw_hook_body_unlinked` 一类保留问题 |
+
+前后窗口用同一组参数才有可比性。报告回答的是「哪个阶段没接上」，不能写成「回调从未发生」：`missing_hook` 只说明本行没有已关联的 hook 证据。
+
+插件侧的失败码在 `ctx.state.collector_code`，只有宿主内存里的插件状态能看到，ATC 不读：`collector_delivered` 成功；`collector_attempt_timeout` 单次 fetch 超过 600 ms 被自己的计时器中止（接收方可能稍后才处理完，仍记失败）；`collector_host_abort` 宿主的 `ctx.signal` 被中止，不重试；`collector_network_error` 连接失败，重试一次；`collector_http_rejected` 收到非 2xx，`collector_status` 带状态码，4xx 不重试；`collector_deadline` 总预算 1500 ms 用尽。调大宿主 `gatewayTimeoutMs` 只影响 `collector_host_abort` 一种，不能据此排除其余原因。
 
 ### backup
 
@@ -182,6 +211,27 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 - `remaining`：目标协议里仍版本落后的行数；被拒绝的行会留在这里。
 
 重复执行不再处理已经升版的行：第二次运行 `scanned` 为 0，不新增块，也不推进 `input_revision`。重写会推进输入修订并标脏所在分组，派生结论在采集器下一次排空后才按新解释生效；要立刻重算，对受影响的会话再跑一次 `rebuild`。
+
+### migrate-hook-identity
+
+把 `["session",""]` 空桶里的 hook 孤儿行拆回各自的 hook 回退身份 `["hook", hook_id]`。新请求已在身份入口把空 session 当缺失，这个命令只处理旧行；`raw_hook.session` 保留上游空值，不改原始证据。
+
+默认只预览：输出 `bucket`、`scanned`（桶内请求数）、`candidates`（可迁移行，含 `req_id`、`agent`、`hook_id`）、`agents`（桶内按 agent 分布）与 `rejected`（不可迁移行与原因）。加 `--apply` 必须同时给 `--approval-id`，否则退出码 1 且错误码 `approval_id_required`。
+
+拒绝原因：
+
+- `ownership_attached`：已有账本、路由或 OTLP 证据，或 `have` 位图带账本/路由位；已关联行不套用 hook 回退，单列核查。
+- `not_hook_born`：不是 hook 初建的行（`via<>'hook'`）。
+- `actor_known` / `actor_present`：归属已经确认或存在有效 actor，不回退。
+- `session_present`：请求行自己带着有效 session，与空桶矛盾。
+- `hook_evidence_missing` / `hook_evidence_ambiguous`：没有 hook 证据或多份 hook 证据，无法确定唯一回退身份，不取首条猜测。
+- `hook_evidence_merged`：hook 证据已并入别的目标。
+- `hook_source_missing` / `hook_session_present`：`raw_hook` 不存在，或原始 session 非空，来源与空桶矛盾。
+- `identity_changed`：执行期间身份已变化。
+
+每行一个独立事务，事务内重新校验；迁移只改 `conv_key`、`conv_source`、`session`、`actor` 与 `updated_at`，随后按现有归属规则处理旧组并推进输入修订。`actor_state` 仍是 `unknown`，未知归属行不凭空建派生组。报告里的 `conservation` 对账请求、证据、块、别名、工具链接的行数与费用合计，`conserved` 必须为真。
+
+重复执行时桶里只剩被拒绝的行：`migrated` 为 0，不推进修订。迁移不改变后续关联：hook 证据与等待队列不动，唯一 response ID 到达时仍按 `mergeHookInto` 并入账本目标。
 
 ### purge-metadata
 

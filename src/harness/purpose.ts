@@ -5,6 +5,7 @@
  * Harness 名称。
  */
 import { classifierDecision } from './claude';
+import { hermesDecision } from './hermes';
 import { skillHintDecision } from './omp';
 import {
   PURPOSE_VERSION,
@@ -29,6 +30,7 @@ export type HarnessPurposeRule = {
 /** 生产登记：次序即同 agent 多条规则时的优先级，新增 Harness 在此加一行。 */
 export const PURPOSE_RULES: readonly HarnessPurposeRule[] = [
   { agent: 'claude', decide: classifierDecision },
+  { agent: 'hermes', decide: hermesDecision },
   { agent: 'omp', decide: skillHintDecision },
 ];
 

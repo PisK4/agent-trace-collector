@@ -1,10 +1,13 @@
 /** 维护 CLI：参数解析、锁获取与命令分派。所有命令要求 collector 已停止。 */
 
 import { dirname } from 'node:path';
+import { Database } from 'bun:sqlite';
 import { openStore } from '../store';
 import type { Store } from '../store';
 import { backupBundle, backupDatabase, restoreBundle } from './backup';
+import { assertWindow, hookDeliveryReport } from './delivery';
 import { acquireMaintenanceLock, type LockHandle } from './lock';
+import { previewHookIdentityMigration, migrateHookIdentity } from './identity';
 import { previewMetadataPurge, purgeMetadata } from './purge';
 import { rebuildSession } from './rebuild';
 import { reparseProtocol } from './reparse';
@@ -31,13 +34,24 @@ function stringFlag(flags: Map<string, string | true>, name: string): string | n
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/** 窗口端点接受 epoch 毫秒或 ISO 8601；解析失败返回 null，由调用方按用法错误退出。 */
+function momentFlag(flags: Map<string, string | true>, name: string): number | null {
+  const value = stringFlag(flags, name);
+  if (value === null) return null;
+  if (/^\d+$/.test(value)) return Number(value);
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 const USAGE = `usage:
   maintain verify --db <path>
+  maintain hook-delivery --db <path> --since <ISO|ms> --until <ISO|ms>
   maintain backup --db <path> --out <new-path>
   maintain bundle --dir <dataDir> --out <new-dir>
   maintain restore --bundle <bundleDir> --out <new-dir>
   maintain rebuild --db <path> --session <conv_key>
   maintain reparse --db <path> --protocol <name>
+  maintain migrate-hook-identity --db <path> [--apply --approval-id <id>]
   maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --approval-id <id>]
 `;
 
@@ -107,8 +121,31 @@ export async function runMaintenance(argv: string[], io: {
     }
   }
 
+  if (command === 'hook-delivery') {
+    const sinceMs = momentFlag(flags, 'since');
+    const untilMs = momentFlag(flags, 'until');
+    if (sinceMs === null || untilMs === null) {
+      err(USAGE.trimEnd());
+      return 2;
+    }
+    try {
+      assertWindow({ sinceMs, untilMs });
+      // 只读诊断：独立只读连接，不取维护锁，不停采集器。
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        out(JSON.stringify({ ok: true, ...hookDeliveryReport(db, { sinceMs, untilMs }) }));
+      } finally {
+        db.close();
+      }
+      return 0;
+    } catch (error) {
+      err(`hook-delivery_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
+    }
+  }
+
   if (command === 'verify' || command === 'purge-metadata' || command === 'rebuild'
-    || command === 'reparse') {
+    || command === 'reparse' || command === 'migrate-hook-identity') {
     // verify 只读，不需要锁；其余命令写库，必须有。
     let store: Store | null = null;
     let lock: LockHandle | null = null;
@@ -137,6 +174,27 @@ export async function runMaintenance(argv: string[], io: {
           const report = reparseProtocol(store, argument);
           out(JSON.stringify({ ok: true, ...report }));
         }
+        return 0;
+      }
+      if (command === 'migrate-hook-identity') {
+        lock = acquireMaintenanceLock(dirname(dbPath), `migrate-hook-identity:${process.pid}`);
+        if (lock === null) {
+          err('maintenance_lock_held');
+          return 1;
+        }
+        store = openStore(dbPath);
+        const preview = previewHookIdentityMigration(store);
+        if (flags.get('apply') !== true) {
+          out(JSON.stringify({ ok: true, applied: false, ...preview }));
+          return 0;
+        }
+        const approvalId = stringFlag(flags, 'approval-id');
+        if (approvalId === null) {
+          out(JSON.stringify({ ok: false, error: 'approval_id_required', ...preview }));
+          return 1;
+        }
+        const report = migrateHookIdentity(store);
+        out(JSON.stringify({ ok: true, applied: true, approval_id: approvalId, ...report }));
         return 0;
       }
       const before = stringFlag(flags, 'before');

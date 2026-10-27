@@ -289,3 +289,57 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 | 明细弹窗 | tile/图例/内容列表行三种入口同动作；item 命中对齐显示「片段」并默认展开，未对齐降级列全部结果块并带说明；类级弹窗列承载块与解释规则 note；条目正文经工具结果端点读出，非文本折叠为原始对象；Esc 关闭后焦点回到触发 tile，键盘 Enter 等效 |
 | 三态读数 | 高占用 95.0% 出「占满」warn；窗口未知不显示占用率；files 两大一碎并出「其余文件引用 30 项」成员集合块与类级余量块 |
 | 主题与窄栏 | 暗色 tile 深底浅字（表面 rgb(16,25,35)）；620px 视口 ResizeObserver 重排（34 → 6 tile） |
+
+## Hermes 用途识别（合成 + 只读生产快照，2026-10-27）
+
+两条 Hermes 旁路指纹随 [Agent Note：Hermes 用途识别](../.agents/notes/implemented/feature/2026-10-27-hermes-purpose-recognition.md) 交付。合成验收进 `bun test`；生产侧只做只读快照，统一截止时点 2026-10-27T05:33:18Z（本机 13:33），没有停采集器、没有写库。
+
+合成部分：`tests/semantics.test.ts`、`tests/request-purpose.test.ts`、`tests/hermes-purpose.test.ts`、`tests/harness-purpose.test.ts`、`tests/web.test.ts` 与三个共享派生测试文件共 112 项通过，`tsc --noEmit` 通过。覆盖审查器与标题指纹的结论、规则 ID、信号与次序，user 内容与非 hermes 标签的反例，真实 Chat system 块的取数结算，以及主请求 A、审查器 R、续写 B 的链关系。
+
+只读快照按 `started_ms <= 截止时点` 统计，只保存聚合值：
+
+| 项 | 生产结果 |
+| --- | --- |
+| 规模 | 1,242 笔 Hermes 请求，159 个会话键；`conv_source='conv'` 1,186 笔、`'session'` 56 笔 |
+| 用途现状（v4） | `unrecognized` 1,029 笔、`missing` 210 笔、`title.reply.v1` 3 笔；尚无 `command-review` 与 `hermes.session-title.v1` 结论 |
+| 正文与回复 | `have=1` 且回复缺失 56 笔；`have=6`、正文 `pending` 210 笔；`have=7` 976 笔 |
+| 链角色 | `main/confirmed` 447、`branch/confirmed` 381、`main/unknown` 243、`main/first` 112、`main/null` 56、`aux/aux` 3 |
+| 空 session 桶 | `['session','']` 下 Hermes 56 笔、curl 1 笔，actor 均为 unknown |
+| hook 缺口 | Hermes `miss_reason='hook_absent'` 205 笔；等待队列 605 条，其中 603 条无 response ID |
+| 工具 | 924 次调用，resolved 893、pending 31 |
+
+存量 Hermes 行不执行用途重建，按项目所有人的决定直接删除；上面是删除前的只读记录。新流量按 `PURPOSE_VERSION=5` 结算，v5 的真实流量验收要等新代码部署后另行记录。
+
+## 空 session 身份修复与迁移（合成，2026-10-27）
+
+随 [Agent Note：空 session 不是会话身份](../.agents/notes/implemented/bug-fix/2026-10-27-empty-session-identity-migration.md)交付。本轮全部是合成数据，`tests/evidence.test.ts`、`tests/hook.test.ts`、`tests/hook-identity.test.ts`、`tests/maintenance.test.ts` 共 76 项通过，`tsc --noEmit` 通过。真实库上未执行迁移，也没有删除任何行。
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| 新请求身份 | 空 session 的 hook 请求落 `["hook", hook_id]`、`conv_source='hook'`、`session` 与 `actor` 为 NULL、`actor_state='unknown'`；`raw_hook.session` 仍为空串；不产生派生队列行 |
+| 有效 session | 非空 session 的 hook 请求保持 `["session", session]` 与既有 actor |
+| 预览 | 五行种子给出 1 个候选与 4 个拒绝（`ownership_attached`、`hook_evidence_ambiguous`、`hook_session_present`、`hook_source_missing`）；`agents` 按桶内分布计数；预览不改库 |
+| 命令闸门 | 预览退出 0 且 `applied:false`；`--apply` 缺 `--approval-id` 时退出 1、错误码 `approval_id_required`，不迁移 |
+| 执行 | `migrated:1`、`remaining:1`、`conservation.conserved:true`；迁移行 `conv_key` 为 `["hook","hook-a"]`、`session` 与 `actor` 为 NULL、`actor_state='unknown'`、`have` 不变；`SUM(input_revision)` 恰好 +1，无派生队列行 |
+| 重复执行 | 第二次 `migrated:0`，`SUM(input_revision)` 不变 |
+| 迁移后关联 | 唯一 response ID 到达后按 `mergeHookInto` 合并：源行删除，证据 `merged` 落目标，`request_alias` 记旧 id，目标 `conv_key` 与 `actor` 不被 hook 回退覆盖 |
+| helper 回退 | `hookConv('', 'h1')` 与 `hookConv(null, 'h1')` 同为 `["hook","h1"]` |
+
+真实库验证待执行：生产空桶的形状记录在上一节的只读快照里，候选数、拒绝原因分布与守恒对账要在维护窗口跑预览后另行记录。`PURPOSE_VERSION` 升到 5 与本次身份修复是两件事：新流量按 v5 结算，旧 Hermes 行按既定决定删除，不经过迁移。
+
+## hook 投递分层诊断（合成，2026-10-27）
+
+随 [Agent Note：hook 投递分层诊断](../.agents/notes/implemented/feature/2026-10-27-hook-delivery-diagnostics.md)交付。本轮全部是合成数据，`tests/hook-delivery.test.ts`、`tests/hook.test.ts`、`tests/hook-identity.test.ts`、`tests/evidence.test.ts`、`tests/maintenance.test.ts` 共 85 项通过，`tsc --noEmit` 通过。真实流量的窗口对比未执行。
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| 窗口切分 | 请求按 `started_ms`、回调按 `received_at`、摄入问题按 `observed_at` 落窗；窗口外的行不计入 |
+| 缺失分龄 | 以 `--until - HOOK_ABSENT_THRESHOLD_MS` 为界：早于阈值的缺证据行计入 `settled_missing`，晚于阈值的只进 `young_missing` |
+| 缺口出口 | 已有账本或路由证据仍缺 hook 的行进 `missing_with_sources`；无 response ID 的行单独计数；等待队列已有候选的行进 `awaiting_candidate`，不再算作投递缺失 |
+| 分档计数 | 按 agent、状态码、请求类别与 `prompt_tokens` 分档；未知值保留 `unknown` 档，不并入相邻档 |
+| 回调侧 | `raw_hooks` 报总数、`reply_state='absent'` 与正文降级；`pending_hooks` 报队列总数与其无 response ID 条数；`issues` 按来源与原因聚合 |
+| 命令闸门 | 缺 `--since`/`--until` 或值非法退出 2；区间倒置退出 1 且错误码 `hook-delivery_failed:invalid_window`；正常窗口退出 0 并输出 JSON |
+| 投递码 | 单次超时重试后为 `collector_attempt_timeout`；宿主中止只调用一次并为 `collector_host_abort`；连接失败两次后为 `collector_network_error`；2xx 为 `collector_delivered` 且不留 `collector_status`；非 2xx 为 `collector_http_rejected`，4xx 不重试 |
+| 晚到成功 | 接收方 650 ms 后返回 200，即使宿主预算更大，两次尝试仍记 `collector_attempt_timeout`，总耗时不短于一次单次截止 |
+
+插件侧的失败码只存在宿主内存的 `ctx.state` 里，ATC 不读回，因此本轮的窗口统计无法断言某条请求因哪种原因丢投递。真实流量的前后窗口对比、宿主 `gatewayTimeoutMs` 配置实验都未执行；上一节记录的 Hermes 缺口仍是只读快照，不因诊断工具上线而改变含义。

@@ -379,6 +379,8 @@ CREATE TABLE source_cursor (
 
 所以读模型保留 `subagent` 与 `parent_agent` 两列。会话导航仍按 `conv_key` 统一，但前驱计算与工具配对按 `(conv_key, actor)` 做，`actor` 取 `subagent` 优先、否则是会话本身。身份不足以判定归属时明确标不确定，不按名称或时间猜。
 
+空串是上游对"没有会话"的写法。会话身份在入口按缺失处理：`session`、`actor` 都留 NULL，组键回退到该条证据自己的前缀（hook 用 `["hook", id]`），`raw_hook.session` 保留上游原值。账本与路由的映射层先把空串转 NULL；hook envelope 保留原值，规范化在 `insertHookRequest` 读取时完成。旧行落在 `["session",""]` 空桶，只能用显式身份迁移拆回各自的 hook 回退键，见[运维手册](operations.md#migrate-hook-identity)。
+
 ### 合并规则
 
 每个 `req_id` 维护一个来源位图 `have`：1 为 hook，2 为账本，4 为路由，8 为 OTLP span。
@@ -428,6 +430,14 @@ hook 的 `model` 与 `success` 只作为独立报告保留在 `raw_hook`：前�
 写入要触发局部重算。插入、关联成功、补到正文、会话键变更，都重算当前请求及其后继链上已算过的派生值。链长按同会话上限截断，避免一次关联扫全库。
 
 工具配对是可变状态。A 的回复里发出调用 x 时，携带结果的 B 尚未发生，只配一次会永久留空。所以配对写成待配对调用表，后续结果到达时更新归属，并按稳定顺序处理反向到达与重复投递。
+
+### 投递缺口的观察口径
+
+hook 是 best-effort 通道，缺证据有三种来源：回调没发生、回调到达但按 response ID 对不上、合并还没跑。三者都表现为请求行没有 hook 证据，`have` 位图看不出来，只能靠窗口聚合分开计数。
+
+`maintain hook-delivery` 是只读诊断：请求侧按 `started_ms` 落窗，以窗口右端退一个等待阈值（与 `hook_absent` 老化同值）分 settled 与 young；已有账本、路由或 OTLP 的行仍缺 hook 的计 `missing_with_sources`，等待队列里有指向本行的回调计 `awaiting_candidate`，缺 response ID 的计 `missing_without_response_id`。按 agent、状态码、请求类别与体积分档计数，未知值单列。字段与命令见[运维手册](operations.md#hook-delivery)。
+
+插件侧的失败码只存在宿主内存的插件状态里，ATC 不读。薄插件把单次 fetch 超时、宿主中止、网络错误与 HTTP 拒收分成四个固定码：调大宿主预算只影响宿主中止那一种，接收方晚于插件单次截止返回成功也按失败记，不因为最终拿到了响应改写成投递成功。
 
 每个派生结果记录算法版本与未知原因，便于整体重建。
 
@@ -970,7 +980,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 派生编排归 `src/derive/unit.ts`。在线用 `createDeriveUnit(store).run({budgetMs})` 返回 `{didWork,nextDueMs}`：每轮预算 400 ms、最多十个组或切片步骤，用途按十笔一批独立提交，组间检查剩余预算；空闲先只读判定，不开写事务。有积压时 `nextDueMs=0`，调度用定时器让出事件循环后续跑，空闲等待两秒。同步单组内部不切开，单个大组仍可能超过预算；生产切片启用限制见[派生代际与发布指针](#派生代际与发布指针)。维护与容量实验用同模块的 `drainDeriveEntry(store, limit, scope?)`，保留完整统计；需要把多个组放进外层事务的离线调用使用 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`。
 
-请求阶段按 `req_id` 取 `purpose_pending=1` 的行，按 `PURPOSE_VERSION` 解释并写 `purpose_status`（`recognized`/`unrecognized`/`missing`/`retained`/`unsupported`/`error`）、`purpose_version`、`purpose_rule`、`purpose_chain`、`req_kind` 与 `model_title`，把 `purpose_pending` 清 0 并让 `purpose_revision` 追上当前 `input_revision`。规则优先级固定为 Harness 专属强指纹 > 来源 kind > 标题兼容 > 兜底。专属指纹按 agent 标签在 `src/harness/` 的静态登记里选取，登记与编排在 `harness/purpose.ts`，同 agent 多条规则按登记次序，未知与空标签不命中任何登记项：claude 分类器（`harness/claude.ts`）要求 system 文本含 `security monitor for autonomous ai coding agents`、`stop_sequences` 含 `</block>` 同时成立，消息数 2 与工具数 0 只写信号，判定取回复里最后一个 `<block>yes|no`；omp skill 压缩（`harness/omp.ts`）要求任一 user 文本块块首命中模板前缀 `Compress into one routing hint of at most 12 words:`。通用判定留在 `semantics.ts`：来源 kind 只把精确的 `title` 当标题别名并排除链，其它非空值变成 `source:<value>` 参与链；标题兼容先看严格回复形状（整段 `<title>` 或只含 `title` 键的 JSON），再看已存 `req_kind='title'`；兜底是 `unrecognized` + `chat` + `participate`。
+请求阶段按 `req_id` 取 `purpose_pending=1` 的行，按 `PURPOSE_VERSION` 解释并写 `purpose_status`（`recognized`/`unrecognized`/`missing`/`retained`/`unsupported`/`error`）、`purpose_version`、`purpose_rule`、`purpose_chain`、`req_kind` 与 `model_title`，把 `purpose_pending` 清 0 并让 `purpose_revision` 追上当前 `input_revision`。规则优先级固定为 Harness 专属强指纹 > 来源 kind > 标题兼容 > 兜底。专属指纹按 agent 标签在 `src/harness/` 的静态登记里选取，登记与编排在 `harness/purpose.ts`，同 agent 多条规则按登记次序，未知与空标签不命中任何登记项：claude 分类器（`harness/claude.ts`）要求 system 文本含 `security monitor for autonomous ai coding agents`、`stop_sequences` 含 `</block>` 同时成立，消息数 2 与工具数 0 只写信号，判定取回复里最后一个 `<block>yes|no`；omp skill 压缩（`harness/omp.ts`）要求任一 user 文本块块首命中模板前缀 `Compress into one routing hint of at most 12 words:`；hermes（`harness/hermes.ts`）两条规则按次序判，system 文本含 `security reviewer for an ai coding agent` 得 `command-review`、含 `you name chat sessions` 得 `title`，两者都排除链，回复只写判定或标题信号。通用判定留在 `semantics.ts`：来源 kind 只把精确的 `title` 当标题别名并排除链，其它非空值变成 `source:<value>` 参与链；标题兼容先看严格回复形状（整段 `<title>` 或只含 `title` 键的 JSON），再看已存 `req_kind='title'`；兜底是 `unrecognized` + `chat` + `participate`。
 
 正文不可读时：有旧 `purpose_version` 就原样保留并标 `retained`，没有旧解释才落 `missing` 或 `unsupported`；来源 kind 只对没有旧解释的行生效。读取只解骨架与引用索引，不解压消息块。解释出错最多三次，终态记 `error` 并消费当前修订，避免一笔读不出的请求把整组卡在 dirty。写回以请求行上的身份、修订、目标与 `purpose_pending=1` 为条件，交换失败返回 stale 并保留 pending。该阶段不推进自己请求的输入修订——它消费输入，不改变输入；只在用途、链归属或正式标题真的变了时标所属组。
 
