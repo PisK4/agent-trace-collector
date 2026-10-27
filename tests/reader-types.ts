@@ -9,14 +9,15 @@ const store = createReaderStore(fetch);
 await store.loadSessions();
 await store.loadSessions('cursor');
 await store.selectSession('synthetic-session');
-await store.loadEarlier();
+await store.selectSession('synthetic-session', 30, 'latest');
+await store.loadLater();
 const window = store.getWindow();
 const sessionKey: string | null = window.sessionKey;
-const olderCursor: string | null = window.olderCursor;
-// @ts-expect-error olderCursor必须为string|null；any退化时应报TS2578。
-const invalidCursor: number = window.olderCursor;
+const newerCursor: string | null = window.newerCursor;
+// @ts-expect-error newerCursor必须为string|null；any退化时应报TS2578。
+const invalidCursor: number = window.newerCursor;
 void sessionKey;
-void olderCursor;
+void newerCursor;
 void invalidCursor;
 
 const read = await store.readRequest(1, true);
