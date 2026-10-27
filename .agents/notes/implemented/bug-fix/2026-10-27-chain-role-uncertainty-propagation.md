@@ -38,7 +38,7 @@ Status: implemented
 
 `chain_role` 读写点逐一核对后的结论：
 
-- [turns.ts](../../../../src/queries/turns.ts) 的轮次起点：资格判据是 `chain_role='main'`，或 `chain_role='unknown'` 且自身 `prev_relation='unknown'`。提案时以为「unknown 节点自身没有 delta，`input_preview_kind` 不可能是 `delta`」，实施审计发现不成立：正文回收的行按 retained 语义保留旧的 `input_preview_kind='delta'`，而[轮次两端阅读](../../feature/2026-10-25-turn-pair-reading.md)的既有决策是回收起点照常进带（ordinals 清空、终点按保留的形状位）。判据因此多一个 prev_relation 条件：回收起点（关系自身 unknown）保留进带资格，不确定闭包后继（confirmed）排除。轮次集合与修复前逐请求一致。
+- [turns.ts](../../../../src/queries/turns.ts) 的轮次起点：资格判据是 `chain_role='main'`，或 `chain_role='unknown'` 且自身 `prev_relation='unknown'`。提案时以为「unknown 节点自身没有 delta，`input_preview_kind` 不可能是 `delta`」，实施审计发现不成立：正文回收的行按 retained 语义保留旧的 `input_preview_kind='delta'`，而[轮次两端阅读](../feature/2026-10-25-turn-pair-reading.md)的既有决策是回收起点照常进带（ordinals 清空、终点按保留的形状位）。判据因此多一个 prev_relation 条件：回收起点（关系自身 unknown）保留进带资格，不确定闭包后继（confirmed）排除。轮次集合与修复前逐请求一致。
 - [sessions.ts](../../../../src/queries/sessions.ts) 的标题回退：第二候选池缩小到已证明主链；第三候选（不筛角色，只要求 `title_source='user_delta'`）兜底同一批行。标题只在「更早的 user_delta 行全部落 unknown、稍后才有 main 行」的会话里前移到更早一句——那是归属未证明的行的首句，不再冒充主链首句。
 - [trace-view.js](../../../../web/trace-view.js)：分支 Event 只对 `branch` 触发，unknown 不再点亮它；不给 unknown 新增中性 Event，正文状态与新增输入未确认 Event 已覆盖缺失事实。会话详情的辅助提示只认 `aux`，同样不受影响。
 - [ready.ts](../../../../src/derive/slice/ready.ts) 的覆盖校验按 `purpose_chain` 筛选、[session-summary.ts](../../../../src/queries/session-summary.ts) 按算法号核对事实已知性：都不读 branch/main 之外的角色值，核对后无改动。
