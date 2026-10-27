@@ -762,7 +762,7 @@ AVA 的骨架里，`request.summary` 与 `response.summary` 合计占骨架大�
 
 harness 的 Title Generator 是旁路请求：Claude Code 与 OMP 的输入/回复形状不同，但回复都可以解析成 `<title>` 或 `{"title":…}`。这类请求由用途阶段记 `purpose_chain='exclude'` 与 `req_kind='title'`，不进入祖先集合；解析出的正式标题存 `model_title`。会话标题优先取已完成组里最新一次生成的正式标题，没有才退回用户首句。
 
-链角色在每组派生末尾重算：最早的一笔真实请求是 `main`，其余互不相接的根及其后继是 `branch`；正文不可读的请求保持中性，不参与主链竞争。
+链角色在每组派生末尾重算：最早的一笔真实请求是 `main`，其余可证明不相接的根及其后继是 `branch`；正文不可读的请求以无父节点身份进森林，它与其 confirmed 后继构成的不确定闭包记 `unknown`——归属无法证明时不借用 `main` 的中性编码，也不冒充 `branch`。判定收在派生内核一处，同步与切片共用。
 
 ### 新增消息
 

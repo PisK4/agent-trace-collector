@@ -86,10 +86,12 @@ for (const state of ['partial', 'available'] as const) {
         drainDerive(f.store);
         expect(f.store.read.query(`SELECT prev_relation,prev_req_id FROM request
           WHERE req_id=99`).get()).toEqual({ prev_relation: 'unknown', prev_req_id: null });
+        // 99 排最前且不可比：1 连「本组第一笔」都证明不了（relation 同样 unknown），
+        // 2、3 的 confirmed 链经过它。整组归属无法证明，角色如实落 unknown。
         expect(f.store.read.query(`SELECT req_id,chain_role FROM request
           WHERE req_id IN (1,2,3) ORDER BY req_id`).all()).toEqual([
-          { req_id: 1, chain_role: 'main' }, { req_id: 2, chain_role: 'main' },
-          { req_id: 3, chain_role: 'main' },
+          { req_id: 1, chain_role: 'unknown' }, { req_id: 2, chain_role: 'unknown' },
+          { req_id: 3, chain_role: 'unknown' },
         ]);
         expect(f.store.read.query(`SELECT prev_req_id FROM request WHERE req_id=3`).get())
           .toEqual({ prev_req_id: 2 });
@@ -143,7 +145,9 @@ test('增量输入不判成 confirmed，也不充当后续请求的祖先', () =
       [3, null, 'unknown'],
       [4, 2, 'confirmed'],
     ]);
-    expect(rows.map(row => row.chain_role)).toEqual(['main', 'main', 'main', 'main']);
+    // 3 是关系 unknown 的节点，角色显式落 unknown；4 的前缀证据接回已证明主链，
+    // 重新锚定记 main。
+    expect(rows.map(row => row.chain_role)).toEqual(['main', 'main', 'unknown', 'main']);
   } finally {
     f.close();
   }
@@ -401,8 +405,8 @@ test('前驱正文缺失时本轮记为unknown且不算增量', () => {
       req_id: number; prev_relation: string; delta_ordinals: string | null; chain_role: string;
     }, []>('SELECT req_id, prev_relation, delta_ordinals, chain_role FROM request ORDER BY req_id').all();
     expect(rows).toEqual([
-      { req_id: 1, prev_relation: 'unknown', delta_ordinals: null, chain_role: 'main' },
-      { req_id: 2, prev_relation: 'unknown', delta_ordinals: null, chain_role: 'main' },
+      { req_id: 1, prev_relation: 'unknown', delta_ordinals: null, chain_role: 'unknown' },
+      { req_id: 2, prev_relation: 'unknown', delta_ordinals: null, chain_role: 'unknown' },
     ]);
   } finally {
     f.close();

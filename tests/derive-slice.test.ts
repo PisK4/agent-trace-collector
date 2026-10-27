@@ -361,6 +361,34 @@ test('同毫秒且来源位置不足为证时两边都判顺序未证实', () =>
   expect(slice.map(row => [row.req_id, row.prev_relation]))
     .toEqual([[1, 'first'], [2, 'unknown'], [3, 'unknown'], [4, 'confirmed']]);
   expect(slice[3]).toMatchObject({ prev_req_id: 1, delta_ordinals: '[1,2]' });
+  // 顺序未证实的两笔自身关系 unknown，角色同样落 unknown，不当中性 main。
+  expect(slice.map(row => row.chain_role)).toEqual(['main', 'unknown', 'unknown', 'main']);
+});
+
+test('unknown环节切断的confirmed后继标unknown，重新锚定后记main', () => {
+  const sessions: ChainSeed[] = [
+    { texts: ['S'], startedMs: 1000 },
+    { texts: ['S', 'A'], startedMs: 2000 },
+    { texts: ['X'], startedMs: 3000 },
+    { texts: ['X', 'Y'], startedMs: 4000 },
+    { texts: ['S', 'X', 'Y', 'Z'], startedMs: 5000 },
+  ];
+  const { slice, sync } = chainOnBothPaths(sessions, f => {
+    f.store.write(db => db.run("UPDATE request SET body_state='missing' WHERE req_id=2"));
+  });
+  expect(slice).toEqual(sync);
+  // 第 2 笔正文不可读，链从它断开：第 3 笔接不上已知祖先落 unknown；第 4 笔
+  // confirmed 接第 3 笔，但父链存在 unknown 环节、无法证明与主链相接，标
+  // unknown 而不是 branch。第 5 笔的前缀证据直接够到主链根，重新锚定，按
+  // trunk 记 main。
+  expect(slice.map(row => [row.req_id, row.prev_req_id, row.prev_relation, row.chain_role]))
+    .toEqual([
+      [1, null, 'first', 'main'],
+      [2, null, 'unknown', 'unknown'],
+      [3, null, 'unknown', 'unknown'],
+      [4, 3, 'confirmed', 'unknown'],
+      [5, 1, 'confirmed', 'main'],
+    ]);
 });
 
 test('不可读祖先让后续关系降为unknown并保留旧标题', () => {
@@ -373,6 +401,8 @@ test('不可读祖先让后续关系降为unknown并保留旧标题', () => {
   expect(slice.map(row => [row.req_id, row.prev_relation]))
     .toEqual([[1, 'first'], [2, 'unknown'], [3, 'confirmed']]);
   expect(slice[2]).toMatchObject({ prev_req_id: 1, delta_ordinals: '[1,2]' });
+  // 关系 unknown 的节点自身记 unknown，不再借用 main 的中性编码。
+  expect(slice.map(row => row.chain_role)).toEqual(['main', 'unknown', 'main']);
 });
 
 test('两个互不相接的根按遍历序选主链', () => {

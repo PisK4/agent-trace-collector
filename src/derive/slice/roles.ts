@@ -4,7 +4,7 @@ import type { Database } from 'bun:sqlite';
 import type { DeriveBudget } from '../../config';
 import type { Store } from '../../store';
 import {
-  chainTrunk, chainTrunkRoot, commonPrefix, confirmedDeltaOf, settleRelation,
+  chainRolesOf, chainTrunkRoot, commonPrefix, confirmedDeltaOf, settleRelation,
 } from '../decision';
 import { fingerprintsOf, incrementalInputOf } from '../read';
 import { assertQueueRevision, one, sliceDiscardReason, type SliceStep } from './generation';
@@ -114,25 +114,27 @@ function openRoleWork(db: Database, generation: string): StageOutcome {
     ORDER BY traversal_ord LIMIT 1`,
   [generation, roleGen(db, generation)!.role_scan_ord]);
   if (next === null) {
-    // 根与 trunk 由共享判定给出：遍历序第一个「没有可比较父节点」的参与请求是根，
-    // 根的可达集是主链。早先只按 started_ms/req_id 取根会把父节点是未知行的那一笔
-    // 漏掉，与同步路径分叉——判据收进 chainTrunkRoot/chainTrunk 后只剩一个位置。
-    // 成员归属在收尾的这个事务里写进工作行，角色传播按它读，不再逐行从父行继承；
-    // 长组这里是单笔事务里最多的一次写入（每行一列），量级与同步路径整组重算相当。
+    // 角色由共享判定（chainRolesOf）给出：森林含关系 unknown 的行，trunk 照旧，
+    // unknown 行及其 confirmed 后继的不确定闭包记 unknown。早先只按
+    // started_ms/req_id 取根会把父节点是未知行的那一笔漏掉，与同步路径分叉——
+    // 判据收进 decision 后只剩一个位置。三态编码进 in_trunk（1=main、2=unknown、
+    // 0=branch），角色传播按它翻译；长组这里是单笔事务里最多的一次写入
+    // （每行一列），量级与同步路径整组重算相当。
     const nodes = db.query<{ req_id: number; parent_req_id: number | null;
       participating: number; relation: string | null }, [string]>(`
       SELECT req_id,parent_req_id,participating,relation FROM derive_role_work
       WHERE generation=? ORDER BY traversal_ord`).all(generation);
-    const chain = nodes.filter(row => row.participating === 1
-        && row.relation !== null && row.relation !== 'unknown')
-      .map(row => ({ reqId: row.req_id, parentReqId: row.parent_req_id }));
-    const root = chainTrunkRoot(chain);
-    const trunk = chainTrunk(chain, root);
+    const chain = nodes.filter(row => row.participating === 1)
+      .map(row => ({ reqId: row.req_id, parentReqId: row.parent_req_id, relation: row.relation }));
+    const roles = chainRolesOf(chain);
     const mark = db.prepare(
       'UPDATE derive_role_work SET in_trunk=? WHERE generation=? AND req_id=?');
-    for (const node of chain) mark.run(trunk.has(node.reqId) ? 1 : 0, generation, node.reqId);
+    for (const node of chain) {
+      const role = roles.get(node.reqId);
+      mark.run(role === 'main' ? 1 : role === 'unknown' ? 2 : 0, generation, node.reqId);
+    }
     db.run(`UPDATE derive_generation SET stage='role_assign',role_assign_ord=-1,
-      role_root_req=? WHERE generation=?`, [root, generation]);
+      role_root_req=? WHERE generation=?`, [chainTrunkRoot(chain), generation]);
     return { kind: 'advanced', stage: 'role_assign', rows: 0, writes: chain.length + 2 };
   }
   const current = one<{ purpose_revision: number }>(db,
@@ -207,9 +209,9 @@ function scanRoleStep(db: Database, generation: string, budget: DeriveBudget): S
 /**
  * 一页主链角色传播。
  *
- * trunk 归属已在角色扫描收尾时由共享判定（`chainTrunkRoot`/`chainTrunk`）写进
- * 工作行，这里只把它翻成角色：排除用途写 aux；参与但关系未知的行保持中性 main，
- * 不误标分支；其余按 in_trunk 给 main/branch。角色传播不碰标题与摘要。
+ * trunk 与不确定闭包已在角色扫描收尾时由共享判定（`chainRolesOf`）编码进工作行
+ * 的 `in_trunk`（1=main、2=unknown、0=branch），这里只翻译：排除用途写 aux，
+ * 参与行按编码落 main/unknown/branch。角色传播不碰标题与摘要。
  */
 function assignRoleStep(db: Database, generation: string, gen: RoleGen,
   budget: DeriveBudget): StageOutcome {
@@ -222,14 +224,8 @@ function assignRoleStep(db: Database, generation: string, gen: RoleGen,
     return { kind: 'advanced', stage: 'tools', rows: 0, writes: 1 };
   }
   for (const row of rows) {
-    let role: string;
-    if (row.participating !== 1) {
-      role = 'aux';
-    } else if (row.relation === null || row.relation === 'unknown') {
-      role = 'main';
-    } else {
-      role = row.in_trunk === 1 ? 'main' : 'branch';
-    }
+    const role = row.participating !== 1 ? 'aux'
+      : row.in_trunk === 1 ? 'main' : row.in_trunk === 2 ? 'unknown' : 'branch';
     db.run('UPDATE derive_request_result SET chain_role=? WHERE generation=? AND req_id=?',
       [role, generation, row.req_id]);
   }

@@ -395,6 +395,50 @@ export function chainTrunk(ordered: readonly ChainRoleNode[], rootReqId: number 
   return trunk;
 }
 
+/** 链角色三态：`main` 已证明在主链上，`branch` 可证明不相接，`unknown` 归属无法证明。 */
+export type ChainRole = 'main' | 'branch' | 'unknown';
+
+/**
+ * 链角色判定：trunk 与不确定闭包合成每笔参与请求的最终角色。
+ *
+ * 森林不排除关系 unknown 的节点——它们以无父节点身份入森林，trunk 计算照旧；
+ * 在此之上传播一条不确定闭包：关系 unknown 的节点与从它们沿 confirmed 子边
+ * 可达的全部后继记 `unknown`。闭包优先于 trunk：unknown 节点若是首个根，它的
+ * 整条可达集都证明不了归属，只能整体落 unknown；其余场合两集合不相交——
+ * unknown 节点没有父边，它的后代父链必经过它，进不了 trunk。
+ *
+ * `branch` 因此只剩一种来源：父链可证明与主链不相接。链上存在 unknown 环节、
+ * 无法证明与主链不相接的 confirmed 后继一律不标 branch——把「无法证明归属」
+ * 读成「另起一支」是把缺失当成结论。
+ */
+export function chainRolesOf(
+  ordered: readonly (ChainRoleNode & { relation: string | null })[],
+): Map<number, ChainRole> {
+  const trunk = chainTrunk(ordered, chainTrunkRoot(ordered));
+  const ids = new Set(ordered.map(node => node.reqId));
+  const children = new Map<number, number[]>();
+  for (const node of ordered) {
+    if (node.parentReqId === null || !ids.has(node.parentReqId)) continue;
+    const list = children.get(node.parentReqId);
+    if (list === undefined) children.set(node.parentReqId, [node.reqId]);
+    else list.push(node.reqId);
+  }
+  const uncertain = new Set<number>();
+  const stack = ordered.filter(node => node.relation === 'unknown').map(node => node.reqId);
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (uncertain.has(id)) continue;
+    uncertain.add(id);
+    for (const child of children.get(id) ?? []) stack.push(child);
+  }
+  const roles = new Map<number, ChainRole>();
+  for (const node of ordered) {
+    roles.set(node.reqId, uncertain.has(node.reqId) ? 'unknown'
+      : trunk.has(node.reqId) ? 'main' : 'branch');
+  }
+  return roles;
+}
+
 // ---------------------------------------------------------------------------
 // 文本判定：标题与折叠行摘要。
 // ---------------------------------------------------------------------------

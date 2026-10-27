@@ -7,8 +7,28 @@ import { drainDerive, enqueueDerive } from '../src/derive/sync';
 import { persistBody } from '../src/body';
 
 // 维护重建：入口对齐、事务回滚与批量推进。
-test('合成旧排序经维护入口对齐且事实守恒', async () => {
-  const direct = fixture(); const historical = fixture();
+test('维护重建对unknown环节切断的链产出unknown角色且报告如实', async () => {
+  const f = fixture();
+  try {
+    // 缺陷形状：第 2 笔正文缺失，第 3、4 笔的 confirmed 链经它续接。
+    const convKey = JSON.stringify(['session', 'chain']);
+    seedTextChain(f.store, [['S'], ['S', 'A'], ['X'], ['X', 'Y']]);
+    f.store.write(db => db.run("UPDATE request SET body_state='missing' WHERE req_id=2"));
+    const lines: string[] = [];
+    expect(await runMaintenance(['rebuild', '--db', join(f.dir, 'trace.db'),
+      '--session', convKey], { out: line => lines.push(line), err: () => {} })).toBe(0);
+    // 报告如实：4 笔里 1 笔正文缺失按 retained 保留，其余重算。
+    expect(JSON.parse(lines[0]!)).toMatchObject({ queue_remaining: 0,
+      recomputed_requests: 3, retained_requests: 1 });
+    const roles = f.store.read.query<{ req_id: number; chain_role: string }, []>(
+      'SELECT req_id, chain_role FROM request ORDER BY req_id').all();
+    // confirmed 后继的父链存在 unknown 环节：标 unknown，不冒充分支。
+    expect(roles.map(row => row.chain_role))
+      .toEqual(['main', 'unknown', 'unknown', 'unknown']);
+  } finally { f.close(); }
+});
+
+test('合成旧排序经维护入口对齐且事实守恒', async () => {  const direct = fixture(); const historical = fixture();
   try {
     for (const f of [direct, historical]) {
       seedDeriveRound(f.store, [1, 2], [1000, 2000]);

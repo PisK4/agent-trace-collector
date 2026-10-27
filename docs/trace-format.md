@@ -73,7 +73,7 @@ magpie 另有 OTLP 导出，不作为证据源。它只发 `gen_ai.*`、`magpie.
 | --- | --- | --- |
 | 前驱 | `prev_req_id` / `prev_relation` | `first` / `confirmed` / `branch` / `unknown` / `aux` |
 | 新增 | `delta_ordinals` | 本笔相对父节点的消息序号 |
-| 链角色 | `chain_role` | `main` / `branch` / `aux` / `unknown` |
+| 链角色 | `chain_role` | `main`（已证明主链）/ `branch`（可证明不相接）/ `aux` / `unknown`（归属无法证明） |
 | 请求种类 | `req_kind` | `chat`、`title`、`auto-mode-classifier`、`command-review` 等；未知值原样返回 |
 | 链参与 | `purpose_chain` | `participate` / `exclude` |
 | 标题 | `title` / `title_source` / `model_title` | 用户首句、模型时间兜底，或 Title Generator 的正式标题 |
@@ -83,6 +83,8 @@ magpie 另有 OTLP 导出，不作为证据源。它只发 `gen_ai.*`、`magpie.
 | 工具配对 | `tool_call` 的 `state` | `resolved` / `pending` / `ambiguous` |
 
 关系取值要分清：`branch` 是有更早请求但没有一个的序列是本笔前缀；`unknown` 是更早的请求里有正文不可读的，链断了。`unknown` 不能升级成 `branch`，不可读的祖先可能正是真正的父节点。
+
+链角色在关系结算之后按森林判定：关系 unknown 的节点以无父节点身份进森林，trunk 计算照旧（首个根的可达集为 `main`）；在此之上传播不确定闭包——关系 unknown 的节点与从它们沿 confirmed 边可达的全部后继记 `unknown`，闭包优先于 trunk（unknown 节点若是首个根，整条可达集都证明不了归属）。`branch` 只剩一种来源：父链可证明与主链不相接；链上存在 unknown 环节的 confirmed 后继一律不标 `branch`。同步与切片两条路径共用同一份判定（派生内核 `chainRolesOf`）。
 
 ## 置信度：结论是不是「当前」
 
