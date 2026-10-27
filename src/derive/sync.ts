@@ -11,7 +11,7 @@ import {
 import type { BodyReadCache, BodyReadStats } from '../body-cache';
 import { pairBackgroundJobsTx } from './bg-jobs';
 import {
-  chainTrunk, chainTrunkRoot, confirmedDeltaOf, initialPairState, matchPredecessor, pairOutcome,
+  chainRolesOf, confirmedDeltaOf, initialPairState, matchPredecessor, pairOutcome,
   presentationDecision, replyCallsOf, requestResultsOf,
 } from './decision';
 import type { PredecessorMatch, ResolvedTool } from './decision';
@@ -136,32 +136,34 @@ function writePresentationTx(db: Database, input: PresentationInput,
 
 /**
  * 主链判定。同一 (conv_key, actor) 里可能同时存在几条互不相接的真实请求链
- * （标题请求已在派生时排除）。会话的第一笔真实请求是主链根，其余根及其
- * 后继标 branch——分支是相对"从第一笔开始的主线"而言，不是按后续请求数
- * 重新选一次主线，否则一次后来的独立重跑会把真正的开头挤成分支。
+ * （标题请求已在派生时排除）。会话的第一笔真实请求是主链根，其余可证明不相接
+ * 的根及其后继标 branch——分支是相对"从第一笔开始的主线"而言，不是按后续
+ * 请求数重新选一次主线，否则一次后来的独立重跑会把真正的开头挤成分支。
  *
  * 严格前缀只能说明"这一笔是谁的续写"，不能说明"哪条是主线"；主线要等整组
  * 请求都到齐后再按根的时间顺序选，所以每批派生末尾重算一次。
  *
- * 正文不可读（prev_relation='unknown'）的请求不进森林：它们没有可比对象，
- * 既不能证明在主链上，也不能证明是分支，保持中性的 main，不误标分支。
+ * 角色由共享判定（`chainRolesOf`）给出：森林含关系 unknown 的节点，trunk 照旧，
+ * unknown 节点及其 confirmed 后继的不确定闭包记 unknown——链上存在无法证明的
+ * 环节时，后继不能因为 trunk 够不到就被读成另起一支。
  */
 function assignChainRoles(db: Database, convKey: string, actor: string): void {
-  const rows = db.query<{ req_id: number; prev_req_id: number | null; started_ms: number;
+  const rows = db.query<{ req_id: number; prev_req_id: number | null;
+    prev_relation: string | null; started_ms: number;
     sort_source: string | null; sort_key: string | null }, [string, string]>(`
-    SELECT req_id, prev_req_id, started_ms, sort_source, sort_key FROM request
+    SELECT req_id, prev_req_id, prev_relation, started_ms, sort_source, sort_key FROM request
     WHERE conv_key=? AND actor=? AND actor_state='known' AND purpose_chain='participate'
-      AND (prev_relation IS NULL OR prev_relation != 'unknown')
     ORDER BY started_ms ASC, req_id ASC`).all(convKey, actor);
   // 按时间与来源位置遍历，第一个根就是逻辑上最早的根；req_id 只兜底同位置。
   const ordered = [...rows].sort(compareTraversalOrder);
-  const first = ordered[0];
-  if (first === undefined) return;
-  const nodes = ordered.map(row => ({ reqId: row.req_id, parentReqId: row.prev_req_id }));
-  // 根与 trunk 是共享判定（chainTrunkRoot/chainTrunk）；切片路径按同一判据传播。
-  const trunk = chainTrunk(nodes, chainTrunkRoot(nodes) ?? first.req_id);
+  if (ordered[0] === undefined) return;
+  const nodes = ordered.map(row => ({
+    reqId: row.req_id, parentReqId: row.prev_req_id, relation: row.prev_relation,
+  }));
+  // trunk 与不确定闭包都在 chainRolesOf 里；切片路径按同一判据传播。
+  const roles = chainRolesOf(nodes);
   const update = db.prepare('UPDATE request SET chain_role=? WHERE req_id=?');
-  for (const row of rows) update.run(trunk.has(row.req_id) ? 'main' : 'branch', row.req_id);
+  for (const row of rows) update.run(roles.get(row.req_id) ?? 'branch', row.req_id);
 }
 
 export type DrainResult = {

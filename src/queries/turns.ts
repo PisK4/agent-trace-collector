@@ -82,7 +82,8 @@ function commandOrdinals(read: Database, row: TurnRow): number[] {
 /**
  * 结算一个会话的轮次：命令（起点）到最终回复（终点），跨多笔请求的 agent loop。
  *
- * 起点判据唯一落在派生时写下的 kind 位（`input_preview_kind='delta'`），正文
+ * 起点资格先看链角色（已证明主链，或自身关系未知的行——回收起点照常进带），
+ * 命令判据唯一落在派生时写下的 kind 位（`input_preview_kind='delta'`），正文
  * 回收后该位保留、起点照常进带。终点沿确定的 parent 前驱边搜索后代：路径上
  * 不经过其他用户命令请求（kind 位同源判定），可达且路径纯净的 `final` 恰好
  * 一个才结算，分叉出多个保守不结算。只消费派生状态为 current 的组，结算在
@@ -109,10 +110,17 @@ export function listTurns(store: Store, key: string, from: number | null = null)
       else list.push(row.req_id);
     }
     const isCommand = (row: TurnRow): boolean => row.input_preview_kind === 'delta';
+    // 起点资格：已证明主链上的行，或自身关系未知的行。正文回收的起点链角色落
+    // unknown（关系同样 unknown），但 kind 位与形状位都是保留值——轮次两端阅读
+    // 的决策是回收起点照常进带，ordinals 清空。它与不确定闭包后继（confirmed 接
+    // 在无法证明的环节之后，链角色同样 unknown）靠 prev_relation 区分：后继一律
+    // 排除，不能因为编码合并重新获得起点资格。
+    const isStart = (row: TurnRow): boolean => row.chain_role === 'main'
+      || (row.chain_role === 'unknown' && row.prev_relation === 'unknown');
     const settled: { row: TurnRow; endpoint: number }[] = [];
     for (const row of rows) {
-      // 排除范围：分支链、辅助与标题请求都不参与；起点必须是命令行。
-      if (row.chain_role !== 'main' || row.req_kind === 'title' || !isCommand(row)) continue;
+      // 排除范围：分支链、不确定闭包后继、辅助与标题请求都不参与；起点必须是命令行。
+      if (!isStart(row) || row.req_kind === 'title' || !isCommand(row)) continue;
       // 起点自身收尾：纯对话轮两端同笔，不看后代。
       if (row.reply_shape === 'final') {
         settled.push({ row, endpoint: row.req_id });
