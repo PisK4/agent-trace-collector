@@ -88,8 +88,13 @@ if (typeof document !== 'undefined') {
     reqId: qp.get('trace') ? Number(qp.get('trace')) : null,
     /** URL 指定的请求在库里不存在。 */
     missingReqId: /** @type {number | null} */ (null),
-    /** URL 指定的请求存在，但落在当前窗口外（更早的历史）。 */
+    /** URL 指定的请求存在，但落在当前载入窗口之外。 */
     offPageReqId: /** @type {number | null} */ (null),
+    /**
+     * 当前窗口锚点：start 从会话最早一页起载入（默认阅读方向），latest 取
+     * 最新一页（「回到最新」的追尾模式）。刷新按当前锚点重建，换会话复位。
+     */
+    windowAnchor: /** @type {'start' | 'latest'} */ ('start'),
     /** 选中的轮次（会话内已结算轮序号）；null 表示请求态。 */
     turn: /** @type {number | null} */ (null),
     selectedStep: /** @type {string | null} */ (null),
@@ -104,9 +109,9 @@ if (typeof document !== 'undefined') {
     query: '',
     agent: 'all',
     pendingSession: /** @type {string | null} */ (null),
-    /** 最近一次显式刷新时间；刷新会重建最近窗口并清掉旧阅读版本。 */
+    /** 最近一次显式刷新时间；刷新会按当前锚点重建窗口并清掉旧阅读版本。 */
     refreshedAt: /** @type {number | null} */ (null),
-    /** 首载窗口是否已准备完成：完成后提交不再以选中组为锚，加载更早不重复居中。 */
+    /** 首载窗口是否已准备完成：完成后提交不再以选中组为锚，加载后续不重复居中。 */
     revealed: false,
   };
   /** 阅读代次：换会话与显式刷新时自增，旧代次的准备完成不提交。 */
@@ -187,8 +192,8 @@ if (typeof document !== 'undefined') {
     return store.getWindow().requests;
   }
   /**
-   * 请求序号是当前载入窗口内的正序位置：加载更早记录后重新编号，
-   * 内部身份、跳转与缓存键都用 req_id，不用数字。
+   * 请求序号是当前载入窗口内的正序位置：窗口只向尾部追加（加载后续记录），
+   * 已载入行的序号不变；内部身份、跳转与缓存键都用 req_id，不用数字。
    * @param {number} reqId
    */
   function ordinalOf(reqId) {
@@ -521,6 +526,7 @@ if (typeof document !== 'undefined') {
       windowError: store.getWindow().error,
       summary: summary?.status === 'ready' ? summary.data : null,
       summaryFoldOpen: folds.get(`summary:${state.session ?? ''}`) === true,
+      windowAnchor: state.windowAnchor,
     });
   }
 
@@ -630,7 +636,7 @@ if (typeof document !== 'undefined') {
     const window = store.getWindow();
     const rows = currentRows();
     const band = turnBandHtml();
-    // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载更早
+    // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载后续
     // 记录后 rows.length 累计，重绘时重算，不按首次加载上限截断。
     const ordDigits = Math.max(1, String(rows.length).length);
     // 结果行的调用方前缀：调用方正文在窗口缓存内时给同款摘要，缓存外降级只工具名。
@@ -640,11 +646,11 @@ if (typeof document !== 'undefined') {
       const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
       return call === null ? null : { name: call.name, inputText: call.inputText };
     };
-    // 历史入口只在有更早记录或正在读取时出现；序号口径在数字本身的悬停说明里。
+    // 后续入口在列表尾部，只在有更晚记录或正在读取时出现；序号口径在数字本身的悬停说明里。
     const loaderHtml = window.loading
-      ? '<div class="history-loader"><span class="history-start">正在读取更早记录…</span></div>'
-      : window.olderCursor !== null
-        ? '<div class="history-loader"><button id="load-earlier" class="history-button">↑ 加载更早记录</button></div>'
+      ? '<div class="history-loader"><span class="history-start">正在读取后续记录…</span></div>'
+      : window.newerCursor !== null
+        ? '<div class="history-loader"><button id="load-later" class="history-button">↓ 加载后续记录</button></div>'
         : '';
     const groups = rows.map(r => {
       const { steps, stale, placeholder } = stepsOf(r);
@@ -672,7 +678,9 @@ if (typeof document !== 'undefined') {
       emptyHtml: rows.length === 0
         ? `<p class="sess-empty">${state.pendingSession !== null ? '正在读取请求…' : '这个会话没有已记录的请求。'}</p>`
         : '',
-      endHtml: '<div class="timeline-end"><span></span> 已是最新记录</div>',
+      // 「已是最新记录」只在后续游标耗尽后出现：还有更晚记录时不冒充结尾。
+      endHtml: window.loading || window.newerCursor !== null ? ''
+        : '<div class="timeline-end"><span></span> 已是最新记录</div>',
       groups,
       selectedStep: state.selectedStep,
     };
@@ -966,7 +974,7 @@ if (typeof document !== 'undefined') {
     if (r === null) {
       if (state.offPageReqId !== null) {
         const read = store.peekRequest(state.offPageReqId);
-        return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口（可能在更早的历史里）。这里只读了它的详情；需要完整轨迹请从顶部加载更早记录，不自动扫描全部历史。</p></section>${read?.detail ? ledgerRowsHtml(read.detail, read.detail) : ''}`;
+        return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口。这里只读了它的详情；需要完整轨迹请调整窗口（会话头有切窗按钮），不自动扫描全部历史。</p></section>${read?.detail ? ledgerRowsHtml(read.detail, read.detail) : ''}`;
       }
       return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
     }
@@ -1107,17 +1115,17 @@ if (typeof document !== 'undefined') {
     return getComputedStyle(main).overflowY === 'visible' ? (document.scrollingElement ?? main) : main;
   }
 
-  async function loadEarlier() {
-    const button = document.getElementById('load-earlier');
+  async function loadLater() {
+    const button = document.getElementById('load-later');
     if (button !== null) (/** @type {HTMLButtonElement} */ (button)).disabled = true;
-    await store.loadEarlier();
-    // prepend 的位置由每次提交自带的锚点补偿保持，不再手接快照。
+    await store.loadLater();
+    // append 不动既有内容，位置由每次提交自带的锚点补偿保持，不再手接快照。
     renderMain();
     renderSessions();
     void prepareWindow();
   }
 
-  /** 显式刷新：重建最近窗口、清掉旧展开，记录读取时间；记录缓存随窗口重建。 */
+  /** 显式刷新：按当前窗口锚点重建、清掉旧展开，记录读取时间；记录缓存随窗口重建。 */
   async function refreshWindow() {
     if (state.session === null) return;
     const myNav = ++navEpoch;
@@ -1126,10 +1134,14 @@ if (typeof document !== 'undefined') {
     // 显式刷新按用户要求换新：准备结论与旧版本显示一并清掉，不从上一版接着画。
     resetReading();
     dispatch({ kind: 'refresh-start' });
-    await store.selectSession(state.session, windowLimit());
+    await store.selectSession(state.session, windowLimit(), state.windowAnchor);
     if (myNav !== navEpoch) return;
     const rows = currentRows();
-    dispatch({ kind: 'select-latest', latestReqId: rows[rows.length - 1]?.req_id ?? null });
+    if (state.windowAnchor === 'latest') {
+      dispatch({ kind: 'select-latest', latestReqId: rows[rows.length - 1]?.req_id ?? null });
+    } else {
+      dispatch({ kind: 'select-first', firstReqId: rows[0]?.req_id ?? null });
+    }
     renderAll();
     // 导航完成：路由页随重建后的选中请求读取（效果经 nav-settled 统一发出）。
     dispatch({ kind: 'nav-settled' });
@@ -1137,9 +1149,28 @@ if (typeof document !== 'undefined') {
     void ensureSelectedVisible();
   }
 
-  async function jumpLatest() {
-    await refreshWindow();
-    locateRequest(currentRows()[currentRows().length - 1]?.req_id ?? -1);
+  /** 「回到最新」：切到尾锚点重建窗口，选中并居中最新一笔。 @returns {Promise<void>} */
+  function jumpLatest() {
+    state.windowAnchor = 'latest';
+    return refreshWindow();
+  }
+
+  /** 「回到开头」：切回头锚点重建窗口，选中第一笔。 @returns {Promise<void>} */
+  function jumpStart() {
+    state.windowAnchor = 'start';
+    return refreshWindow();
+  }
+
+  /**
+   * 窗口外提示里的切窗动作：换到对面锚点重建。目标进入新窗口就定位到它，
+   * 仍在窗口外（超长会话的中段）就恢复窗口外说明，不假装已到达。
+   * @param {number | null} target
+   */
+  async function switchWindowFor(target) {
+    if (target === null) return;
+    if (state.windowAnchor === 'latest') await jumpStart(); else await jumpLatest();
+    if (currentRows().some(row => row.req_id === target)) locateRequest(target);
+    else dispatch({ kind: 'open-offpage', reqId: target });
   }
 
   /** 定位窗口内请求：选中并滚动进入可见区域（路由随导航完成读取、定点补读都走效果）。 @param {number} id */
@@ -1149,7 +1180,7 @@ if (typeof document !== 'undefined') {
     dispatch({ kind: 'locate', reqId: id });
   }
 
-  /** 默认选最新后必须让选中组进入可见区域。 */
+  /** 默认选中后必须让选中组进入可见区域；头锚点下第一组居中即停在顶部。 */
   function ensureSelectedVisible() {
     requestAnimationFrame(() => {
       const selected = document.querySelector('.trace-group[aria-current="true"]');
@@ -1346,6 +1377,8 @@ if (typeof document !== 'undefined') {
     dispatch({ kind: 'open-session', sessionKey: key, wantedTrace });
     state.pendingSession = key;
     state.revealed = false;
+    // 换会话回默认头锚点：进入会话即从头阅读，追尾模式不跨会话继承。
+    state.windowAnchor = 'start';
     // 换会话不复用上一场的准备结论与保留投影：它们只服务当场阅读。
     resetReading();
     renderMain();
@@ -1354,9 +1387,9 @@ if (typeof document !== 'undefined') {
     state.pendingSession = null;
     await resolveInitialTrace();
     if (myNav !== navEpoch) return;
-    // 默认选最新一笔；窗口外 trace 保留其语义，不用最新顶替。
+    // 默认选第一笔；窗口外 trace 保留其语义，不用第一笔顶替。
     const rows = currentRows();
-    dispatch({ kind: 'session-default', latestReqId: rows[rows.length - 1]?.req_id ?? null });
+    dispatch({ kind: 'session-default', firstReqId: rows[0]?.req_id ?? null });
     renderAll();
     void prepareWindow();
     // 导航完成处补路由读取：URL 直达与切会话后路由页不要求再点一次页签。
@@ -1431,9 +1464,10 @@ if (typeof document !== 'undefined') {
       return;
     }
     if (t.closest('summary')) return;
-    if (t.closest('#load-earlier')) { void loadEarlier(); return; }
+    if (t.closest('#load-later')) { void loadLater(); return; }
     if (t.closest('#refresh-window')) { void refreshWindow(); return; }
-    if (t.closest('#jump-latest')) { void jumpLatest(); return; }
+    if (t.closest('#jump-opposite')) { void (state.windowAnchor === 'latest' ? jumpStart() : jumpLatest()); return; }
+    if (t.closest('#switch-window')) { void switchWindowFor(state.offPageReqId); return; }
     // 轮次带点选：轮次行随意图带入，转换层不做查找。
     const turnChip = /** @type {HTMLElement | null} */ (t.closest('[data-turn]'));
     if (turnChip !== null) {

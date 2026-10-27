@@ -14,7 +14,7 @@ Status: implemented
 
 读取层按实施计划（Task 1–8）交付：查询整套选择派生来源（发布代优先、同步旧列回退，判据与派生内核的 `groupCurrentSql` 一致）；最近窗口与向前分页（older 游标编码页的最早行）；请求阅读版本 token（`r1-` + 64 位十六进制，条件正文 409 校验）与按调用位置读取工具结果（`owner/tools/:ord/result`，路径白名单、六状态）。读取协调独立为 `web/reader-store.js`（区间缓存、inflight 去重、固定 4 并发、409 整笔作废、迟到响应双守卫）；步骤投影独立为 `web/trace-view.js` 纯函数，`app.js` 只做装配。双视图时代的 `createReader`、`ensureDetail` / `ensureBody`、`prefetchDetails` / `prefetchBodies` / `BODY_PREFETCH`、`renderConversation` / `convCard` / `ledgerRow` 家族与 `view` 状态一并删除，只留一套权威缓存。`createReader` 的行为测试随契约迁进 reader-store，`reader-types.ts` 改为锚定新接口。右栏读数页的排序与默认折叠后经[读数条与「无则不显」收敛](../simplification/2026-10-24-rail-usage-strip-and-absence-hiding.md)重排，以该篇为准。工具四页（概览/参数/结果/Schema）只用 owner+callOrd 定位。侧栏折叠、详情栏拖动与键盘调宽（280..640、中栏保底 320）、双击恢复、Session ID 复制与剪贴板拒绝降级均为原生控制，宽度与折叠状态只存内存。
 
-窗口与地址：URL 只写 session/trace/tab。URL 指定的 trace 在窗口外时保留其语义，右栏说明它未在窗口内，主列表不改成最新；`popstate` 带 trace 进入时同样处理。选择身份用 `req_id`、稳定步骤键与调用序号，加载更早后的窗口重新编号只影响显示。显式刷新重建最近窗口、清掉旧展开与阅读版本并记录时间。「回到最新」先刷新再定位末笔。
+窗口与地址：URL 只写 session/trace/tab。URL 指定的 trace 在窗口外时保留其语义，右栏说明它未在窗口内，主列表不改成最新；`popstate` 带 trace 进入时同样处理。选择身份用 `req_id`、稳定步骤键与调用序号。窗口的默认锚点与阅读方向后经[轨迹窗口锚定会话开头](../feature/2026-10-28-start-anchored-trace-window.md)调转：初始窗口取会话最早一页、默认选第一笔、加载入口在列表尾部向后续追加；显式刷新按当前锚点重建窗口，「回到最新」是切到尾锚点的动作。
 
 实现范围、接口与任务验收以[实施计划](../../../../docs/superpowers/plans/2026-10-23-single-timeline-production-reader.md)为准。接口与读取机制的现行契约写入[架构设计](../../../../docs/architecture-design.md)。生产切换本身（删除对话与账本双视图、窗口导航、地址与选择身份）由本记录持有。
 

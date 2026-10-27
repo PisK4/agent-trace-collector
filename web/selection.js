@@ -51,8 +51,9 @@ import { routeReadTarget } from './url-route.js';
  * @typedef {{kind: 'open-session', sessionKey: string, wantedTrace: number | null}
  *   | {kind: 'restore-url', session: string | null, trace: number | null, tab: string}
  *   | {kind: 'trace-resolved', result: 'in-page' | 'canonical' | 'off-page' | 'missing', reqId: number | null}
- *   | {kind: 'session-default', latestReqId: number | null}
+ *   | {kind: 'session-default', firstReqId: number | null}
  *   | {kind: 'select-latest', latestReqId: number | null}
+ *   | {kind: 'select-first', firstReqId: number | null}
  *   | {kind: 'refresh-start'}
  *   | {kind: 'locate', reqId: number}
  *   | {kind: 'select-step', reqId: number, stepKey: string, source: SelectedSource}
@@ -120,13 +121,18 @@ export function applyIntent(state, intent) {
       return { state, effects: [] };
     }
     case 'session-default': {
-      // 无 trace 且无窗口外目标时默认选最新；已有目标不用最新顶替。
+      // 无 trace 且无窗口外目标时默认选窗口第一笔（头锚点下即会话开头）；已有目标不用它顶替。
       if (state.reqId !== null || state.offPageReqId !== null) return { state, effects: [] };
-      return { state: { ...state, reqId: intent.latestReqId, turn: null }, effects: [] };
+      return { state: { ...state, reqId: intent.firstReqId, turn: null }, effects: [] };
     }
     case 'select-latest': {
-      // 显式刷新：无条件回到最新并清选择。
+      // 显式刷新（尾锚点）：无条件回到最新并清选择。
       const next = { ...state, reqId: intent.latestReqId, selectedStep: null, toolOrd: null, toolOwner: null, turn: null };
+      return { state: next, effects: [] };
+    }
+    case 'select-first': {
+      // 显式刷新（头锚点）：无条件回到第一笔并清选择。
+      const next = { ...state, reqId: intent.firstReqId, selectedStep: null, toolOrd: null, toolOwner: null, turn: null };
       return { state: next, effects: [] };
     }
     case 'refresh-start': {
