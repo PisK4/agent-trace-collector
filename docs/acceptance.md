@@ -362,3 +362,21 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 | 故障回滚 | `DELETE FROM request` 注入触发器中止后，请求、原始层、等待队列、派生快照与队列 epoch 全部保持原样，事件未写 |
 | 命令闸门 | 预览退出 0；`--apply` 缺 `--approval-id` 退出 1；缺 `--agent` 退出 2 |
 | 结构检查 | `PRAGMA foreign_key_check` 为空，`verify` 的 `dangling_blocks` 为 0 |
+
+## Hermes 历史数据拆除（真实库，2026-10-27）
+
+按[运维手册](operations.md#purge-agent)的顺序在生产库执行：停服务 → 可恢复 bundle 备份到数据目录外的受限目录 → 预览核对 → 单事务删除 → `verify` → 重启。预览与只读探针逐项一致，没有跨 agent 共享的证据键被守卫拦下。
+
+| 项目 | 删除前 | 删除后 |
+| --- | --- | --- |
+| Hermes 请求 / 会话键 | 1,536 / 241（其中 1 个桶与 curl 共享） | 0 / — |
+| 派生组 | 240，全部 clean，无跨 agent 成员 | 无 dirty 组 |
+| 证据 | ledger 1,478 · route 1,478 · hook 1,318 | 0 |
+| 原始层 | ledger 1,478 · route 1,478 · hook 1,318 | 0 |
+| 等待队列 | 58 条 Hermes hook | 0（总数 702 → 644） |
+| 路由摘要 | 1,478 | 0 |
+| 估算字节 | 46,692,502 | — |
+| 墓碑 | — | 4,274 条，按证据键去重 |
+| 事件 | — | `purge_agent` · `agent_removal:hermes` · 1,536 笔 · approval `purge-hermes-2026-10-27` |
+
+执行后 `integrity_check` 为 `ok`，`dangling_blocks` 与 `duplicate_evidence` 为 0，`foreign_key_check` 为空。采集器重启后正常接收新请求（请求数从 17,192 增至 17,207），采集问题仍为既有的 4 条 OTLP span 记录，没有新增。
