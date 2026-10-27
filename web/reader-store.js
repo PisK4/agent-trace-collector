@@ -124,6 +124,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   const routes = new Map();
   /** @type {Map<number, {state: string, summary: unknown}>} 路由完成值，供同步读取。 */
   const routeValues = new Map();
+  /** @type {Map<number, Promise<RequestRead>>} 增量消费者的在跑任务：同一记录同一时刻只推进一条序列。 */
+  const deltaInflight = new Map();
 
   /** @param {number} id */
   function recordOf(id) {
@@ -555,8 +557,25 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return assemble(rec);
   }
 
-  /** @param {number} id @param {number} [pages] @returns {Promise<RequestRead>} */
-  async function loadDelta(id, pages = 2) {
+  /**
+   * 增量续读在跑时合并：并发调用共享同一任务与同一份 pages 预算，不各自推进
+   * 消费位置。任务结束后释放，下一次调用继续从新位置消费。
+   * @param {number} id @param {number} [pages] @returns {Promise<RequestRead>}
+   */
+  function loadDelta(id, pages = 2) {
+    const pending = deltaInflight.get(id);
+    if (pending !== undefined) return pending;
+    const task = runDelta(id, pages);
+    deltaInflight.set(id, task);
+    void task.then(
+      () => { if (deltaInflight.get(id) === task) deltaInflight.delete(id); },
+      () => { if (deltaInflight.get(id) === task) deltaInflight.delete(id); },
+    );
+    return task;
+  }
+
+  /** @param {number} id @param {number} pages @returns {Promise<RequestRead>} */
+  async function runDelta(id, pages) {
     const rec = recordOf(id);
     const state = rec.delta;
     if (rec.detail === null) return assemble(rec);
