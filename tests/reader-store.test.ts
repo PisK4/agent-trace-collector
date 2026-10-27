@@ -675,7 +675,7 @@ test('peek 同步读取入口：不发网、无快照为 null、失败占位与�
   expect(store.peekRoute(1)).toBeNull();
 });
 
-test('作废即自动重读：换新置已更新标记，冷却内不重复发起', async () => {
+test('作废即自动重读：冷却内不重复发起', async () => {
   let token = TOKEN;
   const h = harness(url => {
     if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
@@ -688,20 +688,14 @@ test('作废即自动重读：换新置已更新标记，冷却内不重复发�
   const store = createReaderStore(h.fetcher, undefined, { autoRereadCooldownMs: 80 });
   await store.selectSession('k', 30);
   await store.readRequest(1);
-  expect(store.peekRequest(1)?.updatedSinceSeen).toBe(false);
   token = TOKEN2;
   await expect(store.readRange(1, 0, 1)).rejects.toThrow('reading_changed');
   expect(store.peekRequest(1)?.status).toBe('invalidated');
   expect(store.peekRequest(1)?.detail).toBeNull();
-  // 自动重读在定时器里发起：换新成功后 fresh、带新 token，并置「已更新」。
+  // 自动重读在定时器里发起：换新成功后 fresh、带新 token；显示层不设成功标记。
   await delay(20);
   expect(store.peekRequest(1)?.status).toBe('fresh');
   expect(store.peekRequest(1)?.token).toBe(TOKEN2);
-  expect(store.peekRequest(1)?.updatedSinceSeen).toBe(true);
-  // 页面交互清除标记；记录保持 fresh。
-  store.clearUpdated(1);
-  expect(store.peekRequest(1)?.updatedSinceSeen).toBe(false);
-  expect(store.peekRequest(1)?.status).toBe('fresh');
   // 冷却内再次作废：不立即重发；冷却到期后才再发起并换新。
   const detailCalls = h.urls.filter(u => u.endsWith('/api/requests/1')).length;
   token = TOKEN;
