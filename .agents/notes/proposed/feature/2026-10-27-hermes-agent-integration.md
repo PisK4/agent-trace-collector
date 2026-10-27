@@ -96,6 +96,8 @@ Status: proposed
 
 本批先交付诊断与配置实验。证据若要求改插件预算或诊断能力，再单独提交代码与合成验证；不承诺所有问题仅靠配置解决。ATC 既有缺失标注保持原义，历史无正文不能因配置变化宣称已恢复。
 
+本批已交付，实际决定、归因顺序与验证见[hook 投递分层诊断](../../implemented/feature/2026-10-27-hook-delivery-diagnostics.md)。交付的是诊断本身：ATC 侧只读窗口聚合，插件侧六个固定码；提高宿主预算的配置实验未跑，跨进程读取插件状态未做。
+
 ### 第三批：空 session 修复与显式身份迁移
 
 该批单独立项、单独提交，在活动 note 树做 supersession check 后记录决定。本提案只规定必要结果，不将其视为第一批附带修复。
@@ -116,7 +118,7 @@ Status: proposed
 
 ### 交付边界
 
-第一批与第三批已交付，决定分别在[Hermes 用途识别](../../implemented/feature/2026-10-27-hermes-purpose-recognition.md)与[空 session 不是会话身份](../../implemented/bug-fix/2026-10-27-empty-session-identity-migration.md)；剩余投递验证保留在[分层验证 hook 投递](2026-10-27-hermes-hook-delivery-diagnostics.md)。不得只因已交付部分就将三批工作整篇标为 implemented。
+三批的实现决定都已分别落成 implemented 记录：[Hermes 用途识别](../../implemented/feature/2026-10-27-hermes-purpose-recognition.md)、[hook 投递分层诊断](../../implemented/feature/2026-10-27-hook-delivery-diagnostics.md)与[空 session 不是会话身份](../../implemented/bug-fix/2026-10-27-empty-session-identity-migration.md)。本文保留为未完成部分的提案：真实库的历史用途升级、宿主预算配置实验与真实流量窗口对比都尚未执行，不得因三批代码已交付就把整篇标为 implemented，也不得把合成验收当成真实库验收。
 
 本次不新增协议适配。无压缩重写和 subagent 样本时不加识别规则；Hermes 自定义字段保持原样保存。工具名称、参数、失败语义与路径汇总的额外适配由后续证据决定，不由协议兼容结论代替。
 

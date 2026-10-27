@@ -1,9 +1,11 @@
 /** 维护 CLI：参数解析、锁获取与命令分派。所有命令要求 collector 已停止。 */
 
 import { dirname } from 'node:path';
+import { Database } from 'bun:sqlite';
 import { openStore } from '../store';
 import type { Store } from '../store';
 import { backupBundle, backupDatabase, restoreBundle } from './backup';
+import { assertWindow, hookDeliveryReport } from './delivery';
 import { acquireMaintenanceLock, type LockHandle } from './lock';
 import { previewHookIdentityMigration, migrateHookIdentity } from './identity';
 import { previewMetadataPurge, purgeMetadata } from './purge';
@@ -32,8 +34,18 @@ function stringFlag(flags: Map<string, string | true>, name: string): string | n
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/** 窗口端点接受 epoch 毫秒或 ISO 8601；解析失败返回 null，由调用方按用法错误退出。 */
+function momentFlag(flags: Map<string, string | true>, name: string): number | null {
+  const value = stringFlag(flags, name);
+  if (value === null) return null;
+  if (/^\d+$/.test(value)) return Number(value);
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 const USAGE = `usage:
   maintain verify --db <path>
+  maintain hook-delivery --db <path> --since <ISO|ms> --until <ISO|ms>
   maintain backup --db <path> --out <new-path>
   maintain bundle --dir <dataDir> --out <new-dir>
   maintain restore --bundle <bundleDir> --out <new-dir>
@@ -106,6 +118,29 @@ export async function runMaintenance(argv: string[], io: {
       return 1;
     } finally {
       lock.release();
+    }
+  }
+
+  if (command === 'hook-delivery') {
+    const sinceMs = momentFlag(flags, 'since');
+    const untilMs = momentFlag(flags, 'until');
+    if (sinceMs === null || untilMs === null) {
+      err(USAGE.trimEnd());
+      return 2;
+    }
+    try {
+      assertWindow({ sinceMs, untilMs });
+      // 只读诊断：独立只读连接，不取维护锁，不停采集器。
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        out(JSON.stringify({ ok: true, ...hookDeliveryReport(db, { sinceMs, untilMs }) }));
+      } finally {
+        db.close();
+      }
+      return 0;
+    } catch (error) {
+      err(`hook-delivery_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
     }
   }
 

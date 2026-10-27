@@ -326,3 +326,20 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 | helper 回退 | `hookConv('', 'h1')` 与 `hookConv(null, 'h1')` 同为 `["hook","h1"]` |
 
 真实库验证待执行：生产空桶的形状记录在上一节的只读快照里，候选数、拒绝原因分布与守恒对账要在维护窗口跑预览后另行记录。`PURPOSE_VERSION` 升到 5 与本次身份修复是两件事：新流量按 v5 结算，旧 Hermes 行按既定决定删除，不经过迁移。
+
+## hook 投递分层诊断（合成，2026-10-27）
+
+随 [Agent Note：hook 投递分层诊断](../.agents/notes/implemented/feature/2026-10-27-hook-delivery-diagnostics.md)交付。本轮全部是合成数据，`tests/hook-delivery.test.ts`、`tests/hook.test.ts`、`tests/hook-identity.test.ts`、`tests/evidence.test.ts`、`tests/maintenance.test.ts` 共 85 项通过，`tsc --noEmit` 通过。真实流量的窗口对比未执行。
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| 窗口切分 | 请求按 `started_ms`、回调按 `received_at`、摄入问题按 `observed_at` 落窗；窗口外的行不计入 |
+| 缺失分龄 | 以 `--until - HOOK_ABSENT_THRESHOLD_MS` 为界：早于阈值的缺证据行计入 `settled_missing`，晚于阈值的只进 `young_missing` |
+| 缺口出口 | 已有账本或路由证据仍缺 hook 的行进 `missing_with_sources`；无 response ID 的行单独计数；等待队列已有候选的行进 `awaiting_candidate`，不再算作投递缺失 |
+| 分档计数 | 按 agent、状态码、请求类别与 `prompt_tokens` 分档；未知值保留 `unknown` 档，不并入相邻档 |
+| 回调侧 | `raw_hooks` 报总数、`reply_state='absent'` 与正文降级；`pending_hooks` 报队列总数与其无 response ID 条数；`issues` 按来源与原因聚合 |
+| 命令闸门 | 缺 `--since`/`--until` 或值非法退出 2；区间倒置退出 1 且错误码 `hook-delivery_failed:invalid_window`；正常窗口退出 0 并输出 JSON |
+| 投递码 | 单次超时重试后为 `collector_attempt_timeout`；宿主中止只调用一次并为 `collector_host_abort`；连接失败两次后为 `collector_network_error`；2xx 为 `collector_delivered` 且不留 `collector_status`；非 2xx 为 `collector_http_rejected`，4xx 不重试 |
+| 晚到成功 | 接收方 650 ms 后返回 200，即使宿主预算更大，两次尝试仍记 `collector_attempt_timeout`，总耗时不短于一次单次截止 |
+
+插件侧的失败码只存在宿主内存的 `ctx.state` 里，ATC 不读回，因此本轮的窗口统计无法断言某条请求因哪种原因丢投递。真实流量的前后窗口对比、宿主 `gatewayTimeoutMs` 配置实验都未执行；上一节记录的 Hermes 缺口仍是只读快照，不因诊断工具上线而改变含义。

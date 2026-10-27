@@ -6,7 +6,13 @@
  *
  * 入口文件必须是 `.hooks.ts`（magpie 按文件名识别），导出 onRequest / onResponse。
  * 投递预算：总 1500 ms，单次 fetch 600 ms，最多 2 次；第二次只针对网络错误、
- * 408、429、5xx，且要共享总截止与 ctx.signal。4xx 不重试。
+ * 单次超时、408、429、5xx，且要共享总截止与 ctx.signal。4xx 不重试，宿主终止不重试。
+ *
+ * 失败码分四种，区分的是原因而不是结果：`collector_attempt_timeout` 是本次
+ * fetch 超过 600 ms 被自己的计时器中止（接收方可能稍后才处理完），
+ * `collector_host_abort` 是宿主的 `ctx.signal` 被中止（宿主预算或生命周期到点），
+ * `collector_network_error` 是连接层面的失败，`collector_http_rejected` 是收到了
+ * 非 2xx 响应。调大宿主预算只影响第二种。
  */
 
 export type HookReportCode = 'ready' | 'empty' | 'unbound' | 'unauthorized' | 'unavailable' | 'invalid' | 'skipped';
@@ -100,20 +106,34 @@ function buildEnvelope(request: unknown, reply: unknown, ctx: HookContext): Enve
   };
 }
 
-async function postOnce(endpoint: string, token: string, payload: string, timeoutMs: number, signal: AbortSignal): Promise<Response | 'network_error'> {
+type Attempt =
+  | { kind: 'response'; response: Response }
+  | { kind: 'timeout' }
+  | { kind: 'host_abort' }
+  | { kind: 'network_error' };
+
+async function postOnce(endpoint: string, token: string, payload: string, timeoutMs: number, signal: AbortSignal): Promise<Attempt> {
+  if (signal.aborted) return { kind: 'host_abort' };
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const startedAt = Date.now();
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   const onAbort = () => controller.abort();
   signal.addEventListener('abort', onAbort, { once: true });
   try {
-    return await fetch(endpoint, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       body: payload,
       signal: controller.signal,
     });
+    // 接收方晚于单次截止才成功，按超时记，不因为拿到了响应就改写成投递成功。
+    if (timedOut || Date.now() - startedAt >= timeoutMs) return { kind: 'timeout' };
+    return { kind: 'response', response };
   } catch {
-    return 'network_error';
+    // 宿主先中止时自己的计时器也会跟着停，按宿主原因归因；反过来才是本次超时。
+    if (signal.aborted) return { kind: 'host_abort' };
+    return { kind: timedOut ? 'timeout' : 'network_error' };
   } finally {
     clearTimeout(timer);
     signal.removeEventListener('abort', onAbort);
@@ -136,23 +156,25 @@ export async function onResponse(reply: unknown, ctx: HookContext): Promise<void
       ctx.state.collector_code = 'collector_deadline';
       return;
     }
-    const result = await postOnce(
-      ctx.options.endpoint, ctx.options.token, payload,
-      Math.min(ATTEMPT_TIMEOUT_MS, remaining), ctx.signal,
-    );
-    if (result === 'network_error') {
-      ctx.state.collector_code = 'collector_network_error';
-      if (attempt === 1) {
-        const pause = Math.min(RETRY_DELAY_MS, Math.max(0, deadline - Date.now()));
-        if (pause > 0) await new Promise(resolve => setTimeout(resolve, pause));
+    // 单次上限被总预算压低时，中止原因实际上是总截止，不冒充单次超时。
+    const timeoutMs = Math.min(ATTEMPT_TIMEOUT_MS, remaining);
+    const result = await postOnce(ctx.options.endpoint, ctx.options.token, payload, timeoutMs, ctx.signal);
+    if (result.kind === 'response') {
+      if (result.response.ok) {
+        ctx.state.collector_code = 'collector_delivered';
+        return;
       }
-      continue;
+      ctx.state.collector_code = 'collector_http_rejected';
+      ctx.state.collector_status = result.response.status;
+      // 4xx 不重试；5xx、408、429 才值得再试一次。
+      if (!RETRYABLE_STATUS.has(result.response.status)) return;
+    } else {
+      ctx.state.collector_code = result.kind === 'timeout'
+        ? (timeoutMs < ATTEMPT_TIMEOUT_MS ? 'collector_deadline' : 'collector_attempt_timeout')
+        : result.kind === 'host_abort' ? 'collector_host_abort' : 'collector_network_error';
+      // 宿主已经中止，重试没有意义。
+      if (result.kind === 'host_abort') return;
     }
-    if (result.ok) return;
-    ctx.state.collector_code = 'collector_http_rejected';
-    ctx.state.collector_status = result.status;
-    // 4xx 不重试；5xx、408、429 才值得再试一次。
-    if (!RETRYABLE_STATUS.has(result.status)) return;
     if (attempt === 1) {
       const pause = Math.min(RETRY_DELAY_MS, Math.max(0, deadline - Date.now()));
       if (pause > 0) await new Promise(resolve => setTimeout(resolve, pause));
