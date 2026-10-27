@@ -297,12 +297,12 @@ test('结果行前缀三级：缓存内同款摘要、缓存外只工具名、�
   const cached = renderTraceRows(row(), steps, 1, null, callOf);
   // 一级：chip 只包工具名，参数摘要以普通文本跟随，muted 箭头后接结果正文。
   expect(cached).toContain('row-tint tint-read">Read</span>');
-  expect(cached).toContain('<code>q.ts · 1400–1530 行</code><span class="row-arrow" aria-hidden="true">→</span><code>文件正文</code>');
+  expect(cached).toContain('<code>src/q.ts · 1400–1530 行</code><span class="row-arrow" aria-hidden="true">→</span><code>文件正文</code>');
   // 二级：装配层查不到调用方（返回 null）时只显示工具名，箭头后直接接结果正文。
   const outside = renderTraceRows(row(), steps, 1, null,
     () => null);
   expect(outside).toContain('row-tint tint-read">Read</span>');
-  expect(outside).not.toContain('<code>q.ts');
+  expect(outside).not.toContain('<code>src/q.ts');
   expect(outside).toContain('<span class="row-arrow" aria-hidden="true">→</span><code>文件正文</code>');
   // 三级：未配对（pairOwner 为 null）中性 chip，不猜归属，也没有调用侧箭头。
   const unpairedSteps = projectSteps(row(), read(detail({ delta_ordinals: [2] }), [carrier],
@@ -311,7 +311,7 @@ test('结果行前缀三级：缓存内同款摘要、缓存外只工具名、�
   expect(unpaired).toContain('row-tint tint-other">Tool result</span>');
   expect(unpaired).not.toContain('row-arrow');
   // 结果行悬停给调用摘要与完整结果正文。
-  expect(cached).toContain('title="q.ts · 1400–1530 行 → 文件正文"');
+  expect(cached).toContain('title="src/q.ts · 1400–1530 行 → 文件正文"');
 });
 
 test('调用行悬停放完整参数 JSON，预览只放参数段', () => {
@@ -320,7 +320,7 @@ test('调用行悬停放完整参数 JSON，预览只放参数段', () => {
   ] }));
   const html = renderTraceRows(row(), steps, 1, null);
   expect(html).toContain('title="{&quot;file_path&quot;:&quot;/u/very/long/path/queries.ts&quot;,&quot;offset&quot;:1,&quot;limit&quot;:5}"');
-  expect(html).toContain('<code>queries.ts · 1–6 行</code>');
+  expect(html).toContain('<code>path/queries.ts · 1–6 行</code>');
 });
 
 test('is_error=true 的结果行带异常态，正常行没有', () => {
@@ -413,24 +413,29 @@ test('HTTP 失败、缺正文与已有步骤并存', () => {
 
 test('工具摘要按工具分派：Read 行区间四种组合', () => {
   expect(toolSummary('Read', JSON.stringify({ file_path: '/Users/pis/src/queries.ts', offset: 1400, limit: 130 })))
-    .toBe('Read · queries.ts · 1400–1530 行');
+    .toBe('Read · src/queries.ts · 1400–1530 行');
   expect(toolSummary('Read', JSON.stringify({ file_path: '/a/b.ts', limit: 130 })))
-    .toBe('Read · b.ts · 前 130 行');
+    .toBe('Read · a/b.ts · 前 130 行');
   expect(toolSummary('Read', JSON.stringify({ file_path: '/a/b.ts', offset: 1400 })))
-    .toBe('Read · b.ts · 1400 行起');
+    .toBe('Read · a/b.ts · 1400 行起');
   expect(toolSummary('Read', JSON.stringify({ file_path: '/a/b.ts' })))
-    .toBe('Read · b.ts');
+    .toBe('Read · a/b.ts');
+  // 仓库根文件：倒数第二段是仓库名，不是文件名。
+  expect(toolSummary('Read', JSON.stringify({ file_path: '/Users/pis/repos/agent-trace-collector/AGENTS.md' })))
+    .toBe('Read · agent-trace-collector/AGENTS.md');
+  // 只有一段的相对路径原样显示，不补斜杠。
+  expect(toolSummary('Read', JSON.stringify({ file_path: 'AGENTS.md' }))).toBe('Read · AGENTS.md');
   // file_path 缺核心键：回退链，不冒充文件摘要。
   expect(toolSummary('Read', '{"pattern":"x"}')).toBe('Read · x');
 });
 
 test('工具摘要按工具分派：Edit、Write、Bash', () => {
   expect(toolSummary('Edit', JSON.stringify({ file_path: 'src/derive.ts', old_string: 'a\nb\nc', new_string: 'x' })))
-    .toBe('Edit · derive.ts · 3→1 行');
+    .toBe('Edit · src/derive.ts · 3→1 行');
   expect(toolSummary('Edit', JSON.stringify({ file_path: 'src/derive.ts', old_string: 'a', new_string: 'b', replace_all: true })))
-    .toBe('Edit · derive.ts · 1→1 行 · 全部替换');
+    .toBe('Edit · src/derive.ts · 1→1 行 · 全部替换');
   expect(toolSummary('Write', JSON.stringify({ file_path: 'docs/memory.md', content: 'x'.repeat(1229) })))
-    .toBe('Write · memory.md · 1.2 KB');
+    .toBe('Write · docs/memory.md · 1.2 KB');
   expect(toolSummary('Write', JSON.stringify({ file_path: 'a.md', content: '小' })))
     .toBe('Write · a.md · 3 B');
   expect(toolSummary('Bash', JSON.stringify({ command: 'bun test', description: '重跑全量测试' })))
@@ -460,11 +465,11 @@ test('OMP 小写工具：read/write/edit 认 path 键，grep/glob/todo/task/web_
   expect(toolSummary('read', JSON.stringify({ path: 'README.md', i: 'Reading README' })))
     .toBe('read · README.md');
   expect(toolSummary('write', JSON.stringify({ path: 'docs/x.md', content: 'y'.repeat(2048) })))
-    .toBe('write · x.md · 2.0 KB');
+    .toBe('write · docs/x.md · 2.0 KB');
   expect(toolSummary('edit', JSON.stringify({ path: 'src/a.ts', old_string: 'a\nb', new_string: 'c' })))
-    .toBe('edit · a.ts · 2→1 行');
+    .toBe('edit · src/a.ts · 2→1 行');
   // 大写工具带 path 键也接受：OMP 混用两种客户端时不漏。
-  expect(toolSummary('Read', JSON.stringify({ path: 'lib/b.py' }))).toBe('Read · b.py');
+  expect(toolSummary('Read', JSON.stringify({ path: 'lib/b.py' }))).toBe('Read · lib/b.py');
   expect(toolSummary('grep', JSON.stringify({ pattern: 'derive_version', path: 'src' })))
     .toBe('grep · derive_version');
   expect(toolSummary('glob', JSON.stringify({ path: 'src/**/*.ts' })))
@@ -487,8 +492,8 @@ test('OMP 小写工具：read/write/edit 认 path 键，grep/glob/todo/task/web_
 test('工具摘要回退：非 JSON 参数原文、未知工具回退链、超长不做字符截断', () => {
   expect(toolSummary('mcp__srv__do', 'not json')).toBe('mcp__srv__do · not json');
   expect(toolSummary('x', '{"command":"ls","cmd":"fallback-cmd"}')).toBe('x · ls');
-  expect(toolSummary('x', '{"file_path":"src/a.ts"}')).toBe('x · a.ts');
-  expect(toolSummary('x', '{"path":"lib/b.py"}')).toBe('x · b.py');
+  expect(toolSummary('x', '{"file_path":"src/a.ts"}')).toBe('x · src/a.ts');
+  expect(toolSummary('x', '{"path":"lib/b.py"}')).toBe('x · lib/b.py');
   expect(toolSummary('', '{"path":"p"}')).toBe('未命名工具 · p');
   // 截断交给中栏列宽的省略号，摘要本身不再按固定字数砍。
   const long = toolSummary('Read', JSON.stringify({ file_path: '/a/'.concat('b'.repeat(300), '.ts') }));

@@ -100,7 +100,7 @@ function bgIndexes(bgJobs) {
   return { bySpawn, byNotice };
 }
 
-/* ---------- 工具行摘要：按工具分派，路径折算成 basename，行区间是显示锚点不是事实 ---------- */
+/* ---------- 工具行摘要：按工具分派，路径折算成末两段，行区间是显示锚点不是事实 ---------- */
 
 /** 悬停 title 属性的超长护栏：预览文本不按字符截断，属性仍要防大参数撑爆。 */
 const TITLE_MAX = 2000;
@@ -111,17 +111,25 @@ const clipChars = (text, max = TITLE_MAX) => {
   return chars.length <= max ? text : `${chars.slice(0, max).join('')}…`;
 };
 
-/** 路径最后一段：扫读锚点是文件名，完整路径进悬停与右栏。 @param {string} p */
+/**
+ * 路径末两段：扫读锚点是「上层目录 + 文件名」，只有一段时原样返回。
+ *
+ * 读模型不带 cwd（`raw_hook.cwd` 有列但不在 `RequestDetail`，omp/zcode 侧实测全空），
+ * 拿不到项目根，所以按纯后缀切：绝对路径的倒数第二段是直接父目录，
+ * `/…/agent-trace-collector/src/harness/semantics.ts` 显示 `harness/semantics.ts`，
+ * 仓库根文件显示 `agent-trace-collector/AGENTS.md`。完整路径进悬停与右栏。
+ * @param {string} p
+ */
 const baseName = (p) => {
-  const trimmed = p.replace(/\/+$/, '');
-  const cut = trimmed.lastIndexOf('/');
-  return cut >= 0 ? trimmed.slice(cut + 1) : trimmed;
+  const parts = p.replace(/\/+$/, '').split('/').filter(Boolean);
+  if (parts.length <= 1) return parts[0] ?? '';
+  return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
 };
 
 /** @param {unknown} v @returns {string | null} 非空字符串原样返回，其余 null。 */
 const nonEmpty = (v) => (typeof v === 'string' && v !== '' ? v : null);
 
-/** 文件类参数取 basename。 @param {unknown} v */
+/** 文件类参数取末两段。 @param {unknown} v */
 const fileBase = (v) => {
   const s = nonEmpty(v);
   return s === null ? null : baseName(s);
@@ -236,7 +244,7 @@ function dispatchSummary(name, args) {
       return pattern === null ? null : clipChars(pattern, 120);
     }
     case 'glob': {
-      // glob 的 pattern 本身就是 path 键的值（"src/**/*.ts"），basename 化会丢语义。
+      // glob 的 pattern 本身就是 path 键的值（"src/**/*.ts"），折成末两段会丢语义。
       return nonEmpty(args.path);
     }
     case 'todo': {
@@ -272,7 +280,7 @@ function dispatchSummary(name, args) {
 }
 
 /**
- * 未知工具的回退链：command→cmd→file_path→path→pattern→原文；file_path 与 path 同样 basename 化。
+ * 未知工具的回退链：command→cmd→file_path→path→pattern→原文；file_path 与 path 同样折成末两段。
  * @param {unknown} args @param {string} inputText
  */
 function fallbackSummary(args, inputText) {
@@ -293,7 +301,7 @@ function fallbackSummary(args, inputText) {
 
 /**
  * 摘要拆成身份与参数段：chip 用工具名，预览用参数段，悬停给完整参数。
- * 参数段不做字符数预截断：超长由中栏列宽的省略号处理，工具名与 basename 不受影响。
+ * 参数段不做字符数预截断：超长由中栏列宽的省略号处理，工具名与路径末两段不受影响。
  * @param {string} name @param {string} inputText @returns {{label: string, args: string}}
  */
 function summaryParts(name, inputText) {
