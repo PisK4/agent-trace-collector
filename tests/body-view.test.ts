@@ -550,14 +550,14 @@ test('尝试链渲染未知 fail 码与已记录时间', () => {
         fail: 'synthetic_new_gate', error: null, start_ms: 1761091200000,
         ms: 100, ttft_ms: 1555, flow_ms: 670, first_text_ms: 2603,
         first_reasoning_ms: 1555, served: null, done: true, tier_served: 'default',
-        reasoning_hidden: true, queued_ms: null,
+        reasoning_hidden: true,
       },
       {
         index: 1, model: 'm2', effort: null, status: 200,
         fail: null, error: null, start_ms: 1761091201000,
         ms: 200, ttft_ms: null, flow_ms: null, first_text_ms: null,
         first_reasoning_ms: null, served: 's', done: true, tier_served: null,
-        reasoning_hidden: false, queued_ms: null,
+        reasoning_hidden: false,
       },
     ],
     timing: { state: 'recorded', note: '时间来自各次尝试的开始时间' },
@@ -573,6 +573,32 @@ test('尝试链渲染未知 fail 码与已记录时间', () => {
   expect(html).toContain('推理隐藏');
 });
 
+test('尝试链只给异常时长上色，首 token 与首个文本保持正文色', () => {
+  const base = {
+    effort: null, fail: null, error: null, start_ms: null, flow_ms: null,
+    first_reasoning_ms: null, served: null, done: null, tier_served: null,
+    reasoning_hidden: null,
+  };
+  const html = renderAttemptChain({
+    state: 'present',
+    items: [
+      { ...base, index: 0, model: 'm1', status: 200, ms: 900, ttft_ms: 1200, first_text_ms: 9000 },
+      { ...base, index: 1, model: 'm2', status: 200, ms: 45_000, ttft_ms: null, first_text_ms: null },
+      { ...base, index: 2, model: 'm3', status: 500, ms: 90_000, ttft_ms: null, first_text_ms: null },
+    ],
+    timing: { state: 'recorded', note: '时间来自各次尝试的开始时间' },
+  });
+  // 正常档不加类也不加色：右栏正常态是正文色。
+  expect(html).toContain('900 ms');
+  expect(html).not.toContain('t-good');
+  expect(html).toContain('<b class="t-warn">45000 ms</b>');
+  expect(html).toContain('<b class="t-bad">90000 ms</b>');
+  // 首 token 与首个文本随模型与内容长度变化，只报数不上档。
+  expect(html).toContain('首 token 1200 ms');
+  expect(html).toContain('首个文本 9000 ms');
+  expect(html).not.toContain('排队');
+});
+
 test('缺时间时只显示说明，不补造间隔', () => {
   const html = renderAttemptChain({
     state: 'present',
@@ -580,7 +606,7 @@ test('缺时间时只显示说明，不补造间隔', () => {
       index: 0, model: 'm1', effort: null, status: 500,
       fail: 'rate_limit', error: null, start_ms: null, ms: null,
       ttft_ms: null, flow_ms: null, first_text_ms: null, first_reasoning_ms: null,
-      served: null, done: null, tier_served: null, reasoning_hidden: null, queued_ms: null,
+      served: null, done: null, tier_served: null, reasoning_hidden: null,
     }],
     timing: { state: 'partial', note: '部分尝试没有开始时间，不推算间隔' },
   });

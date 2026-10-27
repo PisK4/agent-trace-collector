@@ -10,7 +10,8 @@
 
 import { toolTint } from './body-view.js';
 import { esc } from './html.js';
-import { kk, secs } from './rail-facts.js';
+import { kk } from './rail-facts.js';
+import { secs } from './duration.js';
 import { pairStateText } from './trace-pair.js';
 
 /** @param {number} ms */
