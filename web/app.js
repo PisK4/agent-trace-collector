@@ -324,6 +324,8 @@ if (typeof document !== 'undefined') {
     // 失败也是准备结论：失败行如实可见，显式刷新与点击重读才重新准备。
     // 作废仍在自动重读，不登记；恢复换新后由 onStoreChange 接着备齐。
     if (final !== null && (final.detail !== null || final.status === 'failed')) readyRequests.add(id);
+    // 点占位行留下的选择随占位行一起消失：留着会在下次出现准备行时凭空亮起。
+    if (state.selectedStep === `${id}:preparing`) dispatch({ kind: 'clear-step' });
     renderMain();
     if (railTouched || affectsRail(id)) renderRail();
   }
