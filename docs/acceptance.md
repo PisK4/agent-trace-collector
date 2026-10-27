@@ -343,3 +343,22 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 | 晚到成功 | 接收方 650 ms 后返回 200，即使宿主预算更大，两次尝试仍记 `collector_attempt_timeout`，总耗时不短于一次单次截止 |
 
 插件侧的失败码只存在宿主内存的 `ctx.state` 里，ATC 不读回，因此本轮的窗口统计无法断言某条请求因哪种原因丢投递。真实流量的前后窗口对比、宿主 `gatewayTimeoutMs` 配置实验都未执行；上一节记录的 Hermes 缺口仍是只读快照，不因诊断工具上线而改变含义。
+
+## 按 agent 拆除对话数据（合成，2026-10-27）
+
+随 [Agent Note：按 agent 拆除对话数据](../.agents/notes/implemented/feature/2026-10-27-agent-purge.md)交付。本轮全部是合成数据，`tests/maintenance.test.ts` 新增四项通过，`tsc --noEmit` 通过。真实库上的删除与重启在下一节单独记录。
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| 预览 | 四笔请求（三笔 hermes）给出 `requests:3`、`conv_keys:2`、`shared_conv_keys:1`、`groups:2`、`groups_with_remaining:1`、证据 2/2/2 与原始层可删计数；预览不改库 |
+| 共享桶 | 与 claude 同桶的 hermes 行删除后 claude 行保留；组保留 `group_epoch` 并重新标脏 |
+| 独占组 | 只剩未知归属行的组没有队列行；hermes 独占的已知组同步为 clean，`group_epoch` 不变 |
+| 跨 agent 守卫 | 被 claude 请求共享的 `raw_ledger`（gen-B/50）与 `raw_hook`（h-shared）保留，对应证据与费用观测不动 |
+| 请求侧级联 | 别名、工具链接、块引用、孤儿块、证据、费用观测与指向目标的 `prev_req_id` 一并清掉；共享正文块保留 |
+| 来源层 | 目标 `raw_ledger`、`raw_route`、`raw_hook`、`pending_hook`、无引用的 `route_summary`、指向目标的 `bg_job` 与 `otlp_body_ref` 删除 |
+| 派生快照 | 被删请求的 `derive_request_result` 行删除 |
+| 事件与墓碑 | `retention_event` 记 `purge_agent` / `agent_removal:hermes` / `request_count:3`；`purged_evidence` 恰好六条，按证据键去重 |
+| 重复执行 | 第二次 `deleted:0`、`event_id:0`，事件仍为一条，墓碑不增长 |
+| 故障回滚 | `DELETE FROM request` 注入触发器中止后，请求、原始层、等待队列、派生快照与队列 epoch 全部保持原样，事件未写 |
+| 命令闸门 | 预览退出 0；`--apply` 缺 `--approval-id` 退出 1；缺 `--agent` 退出 2 |
+| 结构检查 | `PRAGMA foreign_key_check` 为空，`verify` 的 `dangling_blocks` 为 0 |
