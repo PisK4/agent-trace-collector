@@ -9,7 +9,7 @@
 | 根 [AGENTS.md](../AGENTS.md) | 常备规则：每个会话都要在上下文里的规则，每条一到三行并链接出处 | 故事、案例、流程细节、从链接出处复述的内容 |
 | [architecture-design.md](architecture-design.md) | 组成、证据身份、存储模型、派生、接口、容量与安全边界的设计权威 | 事故叙事、任务步骤、过期状态 |
 | [project-overview.md](project-overview.md) | 项目定位、记录单位与数据来源；名词定义链接到 GLOSSARY.md | 实现细节、决策 rationale、基础名词定义（归 GLOSSARY.md） |
-| [GLOSSARY.md](../GLOSSARY.md) | 领域术语表：术语定义与边界（基础名词、证据坐标、递增计数、认识论、销毁动词、kind 三族），管辖权与准入规则见[术语表命名与文档职责统一](../.agents/notes/implemented/process/2026-10-26-glossary-naming-and-document-ownership.md) | 字段清单与默认值（归 architecture-design.md）、研究 caveat（归 project-overview.md 与调研文档） |
+| [GLOSSARY.md](../GLOSSARY.md) | 领域术语表：术语定义与边界（基础名词、证据坐标、身份与版本、认识论、销毁动词、kind 三族），管辖权与准入规则见[术语表命名与文档职责统一](../.agents/notes/implemented/process/2026-10-26-glossary-naming-and-document-ownership.md) | 字段清单与默认值（归 architecture-design.md）、研究 caveat（归 project-overview.md 与调研文档） |
 | [architecture-review.md](architecture-review.md)、[agent-request-kind-review.md](agent-request-kind-review.md) | 落地前评审记录与证据 | 现行行为的权威描述 |
 | [architecture-evolution-v2.md](architecture-evolution-v2.md) | 本轮架构演进的目标约束与阶段划分：目标职责、依赖、阶段与容量验收；交付记录见实施入口 | 已交付行为、来源证据表的副本 |
 | [magpie-integration-research.md](magpie-integration-research.md)、[magpie-mechanisms-research.md](magpie-mechanisms-research.md) | 对 magpie 机制的研究证据，带锚定版本与证据标签 | 本项目已交付行为的描述 |
