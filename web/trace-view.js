@@ -562,53 +562,68 @@ function toolRowParts(step, callOf) {
   return { chip: '', args: '', arrow: false };
 }
 
+/** @param {string} text @param {number} [max] */
+const clipPreview = (text, max = 140) => [...String(text)].length <= max ? String(text)
+  : `${[...String(text)].slice(0, max).join('')}…`;
+
 /**
  * 单行轨迹只显示请求序号、角色、工具身份 chip 与内容，点击行在右栏阅读详情。
  * 工具行的预览不做字符截断：参数摘要与结果正文完整进 DOM，超长由中栏列宽的
- * 省略号处理；其余行仍按 140 字符截断。
+ * 省略号处理；其余行仍按 140 字符截断。输出不包含状态摘要（选中由
+ * `aria-current` 表达，默认 false），按稳定步骤键可单独比较与提交。
  * @param {import('../src/queries/projection').RequestRow} row
- * @param {TraceStep[]} steps
+ * @param {TraceStep} step
  * @param {number} ordinal 当前窗口展示号（仅显示，身份用 req_id）
- * @param {string|null} selected 当前选中的步骤键
  * @param {((ownerReq: number, callOrd: number) => {name: string, inputText: string} | null) | null} [callOf]
  *   调用方正文在窗口缓存内时由装配层提供；查不到或未传时结果行降级为只工具名。
+ * @param {boolean} [selected] 该步骤是否为当前选择
  * @returns {string}
  */
-export function renderTraceRows(row, steps, ordinal, selected, callOf = null) {
-  const pieces = [];
-  /** @param {string} text @param {number} [max] */
-  const clip = (text, max = 140) => [...String(text)].length <= max ? String(text)
-    : `${[...String(text)].slice(0, max).join('')}…`;
-  for (const step of steps) {
-    const label = KIND_LABEL[step.kind] ?? 'Event';
-    const { chip, args, arrow } = toolRowParts(step, callOf);
-    const isTool = step.kind === 'tool' || step.kind === 'tool_result';
-    // 悬停给完整信息：调用行放完整参数 JSON，结果行放调用摘要与完整结果正文；属性按 TITLE_MAX 截断。
-    let title = '';
-    if (step.kind === 'tool') {
-      title = clipChars(step.toolInput ?? '');
-    } else if (step.kind === 'tool_result') {
-      title = clipChars(args !== '' ? `${args} → ${step.text}` : step.text);
-    }
-    const titleAttr = title !== '' ? ` title="${esc(title)}"` : '';
-    const previewHtml = isTool
-      ? `${args !== '' ? `<code>${esc(args)}</code>` : ''}${
-        arrow ? '<span class="row-arrow" aria-hidden="true">→</span>' : ''}${
-        step.kind === 'tool_result' ? `<code>${esc(step.text)}</code>` : ''}`
-      : esc(clip(step.text));
-    // 背景作业配对读数跟在行尾；发起行与通知事件行各有自己的内容，不重复正文。
-    const bgNoteHtml = step.bgNote === undefined || step.bgNote === null
-      ? '' : ` <span class="bg-note" title="${esc(step.bgNote)}">${esc(step.bgNote)}</span>`;
-    pieces.push(`<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
+export function renderTraceRow(row, step, ordinal, callOf = null, selected = false) {
+  const label = KIND_LABEL[step.kind] ?? 'Event';
+  const { chip, args, arrow } = toolRowParts(step, callOf);
+  const isTool = step.kind === 'tool' || step.kind === 'tool_result';
+  // 悬停给完整信息：调用行放完整参数 JSON，结果行放调用摘要与完整结果正文；属性按 TITLE_MAX 截断。
+  let title = '';
+  if (step.kind === 'tool') {
+    title = clipChars(step.toolInput ?? '');
+  } else if (step.kind === 'tool_result') {
+    title = clipChars(args !== '' ? `${args} → ${step.text}` : step.text);
+  }
+  const titleAttr = title !== '' ? ` title="${esc(title)}"` : '';
+  const previewHtml = isTool
+    ? `${args !== '' ? `<code>${esc(args)}</code>` : ''}${
+      arrow ? '<span class="row-arrow" aria-hidden="true">→</span>' : ''}${
+      step.kind === 'tool_result' ? `<code>${esc(step.text)}</code>` : ''}`
+    : esc(clipPreview(step.text));
+  // 背景作业配对读数跟在行尾；发起行与通知事件行各有自己的内容，不重复正文。
+  const bgNoteHtml = step.bgNote === undefined || step.bgNote === null
+    ? '' : ` <span class="bg-note" title="${esc(step.bgNote)}">${esc(step.bgNote)}</span>`;
+  return `<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
 <div class="compact-row${step.isError === true ? ' step-error' : ''}">
-  <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${step.key === selected}">
+  <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${selected}">
     <span class="compact-meta" title="序号表示当前窗口内的请求 · 请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
     ${chip}
     <span class="compact-preview"${titleAttr}>${previewHtml}</span>${bgNoteHtml}
   </button>
 </div>
-</div>`);
+</div>`;
+}
+
+/**
+ * 请求组的多行拼接：逐行复用 `renderTraceRow`，选中只影响 `aria-current`。
+ * @param {import('../src/queries/projection').RequestRow} row
+ * @param {TraceStep[]} steps
+ * @param {number} ordinal
+ * @param {string|null} selected
+ * @param {((ownerReq: number, callOrd: number) => {name: string, inputText: string} | null) | null} [callOf]
+ * @returns {string}
+ */
+export function renderTraceRows(row, steps, ordinal, selected, callOf = null) {
+  const pieces = [];
+  for (const step of steps) {
+    pieces.push(renderTraceRow(row, step, ordinal, callOf, step.key === selected));
   }
   return pieces.join('');
 }
