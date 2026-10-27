@@ -74,7 +74,7 @@ magpie 另有 OTLP 导出，不作为证据源。它只发 `gen_ai.*`、`magpie.
 | 前驱 | `prev_req_id` / `prev_relation` | `first` / `confirmed` / `branch` / `unknown` / `aux` |
 | 新增 | `delta_ordinals` | 本笔相对父节点的消息序号 |
 | 链角色 | `chain_role` | `main` / `branch` / `aux` / `unknown` |
-| 请求种类 | `req_kind` | `chat`、`title`、`auto-mode-classifier` 等；未知值原样返回 |
+| 请求种类 | `req_kind` | `chat`、`title`、`auto-mode-classifier`、`command-review` 等；未知值原样返回 |
 | 链参与 | `purpose_chain` | `participate` / `exclude` |
 | 标题 | `title` / `title_source` / `model_title` | 用户首句、模型时间兜底，或 Title Generator 的正式标题 |
 | 折叠行摘要 | `input_preview` / `input_preview_kind` / `reply_preview` | kind 取 `delta` / `tail` / `tool_result` / `title` |

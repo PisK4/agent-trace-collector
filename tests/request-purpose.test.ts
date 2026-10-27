@@ -360,3 +360,50 @@ test('OMP skill 描述压缩调用按块首指纹判旁路，普通 OMP 对话�
     });
   } finally { f.close(); }
 });
+
+test('Hermes 审查器指纹经真实 Chat messages 持久化后结算', () => {
+  const f = fixture();
+  try {
+    const SYSTEM = 'You are a security reviewer for an AI coding agent. '
+      + 'You assess whether shell commands are safe to execute.';
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'hermes-review', agent: 'hermes', protocol: 'chat',
+      messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: 'synthetic command' }],
+      reply: { choices: [{ message: { role: 'assistant', content: 'ESCALATE' } }] },
+      purposeTarget: 1,
+    });
+    // 取数走 role=2 的 System 块，不是手工构造的 PurposeView。
+    const task = readTask(f.store, id)!;
+    expect(task.view.systemTexts).toEqual([SYSTEM]);
+    expect(drainPurposes(f.store)).toMatchObject({ applied: 1, remaining: 0 });
+    const row = purposeRow(f.store, id);
+    expect(row).toMatchObject({
+      purpose_status: 'recognized', purpose_version: PURPOSE_VERSION,
+      purpose_rule: 'hermes.command-review.v1', purpose_chain: 'exclude',
+      req_kind: 'command-review', purpose_target: PURPOSE_VERSION,
+    });
+    expect(JSON.parse(row.purpose_signals)).toContain('command-review.verdict.escalate');
+  } finally { f.close(); }
+});
+
+test('Hermes 标题指纹在缺回复时仍结算为 title 并排除链', () => {
+  const f = fixture();
+  try {
+    const SYSTEM = 'You name chat sessions. Respond with {"title": ...}.';
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'hermes-title', agent: 'hermes', actor: null, actorState: 'unknown',
+      messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: 'synthetic' }],
+      reply: null,
+      purposeTarget: 1,
+    });
+    expect(drainPurposes(f.store)).toMatchObject({ applied: 1, remaining: 0 });
+    expect(purposeRow(f.store, id)).toMatchObject({
+      purpose_status: 'recognized', purpose_rule: 'hermes.session-title.v1',
+      purpose_chain: 'exclude', req_kind: 'title', model_title: null,
+    });
+    // 未知归属不因用途结论被确认成已知 actor。
+    expect(f.store.read.query<{ actor: string | null; actor_state: string }, [number]>(
+      'SELECT actor, actor_state FROM request WHERE req_id=?').get(id))
+      .toEqual({ actor: null, actor_state: 'unknown' });
+  } finally { f.close(); }
+});

@@ -181,3 +181,86 @@ test('OMP skill 描述压缩指纹：任一 user 块块首命中即旁路，锚�
   }));
   expect(drifted.chain).toBe('participate');
 });
+
+const REVIEWER_SYSTEM = 'You are a security reviewer for an AI coding agent. '
+  + 'You assess whether shell commands are safe to execute.';
+const TITLER_SYSTEM = 'You name chat sessions. Respond with {"title": ...}.';
+
+test('Hermes 命令审查器：请求侧指纹排除链，判定词只写信号', () => {
+  const decision = classifyPurpose(view({
+    agent: 'hermes', systemTexts: [REVIEWER_SYSTEM], replyText: 'ESCALATE',
+  }));
+  expect(decision).toMatchObject({
+    status: 'recognized', version: PURPOSE_VERSION, kind: 'command-review',
+    chain: 'exclude', rule: 'hermes.command-review.v1', modelTitle: null,
+  });
+  expect(decision.signals).toEqual([
+    'command-review.agent.hermes',
+    'command-review.system.security-reviewer',
+    'command-review.verdict.escalate',
+  ]);
+  // 缺回复与未知措辞都不改变结论，只改信号。
+  const absent = classifyPurpose(view({
+    agent: 'hermes', systemTexts: [REVIEWER_SYSTEM], replyText: null,
+  }));
+  expect(absent.kind).toBe('command-review');
+  expect(absent.signals).toContain('command-review.verdict.unknown');
+  const other = classifyPurpose(view({
+    agent: 'hermes', systemTexts: [REVIEWER_SYSTEM], replyText: '这个命令可以执行。',
+  }));
+  expect(other.kind).toBe('command-review');
+  expect(other.signals).toContain('command-review.verdict.other');
+});
+
+test('Hermes 标题生成器：缺回复仍排除链，单键 JSON 与标签都提取', () => {
+  const json = classifyPurpose(view({
+    agent: 'hermes', systemTexts: [TITLER_SYSTEM], replyText: '{"title":"修复登录"}',
+  }));
+  expect(json).toMatchObject({
+    status: 'recognized', version: PURPOSE_VERSION, kind: 'title',
+    chain: 'exclude', rule: 'hermes.session-title.v1', modelTitle: '修复登录',
+  });
+  expect(json.signals).toContain('title.reply.json-title');
+  expect(classifyPurpose(view({
+    agent: 'hermes', systemTexts: [TITLER_SYSTEM], replyText: '<title>修复登录</title>',
+  })).modelTitle).toBe('修复登录');
+  const absent = classifyPurpose(view({
+    agent: 'hermes', systemTexts: [TITLER_SYSTEM], replyText: null,
+  }));
+  expect(absent).toMatchObject({ kind: 'title', chain: 'exclude', modelTitle: null });
+  expect(absent.signals).toContain('session-title.reply.absent');
+  // 曾有正式标题的行：缺回复不撤销已确认的值。
+  expect(classifyPurpose(view({
+    agent: 'hermes', systemTexts: [TITLER_SYSTEM], replyText: null,
+    stored: { ...view().stored, kind: 'title', modelTitle: '旧标题' },
+  })).modelTitle).toBe('旧标题');
+});
+
+test('Hermes 两条指纹同时出现时审查器先判', () => {
+  const decision = classifyPurpose(view({
+    agent: 'hermes', systemTexts: [REVIEWER_SYSTEM, TITLER_SYSTEM], replyText: '{"title":"x"}',
+  }));
+  expect(decision.kind).toBe('command-review');
+  expect(decision.rule).toBe('hermes.command-review.v1');
+});
+
+test('Hermes 专属指纹不跨 harness，普通 Hermes 请求仍参与主链', () => {
+  // 指纹只在 user 内容：systemTexts 为空，不命中。
+  expect(classifyPurpose(view({
+    agent: 'hermes', systemTexts: [], userBlockHeads: [REVIEWER_SYSTEM],
+  })).kind).toBe('chat');
+  // 同指纹换 agent：不命中任何 Hermes 规则。
+  for (const agent of ['claude', 'omp', 'unknown-harness', '', null]) {
+    const decision = classifyPurpose(view({
+      agent, systemTexts: [REVIEWER_SYSTEM, TITLER_SYSTEM], replyText: 'ESCALATE',
+    }));
+    expect(decision.kind).not.toBe('command-review');
+    expect(decision.kind).not.toBe('title');
+    expect(decision.chain).toBe('participate');
+  }
+  // 普通 Hermes 主请求。
+  expect(classifyPurpose(view({
+    agent: 'hermes', systemTexts: ['You are Hermes Agent, built by Nous Research.'],
+    replyText: '好的',
+  }))).toMatchObject({ status: 'unrecognized', kind: 'chat', chain: 'participate' });
+});
