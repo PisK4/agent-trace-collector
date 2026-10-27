@@ -42,6 +42,9 @@ bun run service restart    # kickstart -k，等到新 pid 可用
 # 只读校验：完整性与三类容易悄悄积累的结构问题
 bun run maintain verify --db '<dataDir>/trace.db'
 
+# hook 投递的只读窗口诊断：缺口、等待队列与已到达回调
+bun run maintain hook-delivery --db '<dataDir>/trace.db' --since '2026-10-26T00:00:00Z' --until '2026-10-27T00:00:00Z'
+
 # 离线备份到不存在的目标（只含数据库，不能恢复占位符连续性）
 bun run maintain backup --db '<dataDir>/trace.db' --out '<新路径>/backup-2026-10-21.db'
 
@@ -79,6 +82,28 @@ bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --
 | `pending_derivations` | `derive_queue` 里的分组数 | 采集器启动后会自行清空；停服务时看到的数字只说明停机前有积压 |
 
 `integrity` 只有一项 `ok` 才算通过。损坏的库会直接抛错，不会被当成合格备份。
+
+### hook-delivery
+
+只读窗口诊断，用独立只读连接，不取维护锁、不停采集器。`--since` 与 `--until` 都要给，接受 epoch 毫秒或 ISO 8601；`--until` 同时是观察时点。
+
+请求侧按 `started_ms` 落窗，`raw_hook` 与 `ingest_issue` 按到达与观察时间落窗。输出分四组：
+
+| 组 | 字段 | 读法 |
+| --- | --- | --- |
+| `requests` | `total`、`with_hook`、`missing_hook` | 缺 hook 证据的行数，不等于回调没送达 |
+| | `settled_missing`、`young_missing` | 以窗口右端退一个等待阈值（1 小时）为界；`young_missing` 只是还没等到 |
+| | `missing_with_sources` | 已有账本、路由或 OTLP 的行也缺 hook：回调阶段没接上，不是请求没发生 |
+| | `missing_without_response_id` | 回调即使到达也按 ID 对不上，只能留在未知 |
+| | `awaiting_candidate` | 等待队列里已有指向本行的回调，差一次合并，不是投递缺失 |
+| | `by_agent`、`by_status`、`by_kind`、`by_prompt_tokens`、`miss_reasons` | 缺口的分组计数；未知值单列，不归并进已知档 |
+| `raw_hooks` | `received`、`reply_absent`、`body_omitted`、`by_agent` | 已到达的回调：回复缺失与正文降级分开计数 |
+| `pending_hooks` | `total`、`without_response_id` | `first_seen` 早于窗口右端的等待项，含历史累积 |
+| `issues` | 按来源与原因的计数 | `raw_hook_body_unlinked` 一类保留问题 |
+
+前后窗口用同一组参数才有可比性。报告回答的是「哪个阶段没接上」，不能写成「回调从未发生」：`missing_hook` 只说明本行没有已关联的 hook 证据。
+
+插件侧的失败码在 `ctx.state.collector_code`，只有宿主内存里的插件状态能看到，ATC 不读：`collector_delivered` 成功；`collector_attempt_timeout` 单次 fetch 超过 600 ms 被自己的计时器中止（接收方可能稍后才处理完，仍记失败）；`collector_host_abort` 宿主的 `ctx.signal` 被中止，不重试；`collector_network_error` 连接失败，重试一次；`collector_http_rejected` 收到非 2xx，`collector_status` 带状态码，4xx 不重试；`collector_deadline` 总预算 1500 ms 用尽。调大宿主 `gatewayTimeoutMs` 只影响 `collector_host_abort` 一种，不能据此排除其余原因。
 
 ### backup
 

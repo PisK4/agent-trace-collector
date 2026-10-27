@@ -31,7 +31,7 @@ Status: implemented
 
 ### 边界
 
-本次只交付用途识别。hook 投递诊断见[分层验证 hook 投递](2026-10-27-hermes-hook-delivery-diagnostics.md)，空 session 修复与身份迁移见[空 session 不是会话身份](../bug-fix/2026-10-27-empty-session-identity-migration.md)。工具名称、参数与失败语义的额外适配未做；协议兼容不等于工具展示已覆盖。
+本次只交付用途识别。hook 投递诊断见[hook 投递分层诊断](2026-10-27-hook-delivery-diagnostics.md)，空 session 修复与身份迁移见[空 session 不是会话身份](../bug-fix/2026-10-27-empty-session-identity-migration.md)。工具名称、参数与失败语义的额外适配未做；协议兼容不等于工具展示已覆盖。
 
 ## Alternatives considered
 
