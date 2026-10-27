@@ -117,6 +117,11 @@ code,pre,.mono{font-family:var(--mono)}
 .col{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain}
 .col-sessions{background:var(--page);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
 .col-main{background:var(--canvas)}
+/* 中栏阅读位置由 trace-dom 每次键控提交时统一补偿；原生滚动锚定会在同一处
+   位置变化上再补一次，两套机制叠加会来回跳。窄屏中栏走文档滚动，根元素
+   一并关掉。 */
+.col-main{overflow-anchor:none}
+html{overflow-anchor:none}
 .col-rail{background:var(--surface);border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
 /* 折叠用 body 类 + visibility：分隔线与可聚焦后代一并退出可访问树，不用 opacity 假装隐藏。 */
 body.sidebar-collapsed .app{grid-template-columns:0 minmax(0,1fr) 6px var(--rail-width)}
@@ -224,6 +229,15 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 /* 选中高亮只落在当前步骤；请求组只留轻微边界，不再与步骤共用底色。 */
 .trace-group[aria-current="true"]{box-shadow:inset 2px 0 0 var(--line-strong)}
 .trace-group[data-status="failed"]{box-shadow:inset 2px 0 0 var(--bad)}
+/* 版本恢复期间显示的是上一版投影：标记绝对定位、不占高度，出现与消失都不移行；
+   组内首行右侧留出让位，文字不钻到标记下面。 */
+.trace-group[data-stale]{position:relative}
+.trace-group[data-stale]::after{
+  content:attr(data-stale);position:absolute;top:8px;right:10px;z-index:1;
+  font-size:10px;color:var(--warn);background:var(--warn-soft);border:1px solid currentColor;
+  border-radius:3px;padding:1px 6px;pointer-events:none;white-space:nowrap;
+}
+.trace-group[data-stale] .compact-step:first-child .compact-select{padding-right:120px}
 .compact-step{border-bottom:1px solid var(--line)}
 .compact-row{display:flex;align-items:center;gap:10px;height:36px;min-width:0;padding-inline:5px}
 .compact-select{display:flex;align-items:center;gap:9px;flex:1;min-width:0;text-align:left;height:100%}
@@ -378,8 +392,6 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .state-chip.warn{color:var(--warn);background:var(--warn-soft)}
 .state-chip.mute{color:var(--muted);background:var(--inset)}
 .state-chip .d{width:5px;height:5px;border-radius:50%;background:currentColor}
-/* 组级「已更新」：自动重读换新后出现，点进组里即消失。 */
-.group-flag{display:flex;justify-content:flex-end;padding:4px 10px 0}
 /* 状态点：成功只给颜色，不再重复 "HTTP 200 / 完成"。 */
 .status-dot{width:7px;height:7px;border-radius:50%;flex:none;display:inline-block;border:1px solid transparent}
 .status-dot.ok{background:var(--good)}

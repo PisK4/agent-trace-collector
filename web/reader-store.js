@@ -6,10 +6,10 @@ import { deltaOrdinals, messageEntries } from './body-model.js';
  * 不进 DOM 闭包。正文与工具结果带阅读版本；409 整笔作废（详情、meta、消息、
  * 区间、结构、增量、工具与路由一起），作废是记录原地重置并保留作废态：原因经
  * 快照 status 同步可查，store 随即自动重读换新（同一笔有冷却窗口，防派生高频
- * 发布时打转），换新后置 updatedSinceSeen，页面交互清除；手动「立即重读」随时
- * 可发起。token 变化的 validate 读取同样原地重置整笔快照。迟到响应必须同时
- * 匹配会话代次、当前记录归属、记录修订与捕获的 token 才可写入缓存；迟到响应
- * 与会话切换后的旧回调不作废、不通知，页面不按 reading_changed 错误自行清理。
+ * 发布时打转）；手动「立即重读」随时可发起。token 变化的 validate 读取同样
+ * 原地重置整笔快照。迟到响应必须同时匹配会话代次、当前记录归属、记录修订与
+ * 捕获的 token 才可写入缓存；迟到响应与会话切换后的旧回调不作废、不通知，
+ * 页面不按 reading_changed 错误自行清理。
  *
  * 缓存边界：只保留当前会话已加载窗口的请求，外加显式读取过的窗口外请求。
  */
@@ -18,7 +18,6 @@ import { deltaOrdinals, messageEntries } from './body-model.js';
  * @typedef {Object} RequestRead 一次请求的读取快照。
  * @property {'reading'|'fresh'|'invalidated'|'failed'} status 快照生命周期：详情在手为 fresh，作废待重读为 invalidated，详情读取失败为 failed，其余 reading。只描述 detail/meta/token 层，结构、增量与逐工具的局部状态不进 status。
  * @property {string | null} detailError 详情读取失败原因；仅 failed 态非空。
- * @property {boolean} updatedSinceSeen 自动重读换新后置位；页面交互经 clearUpdated 清除。
  * @property {import('../src/queries/requests').RequestDetail | null} detail
  * @property {import('../src/protocols').BodyPage | null} meta
  * @property {Map<number, ReturnType<typeof messageEntries>[number]>} messages
@@ -51,7 +50,6 @@ import { deltaOrdinals, messageEntries } from './body-model.js';
  * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} peekSummary 同步读取会话汇总快照；absent 覆盖 404、读取失败与无会话三种不可呈现态。
  * @property {(key: string) => Promise<void>} loadSummary 打开会话即拉一次汇总，不懒加载；换会话代次变更后迟到响应不写入。
  * @property {(query: import('../src/queries/session-summary').SummaryEntriesQuery) => Promise<import('../src/queries/session-summary').SummaryEntries>} loadSummaryEntries 汇总条目点击后的按组查询；无缓存，每次点击现查。
- * @property {(id: number) => void} clearUpdated 清除自动重读的「已更新」标记。
  * @property {(id: number) => void} invalidate 原地清空一笔记录的缓存并落作废态；不通知、不排自动重读，测试与强制失效用。
  */
 
@@ -126,6 +124,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   const routes = new Map();
   /** @type {Map<number, {state: string, summary: unknown}>} 路由完成值，供同步读取。 */
   const routeValues = new Map();
+  /** @type {Map<number, Promise<RequestRead>>} 增量消费者的在跑任务：同一记录同一时刻只推进一条序列。 */
+  const deltaInflight = new Map();
 
   /** @param {number} id */
   function recordOf(id) {
@@ -138,8 +138,6 @@ export function createReaderStore(fetcher, onReadChanged, options) {
         status: 'reading',
         /** 记录修订：作废时自增，迟到详情响应凭它不得写入已重置的记录。 */
         rev: 0,
-        /** 自动重读换新后置位；页面交互经 clearUpdated 清除。 */
-        updatedSinceSeen: false,
         /** 上次自动重读发起时间与在排的定时器。 */
         autoRereadAt: 0, autoTimer: null,
         meta: null,
@@ -211,7 +209,6 @@ export function createReaderStore(fetcher, onReadChanged, options) {
         try {
           await readRequest(rec.id);
         } catch { /* 重读失败：failed 态如实可见，由用户或批次重试 */ }
-        if (reads.get(rec.id) === rec && rec.status === 'fresh') rec.updatedSinceSeen = true;
         onReadChanged?.(rec.id);
         if (reads.get(rec.id) === rec && rec.detail !== null && !rec.delta.done) {
           try { await loadDelta(rec.id, 2); } catch { /* 增量失败保留事件行，可再续读 */ }
@@ -473,7 +470,6 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return {
       status: rec.status,
       detailError: rec.detailError,
-      updatedSinceSeen: rec.updatedSinceSeen,
       detail: rec.detail,
       meta: rec.meta,
       messages: rec.messages,
@@ -561,8 +557,25 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return assemble(rec);
   }
 
-  /** @param {number} id @param {number} [pages] @returns {Promise<RequestRead>} */
-  async function loadDelta(id, pages = 2) {
+  /**
+   * 增量续读在跑时合并：并发调用共享同一任务与同一份 pages 预算，不各自推进
+   * 消费位置。任务结束后释放，下一次调用继续从新位置消费。
+   * @param {number} id @param {number} [pages] @returns {Promise<RequestRead>}
+   */
+  function loadDelta(id, pages = 2) {
+    const pending = deltaInflight.get(id);
+    if (pending !== undefined) return pending;
+    const task = runDelta(id, pages);
+    deltaInflight.set(id, task);
+    void task.then(
+      () => { if (deltaInflight.get(id) === task) deltaInflight.delete(id); },
+      () => { if (deltaInflight.get(id) === task) deltaInflight.delete(id); },
+    );
+    return task;
+  }
+
+  /** @param {number} id @param {number} pages @returns {Promise<RequestRead>} */
+  async function runDelta(id, pages) {
     const rec = recordOf(id);
     const state = rec.delta;
     if (rec.detail === null) return assemble(rec);
@@ -704,12 +717,6 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return summary;
   }
 
-  /** @param {number} id 页面交互清除自动重读的「已更新」标记。 */
-  function clearUpdated(id) {
-    const rec = reads.get(id);
-    if (rec !== undefined) rec.updatedSinceSeen = false;
-  }
-
   /** @param {number} id 原地清空缓存并落作废态；不通知、不排自动重读，测试与强制失效用。 */
   function invalidate(id) {
     const rec = reads.get(id);
@@ -740,7 +747,6 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     peekSummary,
     loadSummary,
     loadSummaryEntries,
-    clearUpdated,
     invalidate,
   };
 }
