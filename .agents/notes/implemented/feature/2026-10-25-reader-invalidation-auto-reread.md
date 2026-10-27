@@ -12,7 +12,7 @@ Status: implemented
 
 作废即自动重读：同一笔按冷却窗口限频（默认 10 秒，`createReaderStore` 第三参 `autoRereadCooldownMs` 可注入），不设尝试上限，会话切换或记录被取代、重建时放弃；深度与手动重读一致（详情 + 元信息，再补最多两片可信增量）。自动换新不再置页面可见的成功标记；版本恢复期间中栏保留上一版投影并标旧版本，见[版本恢复期间保留旧投影](2026-10-27-trace-version-retention.md)。手动「立即重读」随时可用。
 
-读取接口收成单出口：`peekRequest` 记录存在即返回带 `status`/`detailError` 的快照，null 只表示本会话没有这笔记录；`peekDetailError` 退役。页面 `readingChanged` 集合、`readGapOf` 与 projectSteps 的 `ReadGap` 参数一并退役，缺口行文案由快照 status 推导（「阅读版本已变化 · 自动重读中，点击立即重读」）。批量补读只圈「无记录或 failed」，作废项归自动重读管，两条路不重复。作废与自动重读的页面重绘由 `onReadChanged`（原 `onInvalidated` 扩义：作废、自动重读各阶段完成都通知）驱动。`invalidate` 公共入口保留为原地重置，不通知、不排自动重读，供测试与强制失效。projectSteps 仍只收纯数据，不访问 store。
+读取接口收成单出口：`peekRequest` 记录存在即返回带 `status`/`detailError` 的快照，null 只表示本会话没有这笔记录；`peekDetailError` 退役。页面 `readingChanged` 集合、`readGapOf` 与 projectSteps 的 `ReadGap` 参数一并退役，缺口行文案由快照 status 推导（「阅读版本已变化 · 自动重读中，点击立即重读」）。窗口准备只圈未备齐的请求，作废项归自动重读管，两条路不重复；准备流程见[中栏窗口读取的准备流水线](../architecture/2026-10-27-trace-window-preparation.md)。作废与自动重读的页面重绘由 `onReadChanged`（原 `onInvalidated` 扩义：作废、自动重读各阶段完成都通知）驱动，页面按落点是否影响右栏决定重绘范围。`invalidate` 公共入口保留为原地重置，不通知、不排自动重读，供测试与强制失效。projectSteps 仍只收纯数据，不访问 store。
 
 ## Alternatives considered
 
@@ -24,7 +24,7 @@ Status: implemented
 
 ## Consequences
 
-作废原因可查、状态单家、批量补读与自动重读分工清晰；「加载更早」不再静默重建作废记录。代价：reader-store 引入定时器与冷却参数；缺口行的「点击重读」文案变为「自动重读中，点击立即重读」。
+作废原因可查、状态单家、窗口准备与自动重读分工清晰；「加载更早」不再静默重建作废记录。代价：reader-store 引入定时器与冷却参数；缺口行的「点击重读」文案变为「自动重读中，点击立即重读」。
 
 部分取代[生产阅读缓存 reader-store](2026-10-24-reader-store-cache.md)的「409 后自动重读」否决项与「作废记录不作为可用快照返回」「peekRequest 无快照返回 null」边界，该记录保持活跃并交叉链接本篇；[中栏读取缺口如实区分](../bug-fix/2026-10-25-reading-gap-honest-row.md)的三态文案机制由 `ReadGap` 参数改为快照 status 推导、`peekDetailError` 退役，其「不自动重读」引用同样被本篇部分取代；[路由读取生命周期与作废通知](../bug-fix/2026-10-24-reader-route-lifecycle.md)的 `onInvalidated` 更名扩义为 `onReadChanged`；[页面读取缓存收拢进 reader-store](../architecture/2026-10-24-page-cache-single-home.md)的 peekRequest 边界描述随之更新。[版本恢复期间保留旧投影](2026-10-27-trace-version-retention.md)部分取代本篇：自动重读机制保留，成功标记与显示侧不保留旧投影的结论改由那一篇承担。
 
