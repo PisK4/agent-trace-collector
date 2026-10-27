@@ -77,12 +77,12 @@ function harness(handler: Handler) {
 
 const respond = (value: unknown, status = 200) => Response.json(value, { status });
 
-test('loadEarlier 翻倍越过服务端 200 上限后 clamp，窗口继续增长', async () => {
+test('loadLater 翻倍越过服务端 200 上限后 clamp，窗口继续增长', async () => {
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) {
+    if (url.includes('/requests?direction=forward')) {
       const limit = Number(/limit=(\d+)/.exec(url)?.[1] ?? 0);
       if (!url.includes('cursor=')) {
-        return respond({ items: Array.from({ length: limit }, (_, i) => ({ req_id: 1000 - i, started_ms: 1000 - i })), next_cursor: 'c1' });
+        return respond({ items: Array.from({ length: limit }, (_, i) => ({ req_id: i, started_ms: i })), next_cursor: 'c1' });
       }
       return respond({ items: [{ req_id: 500, started_ms: 500 }], next_cursor: null });
     }
@@ -91,17 +91,44 @@ test('loadEarlier 翻倍越过服务端 200 上限后 clamp，窗口继续增长
   const store = createReaderStore(h.fetcher);
   // 初始窗口 240 行（仅用于把窗口撑过翻倍阈值；生产 windowLimit ≤ 100）。
   await store.selectSession('k', 240);
-  await store.loadEarlier();
-  const older = h.urls.find(u => u.includes('cursor='));
-  expect(older).toContain('limit=200');
+  await store.loadLater();
+  const later = h.urls.find(u => u.includes('cursor='));
+  expect(later).toContain('direction=forward');
+  expect(later).toContain('limit=200');
   const rows = store.getWindow().requests;
   expect(rows).toHaveLength(241);
-  expect(rows[0]?.req_id).toBe(500);
+  // append 在尾部：已有行序号不动，新页接在后面。
+  expect(rows[0]?.req_id).toBe(0);
+  expect(rows[240]?.req_id).toBe(500);
+  expect(store.getWindow().newerCursor).toBeNull();
+});
+
+test('窗口锚点：默认头锚点取最早一页，latest 取最新一页', async () => {
+  const h = harness(url => {
+    if (url.includes('/requests?direction=forward') && !url.includes('cursor=')) {
+      return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: 'f1' });
+    }
+    if (url.includes('/requests?direction=older') && !url.includes('cursor=')) {
+      return respond({ items: [{ req_id: 9, started_ms: 9 }], next_cursor: null });
+    }
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  // 默认头锚点：direction=forward 无游标，游标是后续记录的入口。
+  await store.selectSession('k', 30);
+  expect(store.getWindow().requests.map(r => r.req_id)).toEqual([1]);
+  expect(store.getWindow().newerCursor).toBe('f1');
+  expect(h.urls.some(u => u.includes('direction=forward'))).toBe(true);
+  // latest 锚点：direction=older 无游标，取最新一页，游标即耗尽。
+  await store.selectSession('k', 30, 'latest');
+  expect(store.getWindow().requests.map(r => r.req_id)).toEqual([9]);
+  expect(store.getWindow().newerCursor).toBeNull();
+  expect(h.urls.some(u => u.includes('direction=older'))).toBe(true);
 });
 
 test('窗口选择、元信息读取与并发去重的 fetch 序列', async () => {
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) {
+    if (url.includes('/requests?direction=forward')) {
       return respond({ items: [1, 2, 3].map(id => ({ req_id: id, started_ms: id })), next_cursor: 'c1' });
     }
     if (url.endsWith('/api/requests/1')) return respond(detail(1));
@@ -115,7 +142,7 @@ test('窗口选择、元信息读取与并发去重的 fetch 序列', async () =
   await store.selectSession('k', 30);
   const window = store.getWindow();
   expect(window.requests.map(r => r.req_id)).toEqual([1, 2, 3]);
-  expect(window.olderCursor).toBe('c1');
+  expect(window.newerCursor).toBe('c1');
   // 详情 + 元信息各一次。
   const read = await store.readRequest(1);
   expect(read.detail?.req_id).toBe(1);
@@ -137,11 +164,11 @@ test('窗口选择、元信息读取与并发去重的 fetch 序列', async () =
 });
 
 test('503 与空页时旧窗口、游标与已读内容保留', async () => {
-  let earlierFails = true;
+  let laterFails = true;
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) {
+    if (url.includes('/requests?direction=forward')) {
       if (!url.includes('cursor=')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: 'c1' });
-      return earlierFails ? respond({ error: 'unavailable' }, 503) : respond({ items: [{ req_id: 0, started_ms: 0 }], next_cursor: null });
+      return laterFails ? respond({ error: 'unavailable' }, 503) : respond({ items: [{ req_id: 2, started_ms: 2 }], next_cursor: null });
     }
     if (url.endsWith('/api/requests/1')) return respond(detail(1));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 5));
@@ -152,15 +179,15 @@ test('503 与空页时旧窗口、游标与已读内容保留', async () => {
   const store = createReaderStore(h.fetcher);
   await store.selectSession('k', 30);
   await store.readRequest(1);
-  await store.loadEarlier();
+  await store.loadLater();
   const failed = store.getWindow();
   expect(failed.requests.map(r => r.req_id)).toEqual([1]);
-  expect(failed.olderCursor).toBe('c1');
+  expect(failed.newerCursor).toBe('c1');
   expect(failed.error).toBe('http_503');
-  // 恢复后重试成功，去重排序。
-  earlierFails = false;
-  await store.loadEarlier();
-  expect(store.getWindow().requests.map(r => r.req_id)).toEqual([0, 1]);
+  // 恢复后重试成功，append 接在尾部。
+  laterFails = false;
+  await store.loadLater();
+  expect(store.getWindow().requests.map(r => r.req_id)).toEqual([1, 2]);
   expect(store.getWindow().error).toBeNull();
 });
 
@@ -168,7 +195,7 @@ test('409 整笔作废后普通读取走网络重建，并重取回复元信息'
   let bodyStatus = 200;
   let detailToken = TOKEN;
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) {
+    if (url.includes('/requests?direction=forward')) {
       return respond({ items: url.includes('%22k%22') || url.includes('/k/requests') || url.includes("'k'")
         ? [{ req_id: 1, started_ms: 1 }] : [{ req_id: 9, started_ms: 9 }], next_cursor: null });
     }
@@ -216,7 +243,7 @@ test('旧请求的迟到409不能清除已重建的新缓存', async () => {
   let release409: (value: Response) => void = () => {};
   const gated409 = new Promise<Response>(resolve => { release409 = resolve; });
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
     if (url.includes('/body?from=1&to=2')) {
       rangeCalls += 1;
@@ -299,7 +326,7 @@ test('validate 等待在跑的详情读取完成后再拉一次', async () => {
 test('迟到详情不更新新窗口，旧 token 的迟到结果不写入', async () => {
   const releaseDetail = (() => { let resolve: (v: Response) => void = () => {}; const p = new Promise<Response>(r => { resolve = r; }); return { promise: p, resolve }; })();
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) {
+    if (url.includes('/requests?direction=forward')) {
       const key = decodeURIComponent(url.split('/api/sessions/')[1]?.split('/requests')[0] ?? '');
       return respond({ items: key === 'old' ? [{ req_id: 1, started_ms: 1 }] : [{ req_id: 7, started_ms: 7 }], next_cursor: null });
     }
@@ -322,7 +349,7 @@ test('迟到详情不更新新窗口，旧 token 的迟到结果不写入', asyn
 test('工具结果按 owner 与调用序号分别缓存，失败保留到重试成功', async () => {
   let ord1Fails = true;
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) {
       return respond(detail(1, { tool_calls: [
         { call_id: 'a', ord: 0, tool_name: 'read', result_req: 2, result_ord: 1, result_path: 'request.messages[1].content[0]', state: 'resolved' },
@@ -361,7 +388,7 @@ test('工具结果 409 后整笔作废，重建读取换新 token 重取', async
   let toolStatus = 200;
   let token = TOKEN;
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
     if (url.includes('/tools/0/result')) {
@@ -393,7 +420,7 @@ test('迟到的工具结果不写入已换版本的请求', async () => {
   const gated = new Promise<Response>(resolve => { release = resolve; });
   let token = TOKEN;
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
     if (url.includes('/tools/0/result')) {
@@ -421,7 +448,7 @@ test('迟到的工具结果不写入已换版本的请求', async () => {
 
 test('81 条可信增量分两片后可显式续读剩余', async () => {
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) {
       return respond(detail(1, { delta_ordinals: Array.from({ length: 81 }, (_, i) => i) }));
     }
@@ -450,7 +477,7 @@ test('81 条可信增量分两片后可显式续读剩余', async () => {
 test('增量片缺口：空页成功响应不推进消费位置，重试重新走网络', async () => {
   let emptyPieces = true;
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1, { delta_ordinals: [0, 1] }));
     if (url.includes('/body')) {
       const from = Number(/from=(\d+)/.exec(url)?.[1]);
@@ -482,7 +509,7 @@ test('增量片缺口：空页成功响应不推进消费位置，重试重新�
 
 test('delta 分片消费与未确认关系不读消息', async () => {
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1, { delta_ordinals: [0, 1, 2, 80, 81] }));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 82));
     if (url.includes('/body?from=0&to=3')) return respond(bodyPage(0, 3, 82));
@@ -499,7 +526,7 @@ test('delta 分片消费与未确认关系不读消息', async () => {
   expect(h.count('/body?from=80&to=82')).toBe(1);
   // delta = []：立即完成，不读消息。
   const h2 = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 2, started_ms: 2 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 2, started_ms: 2 }], next_cursor: null });
     if (url.endsWith('/api/requests/2')) return respond(detail(2, { delta_ordinals: [] }));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 3));
     return respond({ error: 'not_found' }, 404);
@@ -513,7 +540,7 @@ test('delta 分片消费与未确认关系不读消息', async () => {
   expect(h2.urls.filter(u => u.includes('/body?from=')).length).toBe(1);
   // delta = null：未确认，不读消息。
   const h3 = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 3, started_ms: 3 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 3, started_ms: 3 }], next_cursor: null });
     if (url.endsWith('/api/requests/3')) return respond(detail(3, { delta_ordinals: null, prev_relation: 'unknown' }));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 3));
     return respond({ error: 'not_found' }, 404);
@@ -531,7 +558,7 @@ test('并发增量消费合并为一条任务：不各自推进消费位置', as
   let release: ((value: Response) => void) | null = null;
   const gated = new Promise<Response>(resolve => { release = resolve; });
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1, { delta_ordinals: [0, 1, 2, 3] }));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 4));
     if (url.includes('/body?from=0&to=4')) return gated;
@@ -564,7 +591,7 @@ test('切换会话后同 id 的增量不等待旧任务', async () => {
   const firstStarted = new Promise<void>(resolve => { started = resolve; });
   let session = 'old';
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1, { conv_key: session, delta_ordinals: [0], reading_token: session === 'old' ? TOKEN : TOKEN2 }));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
     if (url.includes('/body?from=0&to=1')) {
@@ -627,7 +654,7 @@ test('孤立回调的请求正文可在轨迹中读取且不冒充新增', async
     derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
   });
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1, { protocol: 'chat', reply: null, reply_state: 'absent' }));
     if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 1, {
@@ -662,7 +689,7 @@ test('孤立请求元信息读取失败后可重试正文', async () => {
     derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
   });
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/5')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return failMeta ? respond({ error: 'unavailable' }, 503) : respond(bodyPage(0, 0, 1));
     if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 1));
@@ -692,7 +719,7 @@ test('孤立请求原文分页失败可重试，工具结果不伪造配对', as
     tool_results: [{ owner_req: 9, ord: 0, result_ord: 0, result_path: 'request.messages[0]', state: 'resolved', tool_name: 'Bash' }],
   });
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/2')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 41, { protocol: 'chat' }));
     if (url.includes('/body?from=0&to=40') && failFirstPage) return respond({ error: 'unavailable' }, 503);
@@ -736,7 +763,7 @@ test('孤立请求结构页部分缺失时重试不丢弃已读消息', async ()
     derivation: { state: 'dirty', chain_state: 'unavailable' },
   });
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/6')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 2));
     if (url.includes('/body?from=0&to=40') || url.includes('/body?from=0&to=2')) {
@@ -771,7 +798,7 @@ test('孤立请求结构页缺少消息时保留位置并可重试', async () =>
     derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
   });
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/3')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 41));
     if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 41));
@@ -805,7 +832,7 @@ test('孤立请求正文换版本后自动重读新消息', async () => {
     derivation: { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' },
   });
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [request], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/4')) return respond({ ...request, reading_token: token });
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
     if (url.includes('/body?from=0&to=40')) {
@@ -833,7 +860,7 @@ test('同会话作废后迟到的路由成功响应不可用，新缓存保留',
   let routeCalls = 0;
   const releases: Array<(value: Response) => void> = [];
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.includes('/route')) {
       routeCalls += 1;
       if (routeCalls === 1) return new Promise<Response>(resolve => { releases.push(resolve); });
@@ -860,7 +887,7 @@ test('迟到的路由失败不清除已重建的新路由缓存', async () => {
   let routeCalls = 0;
   const releases: Array<() => void> = [];
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.includes('/route')) {
       routeCalls += 1;
       if (routeCalls === 1) {
@@ -890,7 +917,7 @@ test('409 只在真正作废当前记录时通知页面', async () => {
   let releaseStale: (value: Response) => void = () => {};
   const gated = new Promise<Response>(resolve => { releaseStale = resolve; });
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
     if (url.includes('/body?from=1&to=2')) {
       rangeCalls += 1;
@@ -923,7 +950,7 @@ test('409 只在真正作废当前记录时通知页面', async () => {
 test('peek 同步读取入口：不发网、无快照为 null、失败占位与作废可见', async () => {
   let detailFails = false;
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return detailFails ? respond({ error: 'unavailable' }, 503) : respond(detail(1));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
     if (url.includes('/tools/0/result')) return respond({ owner_req: 1, call_ord: 0, state: 'available', target: null, content: 'ok', is_error: null, reason: null, reading_token: TOKEN });
@@ -982,7 +1009,7 @@ test('peek 同步读取入口：不发网、无快照为 null、失败占位与�
 test('作废即自动重读：冷却内不重复发起', async () => {
   let token = TOKEN;
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1, { reading_token: token }));
     // 定点区间 0/1 永远 409：作废入口；详情与元信息正常。
     if (url.includes('/body?from=0&to=1')) return respond({ error: 'reading_changed' }, 409);
@@ -1015,7 +1042,7 @@ test('作废即自动重读：冷却内不重复发起', async () => {
 test('共享网络队列并发不超过 4', async () => {
   const h = harness(async url => {
     await delay(15);
-    if (url.includes('/requests?direction=older')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(detail(1));
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 60));
     if (/\/body\?from=\d+&to=\d+/.test(url)) {
@@ -1032,15 +1059,15 @@ test('共享网络队列并发不超过 4', async () => {
   expect(h.maxInflight()).toBeLessThanOrEqual(4);
 });
 
-test('轮次快照：按累计窗口下界请求，失败与 404 落 absent，加载更早后按下界重取', async () => {
+test('轮次快照：按累计窗口下界请求，失败与 404 落 absent，头锚点下界不随后续加载移动', async () => {
   let turnsStatus = 200;
   const changed: number[] = [];
   const h = harness(url => {
-    if (url.includes('/requests?direction=older')) {
+    if (url.includes('/requests?direction=forward')) {
       const key = decodeURIComponent(url.split('/api/sessions/')[1]?.split('/requests')[0] ?? '');
       if (key === 'empty') return respond({ items: [], next_cursor: null });
-      if (!url.includes('cursor=')) return respond({ items: [{ req_id: 10, started_ms: 10 }], next_cursor: 'c1' });
-      return respond({ items: [{ req_id: 5, started_ms: 5 }], next_cursor: null });
+      if (!url.includes('cursor=')) return respond({ items: [{ req_id: 5, started_ms: 5 }], next_cursor: 'c1' });
+      return respond({ items: [{ req_id: 10, started_ms: 10 }], next_cursor: null });
     }
     if (url.includes('/turns?from=')) {
       if (turnsStatus !== 200) return respond({ error: 'x' }, turnsStatus);
@@ -1053,17 +1080,18 @@ test('轮次快照：按累计窗口下界请求，失败与 404 落 absent，�
     return respond({ error: 'not_found' }, 404);
   });
   const store = createReaderStore(h.fetcher, undefined, { onTurnsChanged: () => changed.push(1) });
-  // 选会话后自动取一次，下界取窗口最早请求。
+  // 选会话后自动取一次，下界取窗口最早请求（头锚点即会话开头一页的最早笔）。
   await store.selectSession('k', 30);
   await store.loadTurns();
-  expect(h.urls.some(u => u.includes('/turns?from=10'))).toBe(true);
-  expect(store.peekTurns().status).toBe('ready');
-  // 起点 7 在下界 10 之前：服务端不返回，快照里只有轮 2。
-  expect(store.peekTurns().items.map(t => t.turn)).toEqual([2]);
-  // 加载更早：下界降到 5，重取后两轮都在。
-  await store.loadEarlier();
-  await store.loadTurns();
   expect(h.urls.some(u => u.includes('/turns?from=5'))).toBe(true);
+  expect(store.peekTurns().status).toBe('ready');
+  // 起点 7 与 12 都在下界 5 之后：两轮都在快照里。
+  expect(store.peekTurns().items.map(t => t.turn)).toEqual([1, 2]);
+  // 加载后续：窗口向尾部追加，下界不动，轮次无需重取。
+  await store.loadLater();
+  expect(store.getWindow().requests.map(r => r.req_id)).toEqual([5, 10]);
+  await store.loadTurns();
+  expect(h.urls.some(u => u.includes('/turns?from=10'))).toBe(false);
   expect(store.peekTurns().items.map(t => t.turn)).toEqual([1, 2]);
   // 读取失败落 absent：带不渲染，不占位；恢复后下次触发重取。
   turnsStatus = 503;

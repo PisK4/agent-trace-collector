@@ -198,9 +198,9 @@ export function sessionSummaryFold(s, sessionKey, open) {
 /** 会话头：标题、身份行、窗口合计与汇总折叠区、视图操作行与定位提示。
  *  @param {{sessionKey: string | null, row: SessionRow | null, rows: RequestRow[], refreshedAt: number | null,
  *    missingReqId: number | null, offPageReqId: number | null, windowError: string | null,
- *    summary: SessionSummary | null, summaryFoldOpen: boolean}} input */
+ *    summary: SessionSummary | null, summaryFoldOpen: boolean, windowAnchor: 'start' | 'latest'}} input */
 export function sessionHead(input) {
-  const { sessionKey, row, rows, refreshedAt, missingReqId, offPageReqId, windowError, summary } = input;
+  const { sessionKey, row, rows, refreshedAt, missingReqId, offPageReqId, windowError, summary, windowAnchor } = input;
   const unknown = sessionKey !== null && row === null;
   const first = rows[0] ?? null;
   const latest = rows[rows.length - 1] ?? null;
@@ -234,12 +234,14 @@ export function sessionHead(input) {
     <div class="view-row">
       <span class="grow"></span>
       ${refreshedAt !== null ? `<span class="muted" style="font-size:10.5px">刷新于 ${esc(clock(refreshedAt))}</span>` : ''}
-      <button class="chip-btn" id="refresh-window" title="重新读取最近窗口；输入变化会换发阅读版本">刷新</button>
-      <button class="chip-btn" id="jump-latest">回到最新 ↓</button>
+      <button class="chip-btn" id="refresh-window" title="重新读取当前窗口；输入变化会换发阅读版本">刷新</button>
+      ${windowAnchor === 'latest'
+        ? '<button class="chip-btn" id="jump-opposite" title="重建为会话最早一页，从头阅读">回到开头 ↑</button>'
+        : '<button class="chip-btn" id="jump-opposite" title="重建为会话最新一页，选中最新一笔">回到最新 ↓</button>'}
     </div>
     ${unknown ? `<div class="session-note warn"><span>↳</span><span>链接里的会话 key 不在已加载的会话里：可能是已淘汰、从未记录，或者还在后面的会话页。下面没有用别的会话顶替。</span></div>` : ''}
     ${missingReqId !== null ? `<div class="session-note warn"><span>↳</span><span>链接里的 Request ${missingReqId} 在当前库里不存在，也没有别名指向它。下面显示的是本会话的请求，不是那一笔。</span></div>` : ''}
-    ${offPageReqId !== null ? `<div class="session-note"><span>↳</span><span>链接里的 Request ${offPageReqId} 存在，但不在当前载入窗口（可能在更早的历史里）；从顶部加载更早记录后可以选到它，右栏已显示它的详情。不自动扫描全部历史。</span></div>` : ''}
+    ${offPageReqId !== null ? `<div class="session-note"><span>↳</span><span>链接里的 Request ${offPageReqId} 存在，但不在当前载入窗口，右栏已显示它的详情。不自动扫描全部历史。<button class="chip-btn" id="switch-window">${windowAnchor === 'latest' ? '回到开头窗口' : '切到最新窗口'}</button></span></div>` : ''}
     ${windowError !== null ? `<div class="session-note warn"><span>↳</span><span>请求窗口读取失败：${esc(windowError)}。已加载内容保持不变，可重试。</span></div>` : ''}
   </header>`;
 }

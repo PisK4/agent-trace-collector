@@ -29,11 +29,11 @@ import { deltaOrdinals, messageEntries } from './body-model.js';
 
 /**
  * @typedef {Object} ReaderStore
- * @property {() => {sessionKey: string | null, requests: import('../src/queries/projection').RequestRow[], olderCursor: string | null, loading: boolean, error: string | null}} getWindow
+ * @property {() => {sessionKey: string | null, requests: import('../src/queries/projection').RequestRow[], newerCursor: string | null, loading: boolean, error: string | null}} getWindow
  * @property {() => {items: import('../src/queries/sessions').SessionRow[], cursor: string | null, error: string | null}} getSessions
  * @property {(cursor?: string) => Promise<void>} loadSessions
- * @property {(key: string, limit?: number) => Promise<void>} selectSession
- * @property {() => Promise<void>} loadEarlier
+ * @property {(key: string, limit?: number, anchor?: 'start' | 'latest') => Promise<void>} selectSession
+ * @property {() => Promise<void>} loadLater
  * @property {(id: number, validate?: boolean) => Promise<RequestRead>} readRequest
  * @property {(id: number, from: number, to: number) => Promise<import('../src/protocols').BodyPage>} readRange
  * @property {(id: number) => Promise<RequestRead>} loadStructure
@@ -100,8 +100,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   let sessionKey = null;
   /** @type {import('../src/queries/projection').RequestRow[]} */
   let windowRows = [];
-  /** @type {string | null} */
-  let olderCursor = null;
+  /** @type {string | null} 后续记录游标：耗尽表示窗口已覆盖到会话最新一笔。 */
+  let newerCursor = null;
   let windowLoading = false;
   /** @type {string | null} */
   let windowError = null;
@@ -337,8 +337,13 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return /** @type {import('../src/queries/session-summary').SummaryEntries} */ (data);
   }
 
-  /** @param {string} key @param {number} limit */
-  async function selectSession(key, limit = 30) {
+  /**
+   * 选中会话并载入初始窗口。头锚点（默认）取会话最早一页，进入即从头阅读；
+   * 尾锚点取最新一页，供「回到最新」使用。两个锚点都是单页窗口，扩展只沿
+   * 头锚点向会话后部追加。
+   * @param {string} key @param {number} limit @param {'start' | 'latest'} [anchor]
+   */
+  async function selectSession(key, limit = 30, anchor = 'start') {
     const myEpoch = ++epoch;
     sessionKey = key;
     windowLoading = true;
@@ -351,14 +356,14 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     routes.clear();
     routeValues.clear();
     try {
-      const page = await getJson(`/api/sessions/${encodeURIComponent(key)}/requests?direction=older&limit=${limit}`);
+      const page = await getJson(`/api/sessions/${encodeURIComponent(key)}/requests?direction=${anchor === 'latest' ? 'older' : 'forward'}&limit=${limit}`);
       if (myEpoch !== epoch) return;
       windowRows = page.items;
-      olderCursor = page.next_cursor;
+      newerCursor = page.next_cursor;
     } catch (error) {
       if (myEpoch !== epoch) return;
       windowRows = [];
-      olderCursor = null;
+      newerCursor = null;
       windowError = error instanceof Error ? error.message : 'window_failed';
     } finally {
       if (myEpoch === epoch) {
@@ -370,23 +375,21 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     }
   }
 
-  async function loadEarlier() {
-    if (windowLoading || olderCursor === null) return;
+  async function loadLater() {
+    if (windowLoading || newerCursor === null) return;
     const myEpoch = epoch;
     windowLoading = true;
     windowError = null;
     try {
       // 服务端窗口分页上限 200（queries.checkLimit）：翻倍请求越过上限后
       // 每次都会 400，窗口停在 400 行以内；clamp 到上限继续按页加载。
-      const page = await getJson(`/api/sessions/${encodeURIComponent(String(sessionKey))}/requests?direction=older&limit=${Math.min(windowRows.length > 0 ? windowRows.length : 30, 200)}&cursor=${encodeURIComponent(olderCursor)}`);
+      const page = await getJson(`/api/sessions/${encodeURIComponent(String(sessionKey))}/requests?direction=forward&limit=${Math.min(windowRows.length > 0 ? windowRows.length : 30, 200)}&cursor=${encodeURIComponent(newerCursor)}`);
       if (myEpoch !== epoch) return;
-      // prepend + 去重 + 排序：失败保留旧 rows/cursor 由 catch 负责。
+      // append + 去重：forward 页按 (started_ms, req_id) 升序返回，接在尾部即全窗正序；
+      // 既有行不重编号，轮次下界不动、无需重取。
       const seen = new Set(windowRows.map(row => row.req_id));
-      windowRows = [...page.items.filter((/** @type {{req_id: number}} */ row) => !seen.has(row.req_id)), ...windowRows]
-        .sort((a, b) => a.started_ms - b.started_ms || a.req_id - b.req_id);
-      olderCursor = page.next_cursor;
-      // 窗口下界前移：按新的累计范围重取轮次，更早的轮补进带里。
-      void loadTurns();
+      windowRows = [...windowRows, ...page.items.filter((/** @type {{req_id: number}} */ row) => !seen.has(row.req_id))];
+      newerCursor = page.next_cursor;
     } catch (error) {
       if (myEpoch !== epoch) return;
       windowError = error instanceof Error ? error.message : 'window_failed';
@@ -745,11 +748,11 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   }
 
   return {
-    getWindow: () => ({ sessionKey, requests: windowRows, olderCursor, loading: windowLoading, error: windowError }),
+    getWindow: () => ({ sessionKey, requests: windowRows, newerCursor, loading: windowLoading, error: windowError }),
     getSessions: () => sessions,
     loadSessions,
     selectSession,
-    loadEarlier,
+    loadLater,
     readRequest,
     readRange,
     loadStructure,
