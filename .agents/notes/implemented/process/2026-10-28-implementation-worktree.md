@@ -18,7 +18,7 @@ Status: implemented
 - **依赖。** 符号链接主检出的 `node_modules`，不重复 `bun install`。
 - **验证隔离。** worktree 里起采集器必须给 `ATC_DATA_DIR` 临时根与 `ATC_PORT`；默认数据目录指向生产库（[配置入口](../../../../src/config.ts)）。
 - **服务归属。** `bun run service` 按 plist 的 `ProgramArguments` 认跑本检出 `src/main.ts` 的条目（[探测](../../../../scripts/service-support.ts)），worktree 里的实例归主检出，重启在合并后的主检出执行。
-- **合并与清理。** 验证通过后 `git merge --no-ff` 进 `master`；改动触及 `src/` 才需要 `bun run service restart`；随后 `git worktree remove` 与 `git branch -d`。
+- **合并与清理。** 验证通过后用 `git merge --no-ff` 进 `master`，合并提交保留 worktree 分支这一侧的历史；改动触及 `src/` 才需要 `bun run service restart`；随后只移除工作树目录，分支名保留。
 
 ```sh
 cd ../../                                                # creator-intelligence
@@ -31,12 +31,14 @@ ATC_DATA_DIR=$(mktemp -d) ATC_PORT=8399 bun run start
 cd ../../repos/agent-trace-collector                     # 验证通过后回主检出
 git merge --no-ff feat/<topic> -m "merge: <主题>"
 bun run service restart                                  # 仅当改动触及 src/
-git worktree remove ../../.codex-worktrees/atc-<topic> && git branch -d feat/<topic>
+git worktree remove ../../.codex-worktrees/atc-<topic>   # 目录移除，分支名保留
 ```
 
 ## Alternatives considered
 
 **直接提交 `master`。** 路径最短，但 `web/` 每次请求现读，改到一半就已经对生产生效，没有隔离可言。
+
+**快进合并。** `master` 直接指向分支顶端，看不出这批改动出自哪条实现线，整次落地要逐笔 revert。`--no-ff` 让合并提交保留第二父：`git log --first-parent` 一行一次落地，整次落地用 `git revert -m 1` 一次撤回。
 
 **主检出上切分支或 stash。** 不需要第二个目录，但未完成的改动与生产检出混在一起，stash 还要额外的恢复动作；切分支期间主检出停在不代表生产的提交上。
 
@@ -50,7 +52,11 @@ git worktree remove ../../.codex-worktrees/atc-<topic> && git branch -d feat/<to
 
 生产生效点是合并与重启两件事，合并前 worktree 的改动不外泄。`web/` 合完即生效，`src/` 要等到 `bun run service restart`。
 
-多一步合并与清理。已合并的 worktree 需要显式移除，规则把这一步并进合并动作；漏掉的不会自动消失，会一直留在 `.codex-worktrees/` 里。
+多一步合并与清理。已合并的工作树目录需要显式移除，规则把这一步并进合并动作；漏掉的不会自动消失，会一直留在 `.codex-worktrees/` 里。
+
+每次落地在 `master` 上多一个合并提交。换来的是第一父视图只列落地，整次落地可 `git revert -m 1` 一次撤回。
+
+分支名保留，`git branch` 会持续积累已合并的实现线；需要精简时手动 `git branch -d`，删掉分支名不影响合并提交里的历史。
 
 软规则不拦人。忘记建 worktree 不会报错，只在事后表现为主检出带着半成品。
 
@@ -58,4 +64,4 @@ worktree 里 `bun run service` 找不到本检出的服务条目，验证只能�
 
 ## Testing
 
-命名、基线与清理判据按现有七个 worktree 的实际状态核对：全部合并进 `master`、工作区干净、`node_modules` 为符号链接。软规则没有运行时行为，判定由本期改动不触发自身（文档与单文件修正留在主检出）来体现。
+命名、基线与清理判据按现有七个 worktree 的实际状态核对：全部合并进 `master`、工作区干净、`node_modules` 为符号链接。`--no-ff` 实跑过一轮：临时分支上提交一笔，`master` 是它的祖先（快进本可直接触发），`git merge --no-ff` 得到的合并提交两个父，`git log --first-parent` 只多一行落地；冒烟用的工作树与分支已移除。软规则没有运行时行为，判定由本期改动不触发自身（文档与单文件修正留在主检出）来体现。
