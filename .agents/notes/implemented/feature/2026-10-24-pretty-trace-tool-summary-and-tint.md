@@ -34,13 +34,13 @@ Status: implemented
 
 ### 一行摘要：toolSummary 按工具分派
 
-`toolSummary(name, inputText)` 仍是 `web/trace-view.js` 的纯函数，签名不变。内部拆成 `summaryParts`（身份 + 参数段），chip 与预览各取一段。文件类参数一律 basename（取路径最后一段），完整路径与参数进悬停 title 与右栏。逐工具格式：
+`toolSummary(name, inputText)` 仍是 `web/trace-view.js` 的纯函数，签名不变。内部拆成 `summaryParts`（身份 + 参数段），chip 与预览各取一段。文件类参数折成末两段（`父目录/文件名`，完整路径进悬停 title 与右栏；2026-10-27 由 basename 改为末两段，见[路径显示末两段](2026-10-27-trace-path-two-segments.md)）。逐工具格式：
 
 | 工具 | 行内格式 | 规则 |
 | --- | --- | --- |
-| Read | `Read · queries.ts · 1400–1530 行` | offset+limit 折算区间；只有 limit → `前 130 行`；只有 offset → `1400 行起`；都没有 → 只文件名 |
-| Edit | `Edit · derive.ts · 42→18 行` | old_string 与 new_string 的行数对比（按换行计，空串 0 行）；`replace_all=true` 追加 `· 全部替换` |
-| Write | `Write · memory.md · 1.2 KB` | content 字节数，不足 1KB 显示 B，其余 KB 一位小数，满 1 MB 用 MB |
+| Read | `Read · src/queries.ts · 1400–1530 行` | offset+limit 折算区间；只有 limit → `前 130 行`；只有 offset → `1400 行起`；都没有 → 只路径 |
+| Edit | `Edit · src/derive.ts · 42→18 行` | old_string 与 new_string 的行数对比（按换行计，空串 0 行）；`replace_all=true` 追加 `· 全部替换` |
+| Write | `Write · docs/memory.md · 1.2 KB` | content 字节数，不足 1KB 显示 B，其余 KB 一位小数，满 1 MB 用 MB |
 | Bash / bash | `Bash · 重跑全量测试` | description 优先；缺失取 command 第一个非空行 |
 | Skill | `Skill · ponytail · 打开本地页面截图` | skill 名必有；args 非空时追加 |
 | Agent | `Agent · general-purpose · 核对派生方案` | subagent_type 加 description |
@@ -48,7 +48,7 @@ Status: implemented
 | SubagentHandback | `SubagentHandback · 消息首行` | message 首行 |
 | WebFetch | `WebFetch · github.com/owner/repo` | url 去协议前缀 |
 | ToolSearch | `ToolSearch · select:SendMessage` | query 原样 |
-| 其他 / 未识别 / MCP | 回退链保留 | command→cmd→file_path→path→pattern→原文；file_path 与 path 同样 basename 化 |
+| 其他 / 未识别 / MCP | 回退链保留 | command→cmd→file_path→path→pattern→原文；file_path 与 path 同样折成末两段 |
 
 核心键缺失的已知工具（如 Read 无 file_path）回落到回退链，不冒充文件摘要。摘要不在字符数上预截断。Bash description 一类自述显示到中栏列宽为止，预览文本完整进 DOM，超长由 CSS 省略号收在列宽内（2026-10-25 用户修订，取代原 140 字符预算）。悬停 title 放完整参数 JSON（超 2000 字符截断，避免大参数撑爆属性）。行区间是显示折算，不是事实断言。offset 的基数语义因客户端而异，区间只作扫读锚点；悬停与右栏仍给原始键值。
 
@@ -87,7 +87,7 @@ Status: implemented
 
 **摘要进派生层（tool_call 持久化 input_summary 列）。** 否决：显示字符串入库会把展示格式绑进派生版本。「解释只影响显示」是既定边界（正文分页的 interpretations 同一立场），前端按窗口现算，成本可忽略。
 
-**相对 cwd 显示路径。** 读模型未暴露 cwd（`raw_hook` 有列但不在 request 详情），且 cwd 覆盖不完整（zcode 侧实测全空，见[zcode 支持提案](../../proposed/feature/2026-10-24-zcode-agent-support.md)边界外）。basename 加悬停全路径不依赖它。
+**相对 cwd 显示路径。** 读模型未暴露 cwd（`raw_hook` 有列但不在 request 详情），且 cwd 覆盖不完整（zcode 侧实测全空，见[zcode 支持提案](../../proposed/feature/2026-10-24-zcode-agent-support.md)边界外）。末两段加悬停全路径不依赖它。
 
 **MCP 工具逐个配色。** 否决：开放式集合逐个配色永远追不完。统一中性色即可辨识为「其他工具」。
 
