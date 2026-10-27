@@ -5,95 +5,94 @@
 ## 基础名词
 
 **请求**：
-主实体，一笔客户端提交给 magpie 的请求，可包含多次上游尝试；direct/reported 记录按其来源另外标识。
+本项目的主记录单位，表示来源报告的一笔调用；网关请求可包含多次上游尝试。magpie 与 harness OTLP 都可提供请求记录，同一调用经两条通道分别记录时，请求行数不等于去重后的调用数。
 
 **session**：
-客户端自己声明的会话 id，magpie 原样记录。
+客户端或 harness 声明的会话标识，由 magpie 转报或从 OTLP 属性映射而来；标识缺失时不凭空推定会话归属。
 
 **conv**：
-magpie 根据首条用户消息生成的会话指纹，只在没有 session 时使用。
+magpie 根据首条用户消息生成的会话指纹，只在没有 session 时用于会话归属；它不等同于本项目通用的会话分组键 conv_key。
 
 **trace**：
-本项目的展示单位，等价于一笔请求。
+本项目对一笔请求记录及其详情的称呼，不等同于 OTLP 中由 trace_id 标识、可含多个 span 的 trace。页面可以按会话连续阅读多笔请求。
 
 ## 证据的坐标
 
 **证据通道**：
-一条逻辑请求由哪几路证据合成，取值 hook / ledger / route / otlp_span，落在 request_evidence.source_kind。have 位图（1 hook、2 账本、4 路由、8 OTLP span）是它的读侧影子。
-_Avoid_: 来源（单独说「来源」时指代不明）
+提供请求证据的输入类别，如 hook、账本、路由与 OTLP span；对应 request_evidence.source_kind，区别于读取原始记录的物理来源。
+_Avoid_: 来源（不说明是证据通道、物理来源还是流量种类）
 
 **物理来源**：
-一条原始账本行从哪次读取来，取值 file / api，落在 raw_ledger.source_kind。文件行按 (file_generation, byte_offset) 定位，api 行按批次页内序号。
-_Avoid_: 与证据通道共用同一个 source_kind 词形
+原始账本记录的取得方式，如文件读取或 API 拉取；对应 raw_ledger.source_kind。相同字段名在证据表中表示证据通道，引用时须带所属概念或表名。
 
 **流量种类**：
-一笔调用在网关侧走的路径，取值 through / direct / rejected，落在 raw_ledger.source。
+magpie 账本对调用路径的分类，对应 raw_ledger.source；它与请求记录的创建通路分别描述上游调用和本地建行。
 _Avoid_: via
 
 **出生通路（via）**：
-创建该 request 行的通路，取值 through / hook / direct / rejected / otlp，回答这一行从哪条通路生出来。via='hook' 是暂存行：hook 先到且未对上账本时的行，合并成功即被删除，存活的是账本建的行。via='otlp' 是终态行：harness 侧 span 建的行，独立存在，不与 magpie 行合并。
-_Avoid_: 当作流量种类读
+创建本地请求记录的通路，对应 request.via；后续证据汇入不使它变成证据来源的完整集合。hook 暂存请求可被折叠进账本请求，OTLP 请求独立保留，具体规则见[合并规则](docs/architecture-design.md#合并规则)。
+_Avoid_: 当作流量种类或全部证据通道读
 
 **关联**：
-一条证据行与请求行的挂接状态，merge_state 取 merged / pending；多候选歧义由 pending_hook.candidates 承载，不写进 merge_state。
-_Avoid_: 请求折叠（两回事）
+证据记录与请求记录的挂接关系；关联状态与多候选歧义分别记录，字段约定见[请求与证据的关联](docs/architecture-design.md#请求与证据的关联)。
+_Avoid_: 请求折叠
 
 **请求折叠**：
-两行 request 并成一行的动作：旧 id 进 request_alias，证据、正文引用与派生输入随迁，源行删除。
-_Avoid_: merge_state（那是关联状态）
+将两条被判定为同一请求的本地记录合为一条，保留证据与引用的归属；它改变请求记录本身的身份关系。
+_Avoid_: merge_state（证据关联状态）
 
-## 递增计数家族
+## 身份、修订与版本
 
-七个计数各自回答一个问题，互不代入。
+这些标识分别回答记录属于哪一代、输入变过几次、结果由哪套规则生成，不能统一当作递增计数。
 
-**file_generation**：文件身份，dev + inode + birthtime，不含 size；正常追加不换代际。
+**file_generation**：文件读取代际，用于区分文件更替或重写前后的记录；正常追加不换代。它与底层文件身份的区别见[物理记录身份](docs/architecture-design.md#物理记录身份)和[增量读取协议](docs/architecture-design.md#增量读取协议)。
 
-**rewrite_epoch**：同一文件身份内的重写计数；截断或原地重写时 +1，游标归零重读而旧行身份仍有效。
+**rewrite_epoch**：同一底层文件身份内的重写计数；用于区分截断或原地重写前后的读取代际，不能比较不同文件的新旧。
 
-**group_epoch**：派生组删除重建后的世代；旧完成记录不复用到新组。
+**group_epoch**：派生组的世代身份；组删除后重建会取得新身份，旧完成记录不能复用到新组。它不表示组重建过多少次。
 
-**input_revision**：组消费过的输入修订，只增不减；正文、证据、归属变化推进它，只改费用不推进。
+**input_revision**：同一输入身份内的修订号，输入变化时递增；当前修订与结果已消费的修订需要分别判断，见[组完成与输入修订](docs/architecture-design.md#组完成与输入修订)。
 
-**derive_generation**：派生结果的发布代；读口径由队列上的 published_generation 指针切换。
+**derive_generation**：一代派生结果的身份，涵盖构建中、已发布或已丢弃等阶段；标识本身不表示先后，也不证明该代已经发布。生命周期与读出规则见[派生代际与发布指针](docs/architecture-design.md#派生代际与发布指针)。
 
-**derive_version**：该行被重算过的历史计数，不表示当前算法。
+**derive_version**：请求行在同步派生路径上的历史更新计数；不表示当前算法，也不能用来判断结果是否最新。
 
-**mapping_version / privacy_version**：原始行按哪版字段映射或脱敏规则变换；规则改版后旧行保持旧口径。
+**mapping_version / privacy_version**：记录变换时采用的字段映射或脱敏规则版本；规则升级不会使旧记录自动具备新版本的含义。
 
 ## 认识论五词
 
-**缺失（missing）**：没有观测到。have 位图为 0、费用 absent 都属于它；raw 过期是本次证据缺失，不是从没观测过。
+**缺失（missing）**：所需证据未取得或当前不可用；历史证据过期不等于从未观测过。
 
-**歧义（ambiguous）**：观测到多个候选，不挑一个。工具配对与费用匹配适用。
+**歧义（ambiguous）**：存在多个候选且证据不足以唯一确定；不能任挑一个作为结论。
 
-**未知（unknown）**：有观测但推不出结论。prev_relation=unknown 表示链断了；不许升级成 branch。
+**未知（unknown）**：已有观测仍不足以推出结论；例如前驱关系未知不能升级成已确认的分支。
 
-**未证实（unproven）**：同毫秒先后只有同一账本代际内的偏移能证明；证不了时尝试明细按 pending_final 处理。
+**未证实（unproven）**：某项判断缺少所需证明；例如时间相同的记录不能仅凭时间戳证明先后关系。
 
-**保留（retained）**：旧结论按旧算法与旧输入算得，本次读不出来，原样保留，不冒充新。
+**保留（retained）**：当前无法重算而沿用的历史结论；它仍属于原算法与原输入，不能冒充本轮新结论。
 
-确定结论只认 derived_state='current'。
+派生结论是否可当作当前结论读取，见[读模型里的派生状态](docs/architecture-design.md#读模型里的派生状态)；该判定不限制独立来源事实的读取。
 
 ## 销毁动词
 
-**回收（evict）**：正文预算驱动，body_state 置 evicted，body_prev_state 保留原状态；元数据不参与。
+**回收（evict）**：为满足正文预算而释放正文存储，保留请求元数据；具体规则见[回收](docs/architecture-design.md#回收)。
 
-**过期（expire）**：raw 层按 TTL 删除，删除前先标 payload_state=expired。
+**过期（expire）**：原始证据超过保留期后退出原始层；不代表相关请求从未发生。
 
-**淘汰（purge）**：维护命令显式执行，按证据键写墓碑；来源回放命中墓碑计 purged_skip，不复活。
+**淘汰（purge）**：维护操作显式移除选定数据，并阻止对应来源回放使其重新出现；区别于预算回收与按保留期过期。
 
 ## kind 三族
 
-**调用用途（kind）**：上游自报的调用用途，如 web_search、compact，落在 raw_ledger.kind，与 handed_on 无关。
+**调用用途（kind）**：上游报告的调用用途，对应 raw_ledger.kind；与一次尝试是否转交给其他上游无关。
 
-**请求种类（req_kind）**：派生层判定的请求种类；title 等旁路请求由此排除出祖先集合，正式标题存 model_title。
+**请求种类（req_kind）**：本项目对单笔请求用途的判定结果；与上游自报用途和是否参与主链分别表达不同事实。
 
-**链参与（purpose_chain）**：这一笔参不参与主链；exclude 的请求不进祖先集合，判定规则归用途阶段。
+**链参与（purpose_chain）**：请求是否参与主链的判定；被排除的请求不进入祖先集合。
 
 ## 判定与读出
 
-**结算（settle）**：一次判定落成结论的动作。用途结算在 request-purpose 的 CAS 中落库，供派生与查询消费；轮次结算在读模型按累计窗口即时配对，不落表。
-_Avoid_: 与「派生」混用——派生是组级视图的重算管线，结算落定的是单笔判定
+**结算（settle）**：一次判定形成结论的动作；用途结算确定单笔请求的用途，轮次结算确定请求与回复在轮次中的配对。
+_Avoid_: 与派生混用（派生是组级视图的重算过程）
 
-**读数（readings）**：页面呈现的数值及其面板：读数页、头部读数条、悬停读数都指它，数值来自账本列或会话合计。
-_Avoid_: 与「读取」（正文读取动作）、「读模型」（查询侧）混用；英文同为 read 时按语境分辨
+**读数（readings）**：页面呈现的数值及其面板，包括读数页、头部读数条与悬停读数。
+_Avoid_: 与读取（正文读取动作）、读模型（查询侧）混用

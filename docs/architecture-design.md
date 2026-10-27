@@ -268,19 +268,19 @@ hook 之外，magpie 自己还有两条正文通路，性质不同，都影响�
 (source_kind, file_generation, byte_offset)
 ```
 
-`source_kind` 里 `file` 表示 `usage.jsonl`，`api` 表示从 HTTP 接口拉到的 direct 行。`file_generation` 是文件身份，只有 dev + inode + birthtime，不含 size、mtime 或任何随内容增长而变的东西。`byte_offset` 是该行在文件中的起始字节。`route_id` 降为普通索引，不唯一，真唯一键是上面这个三元组。
+`source_kind` 里 `file` 表示 `usage.jsonl`，`api` 表示从 HTTP 接口拉到的 direct 行。对文件来源，`file_generation` 是底层文件身份与重写代次组成的读取代际，不含 size、mtime 或任何随正常追加而变化的量；具体形状见[增量读取协议](#增量读取协议)。`byte_offset` 是该行在文件中的起始字节。`route_id` 是普通索引，不唯一，真唯一键是上面这个三元组。
 
 身份里放 size 或者放内容哈希都会失效。写进 size 的话，每次正常追加都会换一个代际，于是偏移归零、整文件重读，而代际又是主键的一部分，旧行会以新身份再入库一次，尝试明细与用量汇总随之重复。把首块哈希定义成文件前 64 KiB 同样不行：文件从 10 KiB 长到 100 KiB 时，参与哈希的字节从 10 KiB 变成 64 KiB，指纹照样变。凡是拿内容做身份，都会在文件增长时失效。
 
-所以代际只取不随追加变化的元数据：
+底层文件身份取不随追加变化的元数据：
 
 ```text
-file_generation = dev + inode + birthtime
+file_identity = dev + inode + birthtime
 ```
 
 `birthtime` 取自 `stat`，用于区分同一个 inode 被复用这种少见情形。文件身份回答的是这是哪个文件，长度与修改时间回答的是它变了吗，两者分开存。本机三个字段都在：`usage.jsonl` 的 `birthtimeMs` 与 `stat` 的 `%B` 一致，Bun 的 `fs.statSync(p, { bigint: true })` 直接给到 `birthtimeMs`。
 
-首次见到一个文件时另记一条冻结的头部基线：当时的长度与这段长度的哈希，存进游标就不再重算。之后每轮只在 dev 与 inode 都没变时，按存下来的长度重新哈希同一段并比对。一致说明还是那个文件，不一致说明 inode 被复用了或者文件被原地重写，这才算新代际。基线长度取 `min(size, 64 KiB)` 且在第一次见到时就固定，不随后续增长而变。
+每个读取代际还保存一条冻结的头部基线，用来识别同一底层文件的截断或原地重写。基线长度、重写代次与游标重置规则统一见[增量读取协议](#增量读取协议)。
 
 两个来源的去重规则不共用。路由可以用 `route_id` 做逻辑去重，一条路由一份记录；账本不行，同一 `route_id` 下可能有多条计费行，物理身份是唯一能区分它们的东西。读取器的公共部分只到切出完整行、按代际与偏移去重这一层，之后的幂等键由各来源自己决定。`.gz` 被整体重写时偏移没有意义，路由重读后按 `route_id` upsert，与物理身份无关。
 
@@ -332,7 +332,7 @@ CREATE TABLE source_cursor (
 );
 ```
 
-`seen_size` 不进 `file_generation`；`head_len` 在当前代际首次提交完整行时冻结，换代后重新建立。账本在库内固定标识为 `ledger / usage.jsonl`，不随配置里的文件名改变。
+`seen_size` 不进 `file_generation`；`head_len` 在当前代际首次提交完整行时取 `min(size, 64 KiB)` 并冻结，换代后重新建立。账本在库内固定标识为 `ledger / usage.jsonl`，不随配置里的文件名改变。
 
 读取结果统一为 `SourceRead`，包含 `SourceCursor` 的来源身份与全部游标字段，以及文件形态、状态、行与坏行。在线账本与路由共用 `ingestSource`：追加 jsonl 与封口 gzip 按不同引用基址记录路由坏行，记录内核分别保留账本物理身份与路由 `route_id` 规则。坏行、证据、游标与 `last_ok_ms` 在一个具名事务内提交（`ledger` 或 `route`）。失败时共同回滚，游标回到上批末尾，下轮重新读取并记账，证据按既有身份幂等。
 
@@ -929,7 +929,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 ### 派生算法版本
 
-`request.derive_version` 记录这一行被重算过几次，只是历史计数，不再表示"按哪版算出来"。算法改动后按会话或按天批量重算，整体重建入口：从 `request_evidence` 找到原始记录，按当前算法重跑，写回同一 `req_id`。目标版本、实际算法与保留行由下面两节的三类记录回答。
+`request.derive_version` 在同步组派生更新请求摘要时递增，包括保留旧摘要的更新；它是该路径的历史计数，不代表算法版本、切片发布次数或结果是否最新。算法改动后按会话或按天批量重算，整体重建入口：从 `request_evidence` 找到原始记录，按当前算法重跑，写回同一 `req_id`。目标版本、实际算法与保留行由下面两节的三类记录回答。
 
 ### 有界来源事实与结果依据
 
@@ -948,7 +948,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 原始行与证据行记下 `mapping_version` 与 `privacy_version`：脱敏规则或字段映射改动后，旧行是按旧规则变换的，读模型与迁移要能分辨，而不是假设库里所有行同口径。
 
-摘要与工具配对也记自己的依据。`summary_state='recomputed'` 时写 `summary_algorithm` 与 `summary_basis`（输入修订、组世代、算法）；正文不可读时 `summary_state='retained'`，原算法与 basis 原样保留。工具行写 `algorithm_version` 与 `basis_json`，正文已回收、本轮没有重建的行只标 `retention_state='retained'`。`derive_version` 不再逐次累加，也不再被当作"当前算法"读：维护报告用 `target_algorithm`、`actual_algorithms`（按实际算法分组计数，null 归 `legacy`）与 `legacy_requests` 分开回答目标、实际与保留。
+摘要与工具配对也记自己的依据。`summary_state='recomputed'` 时写 `summary_algorithm` 与 `summary_basis`（输入修订、组世代、算法）；正文不可读时 `summary_state='retained'`，原算法与 basis 原样保留。工具行写 `algorithm_version` 与 `basis_json`，正文已回收、本轮没有重建的行只标 `retention_state='retained'`。`derive_version` 的历史计数语义见[派生算法版本](#派生算法版本)。维护报告用 `target_algorithm`、`actual_algorithms`（按实际算法分组计数，null 归 `legacy`）与 `legacy_requests` 分开回答目标、实际与保留。
 
 ### 正文块读取复用
 
@@ -967,7 +967,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | 字段 | 含义 |
 | --- | --- |
 | `group_epoch` | 组的世代。组被删除后重建拿到新 epoch，旧完成记录因此不能复用到新组 |
-| `input_revision` | 该组消费过的输入修订，只增不减；任何写入者发现输入变化就推进它 |
+| `input_revision` | 该组当前输入的修订号，在同一组世代内只增不减；输入变化就推进，完成时消费的修订另记在 `published_revision` |
 | `published_revision` / `published_algorithm` | 完成时实际消费的修订与算法；与当前修订相等且 `state='clean'` 才表示产物最新 |
 | `state` | `dirty` 待派生，`clean` 已完成；待办查询一律 `state<>'clean'` |
 | `dirty_since_ms` | 首次未完成触发时间。重复 dirty 保留最早值，clean 后清空 |
@@ -994,7 +994,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 同一组的派生结果可以整体按代存在，也可以逐字段写回请求行。两种模式共用请求用途阶段与同一份取值实现，区别只在组阶段写到哪里、读从哪里来。
 
-代际身份是 `derive_generation.generation`：由组键、`group_epoch`、`input_revision` 与算法号拼出，主键唯一；`i_derive_generation_published` 保证一个组同时只有一代 `published`。一代的构建拆成六个阶段（`requests`、`roles`、`role_assign`、`tools`、`summary`、`ready`），每个阶段带自己的续跑游标，进程重启后从游标继续，不从头重扫。构建期的四张工作表只建不改，发布即删。
+代际身份是 `derive_generation.generation`：每次开代生成独立的 `gen-` 加 UUID 标识，主键唯一，不从组键或修订推算，也不按标识排序。组键、`group_epoch`、`input_revision` 与算法号单独记录这一代的依据；`i_derive_generation_published` 保证一个组同时只有一代 `published`。一代的构建拆成六个阶段（`requests`、`roles`、`role_assign`、`tools`、`summary`、`ready`），每个阶段带自己的续跑游标，进程重启后从游标继续，不从头重扫。构建期的四张工作表只建不改，发布即删。
 
 读口径由 `derive_queue.published_generation` 切换，不靠"行里有没有值"判断：
 
