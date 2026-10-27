@@ -32,6 +32,14 @@ bun run service restart    # kickstart -k，等到新 pid 可用
 
 服务条目按 plist 的 `ProgramArguments` 认本检出的 `src/main.ts`，不按 label 猜。在 worktree 里跑时找不到就报 `service_not_managed`，不会操作另一份检出的服务。脚本读 plist 的 `EnvironmentVariables` 决定数据目录，不读调用者的 shell 环境。
 
+plist 的 `ProgramArguments[0]` 指向 `~/.local/libexec/agent-trace-collector`，一份 bun 二进制的硬链接；系统界面按可执行文件名显示进程。链接与源文件共享 inode，不占额外空间。bun 升级换掉源文件后链接仍指向旧版本，升级之后重建：
+
+```sh
+ln -f "$(realpath "$(command -v bun)")" ~/.local/libexec/agent-trace-collector
+```
+
+为什么不用别的改名方式，见 [launcher 显示名](../.agents/notes/implemented/process/2026-10-27-launchd-launcher-name.md)。
+
 `stop` 之后采集器不接收新证据，magpie 与 harness 的请求照常走完，只是这段时间没有新记录。手工起停（不走 launchd）时 `SIGTERM` 或 `SIGINT` 仍然可用：收到信号后先清定时器、停 HTTP 服务、再关库；`SIGKILL` 不会走这套流程，库本身仍然一致（WAL + `synchronous=NORMAL`），只是 WAL 里可能留着未回放的已提交页，下次打开自动回放。
 
 ## 维护命令
