@@ -269,7 +269,7 @@ test('工具概览显示配对与正文加载两种状态，时长归属说明�
   expect(toolOverviewHtml(7, pairOf('pending'), null)).toContain('结果位置待定');
   expect(toolOverviewHtml(7, pairOf('ambiguous'), null)).toContain('多个候选');
   expect(toolOverviewHtml(7, null, null)).toContain('还没有见到结果');
-  expect(toolOverviewHtml(7, pairOf('resolved'), null)).toContain('工具执行时长未采集');
+  expect(toolOverviewHtml(7, pairOf('resolved'), null)).toContain('执行段按结果请求开始减调用请求结束推算');
 });
 
 test('协议未适配时结构折叠说明边界，不邀请顺序读取', () => {
@@ -337,11 +337,11 @@ test('用量两列：缺值显示 —，全缺不渲染，命中行退役后缓�
   // 缓读行的悬停指过去。
   expect(p.usage).not.toContain('>命中<');
   expect(p.usage).toContain('命中率是会话级读数，见会话头合计行');
-  expect(p.headline).toBe('总 2.10s · 出 120');
+  expect(p.headline).toBe('总 2.10 s · 出 120');
   // 基础字段缺值保留槽位显示 —。
   const missing = ledgerParts(ledgerRow({ out_tok: null }) as never, null);
   expect(missing.usage.match(/class="miss"/g)?.length).toBe(1);
-  expect(missing.headline).toBe('总 2.10s');
+  expect(missing.headline).toBe('总 2.10 s');
   const allMissing = ledgerParts(ledgerRow({ in_tok: null, out_tok: null, cache_read: null, cache_write: null }) as never, null);
   expect(allMissing.usage).toBe('');
   expect(allMissing.headline).toBe('');
