@@ -289,3 +289,23 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 | 明细弹窗 | tile/图例/内容列表行三种入口同动作；item 命中对齐显示「片段」并默认展开，未对齐降级列全部结果块并带说明；类级弹窗列承载块与解释规则 note；条目正文经工具结果端点读出，非文本折叠为原始对象；Esc 关闭后焦点回到触发 tile，键盘 Enter 等效 |
 | 三态读数 | 高占用 95.0% 出「占满」warn；窗口未知不显示占用率；files 两大一碎并出「其余文件引用 30 项」成员集合块与类级余量块 |
 | 主题与窄栏 | 暗色 tile 深底浅字（表面 rgb(16,25,35)）；620px 视口 ResizeObserver 重排（34 → 6 tile） |
+
+## Hermes 用途识别（合成 + 只读生产快照，2026-10-27）
+
+两条 Hermes 旁路指纹随 [Agent Note：Hermes 用途识别](../.agents/notes/implemented/feature/2026-10-27-hermes-purpose-recognition.md) 交付。合成验收进 `bun test`；生产侧只做只读快照，统一截止时点 2026-10-27T05:33:18Z（本机 13:33），没有停采集器、没有写库。
+
+合成部分：`tests/semantics.test.ts`、`tests/request-purpose.test.ts`、`tests/hermes-purpose.test.ts`、`tests/harness-purpose.test.ts`、`tests/web.test.ts` 与三个共享派生测试文件共 112 项通过，`tsc --noEmit` 通过。覆盖审查器与标题指纹的结论、规则 ID、信号与次序，user 内容与非 hermes 标签的反例，真实 Chat system 块的取数结算，以及主请求 A、审查器 R、续写 B 的链关系。
+
+只读快照按 `started_ms <= 截止时点` 统计，只保存聚合值：
+
+| 项 | 生产结果 |
+| --- | --- |
+| 规模 | 1,242 笔 Hermes 请求，159 个会话键；`conv_source='conv'` 1,186 笔、`'session'` 56 笔 |
+| 用途现状（v4） | `unrecognized` 1,029 笔、`missing` 210 笔、`title.reply.v1` 3 笔；尚无 `command-review` 与 `hermes.session-title.v1` 结论 |
+| 正文与回复 | `have=1` 且回复缺失 56 笔；`have=6`、正文 `pending` 210 笔；`have=7` 976 笔 |
+| 链角色 | `main/confirmed` 447、`branch/confirmed` 381、`main/unknown` 243、`main/first` 112、`main/null` 56、`aux/aux` 3 |
+| 空 session 桶 | `['session','']` 下 Hermes 56 笔、curl 1 笔，actor 均为 unknown |
+| hook 缺口 | Hermes `miss_reason='hook_absent'` 205 笔；等待队列 605 条，其中 603 条无 response ID |
+| 工具 | 924 次调用，resolved 893、pending 31 |
+
+存量 Hermes 行不执行用途重建，按项目所有人的决定直接删除；上面是删除前的只读记录。新流量按 `PURPOSE_VERSION=5` 结算，v5 的真实流量验收要等新代码部署后另行记录。
