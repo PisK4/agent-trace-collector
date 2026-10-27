@@ -8,7 +8,7 @@ import { fixture, seedPurposeRequest } from './fixtures';
 import { openStore } from '../src/store';
 import { acquireMaintenanceLock, lockPath, maintenanceLockPresent } from '../src/maintenance/lock';
 import { backupBundle, backupDatabase, restoreBundle } from '../src/maintenance/backup';
-import { previewMetadataPurge, purgeMetadata } from '../src/maintenance/purge';
+import { previewAgentPurge, previewMetadataPurge, purgeAgent, purgeMetadata } from '../src/maintenance/purge';
 import { runMaintenance } from '../src/maintenance/cli';
 import { verifyDatabase } from '../src/maintenance/verify';
 import { loadBoundSaltTx, loadConfig } from '../src/config';
@@ -301,6 +301,189 @@ test('淘汰过程中故障整体回滚', () => {
   }
 });
 
+function seedAgentPurge(store: ReturnType<typeof fixture>['store']): void {
+  store.write(db => {
+    db.run(`INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,
+              created_at,updated_at,route_id,agent,conv_key,conv_source,actor,actor_state)
+            VALUES
+              (1,1,'2026-10-26','through','pending',1,3,1,1,100,'hermes','k-shared','session','a-known','known'),
+              (2,2,'2026-10-26','hook','pending',1,1,1,1,200,'claude','k-shared','session','a-known','known'),
+              (3,3,'2026-10-27','through','pending',1,3,1,1,300,'hermes','k-hermes','session','a-h','known'),
+              (4,4,'2026-10-27','hook','pending',1,1,1,1,NULL,'hermes',NULL,NULL,NULL,'unknown')`);
+    // 已合并的旧 id 指向目标：别名必须先删，否则外键拦住删除。
+    db.run('INSERT INTO request_alias(old_id,new_id) VALUES (9,1)');
+    db.run(`INSERT INTO request_evidence(req_id,source_kind,ref_key,merge_state,added_at) VALUES
+      (1,'ledger','["file","gen-A",10]','merged',1),
+      (1,'route','100','merged',1),
+      (1,'hook','h-1','merged',1),
+      (2,'hook','h-2','merged',1),
+      (2,'hook','h-shared','merged',1),
+      (2,'ledger','["file","gen-B",50]','merged',1),
+      (3,'ledger','["file","gen-A",20]','merged',1),
+      (3,'route','300','merged',1),
+      (4,'hook','h-4','merged',1)`);
+    db.run(`INSERT INTO cost_observation(ref_key,observed_at,projection_hash,payload_json) VALUES
+      ('["file","gen-A",10]',1,'h','{}'),('100',1,'h','{}'),('h-1',1,'h','{}'),
+      ('h-2',1,'h','{}'),('h-shared',1,'h','{}'),('["file","gen-B",50]',1,'h','{}'),
+      ('["file","gen-A",20]',1,'h','{}'),('300',1,'h','{}'),('h-4',1,'h','{}')`);
+    // 原始层按 agent 归属：其中两条被存活请求（claude）共享，删除时必须保留。
+    db.run(`INSERT INTO raw_ledger(source_kind,file_generation,byte_offset,route_id,t_text,t_ms,source,agent,payload_json) VALUES
+      ('file','gen-A',10,100,'t',1,'magpie','hermes','{"a":1}'),
+      ('file','gen-A',20,300,'t',1,'magpie','hermes','{"a":1}'),
+      ('file','gen-A',30,200,'t',1,'magpie','claude','{"a":1}'),
+      ('file','gen-B',50,200,'t',1,'magpie','hermes','{"a":1}')`);
+    db.run(`INSERT INTO raw_route(route_id,time_ms,day,agent,payload_json) VALUES
+      (100,1,'2026-10-26','hermes','{"r":1}'),
+      (200,1,'2026-10-26','claude','{"r":1}'),
+      (300,1,'2026-10-27','hermes','{"r":1}')`);
+    db.run(`INSERT INTO raw_hook(hook_id,received_at,agent,parse_state) VALUES
+      ('h-1',1,'hermes','ok'),('h-2',1,'claude','ok'),
+      ('h-4',1,'hermes','ok'),('h-shared',1,'hermes','ok')`);
+    db.run("INSERT INTO pending_hook(hook_id,first_seen) VALUES ('h-4',1)");
+    db.run(`INSERT INTO route_summary(route_id,time_ms,z) VALUES
+      (100,1,x'01'),(200,2,x'01'),(300,3,x'01')`);
+    db.run(`INSERT INTO block(id,hash,fingerprint,z,raw_size) VALUES
+      (1,x'0a','f1',x'01',1),(2,x'0b','f2',x'01',1),(3,x'0c','f3',x'01',1),
+      (4,x'0d','f4',x'01',1),(5,x'0e','f5',x'01',1)`);
+    db.run(`INSERT INTO request_block(req_id,ord,role,block) VALUES
+      (1,0,1,1),(3,0,1,2),(2,0,1,3),(4,0,1,4),(1,1,1,5),(2,1,1,5)`);
+    db.run(`INSERT INTO tool_call(call_id,req_id,ord,tool_name,state) VALUES
+      ('call-1',1,0,'read','resolved'),('call-2',2,0,'read','resolved')`);
+    db.run(`INSERT INTO bg_job(job_id,conv_key,spawn_req,state) VALUES
+      ('bg-1','k-hermes',3,'pending'),('bg-2','k-shared',2,'pending')`);
+    db.run(`INSERT INTO otlp_body_ref(request_body_id,trace_id,req_id,state,updated_at)
+            VALUES ('rb-1',x'00',1,'wired',1)`);
+    db.run(`INSERT INTO derive_request_result(generation,req_id,started_ms,purpose_revision,
+              algorithm,retention_state)
+            VALUES ('gen-result-0000001',1,1,0,1,'recomputed')`);
+    // 两个组都先标成完成：共享组删后仍有成员，应重新 dirty；hermes 独占组应保持完成。
+    db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,input_revision,
+              published_revision,target_algorithm,published_algorithm,state)
+            VALUES ('k-shared','a-known','','epoch-shared',4,4,1,1,'clean'),
+                   ('k-hermes','a-h','','epoch-hermes',2,2,1,1,'clean')`);
+  });
+}
+
+test('按agent拆除只删目标行，共享会话与跨agent引用保留', () => {
+  const f = fixture();
+  try {
+    seedAgentPurge(f.store);
+    const preview = previewAgentPurge(f.store, 'hermes');
+    expect(preview).toMatchObject({
+      agent: 'hermes', requests: 3, conv_keys: 2, shared_conv_keys: 1,
+      groups: 2, groups_with_remaining: 1,
+      first_day: '2026-10-26', last_day: '2026-10-27',
+      evidence: { ledger: 2, route: 2, hook: 2 },
+      // h-shared 与 gen-B/50 被 claude 请求共享，不计入可删行数。
+      raw: { ledger: 2, route: 2, hook: 2, pending_hook: 1, route_summary: 2 },
+    });
+    expect(preview.estimated_bytes).toBeGreaterThan(0);
+    // 预览不改任何东西。
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 4 });
+
+    const result = purgeAgent(f.store, 'hermes', 'approval-synthetic-agent');
+    expect(result.deleted).toBe(3);
+    expect(f.store.read.query('SELECT req_id FROM request ORDER BY req_id').all()).toEqual([{ req_id: 2 }]);
+    expect(f.store.read.query('SELECT old_id,new_id FROM request_alias').all()).toEqual([]);
+    expect(f.store.read.query(`SELECT source_kind,ref_key FROM request_evidence
+      WHERE req_id=2 ORDER BY source_kind,ref_key`).all()).toEqual([
+      { source_kind: 'hook', ref_key: 'h-2' },
+      { source_kind: 'hook', ref_key: 'h-shared' },
+      { source_kind: 'ledger', ref_key: '["file","gen-B",50]' },
+    ]);
+    expect(f.store.read.query('SELECT ref_key FROM cost_observation ORDER BY ref_key').all()).toEqual([
+      { ref_key: '["file","gen-B",50]' }, { ref_key: 'h-2' }, { ref_key: 'h-shared' },
+    ]);
+    // 原始层：被存活请求共享的证据键保留，其余按归属删除。
+    expect(f.store.read.query('SELECT byte_offset FROM raw_ledger ORDER BY byte_offset').all())
+      .toEqual([{ byte_offset: 30 }, { byte_offset: 50 }]);
+    expect(f.store.read.query('SELECT hook_id FROM raw_hook ORDER BY hook_id').all())
+      .toEqual([{ hook_id: 'h-2' }, { hook_id: 'h-shared' }]);
+    expect(f.store.read.query('SELECT count(*) AS n FROM pending_hook').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT route_id FROM raw_route ORDER BY route_id').all()).toEqual([{ route_id: 200 }]);
+    expect(f.store.read.query('SELECT route_id FROM route_summary ORDER BY route_id').all())
+      .toEqual([{ route_id: 200 }]);
+    // 正文块：只被目标引用的回收，共享块与存活请求的块保留。
+    expect(f.store.read.query('SELECT id FROM block ORDER BY id').all()).toEqual([{ id: 3 }, { id: 5 }]);
+    expect(f.store.read.query('SELECT req_id FROM request_block ORDER BY req_id,ord').all())
+      .toEqual([{ req_id: 2 }, { req_id: 2 }]);
+    expect(f.store.read.query('SELECT call_id FROM tool_call').all()).toEqual([{ call_id: 'call-2' }]);
+    expect(f.store.read.query('SELECT job_id FROM bg_job').all()).toEqual([{ job_id: 'bg-2' }]);
+    expect(f.store.read.query('SELECT count(*) AS n FROM otlp_body_ref').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM derive_request_result').get()).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT old_id FROM request_alias').all()).toEqual([]);
+    expect(verifyDatabase(join(f.dir, 'trace.db')).dangling_blocks).toBe(0);
+    expect(f.store.read.query('PRAGMA foreign_key_check').all()).toEqual([]);
+
+    const event = f.store.read.query<{
+      action: string; first_day: string; last_day: string; request_count: number;
+      reason: string; approval_id: string;
+    }, []>('SELECT action,first_day,last_day,request_count,reason,approval_id FROM retention_event').get();
+    expect(event).toEqual({
+      action: 'purge_agent', first_day: '2026-10-26', last_day: '2026-10-27',
+      request_count: 3, reason: 'agent_removal:hermes', approval_id: 'approval-synthetic-agent',
+    });
+    expect(f.store.read.query('SELECT source_kind,ref_key FROM purged_evidence ORDER BY source_kind,ref_key').all())
+      .toEqual([
+        { source_kind: 'hook', ref_key: 'h-1' },
+        { source_kind: 'hook', ref_key: 'h-4' },
+        { source_kind: 'ledger', ref_key: '["file","gen-A",10]' },
+        { source_kind: 'ledger', ref_key: '["file","gen-A",20]' },
+        { source_kind: 'route', ref_key: '100' },
+        { source_kind: 'route', ref_key: '300' },
+      ]);
+    // 只剩未知归属行的空组没有队列行；共享组保留 epoch 重新 dirty，独占组同步完成。
+    const groups = f.store.read.query<{ conv_key: string; state: string; group_epoch: string }, []>(
+      'SELECT conv_key,state,group_epoch FROM derive_queue ORDER BY conv_key').all();
+    expect(groups.find(row => row.conv_key === 'k-shared')).toMatchObject({
+      state: 'dirty', group_epoch: 'epoch-shared',
+    });
+    expect(groups.find(row => row.conv_key === 'k-hermes')).toMatchObject({
+      state: 'clean', group_epoch: 'epoch-hermes',
+    });
+  } finally {
+    f.close();
+  }
+});
+
+test('按agent拆除重复执行不新增删除与事件', () => {
+  const f = fixture();
+  try {
+    seedAgentPurge(f.store);
+    expect(purgeAgent(f.store, 'hermes', 'approval-synthetic-agent-2').deleted).toBe(3);
+    const second = purgeAgent(f.store, 'hermes', 'approval-synthetic-agent-2');
+    expect(second).toEqual({ deleted: 0, event_id: 0 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM retention_event').get()).toEqual({ n: 1 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM purged_evidence').get()).toEqual({ n: 6 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 1 });
+  } finally {
+    f.close();
+  }
+});
+
+test('按agent拆除过程中故障整体回滚', () => {
+  const f = fixture();
+  try {
+    seedAgentPurge(f.store);
+    f.store.db.exec(`CREATE TRIGGER fail_agent_purge BEFORE DELETE ON request
+                     WHEN OLD.req_id=3 BEGIN SELECT RAISE(ABORT,'injected_agent_purge'); END`);
+    expect(() => purgeAgent(f.store, 'hermes', 'approval-synthetic-agent-3')).toThrow();
+    expect(f.store.read.query('SELECT req_id FROM request ORDER BY req_id').all())
+      .toEqual([{ req_id: 1 }, { req_id: 2 }, { req_id: 3 }, { req_id: 4 }]);
+    expect(f.store.read.query('SELECT count(*) AS n FROM raw_ledger').get()).toEqual({ n: 4 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM raw_hook').get()).toEqual({ n: 4 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM pending_hook').get()).toEqual({ n: 1 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM derive_request_result').get()).toEqual({ n: 1 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM retention_event').get()).toEqual({ n: 0 });
+    expect(f.store.read.query<{ group_epoch: string }, [string]>(
+      'SELECT group_epoch FROM derive_queue WHERE conv_key=?').get('k-hermes'))
+      .toEqual({ group_epoch: 'epoch-hermes' });
+    f.store.write(db => db.run('DROP TRIGGER fail_agent_purge'));
+  } finally {
+    f.close();
+  }
+});
+
 test('维护命令在目标库上执行并返回退出码', async () => {
   const f = fixture();
   const source = join(f.dir, 'trace.db');
@@ -315,6 +498,9 @@ test('维护命令在目标库上执行并返回退出码', async () => {
     expect(await runMaintenance(['backup', '--db', source, '--out', target])).toBe(1);
     expect(await runMaintenance(['purge-metadata', '--db', source, '--before', '2026-09-01'])).toBe(0);
     expect(await runMaintenance(['purge-metadata', '--db', source, '--before', '2026-09-01', '--apply'])).toBe(1);
+    expect(await runMaintenance(['purge-agent', '--db', source, '--agent', 'hermes'])).toBe(0);
+    expect(await runMaintenance(['purge-agent', '--db', source, '--agent', 'hermes', '--apply'])).toBe(1);
+    expect(await runMaintenance(['purge-agent', '--db', source])).toBe(2);
     expect(await runMaintenance(['nope'])).toBe(2);
   } finally {
     f.close();

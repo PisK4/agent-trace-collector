@@ -8,7 +8,7 @@ import { backupBundle, backupDatabase, restoreBundle } from './backup';
 import { assertWindow, hookDeliveryReport } from './delivery';
 import { acquireMaintenanceLock, type LockHandle } from './lock';
 import { previewHookIdentityMigration, migrateHookIdentity } from './identity';
-import { previewMetadataPurge, purgeMetadata } from './purge';
+import { previewAgentPurge, previewMetadataPurge, purgeAgent, purgeMetadata } from './purge';
 import { rebuildSession } from './rebuild';
 import { reparseProtocol } from './reparse';
 import { verifyDatabase } from './verify';
@@ -53,6 +53,7 @@ const USAGE = `usage:
   maintain reparse --db <path> --protocol <name>
   maintain migrate-hook-identity --db <path> [--apply --approval-id <id>]
   maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --approval-id <id>]
+  maintain purge-agent --db <path> --agent <name> [--apply --approval-id <id>]
 `;
 
 /**
@@ -144,8 +145,8 @@ export async function runMaintenance(argv: string[], io: {
     }
   }
 
-  if (command === 'verify' || command === 'purge-metadata' || command === 'rebuild'
-    || command === 'reparse' || command === 'migrate-hook-identity') {
+  if (command === 'verify' || command === 'purge-metadata' || command === 'purge-agent'
+    || command === 'rebuild' || command === 'reparse' || command === 'migrate-hook-identity') {
     // verify 只读，不需要锁；其余命令写库，必须有。
     let store: Store | null = null;
     let lock: LockHandle | null = null;
@@ -195,6 +196,32 @@ export async function runMaintenance(argv: string[], io: {
         }
         const report = migrateHookIdentity(store);
         out(JSON.stringify({ ok: true, applied: true, approval_id: approvalId, ...report }));
+        return 0;
+      }
+      if (command === 'purge-agent') {
+        const agent = stringFlag(flags, 'agent');
+        if (agent === null) {
+          err(USAGE.trimEnd());
+          return 2;
+        }
+        lock = acquireMaintenanceLock(dirname(dbPath), `purge-agent:${process.pid}`);
+        if (lock === null) {
+          err('maintenance_lock_held');
+          return 1;
+        }
+        store = openStore(dbPath);
+        const preview = previewAgentPurge(store, agent);
+        if (flags.get('apply') !== true) {
+          out(JSON.stringify({ ok: true, applied: false, ...preview }));
+          return 0;
+        }
+        const approvalId = stringFlag(flags, 'approval-id');
+        if (approvalId === null) {
+          out(JSON.stringify({ ok: false, error: 'approval_id_required', ...preview }));
+          return 1;
+        }
+        const result = purgeAgent(store, agent, approvalId);
+        out(JSON.stringify({ ok: true, applied: true, agent, approval_id: approvalId, ...result }));
         return 0;
       }
       const before = stringFlag(flags, 'before');
