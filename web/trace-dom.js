@@ -10,6 +10,9 @@ import { planCommit } from './trace-commit.js';
  * 高度变化与 prepend 不改写读者的阅读位置。原生滚动锚定由 CSS 关闭，
  * 补偿只有这一处，避免两套机制同时移动。
  *
+ * 可见上沿是吸顶的会话头与轮次带下沿，不是滚动容器盒顶：被吸顶元素盖住的
+ * 行不参与锚点选择，补偿也不会把锚点塞回它们下面。
+ *
  * 这里只做 DOM 装配：模型由 app 组装（不读 store、不改选择）。
  *
  * @typedef {{key: string, html: string}} CommitItem
@@ -90,6 +93,35 @@ function findByStepKey(root, key) {
 }
 
 /**
+ * 中栏可见区的上沿：吸顶的会话头与轮次带盖住滚动容器顶部，内容从它们下面
+ * 滚过。锚点选择与恢复都按它们的下沿算，被盖住的行不算可见，补偿也不会把
+ * 锚点塞回遮挡区。没有生效的吸顶元素时退回容器盒顶（文档滚动时为 0）。
+ * @param {Element} main @param {Element} scroller
+ */
+function stickyBottom(main, scroller) {
+  const documentScroll = scroller === document.scrollingElement;
+  let bottom = documentScroll ? 0 : main.getBoundingClientRect().top;
+  for (const node of main.querySelectorAll('.session-head, .turn-band')) {
+    if (getComputedStyle(node).position !== 'sticky') continue;
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > bottom) bottom = rect.bottom;
+  }
+  return bottom;
+}
+
+/**
+ * 滚动补偿的夹取：向下补偿（delta > 0）不让锚点落进吸顶遮挡区，最多把它
+ * 放到遮挡区下沿；向上补偿保持原样。纯函数，单测直接断言两个方向。
+ * @param {number} delta 锚点节点当前视口位置减提交前位置
+ * @param {number} nodeTop 补偿前锚点节点的视口位置
+ * @param {number} stickyBottom 吸顶元素下沿
+ */
+export function clampRestoreDelta(delta, nodeTop, stickyBottom) {
+  if (delta <= 0) return delta;
+  return Math.min(delta, Math.max(0, nodeTop - stickyBottom));
+}
+
+/**
  * 提交前锚点：优先目标组内的首条可见稳定步骤；目标组整体在视口内但没有可见
  * 步骤时以组本身为锚；否则退回全列表首条可见稳定步骤——读者正在读别处时，
  * 不把位置拉回目标组。
@@ -99,7 +131,7 @@ function findByStepKey(root, key) {
 function captureAnchor(main, scroller, preferredReq) {
   const box = main.getBoundingClientRect();
   const documentScroll = scroller === document.scrollingElement;
-  const top = documentScroll ? 0 : box.top;
+  const top = stickyBottom(main, scroller);
   const bottom = documentScroll ? window.innerHeight : box.bottom;
   /** @type {Anchor | null} */
   let first = null;
@@ -137,7 +169,8 @@ function captureAnchor(main, scroller, preferredReq) {
 
 /**
  * 提交后把锚点放回原来的视口位置。锚点节点被真实删除时不动滚动：猜一个
- * 替代位置会把读者带到别处，保留现有位置更诚实。
+ * 替代位置会把读者带到别处，保留现有位置更诚实。头部抬高后补偿不得把
+ * 锚点推到吸顶元素下面。
  * @param {Element} main @param {Element} scroller @param {Anchor | null} anchor
  */
 function restoreAnchor(main, scroller, anchor) {
@@ -151,7 +184,8 @@ function restoreAnchor(main, scroller, anchor) {
     node = button?.closest('.compact-step') ?? null;
   }
   if (node === null) return;
-  const delta = node.getBoundingClientRect().top - anchor.top;
+  const nodeTop = node.getBoundingClientRect().top;
+  const delta = clampRestoreDelta(nodeTop - anchor.top, nodeTop, stickyBottom(main, scroller));
   if (Math.abs(delta) < 0.5) return;
   scroller.scrollTop += delta;
 }
