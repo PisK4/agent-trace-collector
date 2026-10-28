@@ -1,6 +1,6 @@
 // @ts-check
 import { bodyNotice, renderReplyDetail } from './body-view.js';
-import { messagesKeyOf, replyView } from './body-model.js';
+import { messagePathOf, replyView } from './body-model.js';
 import { esc } from './html.js';
 import { bodyLabelText, bodyStateText } from './row-summary.js';
 
@@ -63,11 +63,12 @@ export function renderTurnRailHead(turn) {
  * @param {number} ord
  * @param {number} ownerId 复制原文按 owner 请求读取：轮次态的 owner 与当前请求可以不同
  * @param {BodyRow | null} ownerRow
+ * @param {string} path
  */
-function commandPanel(entry, ord, ownerId, ownerRow, arrayKey = 'messages') {
+function commandPanel(entry, ord, ownerId, ownerRow, path) {
   const head = `<div class="bp-head">
     <span class="kind user bp-kind">User</span>
-    <span class="bp-path">${esc(arrayKey)}[${ord}]</span>
+    ${path === '' ? '' : `<span class="bp-path">${esc(path)}</span>`}
     ${entry !== null ? `<button class="chip-btn" data-copy-msg="${ord}" data-copy-owner="${ownerId}">复制原文</button>` : ''}
   </div>`;
   if (entry === null) {
@@ -79,6 +80,22 @@ function commandPanel(entry, ord, ownerId, ownerRow, arrayKey = 'messages') {
   const text = entry.input !== null && entry.input.state === 'text' ? entry.input.text
     : entry.blocks.map(block => block.text).filter(part => part.length > 0).join('\n\n');
   return `<div class="body-panel">${head}<div class="bp-text bp-plain">${esc(text)}</div></div>`;
+}
+
+/** @param {TurnRead} read @param {BodyRow | null} row */
+function missingCommandPanel(read, row) {
+  const head = '<div class="bp-head"><span class="kind user bp-kind">User</span></div>';
+  const page = read?.meta ?? null;
+  if (row !== null && row.body_state !== 'available' && row.body_state !== 'partial') {
+    return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty"><b>${esc(bodyStateText(row))}</b>${esc(bodyLabelText(row))}</div></div>`;
+  }
+  if (page === null) {
+    return `<div class="body-panel">${head}<p class="note">正在读取命令正文…</p></div>`;
+  }
+  if (page !== null && page.state !== 'available' && page.state !== 'partial') {
+    return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty"><b>${esc(bodyNotice(page) || '正文不可读')}</b></div></div>`;
+  }
+  return `<div class="body-panel">${head}<p class="note">命令位置不可用，无法读取命令正文。</p></div>`;
 }
 
 /**
@@ -118,10 +135,11 @@ function replyPanel(read, row, foldKey) {
  * }} input
  */
 export function renderTurnRail(input) {
-  // 位置标签按协议的数组键拼：Responses 是 input，其余是 messages。
-  const arrayKey = messagesKeyOf(input.startRead?.meta ?? null);
-  const commands = input.turn.ordinals.map(ord =>
-    commandPanel(input.startRead?.entries.find(entry => entry.ord === ord) ?? null, ord, input.turn.start_req, input.startRow, arrayKey),
-  ).join('');
+  const commands = input.turn.ordinals.length === 0 ? missingCommandPanel(input.startRead, input.startRow)
+    : input.turn.ordinals.map(ord => {
+      const path = messagePathOf(input.startRead?.meta ?? null, ord).replace(/^request\./, '');
+      return commandPanel(input.startRead?.entries.find(entry => entry.ord === ord) ?? null,
+        ord, input.turn.start_req, input.startRow, path);
+    }).join('');
   return `${commands}${replyPanel(input.replyRead, input.replyRow, String(input.replyRow?.req_id ?? ''))}`;
 }

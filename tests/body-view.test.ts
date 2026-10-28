@@ -25,7 +25,8 @@ const missingCapabilities: CapabilityView = {
 
 function page(overrides: Partial<BodyPage> = {}): BodyPage {
   return {
-    state: 'available', protocol: 'anthropic', parse_state: 'ok', reply_state: 'ok',
+    state: 'available', protocol: 'anthropic', message_location: { key: 'messages', form: 'array' },
+    parse_state: 'ok', reply_state: 'ok',
     from: 0, to: 0, total: 2,
     messages: [], request_fields: null, reply: null, reason: null,
     interpretations: [],
@@ -210,7 +211,7 @@ test('回复两种协议都能读出文本、推理与调用', () => {
 
 test('Responses 回复从 output 出块，调用序号与服务端位置同源', () => {
   const view = replyView(page({
-    protocol: 'responses',
+    protocol: 'responses', message_location: { key: 'input', form: 'array' },
     reply: {
       id: 'resp_1',
       status: 'completed',
@@ -237,7 +238,7 @@ test('Responses 回复从 output 出块，调用序号与服务端位置同源',
   }]);
   // 两个消息项各有 content[0]：块序号取项位置，步骤键不撞。
   const twoMessages = replyView(page({
-    protocol: 'responses',
+    protocol: 'responses', message_location: { key: 'input', form: 'array' },
     reply: { status: 'completed', output: [
       { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'a' }] },
       { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'b' }] },
@@ -255,7 +256,7 @@ test('Responses 回复从 output 出块，调用序号与服务端位置同源',
 
 test('Responses 请求项按 type 出块，工具结果不混进用户消息', () => {
   const entries = messageEntries(page({
-    protocol: 'responses',
+    protocol: 'responses', message_location: { key: 'input', form: 'array' },
     messages: [
       { ord: 0, value: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '读配置' }] } },
       { ord: 1, value: { type: 'function_call', call_id: 'c1', name: 'read', arguments: '{}' } },
@@ -803,16 +804,25 @@ test('消息详情里的配对入口只在 call_id 确认两端时出现', () =>
     ],
   } as unknown as RequestDetail;
   const pairOf = messagePairIndexOf(detail, prevDetail);
-  const calls = renderMessageDetail(entries[0]!, 'messages', pairOf);
+  const calls = renderMessageDetail(entries[0]!, 'request.messages[0]', pairOf);
   // 调用表按 call_id 认出两条：结果未到的调用也给入口（配对页会说明待结果）。
   expect(calls).toContain('data-tool-owner="7" data-call-ord="0"');
   expect(calls).toContain('data-tool-owner="7" data-call-ord="1"');
   // 调用表里没有的 call_id 不给入口，不按块序号猜。
   expect((calls.match(/配对两端/g) ?? []).length).toBe(2);
-  const results = renderMessageDetail(entries[1]!, 'messages', pairOf);
+  const results = renderMessageDetail(entries[1]!, 'request.messages[3]', pairOf);
   expect((results.match(/配对两端/g) ?? []).length).toBe(1);
   expect(results).toContain('data-tool-owner="7" data-call-ord="0"');
+  const unknown = renderMessageDetail(entries[1]!, '', pairOf);
+  expect(unknown).not.toContain('bp-path');
+  expect(unknown).not.toContain('配对两端');
+  // 旧 Responses 骨架可能拆 messages，但索引指向同 call_id 的 input，不能跨路径配对。
+  const mixedKeys = renderMessageDetail(entries[1]!, 'request.input[3]', pairOf);
+  expect(mixedKeys).not.toContain('配对两端');
+  // 同一 call_id 出现在另一条消息或另一个块时，也不能冒充记录的结果位置。
+  const wrongMessage = renderMessageDetail(entries[1]!, 'request.messages[4]', pairOf);
+  expect(wrongMessage).not.toContain('配对两端');
   // 未确认前驱、未读完的反向索引与空 call_id 都不产生入口。
-  expect(renderMessageDetail(entries[0]!, 'messages', messagePairIndexOf(detail, null))).not.toContain('配对两端');
+  expect(renderMessageDetail(entries[0]!, 'request.messages[0]', messagePairIndexOf(detail, null))).not.toContain('配对两端');
   expect(renderMessageDetail(entries[0]!)).not.toContain('配对两端');
 });

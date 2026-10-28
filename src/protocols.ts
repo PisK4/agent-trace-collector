@@ -3,7 +3,7 @@ import type { Store } from './store';
 import type { BodyState } from './store';
 import { interpretMessage, messageText, type MessageView, type UserInputView } from './input-interpretation';
 import { CAPABLE_PROTOCOLS, capabilityView, type CapabilityCoverage, type CapabilityView } from './capabilities';
-import { skeletonLike } from './skeleton';
+import { skeletonLike, validateSkeleton } from './skeleton';
 import { messageCountOf, wireCallsOf, wireResultsOf } from './protocol-shape';
 
 /**
@@ -46,8 +46,10 @@ export type BodyCoverage = {
 
 export type BodyPage = {
   state: BodyState;
-  /** 骨架里记录的协议名；浏览器按它决定 `request.messages[...]` 还是 `request.input[...]`。 */
+  /** 骨架里记录的协议名；正文不可读或骨架不识别时为 unknown。 */
   protocol: string;
+  /** 骨架确认的原始消息键与形态；无法确认时为 null。 */
+  message_location: { key: 'messages' | 'input'; form: 'array' | 'string' } | null;
   parse_state: string | null;
   reply_state: string | null;
   from: number;
@@ -175,8 +177,9 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
   };
   const page: BodyPage = {
     state,
-    // 骨架还没读到（回收、未到或骨架损坏）时协议名未知，页面按 `messages` 拼路径。
+    // 骨架不可读或损坏时协议与消息位置均未知。
     protocol: 'unknown',
+    message_location: null,
     parse_state: stateRow.parse_state,
     reply_state: stateRow.reply_state,
     from,
@@ -205,6 +208,10 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
   // 宽松读取：损坏骨架展示为未知协议与空字段，分页不因结构损坏而拒绝整页。
   const skeleton = skeletonLike(JSON.parse(zstdDecompressSync(stateRow.skeleton_z).toString('utf8')));
   if (skeleton === null) return page;
+  const stored = validateSkeleton(skeleton, stateRow.msg_count);
+  if (stored !== null && stored.hasMessages) {
+    page.message_location = { key: stored.messagesKey, form: stored.messagesForm };
+  }
   const fields = isRecord(skeleton.request_without_messages) ? skeleton.request_without_messages : null;
   const protocol = typeof skeleton.protocol === 'string' && skeleton.protocol.length > 0
     ? skeleton.protocol : 'unknown';

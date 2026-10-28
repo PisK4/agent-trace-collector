@@ -52,6 +52,7 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/selection.js': { file: 'selection.js', type: 'text/javascript; charset=utf-8' },
   '/trace-commit.js': { file: 'trace-commit.js', type: 'text/javascript; charset=utf-8' },
   '/trace-dom.js': { file: 'trace-dom.js', type: 'text/javascript; charset=utf-8' },
+  '/trace-preparation.js': { file: 'trace-preparation.js', type: 'text/javascript; charset=utf-8' },
   '/trace-pair.js': { file: 'trace-pair.js', type: 'text/javascript; charset=utf-8' },
   '/tool-summary.js': { file: 'tool-summary.js', type: 'text/javascript; charset=utf-8' },
   '/trace-view.js': { file: 'trace-view.js', type: 'text/javascript; charset=utf-8' },

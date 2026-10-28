@@ -725,6 +725,7 @@ function bodyPageOf(r: SynthRequest, from: number, to: number): BodyPage {
   return {
     state:r.bodyState,
     protocol:r.protocol,
+    message_location: readable ? { key: 'messages', form: 'array' } : null,
     parse_state:r.bodyState === 'available' || r.bodyState === 'partial' ? 'ok' : null,
     reply_state:r.bodyState === 'available' || r.bodyState === 'partial' ? (r.reply === null ? 'absent' : 'ok') : null,
     from, to, total, messages:sliced,

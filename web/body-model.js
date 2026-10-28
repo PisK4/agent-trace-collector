@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * 正文读取模型：两种协议的消息与回复归一化、块视图与工具条目。
+ * 正文读取模型：协议消息与回复归一化、块视图与工具条目。
  * 只做数据转换，不产生 HTML；展示路径在 body-view，转义策略在 html。
  *
  * @typedef {import('../src/protocols').BodyPage} BodyPage
@@ -188,20 +188,22 @@ export function toolResultCallIdOf(block) {
 
 /**
  * 消息详情里的配对入口坐标：call_id 能确认两端才给，读不到返回 null。
- * 结果块的调用方取本请求的反向配对索引；调用块的调用方是产出请求（已确认前驱），
- * 按 call_id 在它的调用表里找序号。前驱不在窗口、未读或 call_id 对不上时不给，
- * 不按块序号猜。
+ * 结果块的调用方取本请求的反向配对索引，且块路径必须与记录的结果位置一致：
+ * 旧 Responses 骨架可能按 messages 拆块而索引记的是 input，同 call_id 也不能跨路径配对。
+ * 调用块的调用方是产出请求（已确认前驱），按 call_id 在它的调用表里找序号。
+ * 前驱不在窗口、未读或 call_id 对不上时不给，不按块序号猜。
  * @param {RequestDetail | null} detail
  * @param {RequestDetail | null} prevDetail
- * @returns {(block: Block) => {owner: number, callOrd: number} | null}
+ * @returns {(block: Block, path: string) => {owner: number, callOrd: number} | null}
  */
 export function messagePairIndexOf(detail, prevDetail) {
-  return (block) => {
+  return (block, path) => {
     if (block.kind === 'result') {
       const id = toolResultCallIdOf(block);
-      if (id === '') return null;
+      if (id === '' || path === '') return null;
       const row = detail?.tool_results.find(item => item.call_id === id) ?? null;
-      return row === null || row.state !== 'resolved' ? null : { owner: row.owner_req, callOrd: row.ord };
+      return row === null || row.state !== 'resolved' || row.result_path !== path
+        ? null : { owner: row.owner_req, callOrd: row.ord };
     }
     if (block.kind === 'call') {
       const id = toolCallOfBlock(block).id;
@@ -272,26 +274,16 @@ function fieldsText(value) {
 }
 
 /**
- * 消息数组在原始请求对象里的键：Responses 用 `input`，其余协议用 `messages`。
- * 浏览器不打包 `protocol-shape`，协议名从 `BodyPage.protocol` 取；正文页还没读到
- * 时协议未知，按 `messages` 拼路径，与读取端旧布局的缺省一致。
- * @param {BodyPage | null | undefined} page
- * @returns {'messages' | 'input'}
- */
-export function messagesKeyOf(page) {
-  const protocol = page === null || page === undefined ? null : page.protocol;
-  return protocol === 'responses' ? 'input' : 'messages';
-}
-
-/**
- * 消息在原始请求对象里的路径前缀，如 `request.messages[3]` 或 `request.input[3]`。
- * 轨迹与配对页都用它拼与后端 `result_path` 比对的位置。
- * @param {BodyPage | null | undefined} page
+ * 消息在原始请求对象里的位置。骨架确认裸字符串时路径只到 input；序号仍是
+ * 内部块位置，不是字符串下标。未取得形态时返回空串，不猜测原对象路径。
+ * @param {{message_location?: BodyPage['message_location']} | null | undefined} page
  * @param {number} ord
  * @returns {string}
  */
 export function messagePathOf(page, ord) {
-  return `request.${messagesKeyOf(page)}[${ord}]`;
+  const location = page?.message_location ?? null;
+  if (location === null) return '';
+  return location.form === 'string' ? `request.${location.key}` : `request.${location.key}[${ord}]`;
 }
 
 /**
