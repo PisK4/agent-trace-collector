@@ -110,15 +110,22 @@ test('弹窗 HTML：缺口状态与读取失败如实呈现，不渲染条目列
   }, { phase: 'loading' })).toContain('读取目录…');
 });
 
-test('条目正文：文本、失败标记、不可读状态与原始对象折叠', () => {
+test('条目正文：展开即内容，抽不出文本直出 JSON，不再挂原始对象折叠', () => {
   const entry = { ord: 1, path: 'request.messages[1].content[0]', precision: 'located' };
   expect(entryContentHtml(entry, { content: 'file body', is_error: false }))
-    .toContain('<pre class="ctx-d-text">file body</pre>');
+    .toBe('<pre class="ctx-d-text">file body</pre>');
   expect(entryContentHtml(entry, { content: 'boom', is_error: true })).toContain('is_error');
-  // 正文页形状：messages[0].value。
-  expect(entryContentHtml({ ord: 0, path: 'request.messages[0]', precision: 'carrier' },
-    { state: 'available', messages: [{ ord: 0, value: { role: 'user', content: 'hi' } }] }))
-    .toContain('原始对象');
+  // 正文页形状：messages[0].value 是整条消息对象，抽不出文本，直接给 JSON 而不是空白。
+  const message = entryContentHtml({ ord: 0, path: 'request.messages[0]', precision: 'carrier' },
+    { state: 'available', messages: [{ ord: 0, value: { role: 'user', content: 'hi' } }] });
+  expect(message).toContain('&quot;role&quot;: &quot;user&quot;');
+  expect(message).toMatch(/<pre class="ctx-d-text">\{\n/);
+  expect(message).not.toContain('原始对象');
+  expect(message).not.toContain('<details');
+  // 抽得出文本的条目只渲染一份内容。
+  const text = entryContentHtml(entry, { content: [{ type: 'text', text: 'hi' }] });
+  expect(text.match(/<pre class="ctx-d-text">/g)?.length).toBe(1);
+  expect(text).not.toContain('&quot;type&quot;');
   expect(entryContentHtml(entry, { state: 'evicted', reason: 'budget' })).toContain('budget');
 });
 
