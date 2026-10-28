@@ -148,6 +148,26 @@ export function messageBlocks(message) {
   return out;
 }
 
+/**
+ * 调用块的身份与参数：Anthropic 用 id/name/input，Chat 用 function.name/arguments，
+ * Responses 用 call_id 与 input/arguments。回复视图与请求消息的调用行共用这一份
+ * 提取，不按消息方向另写协议分叉。
+ * @param {Block} block 调用块（kind='call'）
+ * @returns {{id: string, name: string, inputText: string}}
+ */
+export function toolCallOfBlock(block) {
+  const raw = isRecord(block.raw) ? block.raw : {};
+  const fn = isRecord(raw.function) ? raw.function : raw;
+  return {
+    id: typeof raw.id === 'string' ? raw.id
+      : typeof raw.call_id === 'string' ? raw.call_id : '',
+    name: typeof fn.name === 'string' ? fn.name : '',
+    inputText: typeof fn.input === 'string' ? fn.input
+      : typeof fn.arguments === 'string' ? fn.arguments
+        : JSON.stringify(fn.input ?? fn.arguments ?? null) ?? '',
+  };
+}
+
 /** @param {unknown} message @returns {Role} */
 export function roleOf(message) {
   if (!isRecord(message)) return 'unknown';
@@ -409,18 +429,7 @@ export function replyView(page) {
       if (block.kind === 'text' && block.text.length > 0) texts.push(block.text);
       if (block.kind === 'thinking' && block.text.length > 0) thinking.push(block.text);
       if (block.kind === 'call') {
-        const raw = isRecord(block.raw) ? block.raw : {};
-        const fn = isRecord(raw.function) ? raw.function : raw;
-        calls.push({
-          id: typeof raw.id === 'string' ? raw.id
-            : typeof raw.call_id === 'string' ? raw.call_id : '',
-          name: typeof fn.name === 'string' ? fn.name : '',
-          inputText: typeof fn.input === 'string' ? fn.input
-            : typeof fn.arguments === 'string' ? fn.arguments
-              : JSON.stringify(fn.input ?? fn.arguments ?? null) ?? '',
-          ord: block.index,
-          path: block.path,
-        });
+        calls.push({ ...toolCallOfBlock(block), ord: block.index, path: block.path });
       }
     }
     return { state: 'ok', text: texts.join('\n\n'), thinking, calls, blocks: full, choiceCount, finish, model, raw: reply };
