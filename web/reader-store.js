@@ -96,6 +96,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
 
   /** @type {{items: import('../src/queries/sessions').SessionRow[], cursor: string | null, error: string | null}} */
   const sessions = { items: [], cursor: null, error: null };
+  /** @type {boolean} 会话列表请求在跑：同 tick 的重复点击共用一次请求。 */
+  let sessionsLoading = false;
   /** @type {string | null} */
   let sessionKey = null;
   /** @type {import('../src/queries/projection').RequestRow[]} */
@@ -221,13 +223,24 @@ export function createReaderStore(fetcher, onReadChanged, options) {
 
   /** @param {string | undefined} cursor */
   async function loadSessions(cursor) {
+    if (sessionsLoading) return;
+    sessionsLoading = true;
     try {
       const page = await getJson(`/api/sessions?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
-      sessions.items = cursor ? [...sessions.items, ...page.items] : page.items;
+      // 同 tick 的两次点击已经由上面的闸门挡住；分页边界仍可能把同一会话
+      // 返回两次（末条时间相同），按 conv_key 去重，保留先出现的一条。
+      /** @type {Map<string, import('../src/queries/sessions').SessionRow>} */
+      const seen = new Map();
+      for (const item of [...(cursor ? sessions.items : []), ...page.items]) {
+        if (!seen.has(item.conv_key)) seen.set(item.conv_key, item);
+      }
+      sessions.items = [...seen.values()];
       sessions.cursor = page.next_cursor;
       sessions.error = null;
     } catch (error) {
       sessions.error = error instanceof Error ? error.message : 'load_failed';
+    } finally {
+      sessionsLoading = false;
     }
   }
 
