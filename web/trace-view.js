@@ -1,5 +1,5 @@
 // @ts-check
-import { deltaOrdinals, messagePathOf, replyView, systemPathOf } from './body-model.js';
+import { deltaOrdinals, messagePathOf, replyView, systemPathOf, toolCallOfBlock } from './body-model.js';
 import { toolTint } from './body-view.js';
 import { compact, secs, tierOf, TIER_LIMITS, toolCategory } from './duration.js';
 import { esc } from './html.js';
@@ -34,6 +34,7 @@ import { esc } from './html.js';
  * @property {'failed'|'missing_body'|'missing_reply'|'unknown'|'truncated'|null} status
  * @property {{state: 'resolved'|'pending'|'ambiguous'|'unpaired', reqId: number|null} | null} result
  * @property {{reqId: number, callOrd: number} | null} pairOwner 结果步骤的反向配对：承载本结果的调用方与调用序号；未确认时为 null
+ * @property {{reqId: number, callOrd: number} | null} [callOwner] 承载消息里调用行的配对坐标：产出请求与调用序号；未确认时缺省
  * @property {string | null} [toolName] 调用步是工具名，结果步是配对索引的 tool_name（缓存外仍可知）；其余步骤缺省
  * @property {string | null} [toolArgs] 调用步的参数段摘要（已按预算截断，不含工具名）；其余步骤缺省
  * @property {string | null} [toolInput] 调用步的完整参数 JSON，供悬停展示；其余步骤缺省
@@ -342,15 +343,27 @@ function execReading(pair) {
 }
 
 /**
+ * 承载请求的组投影：组是这一笔请求结构新增部分的可读投影。delta 里的用户消息、
+ * 消息级 System、assistant 文本与调用块、工具结果各出行；顶层 System 与请求级
+ * 记录是请求自己的事实。回复对象不在本组出内容行，它作为下一笔承载请求的
+ * assistant 消息出现，没有承载请求时由 `projectTailReply` 单独成末尾组。
+ *
+ * 调用块的配对坐标与 exec 读数跟随内容的产出请求（`prev_req_id` 的已确认前驱），
+ * 按 call id 匹配；前驱不在窗口、调用 id 不匹配或元信息未读到时留空，不猜归属。
+ * assistant 文本行的推理读数只在承载 delta 只有一条 assistant 消息时挂到该消息
+ * 的第一段文本，值取自产出请求。
+ *
  * @param {import('../src/queries/projection').RequestRow} row
  * @param {import('./reader-store.js').RequestRead | null} read
  * @param {SystemContext} [systemContext] 顶层 System 的当前值与比较结果；由装配层按
  * 同 actor 已确认前驱计算，投影不做时间推断，也不持久化比较结果。
  * @param {import('../src/queries/bg-jobs').BgJobRow[]} [bgJobs] 会话的背景作业配对；
  * 缺省或未读到时不画配对标注。
+ * @param {((prevId: number) => {reasoningMs: number | null, calls: import('../src/queries/requests').ToolCallRow[]} | null) | null} [prevInfoOf]
+ * 产出请求（已确认前驱）的读数与调用表；缺省时调用行不挂配对坐标与执行读数。
  * @returns {TraceStep[]}
  */
-export function projectSteps(row, read, systemContext = null, bgJobs = []) {
+export function projectSteps(row, read, systemContext = null, bgJobs = [], prevInfoOf = null) {
   /** @type {TraceStep[]} */
   const steps = [];
   const detail = read?.detail ?? null;
@@ -416,6 +429,15 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
       ? 'unknown' : null,
     unassigned ? '会话归属未确认 · 以下为本次请求的消息' : `新增输入未确认 · ${detail.prev_relation ?? detail.derived_state}`);
   }
+  // 产出请求：承载 delta 里 assistant 消息的来源。只有已确认前驱才可读它的
+  // 调用表与推理读数；分叉、未知与首笔都没有可对齐的产出请求。
+  const prevId = detail.prev_relation === 'confirmed' && typeof detail.prev_req_id === 'number'
+    ? detail.prev_req_id : null;
+  const prevInfo = prevId !== null && prevInfoOf !== null ? prevInfoOf(prevId) : null;
+  // 推理段只在 delta 只有一条 assistant 消息时可归属到它；多条时无法区分各段。
+  const deltaAssistants = trusted === null ? []
+    : read.entries.filter(entry => trusted.has(entry.ord) && entry.role === 'assistant');
+  const soleAssistantOrd = deltaAssistants.length === 1 ? deltaAssistants[0].ord : null;
   if (trusted !== null || unassigned) {
     for (const entry of read.entries) {
       if (trusted !== null && !trusted.has(entry.ord)) continue;
@@ -469,6 +491,50 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
         });
         continue;
       }
+      // 承载 delta 里的 assistant 消息：每条文本、每个调用各一行；thinking 不常驻，
+      // 结果块已在上面单独出行。块路径按消息内协议位置拼，与结果行同一规则。
+      // 归属未确认时不走这里：按请求原文展示整条消息，不把它读成新增内容。
+      if (entry.role === 'assistant' && !unassigned) {
+        let firstText = true;
+        for (const block of entry.blocks) {
+          if (block.kind !== 'text' && block.kind !== 'call') continue;
+          const path = block.path === '' ? msgBase : `${msgBase}.${block.path}`;
+          if (block.kind === 'text') {
+            if (block.text.length === 0) continue;
+            const reading = firstText && soleAssistantOrd === entry.ord
+              && prevInfo !== null && prevInfo.reasoningMs !== null && prevInfo.reasoningMs > 0
+              ? { kind: /** @type {'reason'} */ ('reason'), ms: prevInfo.reasoningMs }
+              : undefined;
+            firstText = false;
+            steps.push({
+              key: `${row.req_id}:message:${entry.ord}:text:${block.index}`, reqId: row.req_id,
+              kind: 'assistant', text: block.text, messageOrd: entry.ord, callOrd: null,
+              source: { side: 'request', path, messageOrd: entry.ord, blockIndex: block.index },
+              raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null,
+              reading,
+            });
+            continue;
+          }
+          // 调用行的配对坐标与执行读数跟随产出请求：按 call id 匹配，不拿块序号冒充调用序号。
+          const call = toolCallOfBlock(block);
+          const pair = prevInfo !== null && call.id !== ''
+            ? prevInfo.calls.find(item => item.call_id === call.id) ?? null : null;
+          const parts = summaryParts(call.name, call.inputText);
+          steps.push({
+            key: `${row.req_id}:message:${entry.ord}:call:${block.index}`, reqId: row.req_id,
+            kind: 'tool', text: `${parts.label} · ${parts.args}`,
+            toolName: call.name !== '' ? call.name : null, toolArgs: parts.args, toolInput: call.inputText,
+            messageOrd: entry.ord, callOrd: null,
+            source: { side: 'request', path, messageOrd: entry.ord, blockIndex: block.index },
+            raw: block.raw, unrecognized: false, status: null,
+            result: pair === null ? null
+              : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
+            pairOwner: null, callOwner: pair === null || prevId === null ? null : { reqId: prevId, callOrd: pair.ord },
+            reading: execReading(pair),
+          });
+        }
+        continue;
+      }
       if (!entry.isInput) {
         if (unassigned && resultBlocks.length === 0) {
           const role = entry.role === 'assistant' ? 'Assistant' : entry.rawRole ?? 'Unknown';
@@ -514,8 +580,8 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
       ? `新增读取失败 · 已消费 ${Math.min(deltaState.next, total)} / ${total} · ${deltaState.error}`
       : `还有 ${total - deltaState.next} 条新增未读取 · 点击续读`);
   }
-  // 回复块只经 replyView 归一化：块序号沿用协议内位置，路径从回复根算起；
-  // thinking 不常驻，多 choice 不结构化拆行，只出一条保留原始对象的记录。
+  // 回复状态只做事实记录：回复的内容块不在承载请求的组里出步骤，它们作为下一笔
+  // 承载请求的 assistant 消息出现；没有承载请求的回复由 projectTailReply 单独成组。
   const meta = read?.meta ?? null;
   const view = meta === null ? null : replyView(meta);
   const unknownBody = trusted === null && detail.actor_state === 'unknown';
@@ -536,36 +602,6 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
   } else if (view.state !== 'ok') {
     // pending / evicted / unsupported / summary：正文状态行已经说明状态，
     // 这里不再补一条「未收到回复」，避免同屏两句话互相打架。
-  } else {
-    for (const block of view.blocks) {
-      const index = block.index;
-      if (block.kind === 'text' && block.text.length > 0) {
-        steps.push({ key:`${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
-          text: block.text, messageOrd: null, callOrd: null,
-          source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
-          raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null,
-          reading: reasoningReading(row) });
-      } else if (block.kind === 'call') {
-        const call = view.calls.find(item => item.ord === index) ?? null;
-        const pair = detail.tool_calls?.find(item => item.ord === index) ?? null;
-        const parts = summaryParts(call?.name ?? '', call?.inputText ?? '');
-        steps.push({ key: `${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
-          text: `${parts.label} · ${parts.args}`,
-          toolName: call?.name ?? null, toolArgs: parts.args, toolInput: call?.inputText ?? '',
-          messageOrd: null, callOrd: index,
-          source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
-          raw: block.raw,
-          unrecognized: false, status: null,
-          result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
-          pairOwner: null, reading: execReading(pair) });
-      } else if (block.kind !== 'thinking') {
-        // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
-        steps.push({ key: `${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
-          text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
-          source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
-          raw: block.raw, unrecognized: true, status: null, result: null, pairOwner: null });
-      }
-    }
   }
   // 回调只报告自身观察，不由 success 推断 HTTP 状态或具体原因。
   const hookReports = detail.source_facts?.hook?.successes ?? [];
@@ -593,6 +629,83 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
     record('body', 'missing_body', `正文状态：${row.body_state}${row.miss_reason ? `（${row.miss_reason}）` : ''}`);
   }
   return steps;
+}
+
+/**
+ * 末尾组的请求集合（纯判定）：会话已完整加载时，没有后继请求把它当作已确认
+ * 前驱、且它之后没有前驱未定的请求的链末各得一个末尾组。未知前驱可能承载这条
+ * 回复，排除不了就抑制，避免同一回复出现两次。装配层先把窗口行整理成 entries，
+ * 辅助与排除请求不进 entries。
+ * @param {{id: number, prevId: number | null, undetermined: boolean}[]} entries 行序排列
+ * @param {boolean} complete 会话是否已完整加载（后续游标耗尽且不在读取中）
+ * @returns {Set<number>}
+ */
+export function tailEligibleIds(entries, complete) {
+  /** @type {Set<number>} */
+  const eligible = new Set();
+  if (!complete) return eligible;
+  const successors = new Set(entries.map(item => item.prevId).filter(id => id !== null));
+  for (let index = 0; index < entries.length; index += 1) {
+    const item = entries[index];
+    if (successors.has(item.id)) continue;
+    if (entries.slice(index + 1).some(later => later.undetermined)) continue;
+    eligible.add(item.id);
+  }
+  return eligible;
+}
+
+/**
+ * 末尾回复投影：没有承载请求的回复单独成组。只有回复对象可读、状态为 ok 且
+ * 至少有一个文本或调用块才成组；空回复、缺失、部分、非法与多 choice 的说明
+ * 留在产出请求的组里，不在这里重复。
+ *
+ * 行键沿用 `reqId:reply:*` 与 `reqId:call:*`，source 指向回复根；读数「本次回复」
+ * 照旧，推理读数归属产出请求。
+ * @param {import('../src/queries/projection').RequestRow} row
+ * @param {import('./reader-store.js').RequestRead | null} read
+ * @returns {{steps: TraceStep[], eligible: boolean}} eligible 为假时 steps 不作为组显示
+ */
+export function projectTailReply(row, read) {
+  const meta = read?.meta ?? null;
+  const view = meta === null ? null : replyView(meta);
+  if (view === null || view.state !== 'ok' || (view.choiceCount !== null && view.choiceCount > 1)) {
+    return { steps: [], eligible: false };
+  }
+  /** @type {TraceStep[]} */
+  const steps = [];
+  let content = false;
+  for (const block of view.blocks) {
+    const index = block.index;
+    if (block.kind === 'text' && block.text.length > 0) {
+      content = true;
+      steps.push({ key: `${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
+        text: block.text, messageOrd: null, callOrd: null,
+        source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
+        raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null,
+        reading: reasoningReading(row) });
+    } else if (block.kind === 'call') {
+      const call = view.calls.find(item => item.ord === index) ?? null;
+      const pair = read?.detail?.tool_calls?.find(item => item.ord === index) ?? null;
+      const parts = summaryParts(call?.name ?? '', call?.inputText ?? '');
+      content = true;
+      steps.push({ key: `${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
+        text: `${parts.label} · ${parts.args}`,
+        toolName: call?.name ?? null, toolArgs: parts.args, toolInput: call?.inputText ?? '',
+        messageOrd: null, callOrd: index,
+        source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
+        raw: block.raw,
+        unrecognized: false, status: null,
+        result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
+        pairOwner: null, reading: execReading(pair) });
+    } else if (block.kind !== 'thinking') {
+      // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
+      steps.push({ key: `${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
+        text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
+        source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
+        raw: block.raw, unrecognized: true, status: null, result: null, pairOwner: null });
+    }
+  }
+  return { steps, eligible: content };
 }
 
 // 参与角色英文标签 + 内容类型：调用由 Assistant 发出、结果显示在 Tool 上，

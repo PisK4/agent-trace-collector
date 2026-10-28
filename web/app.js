@@ -38,7 +38,7 @@ import {
 import { applyIntent } from './selection.js';
 import { createMainView } from './trace-dom.js';
 import { renderTracePair } from './trace-pair.js';
-import { projectSteps, renderTraceRow } from './trace-view.js';
+import { projectSteps, projectTailReply, renderTraceRow, tailEligibleIds as tailIds } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
 import { railTabFromParam, railTabParam, resolveTraceTarget, traceIdFromParam } from './url-route.js';
 
@@ -72,6 +72,12 @@ if (typeof document !== 'undefined') {
    * @type {Map<number, import('./trace-view.js').TraceStep[]>}
    */
   const retainedSteps = new Map();
+  /**
+   * 末尾回复投影的缓存：与组投影分开存，版本作废时随组一起退回或隐藏，
+   * 不把旧回复冒充当前。换会话与刷新即清。
+   * @type {Map<number, {steps: import('./trace-view.js').TraceStep[], eligible: boolean}>}
+   */
+  const retainedTail = new Map();
   /**
    * 上下文明细弹窗：tile、图例与列表行共用的选择动作。读取走注入的同一 fetcher，
    * 代次捕获在模块内，晚到响应不进已切换的弹窗。
@@ -164,7 +170,8 @@ if (typeof document !== 'undefined') {
           break;
         case 'scroll-group':
           requestAnimationFrame(() => {
-            document.querySelector(`.trace-group[data-req="${CSS.escape(String(fx.reqId))}"]`)
+            // 定位到承载组：同号可能相邻出现末尾回复组，按组键选而不是 data-req。
+            document.querySelector(`.trace-group[data-group-key="req:${CSS.escape(String(fx.reqId))}"]`)
               ?.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
           });
           break;
@@ -365,11 +372,12 @@ if (typeof document !== 'undefined') {
     if (epoch === readingEpoch) state.revealed = true;
   }
 
-  /** 换会话与显式刷新清空准备结论：提交集与保留投影都不跨场复用。 */
+  /** 换会话与显式刷新清空准备结论：提交集、保留投影与末尾回复缓存都不跨场复用。 */
   function resetReading() {
     readingEpoch += 1;
     readyRequests.clear();
     retainedSteps.clear();
+    retainedTail.clear();
   }
 
   /**
@@ -599,6 +607,19 @@ if (typeof document !== 'undefined') {
   }
 
   /**
+   * 产出请求（已确认前驱）的推理读数与调用表：承载 delta 里的调用行按 call id
+   * 对齐配对状态与执行读数，assistant 文本行按唯一消息取推理段。前驱不在窗口
+   * 或未读到时返回 null，调用行留空，不猜归属。
+   * @param {number} prevId
+   */
+  function prevInfoOf(prevId) {
+    const prev = store.peekRequest(prevId);
+    const detail = prev?.detail ?? null;
+    if (detail === null) return null;
+    return { reasoningMs: detail.reasoning_span_ms, calls: detail.tool_calls };
+  }
+
+  /**
    * 一笔请求的步骤投影。准备完成的组用当前读取投影并更新保留投影；未备齐时
    * 退回最近一次完整投影，旧结果由 stale 声明归属；两者都没有才显示准备行。
    * @param {RequestRow} r
@@ -608,7 +629,7 @@ if (typeof document !== 'undefined') {
   function stepsOf(r) {
     const read = store.peekRequest(r.req_id);
     const project = () => projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
-      store.peekBgJobs().items);
+      store.peekBgJobs().items, prevInfoOf);
     if (readyRequests.has(r.req_id) && read !== null && read.detail !== null) {
       const steps = project();
       retainedSteps.set(r.req_id, steps);
@@ -630,9 +651,56 @@ if (typeof document !== 'undefined') {
   }
 
   /**
+   * 末尾回复组：没有后继承载的链末回复单独成组。只在会话完整加载时计算；
+   * 历史加载不改已显示行的归属与顺序。读取未备齐时退回缓存并标 stale，
+   * 缓存也没有就不成组，不把旧回复冒充当前。
+   * @param {RequestRow} r
+   * @returns {{steps: import('./trace-view.js').TraceStep[], stale: 'reading' | 'failed' | null} | null}
+   */
+  function tailOf(r) {
+    const read = store.peekRequest(r.req_id);
+    if (readyRequests.has(r.req_id) && read !== null && read.detail !== null) {
+      const tail = projectTailReply(r, read);
+      retainedTail.set(r.req_id, tail);
+      return tail.eligible ? { steps: tail.steps, stale: null } : null;
+    }
+    const retained = retainedTail.get(r.req_id);
+    if (retained !== undefined && retained.eligible) {
+      return {
+        steps: retained.steps,
+        stale: read !== null && read.status === 'failed' ? 'failed' : 'reading',
+      };
+    }
+    return null;
+  }
+
+  /**
+   * 末尾组的请求集合：会话已完整加载、请求不是辅助、没有已加载的非辅助请求把它
+   * 当作已确认前驱（后继承载），且它之后没有前驱未知的请求。判定本身是纯函数，
+   * 这里只把窗口行整理成它要的形状：前驱未定包含详情未准备与关系不是 confirmed/first。
+   * @returns {Set<number>}
+   */
+  function tailEligibleIds() {
+    const window = store.getWindow();
+    const rows = currentRows().filter(row => row.purpose_chain !== 'exclude' && row.chain_role !== 'aux');
+    const entries = rows.map(row => {
+      const read = readyRequests.has(row.req_id) ? store.peekRequest(row.req_id) : null;
+      const detail = read?.detail ?? null;
+      const confirmed = detail !== null && detail.prev_relation === 'confirmed';
+      return {
+        id: row.req_id,
+        prevId: confirmed && typeof detail.prev_req_id === 'number' ? detail.prev_req_id : null,
+        undetermined: detail === null || (detail.prev_relation !== 'confirmed' && detail.prev_relation !== 'first'),
+      };
+    });
+    return tailIds(entries, window.newerCursor === null && !window.loading);
+  }
+
+  /**
    * 中栏模型：会话头、轮次带与步骤列表一次读齐，交给 trace-dom 键控提交。
    * 步骤行的 HTML 不含选择（默认 false），选择由视图单独写回高亮；
    * 请求组容器自身的可见结果为空串，内容按稳定步骤键逐行比较。
+   * 组按行顺序输出「承载组、末尾组、承载组、末尾组……」；末尾组与承载组同号相邻。
    * @returns {import('./trace-dom.js').MainModel}
    */
   function mainModel() {
@@ -642,8 +710,15 @@ if (typeof document !== 'undefined') {
     // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载后续
     // 记录后 rows.length 累计，重绘时重算，不按首次加载上限截断。
     const ordDigits = Math.max(1, String(rows.length).length);
-    // 结果行的调用方前缀：调用方正文在窗口缓存内时给同款摘要，缓存外降级只工具名。
-    const callOf = (/** @type {number} */ ownerReq, /** @type {number} */ callOrd) => {
+    /**
+     * 结果行的调用方摘要：同组调用行优先（结果与调用同在承载 delta 里），其次
+     * 回退产出请求缓存；两处都没有时降级为只工具名。
+     * @param {import('./trace-view.js').TraceStep[]} steps
+     */
+    const callOfFor = (steps) => (/** @type {number} */ ownerReq, /** @type {number} */ callOrd) => {
+      const same = steps.find(step => step.kind === 'tool' && step.callOwner !== undefined
+        && step.callOwner !== null && step.callOwner.reqId === ownerReq && step.callOwner.callOrd === callOrd);
+      if (same !== undefined) return { name: same.toolName ?? '', inputText: same.toolInput ?? '' };
       const ownerRead = store.peekRequest(ownerReq);
       if (ownerRead === null || ownerRead.meta === null) return null;
       const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
@@ -655,23 +730,41 @@ if (typeof document !== 'undefined') {
       : window.newerCursor !== null
         ? '<div class="history-loader"><button id="load-later" class="history-button">↓ 加载后续记录</button></div>'
         : '';
-    const groups = rows.map(r => {
+    const tails = tailEligibleIds();
+    /** @type {import('./trace-dom.js').GroupModel[]} */
+    const groups = [];
+    for (const r of rows) {
       const { steps, stale, placeholder } = stepsOf(r);
       const ordinal = ordinalOf(r.req_id);
+      const callOf = callOfFor(steps);
+      const status = r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success';
       /** @type {import('./trace-dom.js').CommitItem[]} */
       const items = [];
       for (const step of steps) {
         items.push({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) });
       }
-      return {
+      groups.push({
+        key: `req:${r.req_id}`,
         reqId: r.req_id,
-        status: r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success',
+        status,
         current: r.req_id === state.reqId,
         stale,
         placeholder,
         rows: items,
-      };
-    });
+      });
+      // 末尾组不挂请求级 aria-current：它是同一请求的回复，不是第二笔请求。
+      const tail = tails.has(r.req_id) ? tailOf(r) : null;
+      if (tail === null) continue;
+      groups.push({
+        key: `tail:${r.req_id}`,
+        reqId: r.req_id,
+        status,
+        current: false,
+        stale: tail.stale,
+        placeholder: false,
+        rows: tail.steps.map(step => ({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) })),
+      });
+    }
     return {
       headHtml: sessionHead(),
       bandHtml: band,
