@@ -167,8 +167,9 @@ export function contextDetailHtml(s, dir) {
 }
 
 /**
- * 单个条目的正文：文本直接呈现，非文本与原始对象折叠为 JSON。
- * 工具结果读 data.content；正文页读 messages[0].value；不可读状态原样说明。
+ * 单个条目的正文：展开即内容，只渲染一层——抽得出文本给文本，抽不出给
+ * 缩进 JSON。工具结果读 data.content；正文页读 messages[0].value；不可读
+ * 状态原样说明。
  * @param {{ord: number | null, path: string, precision: string}} entry
  * @param {any} data
  */
@@ -181,9 +182,8 @@ export function entryContentHtml(entry, data) {
     : data?.messages?.[0]?.value ?? null;
   const text = contentTextOf(value);
   const state = data?.is_error === true ? '<p class="ctx-d-status">工具结果标记为失败（is_error）</p>' : '';
-  const textHtml = text === null ? '' : `<pre class="ctx-d-text">${esc(text)}</pre>`;
-  const rawHtml = `<details class="ctx-d-raw"><summary>原始对象</summary><pre>${esc(JSON.stringify(value, null, 1))}</pre></details>`;
-  return `${state}${textHtml}${rawHtml}`;
+  const body = text === null ? JSON.stringify(value, null, 1) : text;
+  return `${state}<pre class="ctx-d-text">${esc(body)}</pre>`;
 }
 
 /**
