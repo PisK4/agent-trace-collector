@@ -16,6 +16,7 @@
 
 import { esc, mdToHtml } from './html.js';
 import { clip, displayRoleOf } from './body-model.js';
+import { clipChars, summaryParts } from './tool-summary.js';
 
 /** 参与角色标签统一用英文；tag 只管显示文本，CSS 类名走 roleClass。 @param {Role} role */
 export function roleTag(role) {
@@ -92,12 +93,17 @@ export function renderMessages(entries, options) {
 /**
  * 单条消息的完整内容。用户与工具结果按原文保留换行，助手文本按 Markdown 显示。
  * `path` 是原始请求对象里的消息位置；未知时不显示位置。
+ * 调用与结果块在 call_id 与原始路径都能确认两端时给显式配对入口，不按块序号猜。
  * @param {Entry} entry
  * @param {string} [path]
+ * @param {((block: Block, path: string) => {owner: number, callOrd: number} | null) | null} [pairOf]
  */
-export function renderMessageDetail(entry, path = '') {
+export function renderMessageDetail(entry, path = '', pairOf = null) {
   const displayRole = displayRoleOf(entry);
   const blocks = entry.blocks.map(block => {
+    // 块位置按正文骨架拼；Chat 的 role=tool 结果配对到整条消息，与后端 result_path 同口径。
+    const blockPath = path === '' || entry.rawRole === 'tool' || block.path === ''
+      ? path : `${path}.${block.path}`;
     if (block.kind === 'text') {
       return entry.role === 'assistant'
         ? `<div class="bp-text">${mdToHtml(block.text)}</div>`
@@ -110,7 +116,10 @@ export function renderMessageDetail(entry, path = '') {
     if (block.kind === 'call' || block.kind === 'result') {
       const failed = block.kind === 'result' && block.failed === true
         ? '<span class="tool-chip miss"><span>工具结果失败</span></span>' : '';
-      return `${failed}<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(block.text)}</pre>`;
+      const pair = pairOf === null ? null : pairOf(block, blockPath);
+      const open = pair === null ? ''
+        : `<div class="conv-tools"><button class="chip-btn" data-tool-owner="${pair.owner}" data-call-ord="${pair.callOrd}">配对两端 ▸</button></div>`;
+      return `${failed}${open}<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(block.text)}</pre>`;
     }
     return `<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(JSON.stringify(block.raw, null, 2))}</pre>`;
   }).join('');
@@ -173,7 +182,8 @@ export function renderUnknownBlockDetail(path, raw) {
 
 /**
  * 工具往返折叠行。每次调用都提供右栏内打开配对页的入口，阅读就地完成；
- * 没有配对信息就不显示状态，只有异常（多候选）才提示。
+ * 没有配对信息就不显示状态，只有异常（多候选）才提示。行内摘要与中栏调用行
+ * 同源（tool-summary 叶子模块）：工具名加参数段，完整 inputText 只在悬停里。
  * @param {ToolEntry[]} tools
  * @param {string} [foldKey] 折叠持久化键前缀（req id）；空串不持久化
  */
@@ -183,8 +193,10 @@ export function renderTools(tools, foldKey = '') {
     const open = `<button class="chip-btn" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}">配对两端 ▸</button>`;
     const warn = tool.state === 'ambiguous'
       ? '<span class="tool-chip miss"><span>结果有多个候选，未配对</span></span>' : '';
+    const parts = summaryParts(tool.name, tool.inputText);
+    const text = parts.args === '' ? parts.label : `${parts.label} · ${parts.args}`;
     return `<div class="tool-row">
-      <span class="tool-chip call ${toolTint(tool.name)}" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clip(tool.inputText, 90))})</span></span>
+      <span class="tool-chip call ${toolTint(tool.name)}" title="${esc(clipChars(tool.inputText))}"><span>${esc(text)}</span></span>
       ${open}${warn}
     </div>`;
   }).join('');

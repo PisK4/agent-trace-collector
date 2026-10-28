@@ -1,6 +1,7 @@
 // @ts-check
 /**
- * 上下文构成视图的共享原语：类别口径（kind→标签与色槽）与 token 缩写。
+ * 上下文构成视图的共享原语：类别口径（kind→标签、色槽与路径类判定）、
+ * token 缩写与路径类可见名折算。
  * rail-facts 的构成条与图例、context-map 的 treemap 与内容列表共用同一口径；
  * magpie 拆出新类时只在 PARTS 加一行映射，未知 kind 原样显示名字、落灰槽。
  */
@@ -38,3 +39,15 @@ export function partColor(kind) {
 
 /** token 缩写：1.2M / 74.4k / 980；缺值显示 —，不当作 0。 @param {number | null | undefined} v */
 export const kk = (v) => (v == null ? '—' : v >= 1000000 ? (v / 1e6).toFixed(1) + 'M' : v >= 1000 ? (v / 1000).toFixed(1) + 'k' : String(v));
+
+/** 路径类类别：可见名只留 basename，完整名字由 title 与 aria-label 承担。 */
+const PATH_KINDS = new Set(['files', 'memory']);
+
+/** @param {string} kind */
+export const isPathKind = (kind) => PATH_KINDS.has(kind);
+
+/** 末段路径：没有目录时原样返回，末尾斜杠不算名字。 @param {string} name */
+export const baseNameOf = (name) => {
+  const parts = name.split('/').filter(Boolean);
+  return parts.length === 0 ? name : parts[parts.length - 1];
+};

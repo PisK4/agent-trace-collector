@@ -54,6 +54,7 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/trace-dom.js': { file: 'trace-dom.js', type: 'text/javascript; charset=utf-8' },
   '/trace-preparation.js': { file: 'trace-preparation.js', type: 'text/javascript; charset=utf-8' },
   '/trace-pair.js': { file: 'trace-pair.js', type: 'text/javascript; charset=utf-8' },
+  '/tool-summary.js': { file: 'tool-summary.js', type: 'text/javascript; charset=utf-8' },
   '/trace-view.js': { file: 'trace-view.js', type: 'text/javascript; charset=utf-8' },
   '/url-route.js': { file: 'url-route.js', type: 'text/javascript; charset=utf-8' },
   '/turn-band.js': { file: 'turn-band.js', type: 'text/javascript; charset=utf-8' },

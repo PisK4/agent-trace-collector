@@ -69,6 +69,7 @@ Status: implemented
 ## Related
 
 - [读数页上下文分布 treemap](2026-10-26-context-distribution-treemap.md)：被部分取代的前一版决策，类别来源与颜色身份继续有效。
+- [中栏按承载请求的 delta 分组](2026-10-28-request-delta-trace-groups.md)：部分取代 tile、列表行、弹窗头与成员名单的可见名字（文件与记忆类只留 basename，完整名字进 `title` 与 `aria-label`）；类别身份、面积与 token 守恒、`iidOf`、目录查询与点击明细继续有效。
 - Magpie 参照（`开源源码@magpie-3173440ca`，版本锁定）：容器尺寸观察、HTML tile、单项展开与密封内容呈现的静态依据；本次不采用其内存正文保留、`/api/context/text` 依赖与全屏弹窗。仅静态读码，未运行其测试。
 - [架构设计·查询接口](../../../../docs/architecture-design.md#查询接口)：目录查询的接口形状与读取一致性的权威描述。
 - [验收记录](../../../../docs/acceptance.md)：本轮合成验收的做法与结果。

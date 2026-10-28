@@ -78,15 +78,15 @@ export function railFactsHtml(parts) {
 /**
  * 结构续读的按钮与失败提示，正文页签与请求结构折叠共用一份。
  * 加载中禁用按钮，失败时按钮改「重试读取」并附原因；是否显示按钮由调用方判断，
- * 两个页签对「还有没有下一片」的前置条件不同。
- * @param {{ next: number, loading: boolean, error: string | null }} structure
+ * 两个页签的正文可读性前置条件不同。已读窗口是 `[back, next)`，向前读更早的片。
+ * @param {{ back: number, next: number, loading: boolean, error: string | null }} structure
  * @param {number} reqId
  * @param {number | string | null} total
  * @returns {{button: string, note: string}}
  */
 export function structureMoreParts(structure, reqId, total) {
   return {
-    button: `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${structure.error ? '重试读取' : `加载下一片（已读 ${structure.next} / ${total}）`}</button>`,
+    button: `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${structure.error ? '重试读取' : `加载更早（已读 ${structure.back}–${structure.next} / ${total}）`}</button>`,
     note: structure.error ? `<p class="note warn">结构读取失败：${esc(structure.error)}</p>` : '',
   };
 }
@@ -101,27 +101,29 @@ export function structureMoreParts(structure, reqId, total) {
  *   row: { body_state: string, miss_reason?: string | null },
  *   meta: { total: number | null, message_location?: BodyPage['message_location'] } | null,
  *   entries: import('./body-model.js').Entry[],
- *   structure: { next: number, total: number | null, ords: number[], loading: boolean, error: string | null },
+ *   structure: { back: number, next: number, total: number | null, ords: number[], loading: boolean, error: string | null },
  *   delta: Set<number> | null,
  *   deltaState?: { next: number, done: boolean, loading: boolean, error: string | null } | null,
  *   parseState?: string | null,
  *   relation: string,
  *   open?: boolean,
  *   selected?: number | null,
+ *   pairOf?: ((block: import('./body-model.js').Block, path: string) => {owner: number, callOrd: number} | null) | null,
  * }} input
  * @returns {string}
  */
 export function structureFoldHtml(input) {
-  const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation, open = false, selected = null } = input;
+  const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation, open = false, selected = null, pairOf = null } = input;
   const total = structure.total ?? (meta ? meta.total : null);
   const count = total === null || total === undefined ? '消息总数未读取' : `${total} 条消息`;
   const canLoad = row.body_state === 'available' || row.body_state === 'partial';
-  const unread = total !== null && total !== undefined && structure.next < total;
+  // 已读窗口是 [back, next)：back > 0 表示前面还有更早的消息；读取失败保留重试入口。
+  const unread = (total !== null && total !== undefined && structure.back > 0) || structure.error !== null;
   const chosen = selected === null
     ? null : entries.find(entry => entry.ord === selected) ?? null;
   let body;
   if (chosen !== null) {
-    body = `${renderMessageDetail(chosen, messagePathOf(meta, chosen.ord))}
+    body = `${renderMessageDetail(chosen, messagePathOf(meta, chosen.ord), pairOf)}
       <div class="conv-tools"><button class="chip-btn" data-structure-back="${reqId}">返回消息列表</button></div>`;
   } else if (entries.length === 0 && !canLoad) {
     body = `<p class="note">${esc(bodyLabelText(row))}</p>`;
@@ -129,7 +131,7 @@ export function structureFoldHtml(input) {
     // 协议未适配是解释边界：原文完整也不按已知协议展开消息结构。
     body = '<p class="note">协议未适配：原对象已保存，但不按已知协议解释消息结构；请求字段与回复按原文阅读。</p>';
   } else if (entries.length === 0) {
-    body = `<p class="note">${structure.loading ? '正在读取消息结构…' : '尚未读取消息正文；展开后从开头读取前 40 条。'}</p>`;
+    body = `<p class="note">${structure.loading ? '正在读取消息结构…' : '尚未读取消息正文；展开后从末尾读取最近 40 条。'}</p>`;
   } else {
     const consumed = deltaState === null ? delta?.size ?? 0 : Math.min(deltaState.next, delta?.size ?? 0);
     const deltaNote = delta === null
@@ -151,10 +153,11 @@ export function structureFoldHtml(input) {
     body = `${deltaNote}${renderMessages(listEntries, { delta, limit: listEntries.length, selectedOrd: selected, gaps })}`;
   }
   const { button, note: errorNote } = structureMoreParts(structure, reqId, total);
+  // 按钮与失败说明放在列表上方，与「向前读更早」的方向一致。
   const more = unread && canLoad ? button : '';
   return `<details class="rail-fold" data-structure-fold="${reqId}" data-fold="structure:${reqId}"${open ? ' open' : ''}>
     <summary>请求结构<span class="fold-count">${esc(count)}</span></summary>
-    <div class="fold-body">${errorNote}${body}${more}</div>
+    <div class="fold-body">${errorNote}${more}${body}</div>
   </details>`;
 }
 
@@ -255,8 +258,9 @@ export function systemContextOf(row, readOf) {
 /**
  * 选中来源解析：把当前选中的步骤解析成右栏的阅读目标。
  * `state.selectedStep` 是唯一选择；右栏来源只从这一步解析，不按时间跳别的请求。
- * 调用与已配对的结果步骤都解析成配对目标（owner + 调用序号），右栏就地同屏阅读；
- * 未配对的结果、System 与其余输入步骤打开正文来源；记录步骤打开请求读数。
+ * 请求侧分支处理输入消息、承载真实内容的 assistant 消息与结果消息，按消息号定位；
+ * 回复侧分支只服务末尾组，按回复块定位。配对页不在这里推导：它只由「配对两端」
+ * 与工具页列表等显式入口打开。
  * @param {import('./trace-view.js').TraceStep | null} step
  * @param {string | null} [selectedKey] 消息列表选中的稳定键，主轨迹未投影时用于定位缓存原文。
  * @param {RequestRead | null} [read]
@@ -265,8 +269,7 @@ export function systemContextOf(row, readOf) {
  *   | {side:'request', target:'message', path:string, messageOrd:number}
  *   | {side:'reply', target:'text', path:string, blockIndex:number, text:string}
  *   | {side:'reply', target:'block', path:string, blockIndex:number, raw:unknown}
- *   | {side:'reply', target:'call', path:string, callOrd:number, ownerReq:number}
- *   | {side:'pair', ownerReq:number, callOrd:number}}
+ *   | {side:'reply', target:'call', path:string, callOrd:number, ownerReq:number}}
  */
 export function resolveSelectedSource(step, selectedKey = null, read = null) {
   if (step === null && read?.detail !== null && read?.detail !== undefined && selectedKey !== null) {
@@ -279,10 +282,6 @@ export function resolveSelectedSource(step, selectedKey = null, read = null) {
   }
   if (step === null || step.source === null) return { side: 'none' };
   const s = step.source;
-  // 已配对的结果步骤优先解析成配对目标：它虽然落在 request 侧，阅读入口是两端同屏。
-  if (step.kind === 'tool_result' && step.pairOwner !== null) {
-    return { side: 'pair', ownerReq: step.pairOwner.reqId, callOrd: step.pairOwner.callOrd };
-  }
   if (s.side === 'request') {
     if (typeof s.messageOrd === 'number') {
       return { side: 'request', target: 'message', path: s.path, messageOrd: s.messageOrd };
