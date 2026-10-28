@@ -16,7 +16,7 @@
  */
 
 import { esc } from './html.js';
-import { kk, partColor, partLabel } from './parts.js';
+import { baseNameOf, isPathKind, kk, partColor, partLabel } from './parts.js';
 
 /** iid → {kind, tag, name}；iid 由 kind\01tag\01name 拼成，名字段允许含分隔符。
  *  @param {string} iid */
@@ -113,23 +113,30 @@ export function directoryStatusHtml(data) {
 /**
  * 弹窗内部 HTML：头部是所选范围（类别色点 + 名称 + token），主体是状态说明
  * 与目录条目列表。条目默认收起（单项选择默认展开），展开时才读正文。
+ * 路径类名字只显示 basename，完整名字在 title 里。
  * @param {ContextSelection} s
  * @param {{phase: string, data?: ContextDirectory, error?: string | null}} dir
  */
 export function contextDetailHtml(s, dir) {
+  const shown = s.name !== null && isPathKind(s.kind) ? baseNameOf(s.name) : s.label;
+  const nameTitle = shown === s.label ? '' : ` title="${esc(s.label)}"`;
   const head = `<header class="ctx-d-head">
-    <span class="t"><i class="dot" style="background:${partColor(s.kind)}"></i><b>${esc(s.label)}</b></span>
+    <span class="t"><i class="dot" style="background:${partColor(s.kind)}"></i><b${nameTitle}>${esc(shown)}</b></span>
     <span class="v">${s.tokens === null ? '' : `${kk(s.tokens)} tokens`}</span>
     <span class="grow"></span>
     <button type="button" class="x" data-ctx-close aria-label="关闭明细">×</button>
   </header>`;
   const body = dir.phase === 'loading' ? '<div class="ctx-d-body"><p class="ctx-d-status">读取目录…</p></div>' : (() => {
     // 集合块的成员身份：目录按类别范围取，成员名单在此如实列出。
+    // 路径类名字只显示 basename，完整名字在 title 里。
     const members = s.members !== undefined && s.members.length > 0
       ? `<div class="ctx-d-body"><p class="ctx-d-note">成员：${
         s.members.map(m => {
           const parsed = iidParse(m);
-          return parsed === null ? '' : esc(parsed.name);
+          if (parsed === null) return '';
+          if (!isPathKind(parsed.kind)) return esc(parsed.name);
+          const base = baseNameOf(parsed.name);
+          return base === parsed.name ? esc(base) : `<span title="${esc(parsed.name)}">${esc(base)}</span>`;
         }).filter(x => x !== '').join('、')}</p></div>` : '';
     const inner = dir.phase === 'error' ? `<div class="ctx-d-body"><p class="ctx-d-status">${esc(dir.error ?? '读取失败')}</p>${
       dir.error === 'reading_changed' ? '<p class="ctx-d-note">阅读依据已变化，关闭后重新打开。</p>' : ''}</div>`

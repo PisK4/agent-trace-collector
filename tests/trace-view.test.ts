@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { toolTint } from '../web/body-view.js';
 import { resolveSelectedSource } from '../web/rail-facts.js';
-import { projectSteps, renderTraceRows, toolSummary } from '../web/trace-view.js';
+import { projectSteps, projectTailReply, renderTraceRows, tailEligibleIds, toolSummary } from '../web/trace-view.js';
 
 const TOKEN = 'r1-' + 'a'.repeat(64);
 
@@ -32,6 +32,11 @@ function entry(ord: number, input: unknown, isInput: boolean) {
   return { ord, role: 'user', blocks: [], preview: '', input, isInput };
 }
 
+/** 承载 delta 里的 assistant 消息：块与 body-model 归一化后的形状一致。 */
+function assistantEntry(ord: number, blocks: Record<string, unknown>[]) {
+  return { ord, role: 'assistant', rawRole: 'assistant', blocks, preview: '', input: null, isInput: false };
+}
+
 type ProjectableRead = Parameters<typeof projectSteps>[1];
 function read(detailJson: unknown, entries: unknown[], reply: unknown): ProjectableRead {
   return {
@@ -55,34 +60,45 @@ function gapRead(status: 'invalidated' | 'failed', detailError: string | null = 
   } as unknown as ProjectableRead;
 }
 
-test('投影顺序与稳定键：旧 ord 不进步骤，新增与回复块按协议顺序', () => {
+test('投影顺序与稳定键：旧 ord 不进步骤，承载 delta 的消息逐块出行', () => {
   const r = row();
   const entries = [
     entry(0, { state: 'text', text: 'old', original: 'old' }, true),
     entry(2, { state: 'text', text: 'new question', original: 'new question' }, true),
     entry(3, { state: 'unrecognized', text: '<queued>', original: '<queued>' }, true),
+    assistantEntry(4, [
+      { kind: 'text', text: '先看文件', index: 0, raw: '先看文件', path: 'content[0]' },
+      { kind: 'call', text: 'Bash({"command":"bun test"})', index: 1, raw: { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'bun test' } }, path: 'content[1]' },
+      { kind: 'text', text: '看完再说', index: 2, raw: '看完再说', path: 'content[2]' },
+    ]),
   ];
   const reply = { stop_reason: 'tool_use', content: [
     { type: 'text', text: '先看文件' },
     { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'bun test' } },
     { type: 'text', text: '看完再说' },
   ] };
-  const d = detail({ tool_calls: [{ call_id: 'c1', ord: 1, tool_name: 'Bash', result_req: 8, result_ord: 0, result_path: 'p', state: 'resolved' }] });
+  const d = detail({ delta_ordinals: [2, 3, 4] });
   const steps = projectSteps(r, read(d, entries, reply));
+  // 承载组的回复不出内容行；delta 里的 assistant 消息按文本与调用各出一行。
   expect(steps.map(s => s.kind)).toEqual(['user', 'user', 'assistant', 'tool', 'assistant']);
   expect(steps[1]?.unrecognized).toBe(true);
   expect(steps.map(s => s.key)).toEqual([
-    '7:message:2', '7:message:3', '7:reply:text:0', '7:call:1', '7:reply:text:2',
+    '7:message:2', '7:message:3', '7:message:4:text:0', '7:message:4:call:1', '7:message:4:text:2',
   ]);
-  expect(steps[3]?.result).toEqual({ state: 'resolved', reqId: 8 });
+  expect(steps[4]?.source).toEqual({ side: 'request', path: 'request.messages[4].content[2]', messageOrd: 4, blockIndex: 2 });
   // 渲染：每行只有一个选择入口，类型与内容之外不再附加状态、结果链接或箭头。
   const html = renderTraceRows(r, steps, 4, null);
   expect(html.match(/data-request-ordinal="4"/g)?.length).toBe(5);
   expect(html.match(/<button /g)?.length).toBe(5);
   expect(html).not.toMatch(/compact-metrics|step-status|step-result-link|step-expand/);
   expect(html).not.toContain('<time');
-  const selected = renderTraceRows(r, steps, 4, '7:call:1');
-  expect(selected).toContain('data-step-key="7:call:1" data-kind="tool" data-call-ord="1" aria-current="true"');
+  const selected = renderTraceRows(r, steps, 4, '7:message:4:call:1');
+  expect(selected).toContain('data-step-key="7:message:4:call:1" data-kind="tool" aria-current="true"');
+  // 末尾回复投影不进入承载组：同一回复由 projectTailReply 单独给出，键沿用 reply:*。
+  const tail = projectTailReply(r, read(d, entries, reply));
+  expect(tail.eligible).toBe(true);
+  expect(tail.steps.map(s => s.key)).toEqual(['7:reply:text:0', '7:call:1', '7:reply:text:2']);
+  expect(projectTailReply(r, read(d, entries, null))).toEqual({ steps: [], eligible: false });
 });
 
 test('读取未完成与不可用时不拆 input_preview 为用户步骤', () => {
@@ -116,7 +132,7 @@ test('注入与空 content 不是用户', () => {
   ];
   const reply = { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] };
   const steps = projectSteps(row(), read(d, entries, reply));
-  expect(steps.map(s => s.kind)).toEqual(['user', 'assistant']);
+  expect(steps.map(s => s.kind)).toEqual(['user']);
   const html = renderTraceRows(row(), steps, 1, null);
   expect(html).not.toContain('<img src=x');
   expect(html).toContain('&lt;img src=x');
@@ -216,35 +232,59 @@ test('结果步骤反向配对：Anthropic 按内容块路径，Chat 按整条�
   expect(mismatched.find(s => s.kind === 'tool_result')?.pairOwner).toBeNull();
 });
 
-test('选中来源解析：调用与已配对结果都解析成配对目标', () => {
+test('选中来源解析：请求侧一律落到消息本身，配对页不在这里推导', () => {
   const callStep = { kind: 'tool', source: { side: 'reply', path: 'reply.content[1]', messageOrd: null, blockIndex: 1 }, callOrd: 1, reqId: 7, pairOwner: null };
   expect(resolveSelectedSource(callStep as never)).toEqual({
     side: 'reply', target: 'call', path: 'reply.content[1]', callOrd: 1, ownerReq: 7,
   });
+  // 已配对的结果也打开它所在的消息：配对页只由显式按钮进入。
   const pairedResult = { kind: 'tool_result', source: { side: 'request', path: 'request.messages[2].content[0]', messageOrd: 2, blockIndex: 0 }, pairOwner: { reqId: 3, callOrd: 1 }, reqId: 7 };
-  expect(resolveSelectedSource(pairedResult as never)).toEqual({ side: 'pair', ownerReq: 3, callOrd: 1 });
+  expect(resolveSelectedSource(pairedResult as never)).toEqual({
+    side: 'request', target: 'message', path: 'request.messages[2].content[0]', messageOrd: 2,
+  });
   const plainResult = { kind: 'tool_result', source: { side: 'request', path: 'request.messages[2].content[0]', messageOrd: 2, blockIndex: 0 }, pairOwner: null, reqId: 7 };
   expect(resolveSelectedSource(plainResult as never)).toEqual({
     side: 'request', target: 'message', path: 'request.messages[2].content[0]', messageOrd: 2,
   });
 });
 
-test('回复来源是实际协议路径：Anthropic content[i]，Chat tool_calls[i]', () => {
-  const anthropic = projectSteps(row(), read(detail(), [], { stop_reason: 'tool_use', content: [
+test('消息来源是实际协议路径：Anthropic content[i]，Chat tool_calls[i]；末尾回复从回复根算', () => {
+  const anthropic = projectSteps(row(), read(detail({ delta_ordinals: [4] }), [
+    assistantEntry(4, [
+      { kind: 'text', text: '先看', index: 0, raw: '先看', path: 'content[0]' },
+      { kind: 'call', text: 'Bash({})', index: 1, raw: { type: 'tool_use', id: 'c1', name: 'Bash', input: {} }, path: 'content[1]' },
+    ]),
+  ], null));
+  expect(anthropic.find(s => s.kind === 'assistant')?.source).toEqual({
+    side: 'request', path: 'request.messages[4].content[0]', messageOrd: 4, blockIndex: 0,
+  });
+  expect(anthropic.find(s => s.kind === 'tool')?.source).toEqual({
+    side: 'request', path: 'request.messages[4].content[1]', messageOrd: 4, blockIndex: 1,
+  });
+  const chat = projectSteps(row(), read(detail({ delta_ordinals: [4] }), [
+    assistantEntry(4, [
+      { kind: 'call', text: 'read({})', index: 0, raw: { id: 'a', type: 'function', function: { name: 'read', arguments: '{}' } }, path: 'tool_calls[0]' },
+    ]),
+  ], null));
+  expect(chat.find(s => s.kind === 'tool')?.source).toEqual({
+    side: 'request', path: 'request.messages[4].tool_calls[0]', messageOrd: 4, blockIndex: 0,
+  });
+  // 末尾回复投影的来源从回复根算起：Anthropic content[i]，Chat tool_calls[i]。
+  const tail = projectTailReply(row(), read(detail(), [], { stop_reason: 'tool_use', content: [
     { type: 'text', text: '先看' },
     { type: 'tool_use', id: 'c1', name: 'Bash', input: {} },
   ] }));
-  expect(anthropic.find(s => s.kind === 'assistant')?.source).toEqual({
+  expect(tail.steps.find(s => s.kind === 'assistant')?.source).toEqual({
     side: 'reply', path: 'reply.content[0]', messageOrd: null, blockIndex: 0,
   });
-  expect(anthropic.find(s => s.kind === 'tool')?.source).toEqual({
+  expect(tail.steps.find(s => s.kind === 'tool')?.source).toEqual({
     side: 'reply', path: 'reply.content[1]', messageOrd: null, blockIndex: 1,
   });
-  const chat = projectSteps(row(), read(detail(), [], { choices: [{ finish_reason: 'tool_calls', message: {
+  const chatTail = projectTailReply(row(), read(detail(), [], { choices: [{ finish_reason: 'tool_calls', message: {
     role: 'assistant', content: null,
     tool_calls: [{ id: 'a', type: 'function', function: { name: 'read', arguments: '{}' } }],
   } }] }));
-  expect(chat.find(s => s.kind === 'tool')?.source).toEqual({
+  expect(chatTail.steps.find(s => s.kind === 'tool')?.source).toEqual({
     side: 'reply', path: 'reply.choices[0].message.tool_calls[0]', messageOrd: null, blockIndex: 0,
   });
   // 记录与辅助步骤不落在协议对象上，点击打开请求读数。
@@ -255,15 +295,15 @@ test('回复来源是实际协议路径：Anthropic content[i]，Chat tool_calls
 });
 
 test('工具行上屏：chip 承载工具身份，未配对结果保持中性 Tool result', () => {
-  const d = detail({ delta_ordinals: [2] });
+  const d = detail({ delta_ordinals: [2, 3] });
   const mixed = {
     ord: 2, role: 'user', rawRole: 'user',
     blocks: [{ kind: 'result', text: 'file body', index: 0, raw: {}, path: 'content[0]' }],
     preview: 'file body', input: null, isInput: false,
   };
-  const steps = projectSteps(row(), read(d, [mixed], { stop_reason: 'tool_use', content: [
-    { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls', description: '列目录' } },
-  ] }));
+  const steps = projectSteps(row(), read(d, [mixed, assistantEntry(3, [
+    { kind: 'call', text: 'Bash({"command":"ls","description":"列目录"})', index: 0, raw: { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls', description: '列目录' } }, path: 'content[0]' },
+  ])], null));
   const html = renderTraceRows(row(), steps, 3, null);
   expect(html).toContain('>Assistant<');
   expect(html).toContain('>Tool<');
@@ -315,9 +355,9 @@ test('结果行前缀三级：缓存内同款摘要、缓存外只工具名、�
 });
 
 test('调用行悬停放完整参数 JSON，预览只放参数段', () => {
-  const steps = projectSteps(row(), read(detail(), [], { stop_reason: 'tool_use', content: [
-    { type: 'tool_use', id: 'c1', name: 'Read', input: { file_path: '/u/very/long/path/queries.ts', offset: 1, limit: 5 } },
-  ] }));
+  const steps = projectSteps(row(), read(detail({ delta_ordinals: [4] }), [assistantEntry(4, [
+    { kind: 'call', text: 'Read({...})', index: 0, raw: { type: 'tool_use', id: 'c1', name: 'Read', input: { file_path: '/u/very/long/path/queries.ts', offset: 1, limit: 5 } }, path: 'content[0]' },
+  ])], null));
   const html = renderTraceRows(row(), steps, 1, null);
   expect(html).toContain('title="{&quot;file_path&quot;:&quot;/u/very/long/path/queries.ts&quot;,&quot;offset&quot;:1,&quot;limit&quot;:5}"');
   expect(html).toContain('<code>path/queries.ts · 1–6 行</code>');
@@ -427,7 +467,7 @@ test('孤立请求按详情归属显示携带的历史，其他快照不冒充�
   const unknown = detail({ actor_state: 'unknown', derived_state: 'dirty', derivation: { chain_state: 'unavailable' }, delta_ordinals: null });
   const snapshot = read(unknown, [history, injected], { choices: [] })!;
   snapshot.meta = { ...snapshot.meta!, state: 'available', protocol: 'chat', total: 2 };
-  snapshot.structure = { next: 2, total: 2, ords: [0, 1], loading: false, error: null };
+  snapshot.structure = { back: 0, next: 2, total: 2, ords: [0, 1], loading: false, error: null };
   const steps = projectSteps(row({ actor_state: 'known' }), snapshot);
   const pastAssistant = steps.find(step => step.key === '7:message:0');
   expect(pastAssistant?.kind).toBe('assistant');
@@ -447,11 +487,15 @@ test('辅助请求只有一条辅助记录；同 call_id 不同请求的键不�
   const aux = projectSteps(row({ purpose_chain: 'exclude', req_kind: 'title' }), null);
   expect(aux.length).toBe(1);
   expect(aux[0]?.kind).toBe('aux');
-  const tool = { call_id: 'same', ord: 0, tool_name: 'x', result_req: 9, result_ord: 0, result_path: 'p', state: 'resolved' };
-  const a = projectSteps(row({ req_id: 7 }), read(detail({ req_id: 7, tool_calls: [tool] }), [], { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'same', name: 'x', input: {} }] }));
-  const b = projectSteps(row({ req_id: 9 }), read(detail({ req_id: 9, tool_calls: [tool] }), [], { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'same', name: 'x', input: {} }] }));
-  expect(a[0]?.key).toBe('7:call:0');
-  expect(b[0]?.key).toBe('9:call:0');
+  const callBlock = { kind: 'call', text: 'x({})', index: 0, raw: { type: 'tool_use', id: 'same', name: 'x', input: {} }, path: 'content[0]' };
+  const a = projectSteps(row({ req_id: 7 }), read(detail({ req_id: 7, delta_ordinals: [4] }), [assistantEntry(4, [callBlock])], null));
+  const b = projectSteps(row({ req_id: 9 }), read(detail({ req_id: 9, delta_ordinals: [4] }), [assistantEntry(4, [callBlock])], null));
+  expect(a[0]?.key).toBe('7:message:4:call:0');
+  expect(b[0]?.key).toBe('9:message:4:call:0');
+  // 末尾组沿用 reply/call 键，与承载组的 message:* 键不冲突。
+  const reply = { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'same', name: 'x', input: {} }] };
+  expect(projectTailReply(row({ req_id: 7 }), read(detail({ req_id: 7 }), [], reply)).steps[0]?.key).toBe('7:call:0');
+  expect(projectTailReply(row({ req_id: 9 }), read(detail({ req_id: 9 }), [], reply)).steps[0]?.key).toBe('9:call:0');
 });
 
 test('回复完整性：截断、未知停止、未收到与纯工具回复', () => {
@@ -468,10 +512,16 @@ test('回复完整性：截断、未知停止、未收到与纯工具回复', ()
   expect(unknown.find(s => s.status === 'unknown')?.text).toContain('weird_stop');
   const absent = projectSteps(row(), read(detail(), [], null));
   expect(absent.some(s => s.status === 'missing_reply')).toBe(true);
-  // 纯工具回复：没有助手文本步骤，工具步骤在。
-  const toolOnly = projectSteps(row(), read(detail({ tool_calls: [{ call_id: 'c', ord: 0, tool_name: 'x', result_req: null, result_ord: null, result_path: null, state: 'pending' }] }), [], { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'c', name: 'x', input: {} }] }));
-  expect(toolOnly.some(s => s.kind === 'assistant')).toBe(false);
-  expect(toolOnly.find(s => s.kind === 'tool')?.result).toEqual({ state: 'pending', reqId: null });
+  // 纯工具回复：承载组不出内容行；末尾投影没有助手文本步骤，工具步骤在。
+  const toolOnlyReply = { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'c', name: 'x', input: {} }] };
+  const toolOnlyRead = read(detail({ tool_calls: [{ call_id: 'c', ord: 0, tool_name: 'x', result_req: null, result_ord: null, result_path: null, state: 'pending' }] }), [], toolOnlyReply);
+  expect(projectSteps(row(), toolOnlyRead).some(s => s.kind === 'assistant')).toBe(false);
+  const tail = projectTailReply(row(), toolOnlyRead);
+  expect(tail.steps.some(s => s.kind === 'assistant')).toBe(false);
+  expect(tail.steps.find(s => s.kind === 'tool')?.result).toEqual({ state: 'pending', reqId: null });
+  // 多 choice 与空回复不单独成末尾组。
+  expect(projectTailReply(row(), read(detail(), [], { choices: [{}, {}] })).eligible).toBe(false);
+  expect(projectTailReply(row(), read(detail(), [], { stop_reason: 'end_turn', content: [] })).eligible).toBe(false);
 });
 
 test('HTTP 失败、缺正文与已有步骤并存', () => {
@@ -616,14 +666,14 @@ test('多 choice 回复保留原始对象并说明限制', () => {
   expect(malformed.some(s => s.kind === 'assistant')).toBe(false);
 });
 
-test('选中来源解析：回复四块各自定位，两个文本不再共享整份回复', () => {
+test('选中来源解析：末尾回复四块各自定位，两个文本不再共享整份回复', () => {
   const reply = { stop_reason: 'tool_use', content: [
     { type: 'text', text: 't0' },
     { type: 'tool_use', id: 'c1', name: 'Bash', input: {} },
     { type: 'text', text: 't2' },
     { type: 'tool_use', id: 'c3', name: 'Read', input: {} },
   ] };
-  const steps = projectSteps(row(), read(detail(), [], reply));
+  const steps = projectTailReply(row(), read(detail(), [], reply)).steps;
   expect(steps.map(s => s.key)).toEqual(['7:reply:text:0', '7:call:1', '7:reply:text:2', '7:call:3']);
   expect(resolveSelectedSource(steps[0] ?? null)).toEqual({
     side: 'reply', target: 'text', path: 'reply.content[0]', blockIndex: 0, text: 't0',
@@ -646,14 +696,18 @@ test('选中来源解析：输入消息、顶层 System 与未知块', () => {
     blocks: [{ kind: 'text', text: 'q', index: 0, raw: 'q', path: 'content[0]' }],
     preview: 'q', input: { state: 'text', text: 'q', original: 'q' }, isInput: true,
   };
-  const steps = projectSteps(row(), read(d, [user], { stop_reason: 'end_turn', content: [{ type: 'mystery', x: 1 }] }));
+  const reply = { stop_reason: 'end_turn', content: [{ type: 'mystery', x: 1 }] };
+  const steps = projectSteps(row(), read(d, [user], reply));
   expect(resolveSelectedSource(steps.find(s => s.kind === 'user') ?? null)).toEqual({
     side: 'request', target: 'message', path: 'request.messages[2]', messageOrd: 2,
   });
-  const unknown = steps.find(s => s.key === '7:reply:block:0');
+  // 未知回复块只在末尾投影里出现，来源仍指向协议位置；只有未知块的回复不成组。
+  const tail = projectTailReply(row(), read(d, [user], reply));
+  const unknown = tail.steps.find(s => s.key === '7:reply:block:0');
   expect(resolveSelectedSource(unknown ?? null)).toEqual({
     side: 'reply', target: 'block', path: 'reply.content[0]', blockIndex: 0, raw: unknown?.raw,
   });
+  expect(tail.eligible).toBe(false);
   const sysRead = read(d, [], { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] });
   (sysRead as { meta: Record<string, unknown> }).meta = {
     reply: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] },
@@ -665,8 +719,8 @@ test('选中来源解析：输入消息、顶层 System 与未知块', () => {
   });
 });
 
-test('截图形状：Skill 调用定位本笔回复，结果步骤不按时间跳下一笔', () => {
-  // 请求 A：输入两条，回复含 Skill(ponytail)。
+test('截图形状：调用行归承载它的下一笔请求，结果行不按时间跳下一笔', () => {
+  // 请求 A：输入两条，回复含 Skill(ponytail)；调用行不在 A 的组里。
   const rowA = row({ req_id: 108 });
   const dA = detail({ req_id: 108, delta_ordinals: [0, 1], tool_calls: [
     { call_id: 'p', ord: 0, tool_name: 'Skill', result_req: 110, result_ord: 0, result_path: 'request.messages[2].content[0]', state: 'resolved' },
@@ -679,26 +733,36 @@ test('截图形状：Skill 调用定位本笔回复，结果步骤不按时间�
   const stepsA = projectSteps(rowA, read(dA, [userA(0), userA(1)],
     { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'p', name: 'Skill', input: {} }] }));
   expect(stepsA.filter(s => s.kind === 'user')).toHaveLength(2);
-  expect(resolveSelectedSource(stepsA.find(s => s.kind === 'tool') ?? null)).toMatchObject({
-    side: 'reply', target: 'call', path: 'reply.content[0]', callOrd: 0,
-  });
-  // 请求 B：输入四条（两条用户文本、一条工具结果、再一条用户文本），回复含 Skill(memmy)。
+  expect(stepsA.some(s => s.kind === 'tool')).toBe(false);
+  // 请求 B：承载 A 的回复与结果；调用行带产出请求（A）的配对坐标与执行读数。
   const rowB = row({ req_id: 110 });
-  const dB = detail({ req_id: 110, delta_ordinals: [2, 3, 4, 5] });
+  const dB = detail({ req_id: 110, prev_req_id: 108, delta_ordinals: [2, 3, 4, 5] });
   const resultMsg = {
     ord: 4, role: 'user', rawRole: 'user',
     blocks: [{ kind: 'result', text: 'res', index: 0, raw: {}, path: 'content[0]' }],
     preview: 'res', input: null, isInput: false,
   };
-  const stepsB = projectSteps(rowB, read(dB, [userA(2), userA(3), resultMsg, userA(5)],
-    { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'm', name: 'Skill', input: {} }] }));
-  expect(stepsB.filter(s => s.kind === 'user')).toHaveLength(3);
-  expect(resolveSelectedSource(stepsB.find(s => s.kind === 'tool') ?? null)).toMatchObject({
-    side: 'reply', target: 'call', path: 'reply.content[0]', callOrd: 0,
-  });
+  const callEntry = assistantEntry(3, [
+    { kind: 'call', text: 'Skill({})', index: 0, raw: { type: 'tool_use', id: 'p', name: 'Skill', input: {} }, path: 'content[0]' },
+  ]);
+  const prevInfoOf = (prevId: number) => {
+    expect(prevId).toBe(108);
+    return { reasoningMs: null, calls: dA.tool_calls };
+  };
+  const stepsB = projectSteps(rowB, read(dB, [userA(2), callEntry, resultMsg, userA(5)],
+    { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'm', name: 'Skill', input: {} }] }), null, [], prevInfoOf);
+  expect(stepsB.filter(s => s.kind === 'user')).toHaveLength(2);
+  const call = stepsB.find(s => s.kind === 'tool');
+  expect(call?.source).toMatchObject({ side: 'request', path: 'request.messages[3].content[0]', messageOrd: 3 });
+  expect(call?.callOwner).toEqual({ reqId: 108, callOrd: 0 });
+  expect(call?.result).toEqual({ state: 'resolved', reqId: 110 });
   // 工具结果步骤定位在 B 自己的消息块，不跳去下一笔辅助请求。
   const result = stepsB.find(s => s.kind === 'tool_result');
   expect(result?.source).toMatchObject({ side: 'request', path: 'request.messages[4].content[0]', messageOrd: 4 });
+  // 产出请求不在窗口或调用 id 不匹配：调用行不挂配对坐标，不猜归属。
+  const unmatched = projectSteps(rowB, read(dB, [callEntry], null), null, [], () => ({ reasoningMs: null, calls: [] }));
+  expect(unmatched.find(s => s.kind === 'tool')?.callOwner ?? null).toBeNull();
+  expect(unmatched.find(s => s.kind === 'tool')?.reading ?? null).toBeNull();
 });
 
 test('增量未完成或失败出现事件记录，完成时不出现', () => {
@@ -751,44 +815,48 @@ test('背景作业配对标注：发起结果行带配对读数，完成通知�
   expect(plain.find(s => s.key === '7:message:3:bg')).toBeUndefined();
 });
 
-test('行尾读数：文本行挂推理段、调用行挂执行段，其余行留空', () => {
-  const r = row({ reasoning_span_ms: 2100 });
-  const entries = [entry(2, { state: 'text', text: '问题', original: '问题' }, true)];
-  const reply = { stop_reason: 'tool_use', content: [
-    { type: 'text', text: '先看文件' },
-    { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'bun test' } },
-    { type: 'text', text: '看完再说' },
-  ] };
-  const d = detail({ tool_calls: [{ call_id: 'c1', ord: 1, tool_name: 'Bash', result_req: 8, result_ord: 0, result_path: 'p', state: 'resolved', exec_ms: 2400 }] });
-  const steps = projectSteps(r, read(d, entries, reply));
-  expect(steps.map(s => s.kind)).toEqual(['user', 'assistant', 'tool', 'assistant']);
-  // 推理段属于整笔请求：每块文本都标同一个数，不是只标第一块。
-  expect(steps.filter(s => s.kind === 'assistant').map(s => s.reading))
-    .toEqual([{ kind: 'reason', ms: 2100 }, { kind: 'reason', ms: 2100 }]);
+test('行尾读数：承载消息的文本行挂产出请求的推理段，调用行挂执行段，其余行留空', () => {
+  const r = row();
+  const entries = [
+    entry(2, { state: 'text', text: '问题', original: '问题' }, true),
+    assistantEntry(3, [
+      { kind: 'text', text: '先看文件', index: 0, raw: '先看文件', path: 'content[0]' },
+      { kind: 'call', text: 'Bash({"command":"bun test"})', index: 1, raw: { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'bun test' } }, path: 'content[1]' },
+      { kind: 'text', text: '看完再说', index: 2, raw: '看完再说', path: 'content[2]' },
+    ]),
+  ];
+  const d = detail({ prev_req_id: 5, delta_ordinals: [2, 3] });
+  const calls = [{ call_id: 'c1', ord: 1, tool_name: 'Bash', result_req: 8, result_ord: 0, result_path: 'p', state: 'resolved', exec_ms: 2400 }];
+  const steps = projectSteps(r, read(d, entries, null), null, [], () => ({ reasoningMs: 2100, calls }));
+  expect(steps.filter(s => s.kind !== 'record').map(s => s.kind)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+  // 推理段只挂到唯一 assistant 消息的第一段文本；同消息的第二段不重复。
+  expect(steps.filter(s => s.kind === 'assistant').map(s => s.reading ?? null))
+    .toEqual([{ kind: 'reason', ms: 2100 }, null]);
   expect(steps.find(s => s.kind === 'tool')?.reading).toEqual({ kind: 'exec', ms: 2400 });
   expect(steps.find(s => s.kind === 'user')?.reading).toBeUndefined();
 
   const html = renderTraceRows(r, steps, 1, null);
   expect(html).toContain('<span class="row-reading reason"><span class="k">思考</span><b class="v t-good">2.1s</b></span>');
   expect(html).toContain('<span class="row-reading exec"><span class="k">执行</span><b class="v t-good">2.4s</b></span>');
-  // 每行都有读数槽，只有 User 行留空：槽宽不随内容跳。
-  expect(html.match(/class="compact-reading"/g)?.length).toBe(4);
-  expect(html.match(/class="compact-reading"><\/span>/g)?.length).toBe(1);
+  // 每行（含请求级记录）都有读数槽，User 行、第二段文本与记录行留空：槽宽不随内容跳。
+  expect(html.match(/class="compact-reading"/g)?.length).toBe(5);
+  expect(html.match(/class="compact-reading"><\/span>/g)?.length).toBe(3);
 });
 
 test('读数按工具类别取档位，等待型工具不上色', () => {
   const r = row();
-  const reply = { stop_reason: 'tool_use', content: [
-    { type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: {} },
-    { type: 'tool_use', id: 'r', name: 'Read', input: { file_path: '/x' } },
-    { type: 'tool_use', id: 'a', name: 'Agent', input: {} },
-  ] };
-  const d = detail({ tool_calls: [
+  const entries = [assistantEntry(3, [
+    { kind: 'call', text: 'AskUserQuestion({})', index: 0, raw: { type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: {} }, path: 'content[0]' },
+    { kind: 'call', text: 'Read({})', index: 1, raw: { type: 'tool_use', id: 'r', name: 'Read', input: { file_path: '/x' } }, path: 'content[1]' },
+    { kind: 'call', text: 'Agent({})', index: 2, raw: { type: 'tool_use', id: 'a', name: 'Agent', input: {} }, path: 'content[2]' },
+  ])];
+  const d = detail({ prev_req_id: 5, delta_ordinals: [3] });
+  const calls = [
     { call_id: 'q', ord: 0, tool_name: 'AskUserQuestion', result_req: 8, result_ord: 0, result_path: 'p', state: 'resolved', exec_ms: 45_000 },
     { call_id: 'r', ord: 1, tool_name: 'Read', result_req: 8, result_ord: 1, result_path: 'p', state: 'resolved', exec_ms: 12_000 },
     { call_id: 'a', ord: 2, tool_name: 'Agent', result_req: 8, result_ord: 2, result_path: 'p', state: 'resolved', exec_ms: 95_000 },
-  ] });
-  const html = renderTraceRows(r, projectSteps(r, read(d, [], reply)), 1, null);
+  ];
+  const html = renderTraceRows(r, projectSteps(r, read(d, entries, null), null, [], () => ({ reasoningMs: null, calls })), 1, null);
   // 等人回答的 45s 不上档：数值照常显示，整枚标签退成中性色。
   expect(html).toContain('<span class="row-reading exec wait"><span class="k">执行</span><b class="v">45.0s</b></span>');
   // 读 12s 超过 1s/10s 的第二档。
@@ -799,16 +867,21 @@ test('读数按工具类别取档位，等待型工具不上色', () => {
 
 test('读不出时不写 0：推理段与执行段缺值都留空槽', () => {
   const r = row();
-  const reply = { stop_reason: 'tool_use', content: [
-    { type: 'text', text: '只有文本' },
-    { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } },
-  ] };
-  const d = detail({ tool_calls: [{ call_id: 'c1', ord: 1, tool_name: 'Bash', result_req: null, result_ord: null, result_path: null, state: 'pending', exec_ms: null }] });
-  const steps = projectSteps(r, read(d, [], reply));
-  expect(steps.map(s => s.reading ?? null)).toEqual([null, null]);
-  const html = renderTraceRows(r, steps, 1, null);
+  const entries = [assistantEntry(3, [
+    { kind: 'text', text: '只有文本', index: 0, raw: '只有文本', path: 'content[0]' },
+    { kind: 'call', text: 'Bash({})', index: 1, raw: { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } }, path: 'content[1]' },
+  ])];
+  const d = detail({ prev_req_id: 5, delta_ordinals: [3] });
+  const calls = [{ call_id: 'c1', ord: 1, tool_name: 'Bash', result_req: null, result_ord: null, result_path: null, state: 'pending', exec_ms: null }];
+  // 产出请求可读但没有推理段与结算时长：两行读数都留空。
+  const steps = projectSteps(r, read(d, entries, null), null, [], () => ({ reasoningMs: null, calls }));
+  expect(steps.filter(s => s.kind !== 'record').map(s => s.reading ?? null)).toEqual([null, null]);
+  const html = renderTraceRows(r, steps.filter(s => s.kind !== 'record'), 1, null);
   expect(html).not.toContain('class="row-reading');
   expect(html.match(/<span class="compact-reading"><\/span>/g)?.length).toBe(2);
+  // 已确认但产出请求不在窗口（prev_req_id 缺失）时同样不留读数。
+  const noPrev = projectSteps(r, read(detail({ delta_ordinals: [3] }), entries, null), null, [], () => ({ reasoningMs: 9, calls }));
+  expect(noPrev.filter(s => s.kind !== 'record').map(s => s.reading ?? null)).toEqual([null, null]);
 });
 
 test('正文未到的请求不补「未收到回复」，只报正文状态', () => {
@@ -821,4 +894,28 @@ test('正文未到的请求不补「未收到回复」，只报正文状态', ()
   const steps = projectSteps(row({ body_state: 'pending', miss_reason: 'hook_absent' }), pending);
   expect(steps.some(s => s.text === '未收到回复')).toBe(false);
   expect(steps.find(s => s.key === '7:body')?.text).toBe('正文状态：pending（hook_absent）');
+});
+
+test('末尾组判定：只在完整加载时给出，后继承载与前驱未知各抑制一次', () => {
+  const chain = [
+    { id: 2, prevId: null, undetermined: true },
+    { id: 4, prevId: 2, undetermined: false },
+    { id: 5, prevId: 4, undetermined: false },
+  ];
+  // 未读到会话末尾：任何链末都不成末尾组，避免加载历史时挂在行上的回复消失。
+  expect(tailEligibleIds(chain, false).size).toBe(0);
+  // 完整加载：只有 5 是链末；2 的回复被 4 承载，4 的回复被 5 承载。
+  expect([...tailEligibleIds(chain, true)]).toEqual([5]);
+  // 前驱未知的后续行存在时，链末的回复可能由它承载，排除不了就抑制。
+  const unknownTail = [...chain, { id: 6, prevId: null, undetermined: true }];
+  expect(tailEligibleIds(unknownTail, true).has(5)).toBe(false);
+  expect([...tailEligibleIds(unknownTail, true)]).toEqual([6]);
+  // 分支各成链末：两条链都不被对方承载，各得一个末尾组。
+  const branches = [
+    { id: 8, prevId: 7, undetermined: false },
+    { id: 9, prevId: 7, undetermined: false },
+  ];
+  expect([...tailEligibleIds(branches, true)]).toEqual([8, 9]);
+  // 空窗口没有候选。
+  expect(tailEligibleIds([], true).size).toBe(0);
 });

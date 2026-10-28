@@ -16,13 +16,15 @@ import { planCommit } from './trace-commit.js';
  * 这里只做 DOM 装配：模型由 app 组装（不读 store、不改选择）。
  *
  * @typedef {{key: string, html: string}} CommitItem
- * @typedef {{reqId: number, status: string, current: boolean, stale: 'reading' | 'failed' | null,
+ * @typedef {{key: string, reqId: number, status: string, current: boolean, stale: 'reading' | 'failed' | null,
  *   placeholder: boolean, rows: CommitItem[]}} GroupModel
+ *   组身份是字符串键：承载请求的组是 `req:<id>`，末尾回复组是 `tail:<id>`，同号可以相邻。
+ *   `reqId` 仍是数字请求号，写进 DOM 的 `data-req` 供定位与读取；节点复用与锚点按字符串键工作。
  * @typedef {{headHtml: string, bandHtml: string, listClass: string, ordDigits: number,
  *   loaderHtml: string, emptyHtml: string, endHtml: string, groups: GroupModel[],
  *   selectedStep: string | null}} MainModel
  * @typedef {{node: Element, html: string}} Shown
- * @typedef {{node: HTMLElement, rows: Map<string, Shown>, order: string[], status: string, current: boolean,
+ * @typedef {{key: string, node: HTMLElement, rows: Map<string, Shown>, order: string[], status: string, current: boolean,
  *   stale: 'reading' | 'failed' | null, placeholder: boolean}} GroupState
  * @typedef {{kind: 'step' | 'group', key: string, top: number}} Anchor 提交前首条可见稳定步骤（或目标组）及其视口偏移
  */
@@ -59,7 +61,7 @@ function sameOrder(left, right) {
 function listItems(model) {
   /** @type {CommitItem[]} */
   const items = [];
-  for (const group of model.groups) items.push({ key: `group:${group.reqId}`, html: '' });
+  for (const group of model.groups) items.push({ key: `group:${group.key}`, html: '' });
   if (model.emptyHtml !== '') items.push({ key: 'empty', html: model.emptyHtml });
   if (model.loaderHtml !== '') items.push({ key: 'loader', html: model.loaderHtml });
   items.push({ key: 'end', html: model.endHtml });
@@ -139,7 +141,7 @@ function captureAnchor(main, scroller, preferredReq) {
   let preferred = null;
   for (const group of main.querySelectorAll('.trace-group')) {
     const node = /** @type {HTMLElement} */ (group);
-    const wanted = preferredReq !== null && Number(node.dataset.req) === preferredReq;
+    const wanted = preferredReq !== null && node.dataset.groupKey === `req:${preferredReq}`;
     if (!wanted && (preferredReq === null ? first !== null : preferred !== null)) break;
     const groupRect = node.getBoundingClientRect();
     /** @type {Anchor | null} */
@@ -158,7 +160,7 @@ function captureAnchor(main, scroller, preferredReq) {
     // 目标组整组可见却还没有步骤（读取中的空组）：以组本身为锚，补读不会把它推走。
     if (found === null && (wanted || node.hasAttribute('data-placeholder'))
       && groupRect.top < bottom && groupRect.bottom > top) {
-      found = { kind: 'group', key: String(node.dataset.req ?? ''), top: groupRect.top };
+      found = { kind: 'group', key: node.dataset.groupKey ?? '', top: groupRect.top };
     }
     if (found === null) continue;
     if (first === null) first = found;
@@ -178,7 +180,7 @@ function restoreAnchor(main, scroller, anchor) {
   /** @type {Element | null} */
   let node = null;
   if (anchor.kind === 'group') {
-    node = main.querySelector(`.trace-group[data-req="${CSS.escape(anchor.key)}"]`);
+    node = main.querySelector(`.trace-group[data-group-key="${CSS.escape(anchor.key)}"]`);
   } else {
     const button = findByStepKey(main, anchor.key);
     node = button?.closest('.compact-step') ?? null;
@@ -208,22 +210,23 @@ export function createMainView(main) {
   const children = new Map();
   /** @type {string[]} */
   let childOrder = [];
-  /** @type {Map<number, GroupState>} */
+  /** @type {Map<string, GroupState>} */
   const groupStates = new Map();
   /** @type {HTMLElement | null} */
   let selected = null;
   /** @type {string | null} */
   let selectedKey = null;
 
-    /** 请求组容器在这里创建：组自身不承载可见结果，内容由行级计划维护。 @param {number} reqId @returns {GroupState} */
-  function makeGroupState(reqId) {
+  /** 请求组容器在这里创建：组自身不承载可见结果，内容由行级计划维护。 @param {GroupModel} model @returns {GroupState} */
+  function makeGroupState(model) {
     const node = document.createElement('section');
     node.className = 'trace-group';
-    node.setAttribute('data-req', String(reqId));
+    node.setAttribute('data-req', String(model.reqId));
+    node.setAttribute('data-group-key', model.key);
     node.setAttribute('aria-current', 'false');
     /** @type {Map<string, Shown>} */
     const rows = new Map();
-    return { node, rows, order: [], status: '', current: false, stale: null, placeholder: false };
+    return { key: model.key, node, rows, order: [], status: '', current: false, stale: null, placeholder: false };
   }
 
   /** 选择是独立 UI 状态：只改高亮，不参与可见结果比较。 @param {string | null} stepKey */
@@ -274,19 +277,21 @@ export function createMainView(main) {
     const plan = planCommit(shownHtml(children), items);
     /** @type {Map<string, string>} */
     const desired = new Map(items.map(item => /** @type {[string, string]} */ ([item.key, item.html])));
+    const groupsByKey = new Map(model.groups.map(group => [group.key, group]));
     for (const key of plan.remove) {
       const entry = children.get(key);
       if (entry === undefined) continue;
       entry.node.remove();
       children.delete(key);
-      if (key.startsWith('group:')) groupStates.delete(Number(key.slice('group:'.length)));
+      if (key.startsWith('group:')) groupStates.delete(key.slice('group:'.length));
     }
     for (const key of plan.create) {
       if (key.startsWith('group:')) {
-        const reqId = Number(key.slice('group:'.length));
-        const state = makeGroupState(reqId);
+        const groupModel = groupsByKey.get(key.slice('group:'.length));
+        if (groupModel === undefined) continue;
+        const state = makeGroupState(groupModel);
         children.set(key, { node: state.node, html: '' });
-        groupStates.set(reqId, state);
+        groupStates.set(state.key, state);
       } else {
         const html = desired.get(key) ?? '';
         const node = elementOf(html);
@@ -310,7 +315,7 @@ export function createMainView(main) {
 
   /** @param {GroupModel} model */
   function commitGroup(model) {
-    const state = groupStates.get(model.reqId);
+    const state = groupStates.get(model.key);
     if (state === undefined) return;
     if (state.status !== model.status) {
       state.status = model.status;
@@ -376,7 +381,7 @@ export function createMainView(main) {
     if (plan.remove.length > 0 || plan.create.length > 0 || plan.replace.length > 0) structural = true;
     if (!sameOrder(plan.order, childOrder)) structural = true;
     for (const group of model.groups) {
-      const state = groupStates.get(group.reqId);
+      const state = groupStates.get(group.key);
       if (state === undefined) { structural = true; continue; }
       if (state.status !== group.status || state.current !== group.current || state.stale !== group.stale
         || state.placeholder !== group.placeholder) structural = true;

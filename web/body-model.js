@@ -7,7 +7,7 @@
  * @typedef {import('../src/queries/requests').RequestDetail} RequestDetail
  * @typedef {import('../src/input-interpretation').UserInputView} UserInputView
  * @typedef {'system' | 'user' | 'assistant' | 'tool' | 'unknown'} Role
- * @typedef {{kind: string, text: string, index: number, raw: unknown, path: string, failed?: boolean}} Block
+ * @typedef {{kind: string, text: string, index: number, raw: unknown, path: string, failed?: boolean, callId?: string}} Block
  * @typedef {{ord: number, role: Role, rawRole: string | null, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
  * @typedef {{id: string, name: string, inputText: string, ord: number, path: string}} ToolCallView
  * @typedef {{state: 'ok' | 'absent' | 'invalid' | 'pending' | 'evicted' | 'unsupported' | 'summary' | 'partial', text: string, thinking: string[], calls: ToolCallView[], blocks: Block[], choiceCount: number | null, finish: string | null, model: string | null, raw: unknown}} ReplyView
@@ -127,7 +127,11 @@ export function messageBlocks(message) {
   const out = [];
   const content = message.content;
   if (typeof content === 'string') {
-    out.push({ kind: message.role === 'tool' ? 'result' : 'text', text: content, index: 0, raw: content, path: 'content' });
+    // chat 的工具结果写成 role=tool 的整条消息，身份在消息顶层的 tool_call_id 上；
+    // 块里没有这个字段，归一化时带上，供按 call_id 查找两端。
+    const callId = message.role === 'tool' && typeof message.tool_call_id === 'string'
+      ? message.tool_call_id : undefined;
+    out.push({ kind: message.role === 'tool' ? 'result' : 'text', text: content, index: 0, raw: content, path: 'content', callId });
   } else if (Array.isArray(content)) {
     for (const [index, block] of content.entries()) {
       out.push(blockView(block, index, `content[${index}]`));
@@ -146,6 +150,67 @@ export function messageBlocks(message) {
     out.push(blockView(message, 0, ''));
   }
   return out;
+}
+
+/**
+ * 调用块的身份与参数：Anthropic 用 id/name/input，Chat 用 function.name/arguments，
+ * Responses 用 call_id 与 input/arguments。回复视图与请求消息的调用行共用这一份
+ * 提取，不按消息方向另写协议分叉。
+ * @param {Block} block 调用块（kind='call'）
+ * @returns {{id: string, name: string, inputText: string}}
+ */
+export function toolCallOfBlock(block) {
+  const raw = isRecord(block.raw) ? block.raw : {};
+  const fn = isRecord(raw.function) ? raw.function : raw;
+  return {
+    id: typeof raw.id === 'string' ? raw.id
+      : typeof raw.call_id === 'string' ? raw.call_id : '',
+    name: typeof fn.name === 'string' ? fn.name : '',
+    inputText: typeof fn.input === 'string' ? fn.input
+      : typeof fn.arguments === 'string' ? fn.arguments
+        : JSON.stringify(fn.input ?? fn.arguments ?? null) ?? '',
+  };
+}
+
+/**
+ * 结果块指向的调用身份：Anthropic 用 tool_use_id，Responses 用 call_id，chat 的
+ * tool_call_id 落在整条消息上，由 messageBlocks 归一化到块上。读不到返回空串，
+ * 不按块序号猜。
+ * @param {Block} block 结果块（kind='result'）
+ * @returns {string}
+ */
+export function toolResultCallIdOf(block) {
+  if (typeof block.callId === 'string' && block.callId !== '') return block.callId;
+  const raw = isRecord(block.raw) ? block.raw : {};
+  return typeof raw.tool_use_id === 'string' ? raw.tool_use_id
+    : typeof raw.call_id === 'string' ? raw.call_id : '';
+}
+
+/**
+ * 消息详情里的配对入口坐标：call_id 能确认两端才给，读不到返回 null。
+ * 结果块的调用方取本请求的反向配对索引；调用块的调用方是产出请求（已确认前驱），
+ * 按 call_id 在它的调用表里找序号。前驱不在窗口、未读或 call_id 对不上时不给，
+ * 不按块序号猜。
+ * @param {RequestDetail | null} detail
+ * @param {RequestDetail | null} prevDetail
+ * @returns {(block: Block) => {owner: number, callOrd: number} | null}
+ */
+export function messagePairIndexOf(detail, prevDetail) {
+  return (block) => {
+    if (block.kind === 'result') {
+      const id = toolResultCallIdOf(block);
+      if (id === '') return null;
+      const row = detail?.tool_results.find(item => item.call_id === id) ?? null;
+      return row === null || row.state !== 'resolved' ? null : { owner: row.owner_req, callOrd: row.ord };
+    }
+    if (block.kind === 'call') {
+      const id = toolCallOfBlock(block).id;
+      if (id === '' || prevDetail === null) return null;
+      const row = prevDetail.tool_calls.find(item => item.call_id === id) ?? null;
+      return row === null ? null : { owner: prevDetail.req_id, callOrd: row.ord };
+    }
+    return null;
+  };
 }
 
 /** @param {unknown} message @returns {Role} */
@@ -409,18 +474,7 @@ export function replyView(page) {
       if (block.kind === 'text' && block.text.length > 0) texts.push(block.text);
       if (block.kind === 'thinking' && block.text.length > 0) thinking.push(block.text);
       if (block.kind === 'call') {
-        const raw = isRecord(block.raw) ? block.raw : {};
-        const fn = isRecord(raw.function) ? raw.function : raw;
-        calls.push({
-          id: typeof raw.id === 'string' ? raw.id
-            : typeof raw.call_id === 'string' ? raw.call_id : '',
-          name: typeof fn.name === 'string' ? fn.name : '',
-          inputText: typeof fn.input === 'string' ? fn.input
-            : typeof fn.arguments === 'string' ? fn.arguments
-              : JSON.stringify(fn.input ?? fn.arguments ?? null) ?? '',
-          ord: block.index,
-          path: block.path,
-        });
+        calls.push({ ...toolCallOfBlock(block), ord: block.index, path: block.path });
       }
     }
     return { state: 'ok', text: texts.join('\n\n'), thinking, calls, blocks: full, choiceCount, finish, model, raw: reply };

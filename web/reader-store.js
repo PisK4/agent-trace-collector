@@ -22,7 +22,7 @@ import { deltaOrdinals, messageEntries } from './body-model.js';
  * @property {import('../src/protocols').BodyPage | null} meta
  * @property {Map<number, ReturnType<typeof messageEntries>[number]>} messages
  * @property {ReturnType<typeof messageEntries>} entries
- * @property {{next: number, total: number | null, ords: number[], loading: boolean, error: string | null}} structure
+ * @property {{back: number, next: number, total: number | null, ords: number[], loading: boolean, error: string | null}} structure 已读结构窗口：`[back, next)` 连续，首读尾片。
  * @property {{next: number, done: boolean, loading: boolean, error: string | null, unconfirmed: boolean}} delta
  * @property {string | null} token
  */
@@ -145,7 +145,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
         meta: null,
         pages: new Map(),
         messages: new Map(),
-        structure: { next: 0, total: null, ords: [], loading: false, error: null },
+        structure: { back: 0, next: 0, total: null, ords: [], loading: false, error: null },
         delta: { next: 0, done: false, loading: false, error: null, unconfirmed: false },
         tools: new Map(),
         /** @type {Map<string, import('../src/reading').ToolResultReading>} 成功值与失败占位，键同 tools。 */
@@ -175,7 +175,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     rec.meta = null;
     rec.pages = new Map();
     rec.messages = new Map();
-    rec.structure = { next: 0, total: null, ords: [], loading: false, error: null };
+    rec.structure = { back: 0, next: 0, total: null, ords: [], loading: false, error: null };
     rec.delta = { next: 0, done: false, loading: false, error: null, unconfirmed: false };
     rec.tools = new Map();
     rec.toolValues = new Map();
@@ -543,36 +543,79 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return pending;
   }
 
-  /** @param {number} id @returns {Promise<RequestRead>} */
+  /**
+   * 结构片段的序号并集：只记结构读取真正读到的序号，定点读与增量读不混进游标。
+   * @param {any} state @param {ReturnType<typeof messageEntries>} entries
+   */
+  function addStructureOrds(state, entries) {
+    const ords = new Set(state.ords);
+    for (const entry of entries) ords.add(entry.ord);
+    state.ords = [...ords].sort((a, b) => a - b);
+  }
+
+  /**
+   * 读一片结构区间并推进已读窗口：`[from, end)` 连续才算读到；缺口不推进
+   * `back`，丢掉本片缓存让重试重新读取。
+   * @param {number} id @param {any} rec @param {any} state
+   * @param {number} from @param {number} to @param {number} total
+   */
+  async function readStructurePage(id, rec, state, from, to, total) {
+    const page = await readRange(id, from, to);
+    const entries = messageEntries(page);
+    addStructureOrds(state, entries);
+    state.total = page.total ?? total;
+    const end = Math.min(page.to, page.total ?? page.to);
+    const got = new Set(entries.map(entry => entry.ord));
+    let gap = false;
+    if (page.total !== null) {
+      for (let ord = from; ord < end; ord += 1) {
+        if (!got.has(ord)) { gap = true; break; }
+      }
+    }
+    if (gap) {
+      rec.pages.delete(JSON.stringify([id, rec.token, from, to]));
+      state.error = entries.length === 0 ? 'body_page_empty' : 'body_page_gap';
+      return;
+    }
+    state.back = from;
+    // 向前读更早的片不移动窗口上界；只有尾片把它推到新的末尾。
+    state.next = Math.max(state.next, end);
+  }
+
+  /**
+   * 结构读取：尾片优先。`[back, next)` 是连续已读窗口；首读写尾片
+   * `[max(0,total-40), total)`，之后每次向前读一片「更早」，`back` 前移。
+   * total 先取已读元信息；没有才读 0/0，仍为空再读第一页拿总数。长请求的读者
+   * 关心新增与尾部，从头读等于每次展开都先看最早的上下文。
+   * @param {number} id @returns {Promise<RequestRead>}
+   */
   async function loadStructure(id) {
     const rec = recordOf(id);
     const state = rec.structure;
-    if (state.loading || state.total !== null && state.next >= state.total) return assemble(rec);
+    if (state.loading) return assemble(rec);
     state.loading = true;
     state.error = null;
     try {
-      const to = state.total === null ? state.next + 40 : Math.min(state.next + 40, state.total);
-      const page = await readRange(id, state.next, to);
-      const entries = messageEntries(page);
-      const ords = new Set(state.ords);
-      for (const entry of entries) ords.add(entry.ord);
-      state.ords = [...ords].sort((a, b) => a - b);
-      state.total = page.total;
-      const end = Math.min(page.to, page.total ?? page.to);
-      const got = new Set(entries.map(entry => entry.ord));
-      let gap = false;
-      if (page.total !== null) {
-        for (let ord = state.next; ord < end; ord += 1) {
-          if (!got.has(ord)) { gap = true; break; }
-        }
+      if (state.total === null) {
+        if (rec.meta === null) await readRequest(id);
+        state.total = rec.meta?.total ?? null;
       }
-      if (gap) {
-        // 缺口不推进游标，丢掉本片缓存让重试重新读取。
-        rec.pages.delete(JSON.stringify([id, rec.token, state.next, to]));
-        state.error = entries.length === 0 ? 'body_page_empty' : 'body_page_gap';
-      } else {
-        // 只有结构读取成功才推进 next：定点读与增量读不影响连续历史上界。
-        state.next = end;
+      if (state.total === null) {
+        // 元信息没有总数：读第一页拿 total 再决定尾片区间；这一页的序号照常计入并集。
+        const first = await readRange(id, 0, 40);
+        addStructureOrds(state, messageEntries(first));
+        state.total = first.total;
+      }
+      const total = state.total;
+      if (total === null) {
+        state.error = 'body_total_unknown';
+        return assemble(rec);
+      }
+      if (state.back > 0) {
+        // 窗口已建立：向前读一片更早的。
+        await readStructurePage(id, rec, state, Math.max(0, state.back - 40), state.back, total);
+      } else if (state.next === 0 && total > 0) {
+        await readStructurePage(id, rec, state, Math.max(0, total - 40), total, total);
       }
     } catch (error) {
       // 整笔已作废（409 路径）：结构失败不落在孤立记录上，交给调用方统一处理。
