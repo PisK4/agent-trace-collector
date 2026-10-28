@@ -54,12 +54,15 @@ function timingSummary(rows) {
   const durations = rows.map(r => r.ms).filter(v => v !== null);
   const median = ttfts.length === 0 ? null : ttfts[Math.floor(ttfts.length / 2)] ?? null;
   const average = durations.length === 0 ? null : durations.reduce((a, v) => a + v, 0) / durations.length;
-  const genMs = rows.reduce((a, r) => {
+  // 速度只统计计时与输出都在的行：分母漏一行、分子照加，会把 OTLP 行放大成
+  // 8000 tok/s。没有计时行时不给速度。
+  const timed = rows.filter(r => r.out_tok !== null
+    && (r.flow_ms !== null || (r.ms !== null && r.ttft_ms !== null)));
+  const genMs = timed.reduce((a, r) => {
     if (r.flow_ms !== null) return a + r.flow_ms;
-    if (r.ms !== null && r.ttft_ms !== null) return a + Math.max(0, r.ms - r.ttft_ms);
-    return a;
+    return a + Math.max(0, (r.ms ?? 0) - (r.ttft_ms ?? 0));
   }, 0);
-  const outTok = rows.reduce((a, r) => a + (r.out_tok ?? 0), 0);
+  const outTok = timed.reduce((a, r) => a + (r.out_tok ?? 0), 0);
   return {
     median, average,
     speed: genMs > 0 && outTok > 0 ? Math.round(outTok / (genMs / 1000)) : null,
