@@ -92,10 +92,13 @@ export function renderMessages(entries, options) {
 /**
  * 单条消息的完整内容。用户与工具结果按原文保留换行，助手文本按 Markdown 显示。
  * `arrayKey` 是消息数组在协议对象里的键（messages / input），只影响位置标签。
+ * 调用与结果块在 call_id 能确认两端时给显式配对入口；确认不了不给按钮，
+ * 不按块序号猜。
  * @param {Entry} entry
  * @param {string} [arrayKey]
+ * @param {((block: Block) => {owner: number, callOrd: number} | null) | null} [pairOf]
  */
-export function renderMessageDetail(entry, arrayKey = 'messages') {
+export function renderMessageDetail(entry, arrayKey = 'messages', pairOf = null) {
   const displayRole = displayRoleOf(entry);
   const blocks = entry.blocks.map(block => {
     if (block.kind === 'text') {
@@ -110,7 +113,10 @@ export function renderMessageDetail(entry, arrayKey = 'messages') {
     if (block.kind === 'call' || block.kind === 'result') {
       const failed = block.kind === 'result' && block.failed === true
         ? '<span class="tool-chip miss"><span>工具结果失败</span></span>' : '';
-      return `${failed}<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(block.text)}</pre>`;
+      const pair = pairOf === null ? null : pairOf(block);
+      const open = pair === null ? ''
+        : `<div class="conv-tools"><button class="chip-btn" data-tool-owner="${pair.owner}" data-call-ord="${pair.callOrd}">配对两端 ▸</button></div>`;
+      return `${failed}${open}<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(block.text)}</pre>`;
     }
     return `<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(JSON.stringify(block.raw, null, 2))}</pre>`;
   }).join('');

@@ -237,6 +237,8 @@ Status: proposed
 
 按仓库约定，落地在 `../../.codex-worktrees/atc-request-delta-groups` 建 `feat/request-delta-groups` 分支，`master` 以 `--no-ff` 合并。
 
+第 1–3 步已落在这个分支；第 4–6 步待做。
+
 ## Alternatives considered
 
 **A：保留请求加回复的分组，给行加归属标签。** 用户否决：标签要求读者先判断这是上文还是新结果，违反所见即所得；组的内容仍来自两笔请求，右栏仍无法一一对应。标签只是把歧义写出来，不消除歧义。

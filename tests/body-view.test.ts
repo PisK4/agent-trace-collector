@@ -4,7 +4,7 @@ import {
   renderReplyDetail, renderTools, roleClass, roleTag, toolTint,
 } from '../web/body-view.js';
 import {
-  deltaOrdinals, displayRoleOf, messageCopyText, messageEntries, replyView, toolEntries,
+  deltaOrdinals, displayRoleOf, messageCopyText, messageEntries, messagePairIndexOf, replyView, toolEntries,
   topSystemText,
 } from '../web/body-model.js';
 import { partColor, partLabel, renderAttemptChain } from '../web/rail-facts.js';
@@ -738,4 +738,46 @@ test('空回复继承正文状态：未到、回收、摘要与部分正文分�
   const evicted = replyView(page({ state: 'evicted', reply: null }));
   expect(renderReply(evicted)).toContain('正文已回收');
   expect(replyCompleteness({ status: 200 }, evicted)).toEqual({ key: 'unknown', label: '正文已回收' });
+});
+
+test('消息详情里的配对入口只在 call_id 确认两端时出现', () => {
+  const entries = messageEntries(page({
+    messages: [
+      { ord: 2, value: { role: 'assistant', content: [
+        { type: 'tool_use', id: 'toolu_1', name: 'read', input: { path: 'a.ts' } },
+        { type: 'tool_use', id: 'toolu_2', name: 'read', input: { path: 'b.ts' } },
+        { type: 'tool_use', id: 'toolu_orphan', name: 'read', input: { path: 'c.ts' } },
+      ] } },
+      { ord: 3, value: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' },
+        { type: 'tool_result', tool_use_id: 'toolu_9', content: 'orphan' },
+      ] } },
+    ],
+  }));
+  const prevDetail = {
+    req_id: 7,
+    tool_calls: [
+      { call_id: 'toolu_1', ord: 0, tool_name: 'read', result_req: 9, result_ord: 3, result_path: 'request.messages[3].content[0]', state: 'resolved' },
+      { call_id: 'toolu_2', ord: 1, tool_name: 'read', result_req: null, result_ord: null, result_path: null, state: 'pending' },
+    ],
+  } as unknown as RequestDetail;
+  const detail = {
+    req_id: 9, prev_req_id: 7, prev_relation: 'confirmed',
+    tool_results: [
+      { call_id: 'toolu_1', ord: 0, tool_name: 'read', result_req: 9, result_ord: 3, result_path: 'request.messages[3].content[0]', state: 'resolved', owner_req: 7 },
+    ],
+  } as unknown as RequestDetail;
+  const pairOf = messagePairIndexOf(detail, prevDetail);
+  const calls = renderMessageDetail(entries[0]!, 'messages', pairOf);
+  // 调用表按 call_id 认出两条：结果未到的调用也给入口（配对页会说明待结果）。
+  expect(calls).toContain('data-tool-owner="7" data-call-ord="0"');
+  expect(calls).toContain('data-tool-owner="7" data-call-ord="1"');
+  // 调用表里没有的 call_id 不给入口，不按块序号猜。
+  expect((calls.match(/配对两端/g) ?? []).length).toBe(2);
+  const results = renderMessageDetail(entries[1]!, 'messages', pairOf);
+  expect((results.match(/配对两端/g) ?? []).length).toBe(1);
+  expect(results).toContain('data-tool-owner="7" data-call-ord="0"');
+  // 未确认前驱、未读完的反向索引与空 call_id 都不产生入口。
+  expect(renderMessageDetail(entries[0]!, 'messages', messagePairIndexOf(detail, null))).not.toContain('配对两端');
+  expect(renderMessageDetail(entries[0]!)).not.toContain('配对两端');
 });
