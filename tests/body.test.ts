@@ -105,6 +105,56 @@ test('Responses 的裸字符串输入拆成一条消息并逐字还原', () => {
   }
 });
 
+test('正文分页按存储的形态报告消息位置，不根据消息内容猜测', () => {
+  const f = fixture();
+  try {
+    const text = '合成输入\n第二行';
+    const message = { role: 'user', type: 'message', content: [{ type: 'input_text', text }] };
+    seedRequest(f.store, 1);
+    seedRequest(f.store, 2);
+    persistBody(f.store, 1, { protocol: 'responses', request: { input: text }, reply: null, redact_version: 1 });
+    persistBody(f.store, 2, { protocol: 'responses', request: { input: [message] }, reply: null, redact_version: 1 });
+    for (const [id, form] of [[1, 'string'], [2, 'array']] as const) {
+      expect(getBodyPage(f.store, id, 0, 0)?.message_location).toEqual({ key: 'input', form });
+      expect(getBodyPage(f.store, id, 0, 1)?.message_location).toEqual({ key: 'input', form });
+      expect(getBodyPage(f.store, id, 1, 2)?.message_location).toEqual({ key: 'input', form });
+    }
+    // 无法读取骨架时不宣称精确位置。
+    f.store.write(db => db.run("UPDATE request SET body_state='evicted', skeleton_z=NULL WHERE req_id=1"));
+    expect(getBodyPage(f.store, 1, 0, 0)?.message_location).toBeNull();
+  } finally { f.close(); }
+});
+
+test('旧骨架按当时的拆块键读取，Responses 原始 input 留在骨架', () => {
+  const f = fixture();
+  try {
+    const legacyInput = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: '合成输入' }] }];
+    for (const [id, protocol, request] of [
+      [1, 'anthropic', { messages: [{ role: 'user', content: '合成消息' }] }],
+      [2, 'responses', { input: legacyInput }],
+      [3, 'responses', { input: legacyInput, messages: [{ role: 'user', content: '旧键消息' }] }],
+    ] as const) {
+      seedRequest(f.store, id);
+      const split = 'messages' in request;
+      persistBody(f.store, id, { protocol: 'anthropic', request, reply: null, redact_version: 1 });
+      const saved = f.store.read.query<{ skeleton_z: Uint8Array }, [number]>(
+        'SELECT skeleton_z FROM request WHERE req_id=?',
+      ).get(id)!;
+      const skeleton = JSON.parse(zstdDecompressSync(saved.skeleton_z).toString('utf8'));
+      delete skeleton.messages_key;
+      delete skeleton.messages_form;
+      skeleton.protocol = protocol;
+      f.store.write(db => db.run('UPDATE request SET skeleton_z=? WHERE req_id=?', [
+        zstdCompressSync(Buffer.from(JSON.stringify(skeleton))), id,
+      ]));
+      expect(restoreBody(f.store, id)?.request).toEqual(request);
+      expect(getBodyPage(f.store, id, 0, 0)?.message_location).toEqual(
+        split ? { key: 'messages', form: 'array' } : null,
+      );
+    }
+  } finally { f.close(); }
+});
+
 test('角色未知的消息保留原对象并标 unknown 枚举', () => {
   const f = fixture();
   try {
@@ -304,6 +354,12 @@ test('骨架损坏时分页返回空字段与未知协议，不拒绝整页', ()
     const page = getBodyPage(store, 1, 0, 0);
     expect(page).not.toBeNull();
     expect(page?.request_fields).toBeNull();
+    expect(page?.message_location).toBeNull();
+    store.write(db => db.run('UPDATE request SET skeleton_z=? WHERE req_id=1', [
+      zstdCompressSync(Buffer.from(JSON.stringify({ format: 2, protocol: 'anthropic', has_messages: true,
+        messages_key: 'messages', messages_form: 'array', redact_version: 1 }))),
+    ]));
+    expect(getBodyPage(store, 1, 0, 0)?.message_location).toBeNull();
   } finally {
     f.close();
   }

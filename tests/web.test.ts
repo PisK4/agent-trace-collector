@@ -140,7 +140,7 @@ test('结构内点开消息详情可返回，消息总数不变', () => {
   const entries = [entryOf(0, '问'), entryOf(1, '答')];
   const structure = { ...emptyStructure, total: 45, next: 2, ords: [0, 1] };
   const detail = structureFoldHtml({
-    reqId: 1, row: factsRow, meta: { total: 45 }, entries, structure, selected: 1, delta: null, relation: '',
+    reqId: 1, row: factsRow, meta: { total: 45, message_location: { key: 'messages', form: 'array' } }, entries, structure, selected: 1, delta: null, relation: '',
   });
   expect(detail).toContain('45 条消息');
   expect(detail).toContain('data-structure-back="1"');
@@ -151,6 +151,22 @@ test('结构内点开消息详情可返回，消息总数不变', () => {
   });
   expect(back).toContain('data-msg="1"');
   expect(back).toContain('45 条消息');
+});
+
+test('结构消息详情按骨架形态显示原始位置', () => {
+  const base = {
+    reqId: 1, row: factsRow, entries: [entryOf(0, '合成命令')],
+    structure: { ...emptyStructure, total: 1, next: 1, ords: [0] },
+    selected: 0, delta: null, relation: '',
+  };
+  const bare = structureFoldHtml({ ...base, meta: { total: 1, message_location: { key: 'input', form: 'string' } } });
+  expect(bare).toContain('>input</span>');
+  expect(bare).not.toContain('input[0]');
+  expect(bare).toContain('data-copy-msg="0"');
+  const array = structureFoldHtml({ ...base, meta: { total: 1, message_location: { key: 'input', form: 'array' } } });
+  expect(array).toContain('input[0]');
+  const unknown = structureFoldHtml({ ...base, meta: { total: 1 } });
+  expect(unknown).not.toContain('bp-path');
 });
 
 test('回复完整性四态：截断不推翻请求成功，缺失不标完成', () => {

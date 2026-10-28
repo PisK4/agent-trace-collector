@@ -99,7 +99,7 @@ export function structureMoreParts(structure, reqId, total) {
  * @param {{
  *   reqId: number,
  *   row: { body_state: string, miss_reason?: string | null },
- *   meta: { total: number | null } | null,
+ *   meta: { total: number | null, message_location?: BodyPage['message_location'] } | null,
  *   entries: import('./body-model.js').Entry[],
  *   structure: { back: number, next: number, total: number | null, ords: number[], loading: boolean, error: string | null },
  *   delta: Set<number> | null,
@@ -108,7 +108,7 @@ export function structureMoreParts(structure, reqId, total) {
  *   relation: string,
  *   open?: boolean,
  *   selected?: number | null,
- *   pairOf?: ((block: import('./body-model.js').Block) => {owner: number, callOrd: number} | null) | null,
+ *   pairOf?: ((block: import('./body-model.js').Block, path: string) => {owner: number, callOrd: number} | null) | null,
  * }} input
  * @returns {string}
  */
@@ -123,7 +123,7 @@ export function structureFoldHtml(input) {
     ? null : entries.find(entry => entry.ord === selected) ?? null;
   let body;
   if (chosen !== null) {
-    body = `${renderMessageDetail(chosen, 'messages', pairOf)}
+    body = `${renderMessageDetail(chosen, messagePathOf(meta, chosen.ord), pairOf)}
       <div class="conv-tools"><button class="chip-btn" data-structure-back="${reqId}">返回消息列表</button></div>`;
   } else if (entries.length === 0 && !canLoad) {
     body = `<p class="note">${esc(bodyLabelText(row))}</p>`;

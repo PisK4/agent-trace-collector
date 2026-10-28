@@ -14,7 +14,7 @@ function bodyPage(from: number, to: number, total: number | null, extra: Record<
     messages.push({ ord, value: { role: 'user', content: `m${ord}` } });
   }
   return {
-    state: 'available', parse_state: 'parsed', reply_state: 'parsed',
+    state: 'available', protocol: 'anthropic', message_location: { key: 'messages', form: 'array' }, parse_state: 'parsed', reply_state: 'parsed',
     from, to, total, messages,
     request_fields: from === 0 ? { model: 'synth' } : null,
     reply: from === 0 ? { content: [{ type: 'text', text: 'reply' }] } : null,
@@ -1073,6 +1073,37 @@ test('作废即自动重读：冷却内不重复发起', async () => {
   expect(h.urls.filter(u => u.endsWith('/api/requests/1')).length).toBe(detailCalls + 1);
   expect(store.peekRequest(1)?.status).toBe('fresh');
   expect(store.peekRequest(1)?.token).toBe(TOKEN);
+});
+
+test('自动重读在换会话后完成，不通知新会话', async () => {
+  let release: (response: Response) => void = () => {};
+  let started: () => void = () => {};
+  const gated = new Promise<Response>(resolve => { release = resolve; });
+  const rereadStarted = new Promise<void>(resolve => { started = resolve; });
+  let details = 0;
+  const changes: number[] = [];
+  const h = harness(url => {
+    if (url.includes('/requests?direction=forward')) return respond({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null });
+    if (url.endsWith('/api/requests/1')) {
+      details += 1;
+      if (details === 2) { started(); return gated; }
+      return respond(detail(1));
+    }
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
+    if (url.includes('/body?from=0&to=1')) return respond({ error: 'reading_changed' }, 409);
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher, id => changes.push(id), { autoRereadCooldownMs: 0 });
+  await store.selectSession('old', 30);
+  await store.readRequest(1);
+  await expect(store.readRange(1, 0, 1)).rejects.toThrow('reading_changed');
+  await rereadStarted;
+  await store.selectSession('new', 30);
+  const afterSwitch = changes.length;
+  release(respond(detail(1)));
+  await delay(5);
+  expect(changes).toHaveLength(afterSwitch);
+  expect(store.peekRequest(1)).toBeNull();
 });
 
 test('共享网络队列并发不超过 4', async () => {

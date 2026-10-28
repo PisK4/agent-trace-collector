@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test';
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import { fixture } from './fixtures';
 import { SEED_GROUP, seedRequest } from './fixtures';
 import { persistBody } from '../src/body';
-import { drainDerive, enqueueDerive } from '../src/derive/sync';
+import { drainDerive, enqueueDerive, rebuildDerived } from '../src/derive/sync';
+import { GROUP_ALGORITHM } from '../src/derive/state';
 import { evictOldestBodyBatch } from '../src/retention';
 import { listTurns } from '../src/queries/turns';
 
@@ -71,6 +73,149 @@ test('轮次结算：纯对话轮两端同笔，工具循环轮跨笔', () => {
     expect(listTurns(f.store, SEED_GROUP.convKey).items).toEqual([
       { turn: 1, start_req: 1, ordinals: [0], reply_req: 1 },
       { turn: 2, start_req: 2, ordinals: [1], reply_req: 3 },
+    ]);
+  } finally { f.close(); }
+});
+
+test('轮次结算：Responses 数组与字符串输入都能定位命令', () => {
+  const user = { type: 'message', role: 'user', content: [{ type: 'input_text', text: '合成命令' }] };
+  const reply = { status: 'completed', output: [
+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '合成回复' }] },
+  ] };
+  for (const input of [[user], '合成命令']) {
+    const f = fixture();
+    try {
+      seedRequest(f.store, [{ req_id: 1, started_ms: 1000, sort_source: 'ledger', sort_key: 'ledger|0000' }]);
+      persistBody(f.store, 1, { protocol: 'responses', request: { input }, reply, redact_version: 1 });
+      f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE req_id=1'));
+      derive(f);
+      expect(listTurns(f.store, SEED_GROUP.convKey).items).toEqual([
+        { turn: 1, start_req: 1, ordinals: [0], reply_req: 1 },
+      ]);
+    } finally { f.close(); }
+  }
+});
+
+test('轮次结算：旧 Responses 骨架按实际拆块键定位可信增量', () => {
+  const positions: number[][] = [];
+  for (const input of [undefined, [
+    { role: 'assistant', content: '无关输入' }, U('不能当作消息块的命令'),
+  ]]) {
+    const f = fixture();
+    try {
+      const request = { messages: [U('实际命令'), { role: 'assistant', content: '消息块中的回复' }],
+        ...(input === undefined ? {} : { input }) };
+      seedRequest(f.store, [{ req_id: 1, started_ms: 1000, sort_source: 'ledger', sort_key: 'ledger|0000' }]);
+      persistBody(f.store, 1, { protocol: 'anthropic', request,
+        reply: { status: 'completed', output: [] }, redact_version: 1 });
+      const saved = f.store.read.query<{ skeleton_z: Uint8Array }, []>(
+        'SELECT skeleton_z FROM request WHERE req_id=1').get()!;
+      const skeleton = JSON.parse(zstdDecompressSync(saved.skeleton_z).toString('utf8'));
+      delete skeleton.messages_key;
+      delete skeleton.messages_form;
+      skeleton.protocol = 'responses';
+      f.store.write(db => {
+        db.run('UPDATE request SET skeleton_z=?,purpose_pending=0 WHERE req_id=1', [
+          zstdCompressSync(Buffer.from(JSON.stringify(skeleton))),
+        ]);
+      });
+      derive(f);
+      positions.push(listTurns(f.store, SEED_GROUP.convKey).items[0]?.ordinals ?? []);
+    } finally { f.close(); }
+  }
+  expect(positions).toEqual([[0], [0]]);
+});
+
+test('轮次结算：Responses 增量输入定位末尾命令但不伪造可信增量', () => {
+  const user = { type: 'message', role: 'user', content: [{ type: 'input_text', text: '合成命令' }] };
+  for (const input of [[user], '合成命令']) {
+    const f = fixture();
+    try {
+      seedRequest(f.store, [{ req_id: 1, started_ms: 1000, sort_source: 'ledger', sort_key: 'ledger|0000' }]);
+      persistBody(f.store, 1, { protocol: 'responses', request: { input, previous_response_id: 'synthetic-id' },
+        reply: { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '合成回复' }] }] }, redact_version: 1 });
+      f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE req_id=1'));
+      derive(f);
+      const derived = f.store.read.query<{ prev_relation: string; delta_ordinals: string | null; input_preview_kind: string }, []>(
+        'SELECT prev_relation, delta_ordinals, input_preview_kind FROM request WHERE req_id=1').get();
+      expect(derived).toMatchObject({ prev_relation: 'unknown', delta_ordinals: null, input_preview_kind: 'tail_command' });
+      expect(listTurns(f.store, SEED_GROUP.convKey).items).toEqual([{ turn: 1, start_req: 1, ordinals: [0], reply_req: 1 }]);
+    } finally { f.close(); }
+  }
+});
+
+test('轮次结算：不可读引用不生成末尾命令位置', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, [{ req_id: 1, started_ms: 1000, sort_source: 'ledger', sort_key: 'ledger|0000' }]);
+    persistBody(f.store, 1, { protocol: 'responses', request: { input: '合成命令', previous_response_id: 'synthetic' },
+      reply: { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '合成回复' }] }] }, redact_version: 1 });
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE req_id=1'));
+    derive(f);
+    f.store.write(db => db.run('DELETE FROM request_block WHERE req_id=1 AND ord=0'));
+    expect(listTurns(f.store, SEED_GROUP.convKey).items).toEqual([{ turn: 1, start_req: 1, ordinals: [], reply_req: 1 }]);
+  } finally { f.close(); }
+});
+
+test('轮次结算：末尾块损坏时不把更早消息当成当前命令', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, [{ req_id: 1, started_ms: 1000, sort_source: 'ledger', sort_key: 'ledger|0000' }]);
+    persistBody(f.store, 1, { protocol: 'responses', request: { input: [U('旧消息'), U('末尾命令')], previous_response_id: 'synthetic' },
+      reply: { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '合成回复' }] }] }, redact_version: 1 });
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE req_id=1'));
+    derive(f);
+    expect(listTurns(f.store, SEED_GROUP.convKey).items[0]?.ordinals).toEqual([1]);
+    f.store.write(db => db.run('UPDATE block SET z=? WHERE id=(SELECT block FROM request_block WHERE req_id=1 AND ord=1)', [Buffer.from('invalid')]));
+    expect(listTurns(f.store, SEED_GROUP.convKey).items[0]?.ordinals).toEqual([]);
+  } finally { f.close(); }
+});
+
+test('轮次结算：显式重建修正坏尾块的历史误判', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, [{ req_id: 1, started_ms: 1000, sort_source: 'ledger', sort_key: 'ledger|0000' }]);
+    persistBody(f.store, 1, { protocol: 'responses', request: { input: [
+      U('合成旧命令'), { type: 'function_call_output', call_id: 'synthetic', output: '合成结果' },
+    ], previous_response_id: 'synthetic' },
+    reply: { status: 'completed', output: [] }, redact_version: 1 });
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE req_id=1'));
+    derive(f);
+    f.store.write(db => {
+      db.run('UPDATE block SET z=? WHERE id=(SELECT block FROM request_block WHERE req_id=1 AND ord=1)',
+        [Buffer.from('invalid')]);
+      db.run("UPDATE request SET input_preview_kind='tail_command', summary_algorithm=5 WHERE req_id=1");
+      db.run('UPDATE derive_queue SET target_algorithm=5,published_algorithm=5 WHERE conv_key=? AND actor=?',
+        [SEED_GROUP.convKey, SEED_GROUP.actor]);
+    });
+    expect(listTurns(f.store, SEED_GROUP.convKey).items).toEqual([{ turn: 1, start_req: 1, ordinals: [], reply_req: 1 }]);
+    expect(rebuildDerived(f.store, SEED_GROUP.convKey).queued).toBe(1);
+    drainDerive(f.store);
+    expect(f.store.read.query<{ input_preview_kind: string; summary_algorithm: number }, []>(
+      'SELECT input_preview_kind,summary_algorithm FROM request WHERE req_id=1').get())
+      .toEqual({ input_preview_kind: 'tail', summary_algorithm: GROUP_ALGORITHM });
+    expect(listTurns(f.store, SEED_GROUP.convKey).items).toEqual([]);
+  } finally { f.close(); }
+});
+
+test('轮次结算：Responses 工具循环从起点请求定位命令', () => {
+  const f = fixture();
+  try {
+    const user = { type: 'message', role: 'user', content: [{ type: 'input_text', text: '合成命令' }] };
+    const call = { type: 'function_call', call_id: 'synthetic_call', name: 'read', arguments: '{}' };
+    const result = { type: 'function_call_output', call_id: 'synthetic_call', output: '合成结果' };
+    seedRequest(f.store, [
+      { req_id: 1, started_ms: 1000, sort_source: 'ledger', sort_key: 'ledger|0000' },
+      { req_id: 2, started_ms: 2000, sort_source: 'ledger', sort_key: 'ledger|0001' },
+    ]);
+    persistBody(f.store, 1, { protocol: 'responses', request: { input: [user] },
+      reply: { status: 'completed', output: [call] }, redact_version: 1 });
+    persistBody(f.store, 2, { protocol: 'responses', request: { input: [user, call, result] },
+      reply: { status: 'completed', output: [] }, redact_version: 1 });
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE req_id IN (1, 2)'));
+    derive(f);
+    expect(listTurns(f.store, SEED_GROUP.convKey).items).toEqual([
+      { turn: 1, start_req: 1, ordinals: [0], reply_req: 2 },
     ]);
   } finally { f.close(); }
 });
@@ -206,7 +351,7 @@ test('轮次结算：正文回收的起点照常进带，ordinals 清空、终�
     // 主动文本，记成 tail_command 并照常成起点。
     expect(listTurns(f.store, SEED_GROUP.convKey).items).toEqual([
       { turn: 1, start_req: 1, ordinals: [], reply_req: 1 },
-      { turn: 2, start_req: 2, ordinals: [], reply_req: 2 },
+      { turn: 2, start_req: 2, ordinals: [1], reply_req: 2 },
     ]);
   } finally { f.close(); }
 });

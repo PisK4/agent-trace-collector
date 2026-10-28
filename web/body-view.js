@@ -92,16 +92,18 @@ export function renderMessages(entries, options) {
 
 /**
  * 单条消息的完整内容。用户与工具结果按原文保留换行，助手文本按 Markdown 显示。
- * `arrayKey` 是消息数组在协议对象里的键（messages / input），只影响位置标签。
- * 调用与结果块在 call_id 能确认两端时给显式配对入口；确认不了不给按钮，
- * 不按块序号猜。
+ * `path` 是原始请求对象里的消息位置；未知时不显示位置。
+ * 调用与结果块在 call_id 与原始路径都能确认两端时给显式配对入口，不按块序号猜。
  * @param {Entry} entry
- * @param {string} [arrayKey]
- * @param {((block: Block) => {owner: number, callOrd: number} | null) | null} [pairOf]
+ * @param {string} [path]
+ * @param {((block: Block, path: string) => {owner: number, callOrd: number} | null) | null} [pairOf]
  */
-export function renderMessageDetail(entry, arrayKey = 'messages', pairOf = null) {
+export function renderMessageDetail(entry, path = '', pairOf = null) {
   const displayRole = displayRoleOf(entry);
   const blocks = entry.blocks.map(block => {
+    // 块位置按正文骨架拼；Chat 的 role=tool 结果配对到整条消息，与后端 result_path 同口径。
+    const blockPath = path === '' || entry.rawRole === 'tool' || block.path === ''
+      ? path : `${path}.${block.path}`;
     if (block.kind === 'text') {
       return entry.role === 'assistant'
         ? `<div class="bp-text">${mdToHtml(block.text)}</div>`
@@ -114,7 +116,7 @@ export function renderMessageDetail(entry, arrayKey = 'messages', pairOf = null)
     if (block.kind === 'call' || block.kind === 'result') {
       const failed = block.kind === 'result' && block.failed === true
         ? '<span class="tool-chip miss"><span>工具结果失败</span></span>' : '';
-      const pair = pairOf === null ? null : pairOf(block);
+      const pair = pairOf === null ? null : pairOf(block, blockPath);
       const open = pair === null ? ''
         : `<div class="conv-tools"><button class="chip-btn" data-tool-owner="${pair.owner}" data-call-ord="${pair.callOrd}">配对两端 ▸</button></div>`;
       return `${failed}${open}<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(block.text)}</pre>`;
@@ -124,7 +126,7 @@ export function renderMessageDetail(entry, arrayKey = 'messages', pairOf = null)
   return `<div class="body-panel">
     <div class="bp-head">
       <span class="kind ${roleClass(displayRole)} bp-kind">${roleTag(displayRole)}</span>
-      <span class="bp-path">${esc(arrayKey)}[${entry.ord}]</span>
+      ${path === '' ? '' : `<span class="bp-path">${esc(path.replace(/^request\./, ''))}</span>`}
       <button class="chip-btn" data-copy-msg="${entry.ord}">复制原文</button>
     </div>
     <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${entry.blocks.length} 个内容块</span></div>

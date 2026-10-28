@@ -13,7 +13,7 @@ store 是唯一的读取缓存，页面删除三个副本 Map。
 - 同步读取入口 `peekRequest`/`peekToolResult`/`peekRoute`：不发网络。`peekRequest` 最初以详情到手为界，详情未到手返回 null（读取中与失败不做区分）；2026-10-25 起记录存在即返回带 `status` 的快照，null 只表示本会话没有这笔记录，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)。`readToolResult` 登记成功值，普通失败登记 `unavailable` 占位（重试仍显式发起，迟到响应不登记）；`readRoute` 完成值随任务身份校验通过登记。`invalidate` 与会话切换同时清 Promise 缓存与完成值。
 - UI 选择迁出 store：快照的 `structure` 不再有 `selected`/`open`。折叠开合统一以 folds 表为准（既有 data-fold 恢复机制），选中消息存页面的 `structureSelected` Map。`structureFoldHtml` 改收独立的 `open`/`selected` 入参，store 对象不再被页面改写。
 - 作废单一入口：store 真正作废当前记录时通知页面（作废态与自动重读现都归 store，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)），页面无副本可清。
-- 导航代次 `navEpoch`：`selectSession`/`refreshWindow` 在 `store.selectSession` 与 `resolveInitialTrace` 的 await 后检查自身代次，旧导航的后续动作静默结束，不再覆盖当前选择。
+- 导航代次 `navEpoch`：`selectSession`/`refreshWindow` 在 `store.selectSession` 与 `resolveInitialTrace` 的 await 后检查自身代次，旧导航的后续动作静默结束。切窗续体和选择、视口的检查见[切窗收尾服从较新的阅读选择](../bug-fix/2026-10-28-window-navigation-intent-guards.md)。
 
 [生产阅读缓存 reader-store](../../implemented/feature/2026-10-24-reader-store-cache.md) 的 4 并发、两套游标与迟到响应守卫不变；重读政策 2026-10-25 起演进为自动重读加立即重读，见[作废读取的自动重读与快照状态](../feature/2026-10-25-reader-invalidation-auto-reread.md)。本决策集中处理的是页面侧副本与 UI 字段的归属。
 
@@ -27,7 +27,7 @@ store 是唯一的读取缓存，页面删除三个副本 Map。
 
 ## Consequences
 
-reader-store 的对外形状实质变更：`RequestRead.structure` 收窄为 `{next, total, ords, loading, error}`，新增三个 peek 入口与作废通知参数（现 `onReadChanged`）。渲染语义：peek null 即「未读到」（2026-10-25 起为「没有这笔记录」，作废与失败经快照 `status` 区分），工具失败占位可见，409 后重读入口由待重读标记驱动。导航竞态在 await 边界被代次挡住。窗口批次代次（`loadEpoch`）曾独立于导航代次；2026-10-27 起由准备流水线的 `readingEpoch` 接替，见[中栏窗口读取的准备流水线](2026-10-27-trace-window-preparation.md)。
+reader-store 的对外形状实质变更：`RequestRead.structure` 收窄为 `{next, total, ords, loading, error}`，新增三个 peek 入口与作废通知参数（现 `onReadChanged`）。渲染语义：peek null 即「未读到」（2026-10-25 起为「没有这笔记录」，作废与失败经快照 `status` 区分），工具失败占位可见，409 后重读入口由待重读标记驱动。导航竞态在 await 边界被代次挡住。窗口准备代次归准备模块，见[中栏窗口读取的准备流水线](2026-10-27-trace-window-preparation.md)。
 
 ## Testing
 

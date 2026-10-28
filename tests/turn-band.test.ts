@@ -5,7 +5,7 @@ import { renderTurnBand, renderTurnRail, renderTurnRailHead } from '../web/turn-
 /** 最小可用的正文页：默认 available，回复可注入，其余字段按空场景补齐。 */
 function pageOf(reply: unknown, extra: Partial<BodyPage> = {}): BodyPage {
   return {
-    state: 'available', protocol: 'anthropic', parse_state: 'ok',
+    state: 'available', protocol: 'anthropic', message_location: { key: 'messages', form: 'array' }, parse_state: 'ok',
     reply_state: reply === null ? 'absent' : 'ok',
     from: 0, to: 0, total: 0, messages: [], request_fields: null, reply,
     reason: null, interpretations: [],
@@ -101,6 +101,38 @@ test('轮次态：命令组多条消息按序，解释后的用户文本优先�
   expect(html).toContain('REPLY');
   // 复制原文按起点请求读取，不带当前请求的偏见。
   expect(html).toContain('data-copy-owner="7"');
+});
+
+test('轮次态：按原始输入形态显示位置，内部序号仍供复制', () => {
+  const turn = { turn: 1, start_req: 7, ordinals: [0], reply_req: 7 };
+  const entry = { ord: 0, blocks: [{ kind: 'text', text: '合成命令' }], input: inputOf('合成命令') };
+  const render = (meta: BodyPage | null) => renderTurnRail({
+    turn, startRead: { entries: [entry], meta }, replyRead: null,
+    startRow: { body_state: 'available' }, replyRow: null,
+  });
+  const bare = render(pageOf(null, { protocol: 'responses', message_location: { key: 'input', form: 'string' } }));
+  expect(bare).toContain('>input</span>');
+  expect(bare).not.toContain('input[0]');
+  expect(bare).toContain('data-copy-msg="0" data-copy-owner="7"');
+  const array = render(pageOf(null, { protocol: 'responses', message_location: { key: 'input', form: 'array' } }));
+  expect(array).toContain('input[0]');
+  expect(render(null)).not.toContain('messages[0]');
+});
+
+test('轮次态：命令位置缺失时按起点正文状态给出占位', () => {
+  const turn = { turn: 1, start_req: 7, ordinals: [], reply_req: 8 };
+  const render = (startRow: { body_state: string; miss_reason?: string | null } | null, meta: BodyPage | null) => renderTurnRail({
+    turn, startRead: meta === null ? null : { entries: [], meta }, replyRead: null,
+    startRow, replyRow: null,
+  });
+  expect(render({ body_state: 'evicted', miss_reason: '容量回收' }, null)).toContain('正文已回收');
+  const unavailable = render({ body_state: 'available' }, pageOf(null));
+  expect(unavailable).toContain('命令位置不可用');
+  expect(unavailable).not.toContain('正文已回收');
+  expect(unavailable).not.toContain('data-copy-msg');
+  expect(render(null, null)).toContain('正在读取');
+  expect(render({ body_state: 'available' }, null)).toContain('正在读取命令正文');
+  expect(render({ body_state: 'partial' }, null)).toContain('正在读取命令正文');
 });
 
 test('轮次态：命令文本转义，不把正文当 HTML', () => {
