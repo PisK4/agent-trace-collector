@@ -1453,10 +1453,13 @@ if (typeof document !== 'undefined') {
     const step = projected.stale === null ? projected.steps.find(item => item.key === key) ?? null : null;
     // 消息行把读数页的结构折到这条消息：展开折叠，在列表里高亮并滚到它。
     // 详情只在结构列表里再点一次才展开；请求级行只换选择，不动折叠状态。
+    // 点另一条消息行时关掉结构里开着的详情：否则右栏留在上一条的正文，中栏却已
+    // 指向新的一条，读者只能先按「返回消息列表」再找新行。
     const source = step?.source ?? null;
     if (source !== null && source.side === 'request' && typeof source.messageOrd === 'number') {
       folds.set(`structure:${id}`, true);
       structureReveal = { reqId: id, ord: source.messageOrd };
+      structureSelected.delete(id);
     }
     dispatch({ kind: 'select-step', reqId: id, stepKey: String(key) });
   }
