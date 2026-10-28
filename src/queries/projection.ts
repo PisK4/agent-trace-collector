@@ -38,7 +38,7 @@ export type RequestRow = {
   body_state: BodyState; miss_reason: string | null;
   /** 折叠行摘要：派生时写入，不读正文块。kind 说明摘要来自新增还是末轮输入。 */
   input_preview: string | null;
-  input_preview_kind: 'delta' | 'tail' | 'tool_result' | 'title' | null;
+  input_preview_kind: 'delta' | 'tail' | 'tail_command' | 'tool_result' | 'title' | null;
   reply_preview: string | null;
   /** 回复形状位：final 才能当轮次终点；NULL 表示从未判定（升级窗口期）。 */
   reply_shape: 'final' | 'tools' | 'unknown' | null;

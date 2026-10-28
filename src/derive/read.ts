@@ -157,6 +157,36 @@ export function tailUserPreview(db: Database, reqId: number,
   return userPreview(db, reqId, 'tail', cache);
 }
 
+/** 末条消息判定的扫描上限：跳过 system 与注入之后仍遇到屏障即停，上限只防极端正文。 */
+const LAST_MESSAGE_SCAN = 6;
+
+/**
+ * 本笔输入是否以用户主动文本收尾。
+ *
+ * 从末尾往前跳过 system 消息与注入型 user 消息（归档、技能注入、系统提醒
+ * 都是壳），遇到工具结果或 assistant 消息即停。判据与 `interpretMessage`
+ * 同一套：只有 state='text' 算用户主动文本。
+ */
+export function lastUserMessageIsCommand(db: Database, reqId: number,
+  cache?: BodyReadCache): boolean {
+  const meta = db.query<{ agent: string | null }, [number]>(
+    'SELECT agent FROM request WHERE req_id=?').get(reqId);
+  const rows = db.query<{ ord: number } & BlockMessageRow, [number, number]>(`
+    SELECT rb.ord AS ord, b.id AS id, hex(b.hash) AS hash, b.z AS z, b.raw_size AS raw_size
+    FROM request_block rb JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? ORDER BY rb.ord DESC LIMIT ?`).all(reqId, LAST_MESSAGE_SCAN);
+  for (const row of rows) {
+    const message = messageOfBlock(row, cache);
+    if (message === undefined) continue;
+    const view = interpretMessage(message, meta?.agent ?? null, row.ord);
+    if (view.role === 'system') continue;
+    if (view.role !== 'user' || view.input === null) return false;
+    if (view.input.state === 'injected') continue;
+    return view.input.state === 'text';
+  }
+  return false;
+}
+
 /** 标题生成请求的输入里只有被 harness 包起来的用户文本；取第一段可读的。 */
 export function firstUserPreview(db: Database, reqId: number,
   cache?: BodyReadCache): string | null {
@@ -274,5 +304,6 @@ export function presentationPortsOf(db: Database, cache?: BodyReadCache): Presen
     toolResultPreview: (reqId, delta, associations) =>
       toolResultPreview(db, reqId, delta, associations, cache),
     tailUserPreview: reqId => tailUserPreview(db, reqId, cache),
+    lastUserMessageIsCommand: reqId => lastUserMessageIsCommand(db, reqId, cache),
   };
 }

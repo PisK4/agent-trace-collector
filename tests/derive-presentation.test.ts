@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { fixture, seedPurposeRequest, seedDeriveRound, deriveSnapshot, rebuildDeriveGroup, DERIVE_GROUP, DERIVE_ACTOR } from './fixtures';
-import { deriveTitle } from '../src/derive/decision';
+import { deriveTitle, presentationDecision } from '../src/derive/decision';
 import { messageFingerprint } from '../src/fingerprint';
 import { drainDerive, enqueueDerive } from '../src/derive/sync';
 import { modelTimeTitle } from '../src/format';
@@ -237,11 +237,12 @@ test('非标题的排除用途不从用户增量取标题', () => {
     enqueueDerive(f.store, 'aux-delta', 'actor', '');
     drainDerive(f.store, 100);
     // aux 与主链没有可比关系，输入摘要按末轮输入展示；标题只来自用途列。
+    // 末条消息是用户文本，kind 记 tail_command，但排除用途的行不进轮次带。
     expect(f.store.read.query<{ title: string; title_source: string;
       input_preview_kind: string | null }, [number]>(
       'SELECT title,title_source,input_preview_kind FROM request WHERE req_id=?').get(aux))
       .toEqual({ title: '分类器标题', title_source: 'model_title',
-        input_preview_kind: 'tail' });
+        input_preview_kind: 'tail_command' });
   } finally { f.close(); }
 });
 
@@ -438,4 +439,23 @@ test('压缩事件位的保留语义：正文回收沿用旧值，判不出关�
       [number]>('SELECT context_event,summary_state FROM request WHERE req_id=1').get(1);
     expect(row).toMatchObject({ context_event: 'omp_compaction', summary_state: 'retained' });
   } finally { f.close(); }
+});
+
+test('末尾是用户主动文本时 tail 记成 tail_command，工具回传仍是 tail', () => {
+  const facts = {
+    reqId: 1, agent: 'claude', modelServed: 'm', startedMs: 1,
+    isAux: false, isTitle: false, modelTitle: null,
+    current: ['fp'], delta: null, retained: null, replyPreview: null,
+  };
+  const ports = {
+    firstUserPreview: () => null,
+    messageAt: () => null,
+    toolResultPreview: () => null,
+    tailUserPreview: () => '末尾输入',
+    lastUserMessageIsCommand: () => true,
+  };
+  expect(presentationDecision(ports, facts, []).inputKind).toBe('tail_command');
+  expect(presentationDecision(
+    { ...ports, lastUserMessageIsCommand: () => false }, facts, [],
+  ).inputKind).toBe('tail');
 });
