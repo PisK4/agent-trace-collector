@@ -261,3 +261,21 @@ test('轮次结算：未知会话返回空表，不报错', () => {
     expect(listTurns(f.store, '["session","missing"]').items).toEqual([]);
   } finally { f.close(); }
 });
+
+test('轮次结算：不确定闭包里相对可读前驱的新增命令照常成起点', () => {
+  const f = fixture();
+  try {
+    seedTurns(f, [
+      { delta: [U('命令一')], reply: FINAL },
+      { delta: [U('命令二')], reply: FINAL },
+      { delta: [U('命令三')], reply: FINAL },
+      { delta: [U('命令四')], reply: FINAL },
+    ]);
+    derive(f);
+    // 回收 req1：req2 关系 unknown 且 delta 不可算（kind=tail），req3/req4 的前驱可读，
+    // delta 成立但被不确定闭包标成 unknown。
+    expect(evictOldestBodyBatch(f.store, 5000, 1).requests).toBe(1);
+    derive(f);
+    expect(listTurns(f.store, SEED_GROUP.convKey).items.map(item => item.start_req)).toEqual([1, 3, 4]);
+  } finally { f.close(); }
+});
