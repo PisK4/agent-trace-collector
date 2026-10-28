@@ -39,3 +39,32 @@ export function classifierDecision(view: PurposeView): PurposeDecision | null {
     modelTitle: null,
   };
 }
+
+const SUGGESTION_MODE = '[SUGGESTION MODE:';
+const COMPACTION = 'CRITICAL: Respond with TEXT ONLY';
+
+/**
+ * Claude Code 的 suggestion 生成请求。指纹写在最后一条 user 消息的块首，
+ * 只看末尾块首；命中即认，不拿消息数或工具数当门槛。
+ */
+export function suggestionDecision(view: PurposeView): PurposeDecision | null {
+  if (!view.tailUserBlockHeads.some(head => head.startsWith(SUGGESTION_MODE))) return null;
+  return {
+    status: 'recognized', version: PURPOSE_VERSION, rule: 'claude.suggestion-mode.v1',
+    signals: ['suggestion.agent.claude', 'suggestion.tail-block-head'],
+    chain: 'exclude', kind: 'suggestion_mode', modelTitle: null,
+  };
+}
+
+/**
+ * Claude Code 的上下文压缩请求（回复以 `<analysis>` 开头）。与 suggestion
+ * 同样写在末尾块首；两族互斥，登记次序只保证分类器先判。
+ */
+export function compactionDecision(view: PurposeView): PurposeDecision | null {
+  if (!view.tailUserBlockHeads.some(head => head.startsWith(COMPACTION))) return null;
+  return {
+    status: 'recognized', version: PURPOSE_VERSION, rule: 'claude.compaction.v1',
+    signals: ['compaction.agent.claude', 'compaction.tail-block-head'],
+    chain: 'exclude', kind: 'context_compaction', modelTitle: null,
+  };
+}
