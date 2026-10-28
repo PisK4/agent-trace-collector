@@ -109,7 +109,10 @@ export function listTurns(store: Store, key: string, from: number | null = null)
       if (list === undefined) children.set(row.prev_req_id, [row.req_id]);
       else list.push(row.req_id);
     }
-    const isCommand = (row: TurnRow): boolean => row.input_preview_kind === 'delta';
+    // 命令判据：delta（相对可读前驱的新增），或 tail_command（末条消息是
+    // 用户主动文本，关系证明不了但输入形状成立）。
+    const isCommand = (row: TurnRow): boolean =>
+      row.input_preview_kind === 'delta' || row.input_preview_kind === 'tail_command';
     // 起点资格：已证明主链上的行，或链角色落 unknown 的行。unknown 覆盖两种
     // 情况：正文回收的起点（自身关系 unknown），以及不确定闭包里的后继
     // （confirmed）。后者的 delta 相对可读前驱成立，是用户命令的直接证据，
