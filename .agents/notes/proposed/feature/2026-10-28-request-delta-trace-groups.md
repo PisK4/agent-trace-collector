@@ -237,7 +237,7 @@ Status: proposed
 
 按仓库约定，落地在 `../../.codex-worktrees/atc-request-delta-groups` 建 `feat/request-delta-groups` 分支，`master` 以 `--no-ff` 合并。
 
-第 1–4 步已落在这个分支；第 5–6 步待做。
+第 1–5 步已落在这个分支；第 6 步待做。
 
 ## Alternatives considered
 
