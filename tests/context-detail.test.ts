@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
-  contentTextOf, contextDetailHtml, directoryStatusHtml, entryContentHtml, iidParse,
+  contentTextOf, contextDetailHtml, directoryStatusHtml, entryBodyUrl, entryContentHtml, iidParse,
 } from '../web/context-detail.js';
 
 test('iid 解析：tag 可空、名字段允许含分隔符、无分隔非法', () => {
@@ -92,4 +92,17 @@ test('条目正文：文本、失败标记、不可读状态与原始对象折�
     { state: 'available', messages: [{ ord: 0, value: { role: 'user', content: 'hi' } }] }))
     .toContain('原始对象');
   expect(entryContentHtml(entry, { state: 'evicted', reason: 'budget' })).toContain('budget');
+});
+
+test('正文 URL：顶层字段条目没有消息序号，按正文根读取', () => {
+  const session = { reqId: 7, token: 'r1-x' };
+  const top = entryBodyUrl(session, { ord: null, call_ord: null, owner_req: null });
+  expect(top).toBe('/api/requests/7/body?if_reading=r1-x');
+  expect(top).not.toContain('NaN');
+  expect(top).not.toContain('from=');
+  // 有消息序号的条目仍按区间读；工具结果走配对端点，不看自己有没有序号。
+  expect(entryBodyUrl(session, { ord: 3, call_ord: null, owner_req: null }))
+    .toBe('/api/requests/7/body?from=3&to=4&if_reading=r1-x');
+  expect(entryBodyUrl(session, { ord: 5, call_ord: 1, owner_req: 9 }))
+    .toBe('/api/requests/9/tools/1/result?if_reading=r1-x');
 });

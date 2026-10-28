@@ -195,6 +195,16 @@ export function renderTools(tools, foldKey = '') {
   </details>`;
 }
 
+/** 空回复的文案按正文状态分开：未到可等，回收与摘要不可等，缺失才是真的没有。 */
+const EMPTY_REPLY = /** @type {Record<'absent' | 'pending' | 'evicted' | 'unsupported' | 'summary' | 'partial', [string, string]>} */ ({
+  absent: ['上游没有提供可用回复', '请求正文已保存；这一笔只有请求，没有回复对象，这里不补写内容。'],
+  pending: ['回复还没到', '正文未到（hook 尚未回调）；这一笔可能稍后补上，不是没有回复。'],
+  evicted: ['回复随正文一起回收', '正文已回收，回复不再可读；原因见正文状态。'],
+  unsupported: ['回复暂不可读', '原对象已保存，暂不支持结构化解析。'],
+  summary: ['回复不在摘要里', '正文来自 OTLP 摘要，没有保存完整回复对象，这里不补写内容。'],
+  partial: ['回复不在已保存的部分里', '正文不完整；已保存的部分没有回复对象，原因见正文状态。'],
+});
+
 /**
  * 本次回复内容。ASSISTANT 头与模型名不再重复：读数条只显示一次 model_served，
  * finish 移到折叠行摘要（见读数页）。空回复与无法解析分别说明。
@@ -208,9 +218,9 @@ export function renderReply(view, tools = [], foldKey = '') {
     const attr = keySuffix === '' ? '' : ` data-fold="${key}${keySuffix}"`;
     return `<details class="rail-fold sub"${attr}>${inner}</details>`;
   };
-  if (view.state === 'absent') {
-    return `<div class="reply-empty"><b>上游没有提供可用回复</b>
-      <span>请求正文已保存；这一笔只有请求，没有回复对象，这里不补写内容。</span></div>`;
+  if (view.state !== 'ok' && view.state !== 'invalid') {
+    const [head, body] = EMPTY_REPLY[view.state];
+    return `<div class="reply-empty"><b>${head}</b><span>${body}</span></div>`;
   }
   if (view.state === 'invalid') {
     return `<div class="reply-empty"><b>回复对象无法结构化</b>

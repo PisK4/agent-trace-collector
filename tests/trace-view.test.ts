@@ -810,3 +810,15 @@ test('读不出时不写 0：推理段与执行段缺值都留空槽', () => {
   expect(html).not.toContain('class="row-reading');
   expect(html.match(/<span class="compact-reading"><\/span>/g)?.length).toBe(2);
 });
+
+test('正文未到的请求不补「未收到回复」，只报正文状态', () => {
+  const entries = [entry(0, { state: 'text', text: '问', original: '问' }, true)];
+  const snapshot = read(detail({ delta_ordinals: [0] }), entries, null);
+  // 正文未到：meta 带 state='pending'、没有回复对象，回复视图继承正文状态。
+  const pending = {
+    ...snapshot, meta: { state: 'pending', reply: null, capabilities: null },
+  } as unknown as ProjectableRead;
+  const steps = projectSteps(row({ body_state: 'pending', miss_reason: 'hook_absent' }), pending);
+  expect(steps.some(s => s.text === '未收到回复')).toBe(false);
+  expect(steps.find(s => s.key === '7:body')?.text).toBe('正文状态：pending（hook_absent）');
+});

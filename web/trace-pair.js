@@ -23,14 +23,18 @@ export function pairStateText(state) {
 }
 
 /**
- * 正文加载状态的固定文案。
+ * 正文加载状态的固定文案。终态（已回收、消息缺失）不说「可重试」：
+ * 重试不会让正文回来，配对页也不再给重试入口。
  * @param {string} state
+ * @param {string | null} [reason]
  */
-export function loadStateText(state) {
+export function loadStateText(state, reason = null) {
   if (state === 'not_loaded') return '待读取（打开配对页自动读取一次）';
   if (state === 'loading' || state === 'loaded') return state === 'loaded' ? '已读取' : '正在读取';
   if (state === 'invalid_location') return '结果位置无效，不回退猜测';
   if (state === 'available') return '已读取';
+  if (reason === 'body_evicted') return '正文已回收';
+  if (reason === 'message_missing') return '消息已缺失';
   return '读取失败，可重试';
 }
 
@@ -110,7 +114,7 @@ export function renderTracePair(input) {
     && loadState !== 'ambiguous' && loadState !== 'unpaired';
   const statusBits = [
     pairState !== 'resolved' || loadAbnormal ? `关联 ${esc(pairStateText(pairState))}` : '',
-    loadAbnormal ? `正文加载 ${esc(loadStateText(loadState))}` : '',
+    loadAbnormal ? `正文加载 ${esc(loadStateText(loadState, reading?.reason ?? null))}` : '',
   ].filter(Boolean).join(' · ');
   const status = statusBits === '' ? '' : `<div class="bp-meta">${statusBits}</div>`;
   const callName = input.call.name || '未命名工具';
@@ -149,10 +153,12 @@ export function renderTracePair(input) {
   } else if (reading.state === 'invalid_location') {
     resultBody = `<p class="note warn">结果位置无效（${esc(reading.reason ?? '')}），不跨请求搜索或回退第一块。</p>`;
   } else {
+    // body_evicted 与 message_missing 是终态：重试不会让正文回来，只给说明。
+    const retryable = reading.reason !== 'body_evicted' && reading.reason !== 'message_missing';
     resultBody = `<p class="note warn">结果正文不可读（${esc(reading.reason ?? '')}）。</p>
-      <div class="conv-tools">
+      ${retryable ? `<div class="conv-tools">
         <button class="chip-btn" data-tool-retry="${input.owner}" data-call-ord="${input.call.ord}">重试读取</button>
-      </div>`;
+      </div>` : ''}`;
   }
   const resultPath = reading !== null && reading.target !== null ? reading.target.path
     : pair !== null ? pair.result_path : null;

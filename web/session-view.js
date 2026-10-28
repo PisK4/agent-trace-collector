@@ -54,12 +54,15 @@ function timingSummary(rows) {
   const durations = rows.map(r => r.ms).filter(v => v !== null);
   const median = ttfts.length === 0 ? null : ttfts[Math.floor(ttfts.length / 2)] ?? null;
   const average = durations.length === 0 ? null : durations.reduce((a, v) => a + v, 0) / durations.length;
-  const genMs = rows.reduce((a, r) => {
+  // 速度只统计计时与输出都在的行：分母漏一行、分子照加，会把 OTLP 行放大成
+  // 8000 tok/s。没有计时行时不给速度。
+  const timed = rows.filter(r => r.out_tok !== null
+    && (r.flow_ms !== null || (r.ms !== null && r.ttft_ms !== null)));
+  const genMs = timed.reduce((a, r) => {
     if (r.flow_ms !== null) return a + r.flow_ms;
-    if (r.ms !== null && r.ttft_ms !== null) return a + Math.max(0, r.ms - r.ttft_ms);
-    return a;
+    return a + Math.max(0, (r.ms ?? 0) - (r.ttft_ms ?? 0));
   }, 0);
-  const outTok = rows.reduce((a, r) => a + (r.out_tok ?? 0), 0);
+  const outTok = timed.reduce((a, r) => a + (r.out_tok ?? 0), 0);
   return {
     median, average,
     speed: genMs > 0 && outTok > 0 ? Math.round(outTok / (genMs / 1000)) : null,
@@ -198,9 +201,13 @@ export function sessionSummaryFold(s, sessionKey, open) {
 /** 会话头：标题、身份行、窗口合计与汇总折叠区、视图操作行与定位提示。
  *  @param {{sessionKey: string | null, row: SessionRow | null, rows: RequestRow[], refreshedAt: number | null,
  *    missingReqId: number | null, offPageReqId: number | null, windowError: string | null,
- *    summary: SessionSummary | null, summaryFoldOpen: boolean, windowAnchor: 'start' | 'latest'}} input */
+ *    summary: SessionSummary | null, summaryStatus?: 'idle' | 'loading' | 'ready' | 'absent',
+ *    summaryFoldOpen: boolean, windowAnchor: 'start' | 'latest'}} input */
 export function sessionHead(input) {
-  const { sessionKey, row, rows, refreshedAt, missingReqId, offPageReqId, windowError, summary, windowAnchor } = input;
+  const {
+    sessionKey, row, rows, refreshedAt, missingReqId, offPageReqId, windowError,
+    summary, summaryStatus = 'idle', windowAnchor,
+  } = input;
   const unknown = sessionKey !== null && row === null;
   const first = rows[0] ?? null;
   const latest = rows[rows.length - 1] ?? null;
@@ -226,9 +233,11 @@ export function sessionHead(input) {
       ${first && latest ? `<span>${esc(dayTime(first.started_ms))}–${esc(clock(latest.started_ms))}</span>` : ''}
       ${timingParts.length > 0 ? `<span class="sum">${timingParts.join(' · ')}</span>` : ''}
       ${summary !== null ? sessionTotalsHtml(summary)
-      : hasUsage
-        ? `<span class="sum" title="汇总快照读取中；这是已加载窗口的相加，不是会话口径">已加载相加：${kk(totalIn)} 提示 · ${kk(totalOut)} 输出 · $${totalCost.toFixed(4)}${priced.length < rows.length ? ` · ${rows.length - priced.length} 笔未取得费用` : ''}</span>`
-        : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
+      : summaryStatus === 'loading'
+        ? '<span class="sum muted">汇总快照读取中…</span>'
+        : hasUsage
+          ? `<span class="sum" title="汇总快照不可用；这是已加载窗口的相加，不是会话口径">已加载相加：${kk(totalIn)} 提示 · ${kk(totalOut)} 输出 · $${totalCost.toFixed(4)}${priced.length < rows.length ? ` · ${rows.length - priced.length} 笔未取得费用` : ''}</span>`
+          : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
     </div>
     ${sessionSummaryFold(summary, sessionKey, input.summaryFoldOpen)}
     <div class="view-row">
