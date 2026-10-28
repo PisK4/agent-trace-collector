@@ -3,7 +3,7 @@ import { restoreScroll } from '../web/app.js';
 import { replyCompleteness } from '../web/row-summary.js';
 import {
   ledgerParts, ledgerRowsHtml, railFactsHtml, readingChangedNote,
-  structureFoldHtml, structureMoreParts, systemContextOf, toolOverviewHtml, toolSchemaSection,
+  structureFoldHtml, structureMoreParts, structureUnread, systemContextOf, toolOverviewHtml, toolSchemaSection,
   usageFoldHtml,
 } from '../web/rail-facts.js';
 import {
@@ -120,6 +120,39 @@ test('结构折叠：total=45、ords=[] 时有数量没有消息；正文回收�
   });
   expect(evicted).not.toContain('data-structure-more');
   expect(evicted).toContain('正文已回收');
+});
+
+test('结构从未读过时按总数判断未读：给从末尾读取的入口，不写「已读 0–0」', () => {
+  const html = structureFoldHtml({
+    reqId: 1, row: factsRow, meta: { total: 45 }, entries: [entryOf(5, 'm5')],
+    structure: { back: 0, next: 0, total: null, ords: [], loading: false, error: null },
+    open: true, delta: new Set<number>(), relation: '',
+  });
+  expect(html).toContain('data-structure-more="1"');
+  expect(html).toContain('从末尾读取（共 45 条）');
+  expect(html).not.toContain('已读 0–0');
+  expect(structureUnread({ back: 0, next: 0, total: null, loading: false, error: null }, 45)).toBe(true);
+  expect(structureUnread({ back: 0, next: 0, total: null, loading: false, error: null }, null)).toBe(false);
+  expect(structureUnread({ back: 0, next: 0, total: 45, loading: false, error: null }, 45)).toBe(false);
+  expect(structureUnread({ back: 3, next: 45, total: 45, loading: false, error: null }, 45)).toBe(true);
+  expect(structureUnread({ back: 0, next: 0, total: null, loading: false, error: 'body_page_gap' }, null)).toBe(true);
+});
+
+test('中栏选中的消息在结构列表里高亮，不展开详情', () => {
+  const entries = [entryOf(0, '问'), entryOf(1, '答')];
+  const structure = { ...emptyStructure, total: 45, next: 2, ords: [0, 1] };
+  const html = structureFoldHtml({
+    reqId: 1, row: factsRow, meta: { total: 45 }, entries, structure, highlight: 1, delta: null, relation: '',
+  });
+  expect(html).toContain('data-msg="1"');
+  expect(html).toContain('<li class="msg" data-ord="1" aria-current="true">');
+  expect(html).not.toContain('data-structure-back');
+  // 结构列表里点开的那条才替换成详情，返回按钮回到列表。
+  const detail = structureFoldHtml({
+    reqId: 1, row: factsRow, meta: { total: 45 }, entries, structure, selected: 1, highlight: 1, delta: null, relation: '',
+  });
+  expect(detail).toContain('data-structure-back="1"');
+  expect(detail).not.toContain('data-msg=');
 });
 
 test('delta=null 给关系说明不标新增，delta=[] 显示新增 0', () => {

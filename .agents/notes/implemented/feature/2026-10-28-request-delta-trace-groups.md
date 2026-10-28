@@ -269,6 +269,7 @@ Status: implemented
 - 现行分组与投影：[单行步骤投影](2026-10-24-trace-step-projection.md)、[单一轨迹生产阅读](../architecture/2026-10-23-single-timeline-production-reader.md)。
 - 工具摘要与路径折算：[漂亮的工具摘要与配色](2026-10-24-pretty-trace-tool-summary-and-tint.md)、[路径显示末两段](2026-10-27-trace-path-two-segments.md)；本篇只把摘要接到工具往返行，不改摘要规则。
 - 结构折叠与懒读取：[右栏上下文与工具详情](2026-10-24-rail-context-tool-details.md)。
+- 结构折叠的点击落点：[结构折叠的默认面与返回](../bug-fix/2026-10-28-structure-fold-click-and-back.md)部分取代本篇「选中消息高亮并展开详情」「详情替换列表」的决定：中栏点击只在列表里高亮并滚到该消息，详情由结构列表内的点击打开，返回只清结构自己的选择、保留中栏高亮。
 - 上下文矩阵与明细：[上下文矩阵布局与点击明细](2026-10-26-context-treemap-drilldown.md)、[上下文分布 treemap](2026-10-26-context-distribution-treemap.md)。
 - 配对页的显式入口：[Trace Pair 配对页与右栏就地阅读](2026-10-24-trace-pair-rail-page.md)。
 - 轮次目录层：[轮次两端阅读](2026-10-25-turn-pair-reading.md)。

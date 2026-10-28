@@ -76,17 +76,35 @@ export function railFactsHtml(parts) {
 }
 
 /**
+ * 结构还有没读到的消息：从未读过（structure.total 为 null）时按元信息总数判断，
+ * 读过后看已读窗口下界 `back`；读取失败保留重试入口。
+ * 正文页签与请求结构折叠共用这一口径。
+ * @param {{ back: number, next: number, total: number | null, loading: boolean, error: string | null }} structure
+ * @param {number | null | undefined} total
+ * @returns {boolean}
+ */
+export function structureUnread(structure, total) {
+  if (structure.error !== null) return true;
+  if (structure.total === null) return total !== null && total !== undefined && total > 0;
+  return structure.back > 0;
+}
+
+/**
  * 结构续读的按钮与失败提示，正文页签与请求结构折叠共用一份。
  * 加载中禁用按钮，失败时按钮改「重试读取」并附原因；是否显示按钮由调用方判断，
- * 两个页签的正文可读性前置条件不同。已读窗口是 `[back, next)`，向前读更早的片。
- * @param {{ back: number, next: number, loading: boolean, error: string | null }} structure
+ * 两个页签的正文可读性前置条件不同。已读窗口是 `[back, next)`，向前读更早的片；
+ * 从未读过时没有「更早」，按钮读作从末尾读取。
+ * @param {{ back: number, next: number, total?: number | null, loading: boolean, error: string | null }} structure
  * @param {number} reqId
  * @param {number | string | null} total
  * @returns {{button: string, note: string}}
  */
 export function structureMoreParts(structure, reqId, total) {
+  const label = structure.error !== null ? '重试读取'
+    : structure.total === null ? `从末尾读取（共 ${total} 条）`
+      : `加载更早（已读 ${structure.back}–${structure.next} / ${total}）`;
   return {
-    button: `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${structure.error ? '重试读取' : `加载更早（已读 ${structure.back}–${structure.next} / ${total}）`}</button>`,
+    button: `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${label}</button>`,
     note: structure.error ? `<p class="note warn">结构读取失败：${esc(structure.error)}</p>` : '',
   };
 }
@@ -96,6 +114,8 @@ export function structureMoreParts(structure, reqId, total) {
  * data-fold 恢复）；total 在结构未读时取自元信息页，未读取也显示数量而不是空列表。
  * 列表展示已缓存消息的有序并集：连续历史、定点读与增量读到的消息都在，
  * 相邻序号之间的空洞标明未读取；连续历史上界仍由结构游标表达。
+ * `selected` 是结构列表里点开的消息，详情替换列表；`highlight` 是中栏选中的
+ * 消息，只在列表里高亮，不展开详情。
  * @param {{
  *   reqId: number,
  *   row: { body_state: string, miss_reason?: string | null },
@@ -108,17 +128,18 @@ export function structureMoreParts(structure, reqId, total) {
  *   relation: string,
  *   open?: boolean,
  *   selected?: number | null,
+ *   highlight?: number | null,
  *   pairOf?: ((block: import('./body-model.js').Block, path: string) => {owner: number, callOrd: number} | null) | null,
  * }} input
  * @returns {string}
  */
 export function structureFoldHtml(input) {
-  const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation, open = false, selected = null, pairOf = null } = input;
+  const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation, open = false, selected = null, highlight = null, pairOf = null } = input;
   const total = structure.total ?? (meta ? meta.total : null);
   const count = total === null || total === undefined ? '消息总数未读取' : `${total} 条消息`;
   const canLoad = row.body_state === 'available' || row.body_state === 'partial';
-  // 已读窗口是 [back, next)：back > 0 表示前面还有更早的消息；读取失败保留重试入口。
-  const unread = (total !== null && total !== undefined && structure.back > 0) || structure.error !== null;
+  // 未读判定与正文页签同一口径：从未读过按总数，读过后看已读下界。
+  const unread = structureUnread(structure, total);
   const chosen = selected === null
     ? null : entries.find(entry => entry.ord === selected) ?? null;
   let body;
@@ -150,7 +171,7 @@ export function structureFoldHtml(input) {
       if (entry.ord > prev + 1) gaps.push({ from: prev + 1, to: entry.ord - 1 });
       prev = entry.ord;
     }
-    body = `${deltaNote}${renderMessages(listEntries, { delta, limit: listEntries.length, selectedOrd: selected, gaps })}`;
+    body = `${deltaNote}${renderMessages(listEntries, { delta, limit: listEntries.length, selectedOrd: selected ?? highlight, gaps })}`;
   }
   const { button, note: errorNote } = structureMoreParts(structure, reqId, total);
   // 按钮与失败说明放在列表上方，与「向前读更早」的方向一致。

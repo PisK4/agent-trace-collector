@@ -29,3 +29,7 @@ Status: implemented
 ## Testing
 
 `tests/body-view.test.ts` 覆盖路径一致、路径未知、`input` 与 `messages` 混合键、同 `call_id` 落在另一条消息四种情况；合并后的前端窄测（body-view、trace-view、web、trace-pair、trace-commit、selection、trace-preparation、reader-store）177 项通过，`bun run typecheck` 通过。浏览器用 `prototypes/synthetic-server.ts` 复测：工具结果行打开读数页，消息详情显示 `messages[4]` 并给出指向调用方的配对按钮，点按钮进入工具页；「返回消息列表」回到 40 条列表与「加载更早（已读 5–45 / 45）」，步骤高亮消失。真实流量验收未执行。
+
+## Related
+
+[结构折叠的默认面与返回](2026-10-28-structure-fold-click-and-back.md)部分取代本篇「返回列表退出步骤选择」的决定：折叠的详情选择只来自结构列表内的点击，中栏点击只展开折叠、在列表里高亮并滚到该行，返回只清结构自己的选择，步骤选择与高亮保留。`call_id` 加块路径的配对确认、前驱换版重绘与结果行降级继续有效。
