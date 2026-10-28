@@ -673,13 +673,16 @@ test('孤立回调的请求正文可在轨迹中读取且不冒充新增', async
   expect(read.delta.unconfirmed).toBe(true);
   expect(read.entries.map(entry => entry.preview)).toEqual(['synthetic question']);
   const steps = projectSteps(request as never, read);
-  expect(steps.find(step => step.key === '1:uncertain')?.text).toContain('会话归属未确认');
+  // 归属、回复与账本三路缺口收在同一条组级状态行里。
+  expect(steps.find(step => step.kind === 'flag')?.text).toBe('无回复 · 无账本 · 归属未确认');
   const user = steps.find(step => step.kind === 'user');
   expect(user?.text).toBe('synthetic question');
   expect(resolveSelectedSource(user ?? null)).toEqual({ side: 'request', target: 'message', path: 'request.messages[0]', messageOrd: 0 });
+  expect(resolveSelectedSource(steps.find(step => step.kind === 'flag') ?? null)).toEqual({ side: 'evidence' });
   expect(steps.some(step => step.status === 'missing_reply')).toBe(true);
-  expect(steps.some(step => step.text === 'HTTP 状态未知')).toBe(true);
-  expect(steps.some(step => step.text === '回调报告失败 · 未提供失败原因')).toBe(true);
+  expect(steps.some(step => step.text === '无回复')).toBe(false);
+  expect(steps.some(step => step.text === 'HTTP 状态未知')).toBe(false);
+  expect(steps.some(step => step.text.includes('回调报告失败'))).toBe(false);
   await store.loadDelta(1, 2);
   expect(h.count('/body?from=0&to=1')).toBe(1);
 });

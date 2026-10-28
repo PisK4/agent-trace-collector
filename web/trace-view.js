@@ -3,6 +3,7 @@ import { deltaOrdinals, messagePathOf, replyView, systemPathOf, toolCallOfBlock 
 import { toolTint } from './body-view.js';
 import { compact, secs, tierOf, TIER_LIMITS, toolCategory } from './duration.js';
 import { esc } from './html.js';
+import { bodyStateText } from './row-summary.js';
 import { clipChars, summaryParts, toolSummary } from './tool-summary.js';
 
 // 摘要分派住在叶子模块（body-view.js 也要用）；这里继续转发，既有消费者不用改。
@@ -28,7 +29,8 @@ export { toolSummary };
  * @typedef {Object} TraceStep 单行轨迹的一步。
  * @property {string} key 稳定键：reqId:message:N / reqId:reply:text:N / reqId:call:N / reqId:system 等
  * @property {number} reqId
- * @property {'user'|'assistant'|'tool'|'tool_result'|'system'|'record'|'aux'} kind
+ * @property {'user'|'assistant'|'tool'|'tool_result'|'system'|'record'|'aux'|'flag'} kind
+ *   `record` 是事件记录，`aux` 是辅助请求，`flag` 是组级证据状态行（每组至多一条，键 `reqId:flag`）
  * @property {string} text 行文本（工具行是动作摘要）
  * @property {number|null} messageOrd
  * @property {number|null} callOrd
@@ -57,6 +59,11 @@ export { toolSummary };
 // incomplete_details.reason 里（replyView 已把它抬到 finish）。
 const LENGTH_FINISH = new Set(['length', 'max_tokens', 'max_output_tokens']);
 const NORMAL_FINISH = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use', 'completed']);
+
+/** 组级状态行取最强的一档：失败 > 缺正文 > 缺回复 > 未知 > 截断。 */
+const GAP_RANK = /** @type {Record<string, number>} */ ({
+  truncated: 1, unknown: 2, missing_reply: 3, missing_body: 4, failed: 5,
+});
 
 /** 压缩归档的预算丢弃量读数：basis 由派生写，缺字段不冒充 0。 @param {string | null} basis */
 function droppedCharsOf(basis) {
@@ -159,6 +166,18 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
       status, result: null, pairOwner: null, ...extra,
     }));
   };
+  // 证据缺口收在一处：同一根因的多个缺口（缺正文 → 缺回复 → 缺账本）拼成一条
+  // 组级状态行，不再各占一条记录。细节由右栏证据折叠区给出，这里只留短语；
+  // 短语按固定槽位拼接，与调用顺序无关。
+  /** @type {{body: string|null, reply: string|null, ledger: string|null, attribution: string|null}} */
+  const gaps = { body: null, reply: null, ledger: null, attribution: null };
+  /** @type {TraceStep['status']} */
+  let gapStatus = null;
+  /** @param {'body'|'reply'|'ledger'|'attribution'} slot @param {string} text @param {TraceStep['status']} status */
+  const gap = (slot, text, status) => {
+    if (gaps[slot] === null) gaps[slot] = text;
+    if (status !== null && (gapStatus === null || GAP_RANK[status] > GAP_RANK[gapStatus])) gapStatus = status;
+  };
   // 辅助请求一笔一条辅助记录：分类器输入不画成用户消息。
   if (row.purpose_chain === 'exclude' || row.chain_role === 'aux') {
     steps.push({ key:`${row.req_id}:aux`, reqId: row.req_id, kind: 'aux',
@@ -177,9 +196,6 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
       source: { side: 'request', path: systemPathOf(read?.meta ?? null), messageOrd: null, blockIndex: null },
       raw: systemContext.text, unrecognized: false, status: null, result: null, pairOwner: null,
     });
-  }
-  if (row.chain_role === 'branch') {
-    record('branch', null, '分支链请求 · 归属来自派生记录，不按时间推断父子');
   }
   // 上下文压缩事件位：只有本笔确定增量新增归档（或 branch 按输入归因）才标记，
   // 归档消息在后续请求重发时不再是事件。丢弃量按字符数展示，不是 token。
@@ -208,9 +224,9 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
   const unassigned = trusted === null && detail.actor_state === 'unknown'
     && read.meta !== null && (read.meta.state === 'available' || read.meta.state === 'partial');
   if (trusted === null) {
-    record('uncertain', detail.prev_relation === 'unknown' || detail.derived_state !== 'current'
-      ? 'unknown' : null,
-    unassigned ? '会话归属未确认 · 以下为本次请求的消息' : `新增输入未确认 · ${detail.prev_relation ?? detail.derived_state}`);
+    // 归属与新增是同一件事的两面：归属未知时不猜会话关系，只说明按原文展示的范围。
+    gap('attribution', unassigned ? '归属未确认' : '新增未确认',
+      detail.prev_relation === 'unknown' || detail.derived_state !== 'current' ? 'unknown' : null);
   }
   // 产出请求：承载 delta 里 assistant 消息的来源。只有已确认前驱才可读它的
   // 调用表与推理读数；分叉、未知与首笔都没有可对齐的产出请求。
@@ -365,42 +381,47 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
   }
   // 回复状态只做事实记录：回复的内容块不在承载请求的组里出步骤，它们作为下一笔
   // 承载请求的 assistant 消息出现；没有承载请求的回复由 projectTailReply 单独成组。
+  // 正文本身就是缺口时不再叠回复短语：没有正文就没有回复可读，一行说清一次。
   const meta = read?.meta ?? null;
   const view = meta === null ? null : replyView(meta);
   const unknownBody = trusted === null && detail.actor_state === 'unknown';
-  if (view === null && unknownBody && (detail.body_state === 'available' || detail.body_state === 'partial')) {
+  const bodyReadable = row.body_state === 'available' || row.body_state === 'partial';
+  if (!bodyReadable) {
+    // 正文缺口由下面的 body 槽位负责，这里不补回复。
+  } else if (view === null && unknownBody) {
     record('body-metadata', 'unknown', '正文信息未读到 · 点击重试');
   } else if (unknownBody && (meta === null || (meta.state !== 'available' && meta.state !== 'partial'))
     && detail.reply_state !== 'absent') {
-    record('reply', 'unknown', '回复状态未知');
+    gap('reply', '回复未读到', 'unknown');
   } else if (view === null || view.state === 'absent') {
-    record('reply', 'missing_reply', '未收到回复');
+    gap('reply', '无回复', 'missing_reply');
   } else if (view.choiceCount !== null && view.choiceCount > 1) {
     // 多 choice 是回复对象的形状事实，先于状态分支：结构损坏时仍保留原始对象。
     record('choices', null, `多 choice 回复（${view.choiceCount} 项）：保留原始对象，不按冲突序号提供工具定位`);
   } else if (view.state === 'partial') {
-    record('reply', 'unknown', '回复不在已保存的部分里 · 正文不完整');
+    gap('reply', '回复不完整', 'unknown');
   } else if (view.state === 'invalid') {
-    record('reply', 'unknown', '回复对象无法结构化');
+    gap('reply', '回复无法解析', 'unknown');
   } else if (view.state !== 'ok') {
-    // pending / evicted / unsupported / summary：正文状态行已经说明状态，
-    // 这里不再补一条「未收到回复」，避免同屏两句话互相打架。
+    // pending / evicted / unsupported / summary：正文状态已经说明，回复不单独成短语。
   }
-  // 回调只报告自身观察，不由 success 推断 HTTP 状态或具体原因。
+  // 回调只报告自身观察，不由 success 推断 HTTP 状态或具体原因；失败与「无回复」
+  // 是同一个根因的两路表述，已有回复缺口时不再叠一句。
   const hookReports = detail.source_facts?.hook?.successes ?? [];
   if (hookReports.includes('failure')) {
     if (hookReports.includes('success')) record('hook', 'unknown', '回调的成功与失败报告冲突');
-    else if (detail.source_facts?.selected?.error == null) record('hook', 'unknown', '回调报告失败 · 未提供失败原因');
-    else record('hook', 'unknown', '回调报告失败');
+    else if (gaps.reply === null) gap('reply', '回调报告失败', 'unknown');
   }
   const ledgerError = detail.source_facts?.selected?.error;
-  if (ledgerError) record('ledger-error', 'failed', `账本报告错误 · ${ledgerError}`);
-  // 请求级记录：已有内容步骤也保留，不用 !steps.length 当唯一条件。
-  if (row.status !== null && row.status >= 400) {
-    record('http', 'failed', `请求失败 · HTTP ${row.status}；已收到的输入与回复仍保留在步骤里`);
-  } else if (row.status === null) {
-    record('http', 'unknown', 'HTTP 状态未知');
+  // 请求级失败是这一组最强的一档：状态行跟着变红，读者不必逐行比对。
+  const requestFailed = Boolean(ledgerError) || (row.status !== null && row.status >= 400);
+  if (ledgerError) {
+    // 账本错误与 HTTP 失败是同一件事的两路证据，同屏只留一条。
+    record('upstream', 'failed', `上游报错 · ${ledgerError}`);
+  } else if (row.status !== null && row.status >= 400) {
+    record('upstream', 'failed', `请求失败 · HTTP ${row.status}`);
   }
+  if (row.status === null) gap('ledger', '无账本', 'unknown');
   if (view !== null && view.state === 'ok') {
     if (LENGTH_FINISH.has(view.finish ?? '')) {
       record('truncated', 'truncated', `回复因长度上限结束（finish=${view.finish}）；请求仍为 HTTP 成功`);
@@ -409,7 +430,16 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
     }
   }
   if (row.body_state !== 'available' && row.body_state !== 'partial') {
-    record('body', 'missing_body', `正文状态：${row.body_state}${row.miss_reason ? `（${row.miss_reason}）` : ''}`);
+    gap('body', bodyStateText(row), 'missing_body');
+  }
+  // 组级状态行放在最前：读者先看到这一组缺什么，再读内容行。无缺口时不产出。
+  const gapText = [gaps.body, gaps.reply, gaps.ledger, gaps.attribution].filter(part => part !== null).join(' · ');
+  if (gapText !== '') {
+    steps.unshift({
+      key: `${row.req_id}:flag`, reqId: row.req_id, kind: 'flag', text: gapText,
+      messageOrd: null, callOrd: null, source: null, raw: null, unrecognized: false,
+      status: requestFailed ? 'failed' : gapStatus, result: null, pairOwner: null,
+    });
   }
   return steps;
 }
@@ -494,8 +524,8 @@ export function projectTailReply(row, read) {
 // 参与角色英文标签 + 内容类型：调用由 Assistant 发出、结果显示在 Tool 上，
 // 辅助与记录表达请求用途和事件，不伪装成模型消息。工具身份改由着色 chip 承载，
 // 不再使用 Tool call / Tool result 文字小标。
-const KIND_LABEL = { user: 'User', assistant: 'Assistant', tool: 'Assistant', tool_result: 'Tool', system: 'System', record: 'Event', aux: 'Aux' };
-const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'reply', tool_result: 'tool', system: 'system', record: 'aux', aux: 'aux' };
+const KIND_LABEL = { user: 'User', assistant: 'Assistant', tool: 'Assistant', tool_result: 'Tool', system: 'System', record: 'Event', aux: 'Aux', flag: '!' };
+const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'reply', tool_result: 'tool', system: 'system', record: 'aux', aux: 'aux', flag: 'flag' };
 
 /**
  * 工具行的身份 chip 与调用侧参数段。色类只包工具名：参数摘要以普通文本跟随，
@@ -581,8 +611,11 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
     ? '' : ` <span class="bg-note" title="${esc(step.bgNote)}">${esc(step.bgNote)}</span>`;
   // 读数槽定宽右对齐：有读数才出标签，没读数的行留空，列宽与右边缘不跳。
   const readingHtml = step.reading === undefined || step.reading === null ? '' : readingChip(step.reading, step);
+  // 组级状态行只表达缺口，不伪装成一条内容：标签位是警示标记，整行按缺口强度着色。
+  // 行类与状态是稳定键的一部分之外的可变信息，缺口变化时这一行本来就该换内容。
+  const statusAttr = step.kind === 'flag' ? ` data-flag="${esc(step.status ?? 'unknown')}"` : '';
   return `<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
-<div class="compact-row${step.isError === true ? ' step-error' : ''}">
+<div class="compact-row${step.isError === true ? ' step-error' : ''}${step.kind === 'flag' ? ' step-flag' : ''}"${statusAttr}>
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${selected}">
     <span class="compact-meta" title="序号表示当前窗口内的请求 · 请求 ${ordinal}"><b>${ordinal}</b></span>
     <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>

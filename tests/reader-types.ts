@@ -71,8 +71,8 @@ void invalidStatus;
 
 const row = null as unknown as RequestRow;
 const steps = projectSteps(row, null);
-const firstKind: 'user' | 'assistant' | 'tool' | 'tool_result' | 'system' | 'record' | 'aux' = steps[0]!.kind;
-// @ts-expect-error kind是七值联合；any退化时应报TS2578。
+const firstKind: 'user' | 'assistant' | 'tool' | 'tool_result' | 'system' | 'record' | 'aux' | 'flag' = steps[0]!.kind;
+// @ts-expect-error kind是八值联合；any退化时应报TS2578。
 const invalidKind: number = steps[0]!.kind;
 void firstKind;
 void invalidKind;

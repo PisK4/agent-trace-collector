@@ -257,6 +257,12 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .row-label.reply{color:var(--k-assistant);background:var(--k-assistant-bg)}
 .row-label.system{color:var(--k-system);background:var(--k-system-bg)}
 .row-label.aux{color:var(--k-system);background:var(--k-system-bg)}
+/* 组级证据状态行：标签位是警示符号，整行按缺口强度着色——失败用 bad、其余用 warn。
+   正常请求不产出这一行，所以颜色只出现在真有缺口的组里。 */
+.row-label.flag{color:var(--warn);background:var(--warn-soft);font:600 11px var(--mono)}
+.compact-row.step-flag{background:var(--warn-soft)}
+.compact-row.step-flag[data-flag="failed"]{background:var(--bad-soft)}
+.compact-row.step-flag[data-flag="failed"] .row-label.flag{color:var(--bad)}
 /* 工具 chip 沿用 row-label 的低饱和底色模式，色类只包工具名；宽度随内容伸缩，
    超长省略号截断。参数摘要与结果正文以普通文本跟随，不进色类。 */
 .row-tint{flex:none;max-width:170px;padding:2px 5px;border-radius:3px;font:9.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -489,6 +495,12 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .chain-row dt{color:var(--muted);font-size:10.5px}
 .chain-row dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .chain-row code{font-size:10.5px;background:var(--inset);border:1px solid var(--line);border-radius:2px;padding:0 3px}
+/* 证据四行：行首是到达标记，只有异常态（未到/依赖）出颜色。 */
+.evidence-chain .chain-row{grid-template-columns:14px minmax(0,1fr)}
+.evidence-chain .ev{display:inline-block;width:14px;text-align:center;font-weight:600}
+.evidence-chain .ev.ok{color:var(--good)}
+.evidence-chain .ev.miss{color:var(--bad)}
+.evidence-chain .ev.wait{color:var(--muted)}
 .attempt{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:8px;align-items:start;padding:6px 0;border-bottom:1px dashed var(--line)}
 .attempt:last-child{border-bottom:0}
 .attempt-n{font:10px var(--mono);color:var(--muted);padding-top:2px}

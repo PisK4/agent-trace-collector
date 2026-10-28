@@ -14,9 +14,9 @@ import {
 import { esc } from './html.js';
 import { kk, partColor, partLabel } from './parts.js';
 import { contextMapShellHtml, contextRowsHtml } from './context-map.js';
-import { messagePathOf, topSystemText } from './body-model.js';
+import { messagePathOf, replyView, topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
-import { bodyLabelText } from './row-summary.js';
+import { bodyLabelText, bodyStateText } from './row-summary.js';
 import { secs, tierOf, TIER_LIMITS } from './duration.js';
 
 // 类别口径与 token 缩写的定义在 parts.js（与 context-map 共用），这里转发既有消费者。
@@ -63,14 +63,15 @@ export function renderAttemptChain(chain) {
 }
 
 /**
- * 右栏读数页：本次回复 → 请求结构 → 能力清单 → 用量与上下文 → 身份完整性（异常时）。
- * 计时与用量在末位折叠行，头部只留身份行；区块缺的跳过，不重排也不补位。
- * @param {{replyHtml: string, structureHtml: string, capabilitiesHtml: string, usageHtml: string, completenessHtml: string}} parts
+ * 右栏读数页：证据（选中组级状态行时）→ 本次回复 → 请求结构 → 能力清单 →
+ * 用量与上下文 → 身份完整性（异常时）。计时与用量在末位折叠行，头部只留身份行；
+ * 区块缺的跳过，不重排也不补位。
+ * @param {{evidenceHtml?: string, replyHtml: string, structureHtml: string, capabilitiesHtml: string, usageHtml: string, completenessHtml: string}} parts
  * @returns {string}
  */
 export function railFactsHtml(parts) {
   return [
-    parts.replyHtml, parts.structureHtml, parts.capabilitiesHtml,
+    parts.evidenceHtml ?? '', parts.replyHtml, parts.structureHtml, parts.capabilitiesHtml,
     parts.usageHtml, parts.completenessHtml,
   ].filter(html => html !== '').join('');
 }
@@ -279,6 +280,59 @@ export function systemContextOf(row, readOf) {
 }
 
 /**
+ * 证据折叠区：选中中栏组级状态行时出现在读数页顶部。四行各写一路证据自己的
+ * 到达情况，缺的那一路写明它依赖谁；「没有」只写本库没有收到，不推断上游没发。
+ * 数据全部来自已加载的行、详情与正文首片，不新增读取。
+ * @param {RequestRow} row
+ * @param {RequestDetail | null} detail
+ * @param {BodyPage | null} meta
+ * @returns {string}
+ */
+export function evidenceFoldHtml(row, detail, meta) {
+  const hook = detail?.source_facts?.hook?.successes ?? [];
+  const error = detail?.source_facts?.selected?.error ?? null;
+  const view = meta === null ? null : replyView(meta);
+  /** @param {'ok'|'miss'|'wait'} state @param {string} text */
+  const rowHtml = (state, text) =>
+    `<div class="chain-row"><dt><span class="ev ${state}" aria-hidden="true">${state === 'ok' ? '✓' : state === 'miss' ? '✗' : '?'}</span></dt><dd>${text}</dd></div>`;
+  const ledger = row.status !== null
+    ? rowHtml('ok', `HTTP ${row.status}${error !== null ? ` · ${esc(error)}` : ''}`)
+    : rowHtml('miss', '没有关联到账本行');
+  const callback = hook.includes('success')
+    ? rowHtml('ok', hook.includes('failure') ? '已收到 · 成功与失败报告并存' : '已收到')
+    : hook.includes('failure')
+      ? rowHtml('ok', '已收到 · 报告失败')
+      : rowHtml('miss', row.miss_reason === 'hook_absent'
+        ? '无关联证据 · 等满 1 小时仍没有回调关联到本笔' : '无关联证据');
+  const body = row.body_state === 'available' || row.body_state === 'partial'
+    ? rowHtml('ok', esc(bodyStateText(row)))
+    : rowHtml('miss', `${esc(bodyStateText(row))}${row.miss_reason !== null ? ` · ${esc(row.miss_reason)}` : ''}`);
+  const reply = view === null
+    ? rowHtml('wait', '依赖正文')
+    : view.state === 'ok'
+      ? rowHtml('ok', '已收到')
+      : view.state === 'absent'
+        ? rowHtml('miss', '无回复')
+        : rowHtml('wait', `依赖正文 · ${esc(view.state)}`);
+  // 结论句：整表没有一条 ok 时，读者需要一句话说明这一笔是什么，而不是一张空表。
+  const arrived = [ledger, callback, body, reply].filter(html => html.includes('class="ev ok"')).length;
+  const conclusion = arrived === 0
+    ? '<p class="note warn">这一笔只有一条孤立记录：账本、回调与正文都没有到达本库。</p>'
+    : callback.includes('class="ev miss"') && ledger.includes('class="ev ok"')
+      ? '<p class="note">本库没有这笔的回调证据。这不等于上游没有回调过：投递超时或宿主中止都会静默放弃。</p>'
+      : ledger.includes('class="ev miss"')
+        ? '<p class="note">本库没有这笔的账本证据：回调没有携带可核验的 response ID，两边各自成行，不按时间近邻合并。</p>'
+        : '';
+  return `<details class="rail-fold" data-fold="evidence:${row.req_id}" open>
+    <summary>证据</summary>
+    <div class="fold-body">
+      <dl class="chain evidence-chain">${ledger}${callback}${body}${reply}</dl>
+      ${conclusion}
+    </div>
+  </details>`;
+}
+
+/**
  * 选中来源解析：把当前选中的步骤解析成右栏的阅读目标。
  * `state.selectedStep` 是唯一选择；右栏来源只从这一步解析，不按时间跳别的请求。
  * 请求侧分支处理输入消息、承载真实内容的 assistant 消息与结果消息，按消息号定位；
@@ -288,6 +342,7 @@ export function systemContextOf(row, readOf) {
  * @param {string | null} [selectedKey] 消息列表选中的稳定键，主轨迹未投影时用于定位缓存原文。
  * @param {RequestRead | null} [read]
  * @returns {{side:'none'}
+ *   | {side:'evidence'}
  *   | {side:'request', target:'system', path:string, text:string}
  *   | {side:'request', target:'message', path:string, messageOrd:number}
  *   | {side:'reply', target:'text', path:string, blockIndex:number, text:string}
@@ -303,6 +358,8 @@ export function resolveSelectedSource(step, selectedKey = null, read = null) {
       return { side: 'request', target: 'message', path: messagePathOf(read.meta, ord), messageOrd: ord };
     }
   }
+  // 组级状态行不落在协议对象上：右栏顶部展开四路证据，不落到请求级读数页。
+  if (step !== null && step.kind === 'flag') return { side: 'evidence' };
   if (step === null || step.source === null) return { side: 'none' };
   const s = step.source;
   if (s.side === 'request') {
