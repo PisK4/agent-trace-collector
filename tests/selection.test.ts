@@ -103,46 +103,27 @@ test('locate 清全部选择并按现行顺序发效果；路由页时带 read-r
   expect(kinds(noRoute)).toEqual(['render-main', 'render-rail', 'render-crumb', 'update-url', 'scroll-group', 'ensure-read']);
 });
 
-test('select-step：配对来源进工具页并可跨请求归属 owner', () => {
-  const result = applyIntent(base(), {
+test('select-step：点击一律进读数页，不推导配对也不动工具选择', () => {
+  const result = applyIntent(base({ railTab: 'tools', toolOrd: 2, toolOwner: 9 }), {
     kind: 'select-step', reqId: 8, stepKey: '8:message:2:result:0',
-    source: { side: 'pair', ownerReq: 9, callOrd: 3 },
   });
   expect(result.state.reqId).toBe(8);
   expect(result.state.selectedStep).toBe('8:message:2:result:0');
-  expect(result.state.toolOrd).toBe(3);
-  expect(result.state.toolOwner).toBe(9); // 配对页描述 owner 请求的调用，可不等于 reqId
-  expect(result.state.toolPage).toBe('pair');
-  expect(result.state.railTab).toBe('tools');
-  expect(result.effects).toContainEqual({ kind: 'ensure-pair', owner: 9, callOrd: 3 });
+  expect(result.state.toolOrd).toBeNull();
+  expect(result.state.toolOwner).toBeNull();
+  expect(result.state.railTab).toBe('facts');
+  expect(kinds(result)).not.toContain('ensure-pair');
   expect(result.effects).toContainEqual({ kind: 'ensure-read', reqId: 8 });
   expect(result.effects).toContainEqual({ kind: 'focus-step' });
 });
 
-test('select-step：回复侧调用按 reply/call 配对，请求侧进正文页并清工具选择', () => {
-  const call = applyIntent(base(), {
-    kind: 'select-step', reqId: 7, stepKey: '7:call:1',
-    source: { side: 'reply', target: 'call', callOrd: 1, ownerReq: 7 },
-  });
-  expect(call.state.railTab).toBe('tools');
-  expect(call.state.toolOrd).toBe(1);
-  expect(call.state.toolOwner).toBe(7);
-
-  const message = applyIntent(base(), {
-    kind: 'select-step', reqId: 7, stepKey: '7:message:3',
-    source: { side: 'request', target: 'message' },
-  });
-  expect(message.state.railTab).toBe('body');
-  expect(message.state.toolOrd).toBeNull();
-  expect(message.state.toolOwner).toBeNull();
-  expect(kinds(message)).not.toContain('ensure-pair');
-
-  const record = applyIntent(base(), {
-    kind: 'select-step', reqId: 7, stepKey: '7:loading',
-    source: { side: 'none' },
-  });
-  expect(record.state.railTab).toBe('facts');
-  expect(record.state.toolOrd).toBeNull();
+test('select-step：用户、assistant、调用、结果、System 与末尾回复点击后页签一致', () => {
+  for (const key of ['8:message:2:text:0', '8:message:2:call:1', '8:message:3:result:0', '8:system', '8:reply:text:0', '8:call:1']) {
+    const result = applyIntent(base({ railTab: 'body' }), { kind: 'select-step', reqId: 8, stepKey: key });
+    expect(result.state.railTab).toBe('facts');
+    expect(result.state.toolOrd).toBeNull();
+    expect(result.state.toolOwner).toBeNull();
+  }
 });
 
 test('select-message：清工具选择；bodyTab 控制页签；missing/offPage 按现行行为保留', () => {
@@ -251,10 +232,7 @@ test('select-turn 进轮次态并带两端补读效果，请求侧选择保持',
 
 test('点轨迹任意行与导航意图清轮次：select-step、select-message、locate、open-session、刷新', () => {
   const row = { turn: 2, start_req: 7, ordinals: [4, 5], reply_req: 9 };
-  const step = applyIntent(base({ turn: 2 }), {
-    kind: 'select-step', reqId: 8, stepKey: '8:message:2',
-    source: { side: 'request', target: 'message' },
-  });
+  const step = applyIntent(base({ turn: 2 }), { kind: 'select-step', reqId: 8, stepKey: '8:message:2' });
   expect(step.state.turn).toBeNull();
 
   const message = applyIntent(base({ turn: 2 }), { kind: 'select-message', reqId: 8, stepKey: '8:message:2', bodyTab: true });

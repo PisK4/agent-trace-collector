@@ -133,8 +133,8 @@ test('窗口选择、元信息读取与并发去重的 fetch 序列', async () =
     }
     if (url.endsWith('/api/requests/1')) return respond(detail(1));
     if (url.includes('/api/requests/1/body?from=0&to=0')) return respond(bodyPage(0, 0, 45));
-    if (url.includes('/api/requests/1/body?from=0&to=40')) return respond(bodyPage(0, 40, 45));
-    if (url.includes('/api/requests/1/body?from=40&to=45')) return respond(bodyPage(40, 45, 45));
+    if (url.includes('/api/requests/1/body?from=5&to=45')) return respond(bodyPage(5, 45, 45));
+    if (url.includes('/api/requests/1/body?from=0&to=5')) return respond(bodyPage(0, 5, 45));
     if (url.includes('/api/requests/1/body?from=44&to=45')) return respond(bodyPage(44, 45, 45));
     return respond({ error: 'not_found' }, 404);
   });
@@ -153,14 +153,16 @@ test('窗口选择、元信息读取与并发去重的 fetch 序列', async () =
   await Promise.all([store.readRange(1, 44, 45), store.readRange(1, 44, 45)]);
   expect(h.urls.filter(u => u.includes('/body?from=44&to=45')).length).toBe(1);
   expect(h.urls.find(u => u.includes('/body?from=44&to=45'))).toContain('if_reading=' + TOKEN);
-  // 结构 40+5 分页；定点读 44 不推进连续历史上界。
-  await store.loadStructure(1);
-  await store.loadStructure(1);
-  const after = await store.readRequest(1);
+  // 结构首读尾片 [5,45)，再向前读 [0,5)；定点读 44 不推进已读窗口。
+  const tail = await store.loadStructure(1);
+  expect(tail.structure.back).toBe(5);
+  expect(tail.structure.next).toBe(45);
+  const after = await store.loadStructure(1);
+  expect(after.structure.back).toBe(0);
   expect(after.structure.ords).toEqual(Array.from({ length: 45 }, (_, i) => i));
   expect(after.structure.next).toBe(45);
-  expect(h.count('/body?from=0&to=40')).toBe(1);
-  expect(h.count('/body?from=40&to=45')).toBe(1);
+  expect(h.count('/body?from=5&to=45')).toBe(1);
+  expect(h.count('/body?from=0&to=5')).toBe(1);
 });
 
 test('503 与空页时旧窗口、游标与已读内容保留', async () => {
@@ -657,7 +659,7 @@ test('孤立回调的请求正文可在轨迹中读取且不冒充新增', async
     if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/1')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1, { protocol: 'chat', reply: null, reply_state: 'absent' }));
-    if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 1, {
+    if (url.includes('/body?from=0&to=1')) return respond(bodyPage(0, 1, 1, {
       protocol: 'chat', reply: null, reply_state: 'absent',
       messages: [{ ord: 0, value: { role: 'user', content: 'synthetic question' } }],
       interpretations: [{ ord: 0, role: 'user', role_state: 'known', input: { state: 'text', text: 'synthetic question', original: 'synthetic question' }, is_input: true }],
@@ -679,7 +681,7 @@ test('孤立回调的请求正文可在轨迹中读取且不冒充新增', async
   expect(steps.some(step => step.text === 'HTTP 状态未知')).toBe(true);
   expect(steps.some(step => step.text === '回调报告失败 · 未提供失败原因')).toBe(true);
   await store.loadDelta(1, 2);
-  expect(h.count('/body?from=0&to=40')).toBe(1);
+  expect(h.count('/body?from=0&to=1')).toBe(1);
 });
 
 test('孤立请求元信息读取失败后可重试正文', async () => {
@@ -692,7 +694,7 @@ test('孤立请求元信息读取失败后可重试正文', async () => {
     if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/5')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return failMeta ? respond({ error: 'unavailable' }, 503) : respond(bodyPage(0, 0, 1));
-    if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 1));
+    if (url.includes('/body?from=0&to=1')) return respond(bodyPage(0, 1, 1));
     return respond({ error: 'not_found' }, 404);
   });
   const store = createReaderStore(h.fetcher);
@@ -711,7 +713,7 @@ test('孤立请求元信息读取失败后可重试正文', async () => {
 });
 
 test('孤立请求原文分页失败可重试，工具结果不伪造配对', async () => {
-  let failFirstPage = true;
+  let failTail = true;
   const request = detail(2, {
     actor: null, actor_state: 'unknown', via: 'hook', status: null, have: 1,
     derived_state: 'dirty', prev_relation: null, delta_ordinals: null,
@@ -722,37 +724,65 @@ test('孤立请求原文分页失败可重试，工具结果不伪造配对', as
     if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/2')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 41, { protocol: 'chat' }));
-    if (url.includes('/body?from=0&to=40') && failFirstPage) return respond({ error: 'unavailable' }, 503);
-    if (url.includes('/body?from=0&to=40')) {
-      const page = bodyPage(0, 40, 41, { protocol: 'chat' });
+    if (url.includes('/body?from=1&to=41') && failTail) return respond({ error: 'unavailable' }, 503);
+    if (url.includes('/body?from=1&to=41')) return respond(bodyPage(1, 41, 41, { protocol: 'chat' }));
+    if (url.includes('/body?from=0&to=1')) {
+      const page = bodyPage(0, 1, 41, { protocol: 'chat' });
       page.messages[0]!.value = { role: 'tool', content: '<script>synthetic result</script>' };
       return respond(page);
     }
-    if (url.includes('/body?from=40&to=41')) return respond(bodyPage(40, 41, 41, { protocol: 'chat' }));
     return respond({ error: 'not_found' }, 404);
   });
   const store = createReaderStore(h.fetcher);
   await store.selectSession('k', 30);
   await store.readRequest(2);
   const failed = await store.loadDelta(2);
+  expect(failed.structure.back).toBe(0);
   expect(failed.structure.next).toBe(0);
   expect(failed.structure.error).toBe('http_503');
   expect(projectSteps(request as never, failed).find(step => step.key === '2:unassigned-more')?.text).toContain('点击重试');
-  failFirstPage = false;
+  failTail = false;
   const first = await store.loadStructure(2);
-  expect(first.structure.next).toBe(40);
-  const steps = projectSteps(request as never, first);
-  expect(steps.find(step => step.key === '2:unassigned-more')?.text).toContain('还有 1 条请求消息未读取');
+  expect(first.structure.back).toBe(1);
+  expect(first.structure.next).toBe(41);
+  const pending = projectSteps(request as never, first).find(step => step.key === '2:unassigned-more');
+  expect(pending?.text).toContain('还有 1 条更早的请求消息未读取');
+  const last = await store.loadStructure(2);
+  expect(last.structure.back).toBe(0);
+  expect(projectSteps(request as never, last).some(step => step.key === '2:unassigned-more')).toBe(false);
+  const steps = projectSteps(request as never, last);
   const result = steps.find(step => step.kind === 'tool_result');
   expect(result?.pairOwner).toBeNull();
   expect(resolveSelectedSource(result ?? null)).toEqual({ side: 'request', target: 'message', path: 'request.messages[0]', messageOrd: 0 });
   const html = renderTraceRows(request as never, steps, 1, null);
   expect(html).not.toContain('<script>synthetic result</script>');
   expect(html).toContain('&lt;script&gt;synthetic result&lt;/script&gt;');
-  const last = await store.loadStructure(2);
-  expect(last.structure.next).toBe(41);
-  expect(projectSteps(request as never, last).some(step => step.key === '2:unassigned-more')).toBe(false);
-  expect(h.count('/body?from=0&to=40')).toBe(2);
+  expect(h.count('/body?from=1&to=41')).toBe(2);
+  expect(h.count('/body?from=0&to=1')).toBe(1);
+});
+
+test('总数未知时先读第一页取 total，再读尾片', async () => {
+  const request = detail(9);
+  const h = harness(url => {
+    if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
+    if (url.endsWith('/api/requests/9')) return respond(request);
+    if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, null));
+    if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 100));
+    if (url.includes('/body?from=60&to=100')) return respond(bodyPage(60, 100, 100));
+    return respond({ error: 'not_found' }, 404);
+  });
+  const store = createReaderStore(h.fetcher);
+  await store.selectSession('k', 30);
+  await store.readRequest(9);
+  const read = await store.loadStructure(9);
+  // 第一页只为拿总数；已读窗口是尾片 [60,100)，两段之间的空洞由列表标出。
+  expect(read.structure.total).toBe(100);
+  expect(read.structure.back).toBe(60);
+  expect(read.structure.next).toBe(100);
+  expect(read.structure.ords).toEqual([...Array.from({ length: 40 }, (_, i) => i), ...Array.from({ length: 40 }, (_, i) => 60 + i)]);
+  expect(read.entries.map(entry => entry.ord)).toEqual(read.structure.ords);
+  expect(h.count('/body?from=0&to=40')).toBe(1);
+  expect(h.count('/body?from=60&to=100')).toBe(1);
 });
 
 test('孤立请求结构页部分缺失时重试不丢弃已读消息', async () => {
@@ -766,9 +796,9 @@ test('孤立请求结构页部分缺失时重试不丢弃已读消息', async ()
     if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/6')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 2));
-    if (url.includes('/body?from=0&to=40') || url.includes('/body?from=0&to=2')) {
+    if (url.includes('/body?from=0&to=2')) {
       pageReads += 1;
-      const page = bodyPage(0, url.includes('to=40') ? 40 : 2, 2);
+      const page = bodyPage(0, 2, 2);
       if (missing) page.messages = page.messages.filter(message => message.ord === 0);
       return respond(page);
     }
@@ -785,6 +815,7 @@ test('孤立请求结构页部分缺失时重试不丢弃已读消息', async ()
   expect(repeated.structure.error).toBe('body_page_gap');
   missing = false;
   const recovered = await store.loadStructure(6);
+  expect(recovered.structure.back).toBe(0);
   expect(recovered.structure.next).toBe(2);
   expect(recovered.structure.error).toBeNull();
   expect(recovered.entries.map(entry => entry.ord)).toEqual([0, 1]);
@@ -801,10 +832,10 @@ test('孤立请求结构页缺少消息时保留位置并可重试', async () =>
     if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/3')) return respond(request);
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 41));
-    if (url.includes('/body?from=0&to=40')) return respond(bodyPage(0, 40, 41));
-    if (url.includes('/body?from=40&to=41')) {
-      return respond(bodyPage(40, 41, 41, missingPage ? { messages: [], interpretations: [] } : {}));
+    if (url.includes('/body?from=1&to=41')) {
+      return respond(bodyPage(1, 41, 41, missingPage ? { messages: [], interpretations: [] } : {}));
     }
+    if (url.includes('/body?from=0&to=1')) return respond(bodyPage(0, 1, 41));
     return respond({ error: 'not_found' }, 404);
   });
   const store = createReaderStore(h.fetcher);
@@ -812,14 +843,19 @@ test('孤立请求结构页缺少消息时保留位置并可重试', async () =>
   await store.readRequest(3);
   await store.loadDelta(3);
   const failed = await store.loadStructure(3);
-  expect(failed.structure.next).toBe(40);
+  expect(failed.structure.back).toBe(0);
   expect(failed.structure.error).toBe('body_page_empty');
   expect(projectSteps(request as never, failed).find(step => step.key === '3:unassigned-more')?.text).toContain('点击重试');
   missingPage = false;
   const retry = await store.loadStructure(3);
+  expect(retry.structure.back).toBe(1);
   expect(retry.structure.next).toBe(41);
-  expect(retry.entries).toHaveLength(41);
-  expect(h.count('/body?from=40&to=41')).toBe(2);
+  expect(retry.entries).toHaveLength(40);
+  const head = await store.loadStructure(3);
+  expect(head.structure.back).toBe(0);
+  expect(head.entries).toHaveLength(41);
+  // 续读一次、失败一次、成功后重试一次：三次都读尾片区间。
+  expect(h.count('/body?from=1&to=41')).toBe(3);
 });
 
 test('孤立请求正文换版本后自动重读新消息', async () => {
@@ -835,9 +871,9 @@ test('孤立请求正文换版本后自动重读新消息', async () => {
     if (url.includes('/requests?direction=forward')) return respond({ items: [request], next_cursor: null });
     if (url.endsWith('/api/requests/4')) return respond({ ...request, reading_token: token });
     if (url.includes('/body?from=0&to=0')) return respond(bodyPage(0, 0, 1));
-    if (url.includes('/body?from=0&to=40')) {
+    if (url.includes('/body?from=0&to=1')) {
       if (conflict) { conflict = false; token = TOKEN2; return respond({ error: 'reading_changed' }, 409); }
-      return respond(bodyPage(0, 40, 1, { messages: [{ ord: 0, value: { role: 'user', content: token === TOKEN ? 'before' : 'after' } }] }));
+      return respond(bodyPage(0, 1, 1, { messages: [{ ord: 0, value: { role: 'user', content: token === TOKEN ? 'before' : 'after' } }] }));
     }
     return respond({ error: 'not_found' }, 404);
   });

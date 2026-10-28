@@ -14,7 +14,7 @@ import {
   roleTag, toolTint,
 } from './body-view.js';
 import {
-  deltaOrdinals, messageCopyText, messagePathOf, replyView, toolEntries,
+  deltaOrdinals, messageCopyText, messagePairIndexOf, messagePathOf, replyView, toolEntries,
 } from './body-model.js';
 import { esc } from './html.js';
 import { partLabel } from './parts.js';
@@ -39,7 +39,7 @@ import { applyIntent } from './selection.js';
 import { createMainView } from './trace-dom.js';
 import { createTracePreparation } from './trace-preparation.js';
 import { renderTracePair } from './trace-pair.js';
-import { projectSteps, renderTraceRow } from './trace-view.js';
+import { projectSteps, projectTailReply, renderTraceRow, tailEligibleIds as tailIds } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
 import { railTabFromParam, railTabParam, resolveTraceTarget, traceIdFromParam } from './url-route.js';
 
@@ -73,6 +73,12 @@ if (typeof document !== 'undefined') {
    * @type {Map<number, import('./trace-view.js').TraceStep[]>}
    */
   const retainedSteps = new Map();
+  /**
+   * 末尾回复投影的缓存：与组投影分开存，版本作废时随组一起退回或隐藏，
+   * 不把旧回复冒充当前。换会话与刷新即清。
+   * @type {Map<number, {steps: import('./trace-view.js').TraceStep[], eligible: boolean}>}
+   */
+  const retainedTail = new Map();
   /**
    * 上下文明细弹窗：tile、图例与列表行共用的选择动作。读取走注入的同一 fetcher，
    * 代次捕获在模块内，晚到响应不进已切换的弹窗。
@@ -168,7 +174,8 @@ if (typeof document !== 'undefined') {
           const viewport = scroller(), top = viewport.scrollTop;
           requestAnimationFrame(() => {
             if (nav !== navEpoch || selection !== selectionEpoch || viewport !== scroller() || viewport.scrollTop !== top) return;
-            document.querySelector(`.trace-group[data-req="${CSS.escape(String(fx.reqId))}"]`)
+            // 同号可能相邻出现末尾回复组，按组键定位承载组。
+            document.querySelector(`.trace-group[data-group-key="req:${CSS.escape(String(fx.reqId))}"]`)
               ?.scrollIntoView({ block: 'center', behavior: state.revealed && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'instant' });
           });
           break;
@@ -272,19 +279,23 @@ if (typeof document !== 'undefined') {
     if (await preparation.prepareWindow(state.revealed ? null : state.reqId)) state.revealed = true;
   }
 
-  /** 换会话与显式刷新清空准备结论和保留投影。 */
+  /** 换会话与显式刷新清空准备结论、保留投影与末尾回复缓存。 */
   function resetReading() {
     preparation.reset();
     retainedSteps.clear();
+    retainedTail.clear();
   }
 
   /**
-   * 一笔读取落地是否影响右栏：当前请求、工具配对调用方与选中轮次两端之外的组，
-   * 准备完成只提交中栏，右栏不随批次重建。
+   * 一笔读取落地是否影响右栏：当前请求、工具配对调用方、选中轮次两端与当前请求的
+   * 已确认前驱之外的组，准备完成只提交中栏，右栏不随批次重建。前驱参与读数页的
+   * 消息配对入口，换版后必须重绘，不能拿旧前驱的调用表继续给入口。
    * @param {number} id
    */
   function affectsRail(id) {
     if (id === state.reqId || id === state.toolOwner) return true;
+    const detail = currentRead()?.detail ?? null;
+    if (detail !== null && detail.prev_relation === 'confirmed' && id === detail.prev_req_id) return true;
     if (state.turn !== null) {
       const turn = turnOf(state.turn);
       if (turn !== null && (id === turn.start_req || id === turn.reply_req)) return true;
@@ -505,6 +516,19 @@ if (typeof document !== 'undefined') {
   }
 
   /**
+   * 产出请求（已确认前驱）的推理读数与调用表：承载 delta 里的调用行按 call id
+   * 对齐配对状态与执行读数，assistant 文本行按唯一消息取推理段。前驱不在窗口
+   * 或未读到时返回 null，调用行留空，不猜归属。
+   * @param {number} prevId
+   */
+  function prevInfoOf(prevId) {
+    const prev = store.peekRequest(prevId);
+    const detail = prev?.detail ?? null;
+    if (detail === null) return null;
+    return { reasoningMs: detail.reasoning_span_ms, calls: detail.tool_calls };
+  }
+
+  /**
    * 一笔请求的步骤投影。准备完成的组用当前读取投影并更新保留投影；未备齐时
    * 退回最近一次完整投影，旧结果由 stale 声明归属；两者都没有才显示准备行。
    * @param {RequestRow} r
@@ -514,7 +538,7 @@ if (typeof document !== 'undefined') {
   function stepsOf(r) {
     const read = store.peekRequest(r.req_id);
     const project = () => projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
-      store.peekBgJobs().items);
+      store.peekBgJobs().items, prevInfoOf);
     if (preparation.has(r.req_id) && read !== null && read.detail !== null) {
       const steps = project();
       retainedSteps.set(r.req_id, steps);
@@ -536,9 +560,56 @@ if (typeof document !== 'undefined') {
   }
 
   /**
+   * 末尾回复组：没有后继承载的链末回复单独成组。只在会话完整加载时计算；
+   * 历史加载不改已显示行的归属与顺序。读取未备齐时退回缓存并标 stale，
+   * 缓存也没有就不成组，不把旧回复冒充当前。
+   * @param {RequestRow} r
+   * @returns {{steps: import('./trace-view.js').TraceStep[], stale: 'reading' | 'failed' | null} | null}
+   */
+  function tailOf(r) {
+    const read = store.peekRequest(r.req_id);
+    if (preparation.has(r.req_id) && read !== null && read.detail !== null) {
+      const tail = projectTailReply(r, read);
+      retainedTail.set(r.req_id, tail);
+      return tail.eligible ? { steps: tail.steps, stale: null } : null;
+    }
+    const retained = retainedTail.get(r.req_id);
+    if (retained !== undefined && retained.eligible) {
+      return {
+        steps: retained.steps,
+        stale: read !== null && read.status === 'failed' ? 'failed' : 'reading',
+      };
+    }
+    return null;
+  }
+
+  /**
+   * 末尾组的请求集合：会话已完整加载、请求不是辅助、没有已加载的非辅助请求把它
+   * 当作已确认前驱（后继承载），且它之后没有前驱未知的请求。判定本身是纯函数，
+   * 这里只把窗口行整理成它要的形状：前驱未定包含详情未准备与关系不是 confirmed/first。
+   * @returns {Set<number>}
+   */
+  function tailEligibleIds() {
+    const window = store.getWindow();
+    const rows = currentRows().filter(row => row.purpose_chain !== 'exclude' && row.chain_role !== 'aux');
+    const entries = rows.map(row => {
+      const read = preparation.has(row.req_id) ? store.peekRequest(row.req_id) : null;
+      const detail = read?.detail ?? null;
+      const confirmed = detail !== null && detail.prev_relation === 'confirmed';
+      return {
+        id: row.req_id,
+        prevId: confirmed && typeof detail.prev_req_id === 'number' ? detail.prev_req_id : null,
+        undetermined: detail === null || (detail.prev_relation !== 'confirmed' && detail.prev_relation !== 'first'),
+      };
+    });
+    return tailIds(entries, window.newerCursor === null && !window.loading);
+  }
+
+  /**
    * 中栏模型：会话头、轮次带与步骤列表一次读齐，交给 trace-dom 键控提交。
    * 步骤行的 HTML 不含选择（默认 false），选择由视图单独写回高亮；
    * 请求组容器自身的可见结果为空串，内容按稳定步骤键逐行比较。
+   * 组按行顺序输出「承载组、末尾组、承载组、末尾组……」；末尾组与承载组同号相邻。
    * @returns {import('./trace-dom.js').MainModel}
    */
   function mainModel() {
@@ -548,8 +619,18 @@ if (typeof document !== 'undefined') {
     // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载后续
     // 记录后 rows.length 累计，重绘时重算，不按首次加载上限截断。
     const ordDigits = Math.max(1, String(rows.length).length);
-    // 结果行的调用方前缀：调用方正文在窗口缓存内时给同款摘要，缓存外降级只工具名。
-    const callOf = (/** @type {number} */ ownerReq, /** @type {number} */ callOrd) => {
+    /**
+     * 结果行的调用方摘要：同组调用行优先（结果与调用同在承载 delta 里），其次
+     * 回退产出请求缓存；两处都没有时降级为只工具名。保留投影不回退：旧结果行
+     * 不能借用依赖换版后的新调用表，否则会把新调用的名字与参数配到旧结果上。
+     * @param {import('./trace-view.js').TraceStep[]} steps
+     * @param {boolean} fallback 本组是否使用当前读取投影
+     */
+    const callOfFor = (steps, fallback) => (/** @type {number} */ ownerReq, /** @type {number} */ callOrd) => {
+      const same = steps.find(step => step.kind === 'tool' && step.callOwner !== undefined
+        && step.callOwner !== null && step.callOwner.reqId === ownerReq && step.callOwner.callOrd === callOrd);
+      if (same !== undefined) return { name: same.toolName ?? '', inputText: same.toolInput ?? '' };
+      if (!fallback) return null;
       const ownerRead = store.peekRequest(ownerReq);
       if (ownerRead === null || ownerRead.meta === null) return null;
       const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
@@ -561,23 +642,41 @@ if (typeof document !== 'undefined') {
       : window.newerCursor !== null
         ? '<div class="history-loader"><button id="load-later" class="history-button">↓ 加载后续记录</button></div>'
         : '';
-    const groups = rows.map(r => {
+    const tails = tailEligibleIds();
+    /** @type {import('./trace-dom.js').GroupModel[]} */
+    const groups = [];
+    for (const r of rows) {
       const { steps, stale, placeholder } = stepsOf(r);
       const ordinal = ordinalOf(r.req_id);
+      const callOf = callOfFor(steps, stale === null);
+      const status = r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success';
       /** @type {import('./trace-dom.js').CommitItem[]} */
       const items = [];
       for (const step of steps) {
         items.push({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) });
       }
-      return {
+      groups.push({
+        key: `req:${r.req_id}`,
         reqId: r.req_id,
-        status: r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success',
+        status,
         current: r.req_id === state.reqId,
         stale,
         placeholder,
         rows: items,
-      };
-    });
+      });
+      // 末尾组不挂请求级 aria-current：它是同一请求的回复，不是第二笔请求。
+      const tail = tails.has(r.req_id) ? tailOf(r) : null;
+      if (tail === null) continue;
+      groups.push({
+        key: `tail:${r.req_id}`,
+        reqId: r.req_id,
+        status,
+        current: false,
+        stale: tail.stale,
+        placeholder: false,
+        rows: tail.steps.map(step => ({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) })),
+      });
+    }
     return {
       headHtml: sessionHead(),
       bandHtml: band,
@@ -723,6 +822,16 @@ if (typeof document !== 'undefined') {
    * 读数页：本次回复（默认展开）→ 请求结构 → 能力清单 → 用量与上下文（默认展开，末位）→ 身份完整性（异常时）。
    * 能力与结构默认折叠；正常态不带状态标签（异常才出现）。
    */
+  /**
+   * 产出请求（已确认前驱）的详情：承载 delta 里的调用行与消息详情按 call_id 对齐
+   * 配对坐标与执行读数。前驱不在窗口、未读到或关系未确认时返回 null，留空不猜。
+   * @param {RequestDetail | null} detail
+   */
+  function prevDetailOf(detail) {
+    if (detail === null || detail.prev_relation !== 'confirmed' || typeof detail.prev_req_id !== 'number') return null;
+    return store.peekRequest(detail.prev_req_id)?.detail ?? null;
+  }
+
   function railFacts() {
     const r = currentRow();
     if (r === null) return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
@@ -758,16 +867,23 @@ if (typeof document !== 'undefined') {
         <div class="fold-body">${renderReply(view, tools, String(r.req_id))}${truncNote}</div>
       </details>`;
     }
+    // 选中消息行时结构折叠展开并选中该消息；用户之后仍可收起（folds 的显式
+    // false 优先于自动展开）。请求级行与无选择保持用户自己的开合状态。
+    const source = resolveSelectedSource(currentSelectedStep(r), state.selectedStep, read);
+    const messageOrd = source.side === 'request' && source.target === 'message' ? source.messageOrd : null;
+    const foldKey = `structure:${r.req_id}`;
+    const foldState = folds.get(foldKey);
     const structureHtml = structureFoldHtml({
       reqId: r.req_id, row: r, meta,
       entries: read?.entries ?? [],
-      structure: read?.structure ?? { next: 0, total: null, ords: [], loading: false, error: null },
-      open: folds.get(`structure:${r.req_id}`) === true,
-      selected: structureSelected.get(r.req_id) ?? null,
+      structure: read?.structure ?? { back: 0, next: 0, total: null, ords: [], loading: false, error: null },
+      open: foldState ?? (messageOrd !== null),
+      selected: messageOrd ?? structureSelected.get(r.req_id) ?? null,
       delta: detail === null ? null : deltaOrdinals(detail),
       deltaState: read?.delta ?? null,
       parseState: meta?.parse_state ?? null,
       relation: relationTextOf(r.req_id),
+      pairOf: messagePairIndexOf(detail, prevDetailOf(detail)),
     });
     return railFactsHtml({
       replyHtml, structureHtml,
@@ -859,8 +975,15 @@ if (typeof document !== 'undefined') {
   /** 当前请求的选中步骤对象；无选择或选中的是别的请求时返回 null。 @param {RequestRow} r */
   function currentSelectedStep(r) {
     if (state.selectedStep === null || !state.selectedStep.startsWith(`${r.req_id}:`)) return null;
+    const key = state.selectedStep;
     const projected = stepsOf(r);
-    return projected.stale === null ? projected.steps.find(item => item.key === state.selectedStep) ?? null : null;
+    if (projected.stale !== null) return null;
+    const direct = projected.steps.find(item => item.key === key);
+    if (direct !== undefined) return direct;
+    // 末尾组只有当前版本的投影能解析来源。
+    if (!key.startsWith(`${r.req_id}:reply:`) && !key.startsWith(`${r.req_id}:call:`)) return null;
+    const tail = tailOf(r);
+    return tail !== null && tail.stale === null ? tail.steps.find(item => item.key === key) ?? null : null;
   }
 
   function railBody() {
@@ -935,7 +1058,7 @@ if (typeof document !== 'undefined') {
     } else if (source.side === 'request') {
       const chosen = read.entries.find((/** @type {{ord: number}} */ entry) => entry.ord === source.messageOrd) ?? null;
       const path = messagePathOf(page, source.messageOrd);
-      body = chosen !== null ? renderMessageDetail(chosen, path)
+      body = chosen !== null ? renderMessageDetail(chosen, path, messagePairIndexOf(detail, prevDetailOf(detail)))
         : `<div class="rail-empty"><b>消息未读取</b>${path === '' ? `消息 #${source.messageOrd}` : esc(path.replace(/^request\./, ''))} 不在已加载的分片里；读取完成后回到这一步。</div>`;
     } else if (source.side === 'reply' && source.target === 'text') {
       body = `${truncNote}${renderReplyBlockDetail(source.path, source.text)}`;
@@ -947,9 +1070,11 @@ if (typeof document !== 'undefined') {
       body = `<div class="rail-empty"><b>没有可读的回复</b>${esc(bodyNotice(page) || '这一笔只有请求。')}</div>`;
     }
     const structure = read.structure;
-    // 结构总数未读时用元信息页的 total 判断：正文页签也能发起首次结构读取。
+    // 结构总数未读时用元信息页的 total 判断；未读条件是「前面还有更早的消息」，
+    // 与读数页折叠同一口径，首读由结构折叠发起。
     const knownTotal = structure.total ?? (page.total ?? null);
-    const unread = knownTotal !== null && knownTotal !== undefined && structure.next < knownTotal;
+    const unread = (knownTotal !== null && knownTotal !== undefined && structure.back > 0)
+      || structure.error !== null;
     const { button: moreButton, note: structureError } = structureMoreParts(structure, r.req_id, knownTotal);
     return `${bodyNotice(page) ? `<p class="rail-note" style="margin-bottom:8px">${esc(bodyNotice(page))}</p>` : ''}
       ${body}
@@ -1019,12 +1144,55 @@ if (typeof document !== 'undefined') {
     // 滚动只在「同请求同页签的重绘」里保持；页签切换与换请求都回到顶部，行为可预期。
     // 轮次态的键带轮号：逐轮翻阅时滚动回顶，不把上一轮的阅读位置带过去。
     const key = `${state.turn ?? ''}:${state.reqId}:${state.railTab}`;
-    const keep = key === lastRailKey ? rail.scrollTop : 0;
+    const sameRail = key === lastRailKey;
+    const keep = sameRail ? rail.scrollTop : 0;
+    const listAnchor = sameRail ? captureMsgAnchor(rail) : null;
     rail.innerHTML = railBody();
     restoreFolds(rail);
+    // 结构列表是独立滚动区：重绘按首条可见消息归位，首次到达落到最新一条。
+    restoreMsgList(rail, listAnchor);
     restoreScroll(rail, keep);
     lastRailKey = key;
     wireContextMap();
+  }
+
+  /**
+   * 结构列表的滚动锚点：右栏重绘会重建内层列表，scrollTop 不保留。记下当前
+   * 可见的首条消息序号与相对偏移，重绘后按它归位；没有锚点时交给恢复方落底。
+   * @param {HTMLElement} rail
+   * @returns {{ord: number, offset: number} | null}
+   */
+  function captureMsgAnchor(rail) {
+    const list = /** @type {HTMLElement | null} */ (rail.querySelector('.rail-fold .msg-list'));
+    if (list === null) return null;
+    const box = list.getBoundingClientRect();
+    for (const node of list.querySelectorAll('li[data-ord]')) {
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom <= box.top) continue;
+      return { ord: Number(/** @type {HTMLElement} */ (node).dataset.ord), offset: rect.top - box.top };
+    }
+    return null;
+  }
+
+  /**
+   * 结构列表的滚动恢复：锚点还在就按序号与偏移归位（「加载更早」前插不把读者
+   * 拉回顶部）；锚点不在（首读、换请求或列表刚出现）时落到最新一条——读取方向
+   * 是尾片优先。
+   * @param {HTMLElement} rail
+   * @param {{ord: number, offset: number} | null} anchor
+   */
+  function restoreMsgList(rail, anchor) {
+    const list = /** @type {HTMLElement | null} */ (rail.querySelector('.rail-fold .msg-list'));
+    if (list === null) return;
+    if (anchor !== null) {
+      const item = list.querySelector(`li[data-ord="${anchor.ord}"]`);
+      if (item !== null) {
+        const offset = item.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        list.scrollTop += offset - anchor.offset;
+        return;
+      }
+    }
+    list.scrollTop = list.scrollHeight;
   }
 
   function renderAll() {
@@ -1255,12 +1423,15 @@ if (typeof document !== 'undefined') {
       dispatch({ kind: 'select-delta', reqId: id });
       return;
     }
-    // 旧投影仅供显示；来源必须从当前读取投影取得。
+    // 旧投影仅供显示；消息选择只从当前版本取得来源。
     const projected = stepsOf(row);
     const step = projected.stale === null ? projected.steps.find(item => item.key === key) ?? null : null;
-    const source = resolveSelectedSource(step);
-    // 配对判定与页签映射在选择转换里：这里只解析步骤来源。
-    dispatch({ kind: 'select-step', reqId: id, stepKey: String(key), source });
+    const source = step?.source ?? null;
+    if (source !== null && source.side === 'request' && typeof source.messageOrd === 'number') {
+      structureSelected.set(id, source.messageOrd);
+      folds.set(`structure:${id}`, true);
+    }
+    dispatch({ kind: 'select-step', reqId: id, stepKey: String(key) });
   }
 
   /** @param {number} id */
@@ -1438,7 +1609,18 @@ if (typeof document !== 'undefined') {
     if (deltaMore !== null) { void resumeDelta(Number(deltaMore.dataset.deltaMore)); return; }
     const structureBack = /** @type {HTMLElement | null} */ (t.closest('[data-structure-back]'));
     if (structureBack !== null) {
-      if (structureSelected.delete(Number(structureBack.dataset.structureBack))) renderRail();
+      structureSelected.delete(Number(structureBack.dataset.structureBack));
+      // 选中步骤同样会把结构折叠钉在消息详情上：返回列表要一并退出步骤选择，
+      // 否则按钮点下去没有可见变化。
+      const r = currentRow();
+      const step = r === null || state.selectedStep === null ? null : currentSelectedStep(r);
+      const source = step === null ? null : resolveSelectedSource(step, state.selectedStep, currentRead());
+      if (source !== null && source.side === 'request' && source.target === 'message') {
+        dispatch({ kind: 'clear-step' });
+        renderMain();
+      } else {
+        renderRail();
+      }
       return;
     }
     // 会话汇总折叠区的条目点击：先开右栏条目列表，逐项跳配对页或定位请求。

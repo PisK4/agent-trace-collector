@@ -3,11 +3,11 @@ import { routeReadTarget } from './url-route.js';
 
 /**
  * 选择状态的唯一写者：纯转换函数，无 DOM、无网络、无 store。
- * 装配层解析事件与步骤来源后发意图；这里集中维护选择元组的规则——
- * 配对来源（pair 或 reply/call）设 toolOrd 与 toolOwner，toolOwner 可以不等于
- * reqId（配对页描述的是 owner 请求的调用）；页签由步骤来源映射；missing 与
- * offPage 互斥，由导航类意图清除；消息选择（右栏与结构折叠）不改页签、
- * 不清 missing/offPage，沿用现行行为。转换只输出新状态与待执行效果，
+ * 装配层解析事件后发意图；这里集中维护选择元组的规则——
+ * 点击步骤一律进读数，工具选择只在显式打开配对页或工具页时写入，toolOwner
+ * 可以不等于 reqId（配对页描述的是 owner 请求的调用）；missing 与 offPage
+ * 互斥，由导航类意图清除；消息选择（右栏与结构折叠）不改页签、不清
+ * missing/offPage，沿用现行行为。转换只输出新状态与待执行效果，
  * URL、读取、渲染、焦点与滚动由页面执行器完成。
  * 路由读取策略集中在此：导航完成（nav-settled）与页签选择统一按
  * routeReadTarget 计算，装配层不再各自接线。
@@ -30,7 +30,6 @@ import { routeReadTarget } from './url-route.js';
 
 /**
  * @typedef {{side: 'none'}
- *   | {side: 'pair', ownerReq: number, callOrd: number}
  *   | {side: 'request', target: 'message' | 'system'}
  *   | {side: 'reply', target: 'call' | 'text' | 'block', callOrd?: number, ownerReq?: number}
  * } SelectedSource 装配层经 resolveSelectedSource 解析出的步骤来源，只带转换需要的字段。
@@ -56,7 +55,7 @@ import { routeReadTarget } from './url-route.js';
  *   | {kind: 'select-first', firstReqId: number | null}
  *   | {kind: 'refresh-start'}
  *   | {kind: 'locate', reqId: number}
- *   | {kind: 'select-step', reqId: number, stepKey: string, source: SelectedSource}
+ *   | {kind: 'select-step', reqId: number, stepKey: string}
  *   | {kind: 'select-message', reqId: number, stepKey: string, bodyTab: boolean}
  *   | {kind: 'select-delta', reqId: number}
  *   | {kind: 'open-tool', reqId: number, callOrd: number}
@@ -153,17 +152,11 @@ export function applyIntent(state, intent) {
       };
     }
     case 'select-step': {
-      const source = intent.source;
-      const pair = source.side === 'pair' || (source.side === 'reply' && source.target === 'call');
-      const callOrd = pair && source.callOrd !== undefined ? source.callOrd : null;
-      const owner = pair && source.ownerReq !== undefined ? source.ownerReq : intent.reqId;
+      // 点击一行一律进读数：页签固定 facts，工具选择清空；配对页只由「配对两端」
+      // 与工具页列表等显式动作经 open-pair / open-tool 打开，不在这里推导。
       const next = {
         ...state, reqId: intent.reqId, selectedStep: intent.stepKey,
-        toolOrd: pair ? callOrd : null,
-        toolOwner: pair ? owner : null,
-        toolPage: 'pair',
-        railTab: pair ? 'tools'
-          : source.side === 'request' || source.side === 'reply' ? 'body' : 'facts',
+        toolOrd: null, toolOwner: null, toolPage: 'pair', railTab: 'facts',
         missingReqId: null, offPageReqId: null, turn: null,
       };
       /** @type {Effect[]} */
@@ -171,7 +164,6 @@ export function applyIntent(state, intent) {
         { kind: 'open-rail' }, { kind: 'render-main' }, { kind: 'render-rail' }, { kind: 'render-crumb' },
         { kind: 'update-url' }, { kind: 'focus-step' }, { kind: 'ensure-read', reqId: intent.reqId },
       ];
-      if (pair) effects.push({ kind: 'ensure-pair', owner: owner, callOrd: /** @type {number} */ (callOrd) });
       return { state: next, effects };
     }
     case 'select-message': {

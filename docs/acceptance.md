@@ -24,6 +24,60 @@
 
 本轮没有执行生产真实流量验收，没有重启生产采集器或写生产库。
 
+## 中栏按承载请求的 delta 分组（合成 + 真实流量只读，2026-10-28）
+
+前提：worktree `atc-request-delta-groups` 的 `feat/request-delta-groups` 分支（基于 master `19d35a6`）。合成用例进 `bun test`（11 个文件 211 例，`bun run typecheck` 通过）；页面项用 ego lite 操作 worktree 检出的生产页面，数据来自生产库的在线快照（`sqlite3 .backup` 复制到临时数据目录，临时 collector 端口 8771，生产采集器未停），正文不进 fixture 与本文件。做法与动机见[中栏按承载请求的 delta 分组](../.agents/notes/implemented/feature/2026-10-28-request-delta-trace-groups.md)。
+
+### 真实会话只读核对
+
+会话 a58b0a51-0182-4c08-84b0-3dd808dccb91，窗口序号取自页面：
+
+| 验收项 | 结果 |
+| --- | --- |
+| 组 4（40059） | assistant 文本 1 行、调用 2 行（Read、Bash）、结果 2 行；与 40059 的可信 delta `[2,3]` 一致 |
+| 组 2（40057） | 只含顶层 System 与两条消息行（用户命令、消息级 System），没有回复行；40057 的回复出现在组 4 开头 |
+| 点击组 4 调用行 | 右栏 `req 40059`、页签「读数」、请求结构折叠展开并选中 `messages[2]`，选中行带 `aria-current="true"` |
+| 工具往返 | 右栏 Read 行显示 `Read · web/body-model.js · 330–410 行`，与中栏同一摘要一致；完整参数在 chip 的 `title` 里，行内无原始 JSON |
+| 63/61 错位 | 点组 6（40063）的调用行，右栏是 `req 40063` 的结构（8 条消息）并选中 `messages[6]`，不再显示 61 的结构 |
+| 结构尾片 | 请求 43829（234 条消息，辅助请求）：首读 `[194,234)`，列表 40 条、落在底部；按钮「加载更早（已读 194–234 / 234）」在列表上方；加载一片后 80 条（154–233），首条可见消息的位置不动 |
+| 上下文 basename | 记忆条目在列表与 tile 里显示 `AGENTS.md`，`title` 与 `aria-label` 带完整路径，行内没有目录前缀；弹窗头同样显示 `AGENTS.md`、`title` 是完整路径；集合块成员名单对非路径名字原样 |
+
+### 合成覆盖
+
+| 项 | 结果 |
+| --- | --- |
+| 投影 | delta 内 assistant 文本块与调用块各出一行；调用无结果不出结果行；结果无同组调用不补调用行；未归属与分支路径不变 |
+| 末尾组 | 只在会话完整加载时出现；后继承载、其后前驱未知、辅助请求都抑制；多个链末各成一组；加载更早历史不改已显示末尾组 |
+| 组与结构 | 组键 `req:<id>`/`tail:<id>`；选中消息进结构；`select-step` 不产生 `ensure-pair` |
+| 点击与配对 | 中栏所有内容行与普通记录行点击后 `railTab==='facts'`；配对页只由「配对两端」按钮与工具页打开；按钮只在 `call_id` 确认两端时出现 |
+| 结构分页 | 首读尾片、向前分页、`back` 到 0 后按钮消失、空洞不推进 `back`、`total` 未知的两次读取；按钮文案与位置、`unread` 条件、尾片落底与向前加载的滚动锚点 |
+| 工具往返 | Read/Edit/Bash/Skill 行文本与 `toolSummary` 参数段一致；已知工具行内无原始 JSON；`title` 含完整参数；未命名工具沿用固定叫法 |
+| 上下文名字 | tile、列表行、弹窗头与成员名单只显示 basename；完整名字进 `title` 与 `aria-label`；轮次与折叠桶固定叫法不变；`iidOf` 与点击键不变 |
+
+### 页面验收中发现并修掉
+
+首次打开临时采集器页面时整页停在「正在读取本机会话…」。原因是静态白名单 `STATIC_FILES` 没有登记新模块 `web/tool-summary.js`，`app.js` 的 import 链整块加载失败（浏览器里动态 import 报 `Failed to fetch dynamically imported module`）。补上白名单条目并跑 `tests/http.test.ts`（含目录覆盖断言），重开页面后上述检查全部通过。合成套件里已有覆盖白名单的守门用例，本轮提交前只跑了窄测而遗漏它；`http.test.ts` 已并入本轮验收命令列表。
+
+### 未执行
+
+无 schema、端点、依赖与派生版本变化，未对生产采集器做任何写操作或重启；真实会话核对读的是在线快照的临时副本，采集器与主检出未动。页面截图未采集，几何与选中态由 DOM 断言代替。合入 master 与部署未在本轮执行。
+
+## 轨迹阅读分支合入主分支后的合并态（合成，2026-10-28）
+
+前提：worktree `atc-trace-reading-architecture` 的 `fix/trace-reading-architecture` 分支合并 master `ff2e78b` 后的工作区，冲突已按两端语义整合，未提交合并。测试只用合成数据；页面项用 ego lite 打开 worktree 检出的 `prototypes/synthetic-server.ts`（端口 8770，生产采集器未动），加载生产页面与生产读取实现。
+
+| 验收项 | 合成结果 |
+| --- | --- |
+| 窄测与类型 | body-view、trace-view、web、trace-pair、trace-commit、selection、trace-preparation、reader-store 共 177 项通过；`bun run typecheck` 通过 |
+| 点击统一读数 | 点组 3 的工具结果行，右栏 `req 103`、首屏是读数页（本次回复 → 请求结构 → 能力 → 用量） |
+| 消息详情配对入口 | 结构折叠自动选中 `messages[4]`，结果块按钮指向 `data-tool-owner="102" data-call-ord="0"`；点开后工具页显示「read_file · 调用 #0」与概览/参数/配对/Schema 四页 |
+| 路径一致性守卫 | `tests/body-view.test.ts` 覆盖：路径一致给按钮，路径未知、`input`/`messages` 混合键、同 `call_id` 落在另一条消息都不给 |
+| 结构尾片 | 45 条消息首读尾片，按钮「加载更早（已读 5–45 / 45）」；点一次后 `back` 到 0，按钮消失 |
+| 返回消息列表 | 点按钮后显示 40 条消息列表与「加载更早（已读 5–45 / 45）」，消息详情路径消失，中栏步骤高亮清除 |
+| 末尾组 | 组键 `req:117`/`req:118`/`req:119`/`tail:119`；末尾组 `aria-current="false"`，点其回复行打开读数页 |
+
+未在本轮浏览器复现前驱换版重绘与保留投影降级，两项由窄测与代码核查覆盖；真实流量验收未执行，生产采集器与生产库未动。
+
 ## 链角色不确定闭包（真实流量 rebuild，2026-10-28）
 
 前提：master `cf7c2b3`（`GROUP_ALGORITHM=5`）已合并、采集器已重启加载新代码后，对调查报告的 hermes 会话（51 笔请求）执行 `maintain rebuild`。做法与动机见[链角色 note](../.agents/notes/implemented/bug-fix/2026-10-27-chain-role-uncertainty-propagation.md)；这里只记录聚合计数，会话正文、账号与令牌不进本文件。

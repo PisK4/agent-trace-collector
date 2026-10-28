@@ -42,7 +42,7 @@ test('滚动恢复夹在可滚动范围内', () => {
 
 /** @type {Record<string, unknown>} 可读正文的最小行数据 */
 const factsRow = { body_state: 'available', miss_reason: null };
-const emptyStructure = { next: 0, total: 45, ords: [], loading: false, error: null };
+const emptyStructure = { back: 0, next: 0, total: 45, ords: [], loading: false, error: null };
 /** @param {{state: string, items: {name: string, description?: string, schema: unknown, source?: string}[], reason: string | null}} tools */
 const capsOf = (tools: { state: string; items: { name: string; description?: string; schema: unknown; source?: string }[]; reason: string | null }) => ({
   tools, skills: { state: 'present', items: [], reason: null },
@@ -95,9 +95,19 @@ test('结构折叠：total=45、ords=[] 时有数量没有消息；正文回收�
   });
   expect(closed).toContain('45 条消息');
   expect(closed).not.toContain('msg-list');
-  expect(closed).toContain('data-structure-more="1"');
-  // 未读取也给出说明，不给空消息列表冒充。
+  // 首读由展开触发，之前没有「加载更早」；未读取也给出说明，不给空消息列表冒充。
+  expect(closed).not.toContain('data-structure-more');
   expect(closed).toContain('尚未读取');
+  expect(closed).toContain('从末尾读取最近 40 条');
+  // 尾片已读、前面还有更早的消息：按钮在列表上方，文案说明已读窗口。
+  const tail = structureFoldHtml({
+    reqId: 1, row: factsRow, meta: { total: 45 }, entries: [entryOf(5, 'm5')],
+    structure: { ...emptyStructure, back: 5, next: 45, ords: [5] },
+    open: true, delta: new Set<number>(), relation: '',
+  });
+  expect(tail).toContain('data-structure-more="1"');
+  expect(tail).toContain('加载更早（已读 5–45 / 45）');
+  expect(tail.indexOf('加载更早')).toBeLessThan(tail.indexOf('msg-list'));
   // open 状态由调用方传入（页面来自 folds 表），由重绘保持。
   const open = structureFoldHtml({
     reqId: 1, row: factsRow, meta: { total: 45 }, entries: [],
@@ -231,14 +241,14 @@ test('System 上下文按已确认前驱比较，前驱不可读只声明当前'
   expect(systemContextOf(row as never, (noSystem as never))).toBeNull();
 });
 
-test('结构并集：稀疏已读的 99 可见，40–98 标未读，游标仍为 40', () => {
+test('结构并集：稀疏已读的 99 可见，40–98 标未读，已读窗口不被缓存尾部改写', () => {
   const entries = Array.from({ length: 40 }, (_, i) => entryOf(i, `m${i}`));
   entries.push({ ...entryOf(99, 'm99'), input: null, isInput: false });
   const html = structureFoldHtml({
     reqId: 1, row: factsRow, meta: { total: 100 },
     entries,
     structure: {
-      next: 40, total: 100,
+      back: 60, next: 100, total: 100,
       ords: Array.from({ length: 40 }, (_, i) => i), loading: false, error: null,
     },
     open: true,
@@ -248,10 +258,10 @@ test('结构并集：稀疏已读的 99 可见，40–98 标未读，游标仍�
   });
   // 缓存尾部的稀疏消息不被游标过滤掉。
   expect(html).toContain('data-msg="99"');
-  // 相邻序号之间的空洞标明未读；连续游标语义不变。
+  // 相邻序号之间的空洞标明未读；已读窗口仍是尾片。
   expect(html).toContain('#40–#98 未读取');
   expect(html).toContain('data-structure-more="1"');
-  expect(html).toContain('已读 40 / 100');
+  expect(html).toContain('已读 60–100 / 100');
   // 已完成的增量只显示数量，不给续读按钮。
   expect(html).not.toContain('data-delta-more');
 });
@@ -260,7 +270,7 @@ test('增量未完成给续读入口，失败给重试并保留未读位置', ()
   const base = {
     reqId: 1, row: factsRow, meta: { total: 3 },
     entries: [entryOf(0, 'a'), entryOf(1, 'b'), entryOf(2, 'c')],
-    structure: { ...emptyStructure, total: 3, next: 3, ords: [0, 1, 2] },
+    structure: { ...emptyStructure, total: 3, back: 0, next: 3, ords: [0, 1, 2] },
     delta: new Set([0, 1, 2]),
     relation: '',
   };
@@ -519,11 +529,11 @@ test('agent 标签覆盖三条通道的已知来源，未知来源原样透出',
 });
 
 test('结构续读按钮：读取中禁用，失败时改重试并给出原因', () => {
-  const loading = structureMoreParts({ next: 0, loading: true, error: null }, 7, 44);
+  const loading = structureMoreParts({ back: 4, next: 44, loading: true, error: null }, 7, 44);
   expect(loading.button).toContain('disabled');
-  expect(loading.button).toContain('加载下一片（已读 0 / 44）');
+  expect(loading.button).toContain('加载更早（已读 4–44 / 44）');
   expect(loading.note).toBe('');
-  const failed = structureMoreParts({ next: 3, loading: false, error: 'body_page_gap' }, 7, 44);
+  const failed = structureMoreParts({ back: 3, next: 44, loading: false, error: 'body_page_gap' }, 7, 44);
   expect(failed.button).toContain('重试读取');
   expect(failed.button).not.toContain('disabled');
   expect(failed.note).toContain('结构读取失败：body_page_gap');

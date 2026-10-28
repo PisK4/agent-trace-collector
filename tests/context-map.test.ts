@@ -292,7 +292,7 @@ test('内容列表跨类按 token 降序，折叠摘要按已保存条目计数'
   expect(rows).toContain('data-ctx-key="files\u0001read\u0001f0.txt"');
 });
 
-test('列表特殊 tag：上下文轮次叫法、×N 聚合与路径目录', () => {
+test('列表特殊 tag：上下文轮次叫法、×N 聚合与 basename', () => {
   const rows = contextRowsHtml(sevenKinds(), 7);
   expect(rows).toContain('另外 8 项');
   expect(rows).toContain('更早上下文 6 轮');
@@ -302,12 +302,36 @@ test('列表特殊 tag：上下文轮次叫法、×N 聚合与路径目录', () 
   // turns/more 自带数量词，不重复挂 ×N（带尖括号避免误伤 ×62 的子串）。
   expect(rows).not.toContain('>×6<');
   expect(rows).not.toContain('>×8<');
-  // 路径类 item：名字在前、目录在后。
-  expect(rows).toContain('src/http.ts');
-  expect(rows).toContain('requests.ts');
-  expect(rows).toContain('<small>src/queries/</small>');
+  // 路径类 item：可见名只留 basename，完整路径在 title 与 aria，行内没有目录前缀。
+  expect(rows).toContain('<b>http.ts</b>');
+  expect(rows).toContain('<b>requests.ts</b>');
+  expect(rows).toContain('<b>AGENTS.md</b>');
+  expect(rows).toContain('文件引用 · src/queries/requests.ts');
+  expect(rows).not.toContain('<small>');
   expect(rows).toContain('>MCP<');
   expect(rows).toContain('>提醒<');
+});
+
+test('路径类 tile 与列表行只显示 basename，完整名字进 aria 与 title', () => {
+  const tiles = tilesOf(sevenKinds(), 592, 240);
+  const names = (kind: string) => tiles.filter(t => t.kind === kind && t.item !== null).map(t => t.name);
+  expect(names('files')).toContain('http.ts');
+  expect(names('files')).toContain('requests.ts');
+  expect(names('memory')).toContain('AGENTS.md');
+  expect(names('files')).not.toContain('src/queries/requests.ts');
+  // 非路径名字原样：工具、结果与提醒不改写。
+  expect(names('tools')).toContain('Bash');
+  expect(names('memory')).toContain('reminders');
+  // 轮次与折叠桶的固定叫法不变。
+  expect(names('chat')).toContain('上下文第 2 轮');
+  expect(names('chat')).toContain('更早上下文 6 轮');
+  expect(names('files')).toContain('另外 7 项');
+
+  const inner = contextMapInnerHtml(sevenKinds(), 592, 240, 7);
+  expect(inner).toContain('<span class="ctx-tname">requests.ts</span>');
+  // 完整名字仍在 aria-label 里，悬停可读；身份键与点击匹配不变。
+  expect(inner).toContain('文件引用 · src/queries/requests.ts');
+  expect(inner).toContain('data-ctx-key="files\u0001read\u0001src/queries/requests.ts"');
 });
 
 test('六类旧口径照常渲染，未知类别保持原名', () => {
