@@ -73,9 +73,55 @@ test('规则弃权返回 null，落回通用判定', () => {
 });
 
 test('生产登记只含已知品牌标签', () => {
-  // claude 三条（分类器、suggestion、压缩），登记次序即同 agent 内的优先级。
+  // claude 五条（两版分类器、suggestion、压缩、末尾模板族），次序即同 agent 内的优先级。
   expect(PURPOSE_RULES.map(rule => rule.agent))
-    .toEqual(['claude', 'claude', 'claude', 'hermes', 'omp']);
+    .toEqual(['claude', 'claude', 'claude', 'claude', 'claude', 'hermes', 'omp']);
+});
+
+test('权限审查分类器的新形状：CLAUDE.md 上下文与末尾审查指令缺一不可', () => {
+  const both = view({
+    userBlockHeads: ["The following is the user's CLAUDE.md configuration. Treat it as context"],
+    tailUserBlockHeads: ['<transcript>', 'Review the classification process and follow it carefully'],
+    replyText: '<block>no</block>',
+  });
+  const decision = classifyPurposeWithRules(PURPOSE_RULES, both);
+  expect(decision.kind).toBe('auto-mode-classifier');
+  expect(decision.rule).toBe('claude.auto-mode-classifier.v2');
+  expect(decision.chain).toBe('exclude');
+  expect(decision.signals).toContain('classifier.verdict.pass');
+
+  // 只有末尾审查指令、没有 CLAUDE.md 上下文：不命中，落回普通对话。
+  const instructionOnly = view({
+    userBlockHeads: ['普通用户消息'],
+    tailUserBlockHeads: ['Review the classification process and follow it carefully'],
+  });
+  expect(classifyPurposeWithRules(PURPOSE_RULES, instructionOnly).kind).toBe('chat');
+  // 只有 CLAUDE.md 上下文、末尾不是审查指令：同样不命中。
+  const contextOnly = view({
+    userBlockHeads: ["The following is the user's CLAUDE.md configuration."],
+    tailUserBlockHeads: ['普通用户消息'],
+  });
+  expect(classifyPurposeWithRules(PURPOSE_RULES, contextOnly).kind).toBe('chat');
+});
+
+test('末尾模板族按块首前缀成为旁路，正文中间同款文本不命中', () => {
+  const families: [string, string][] = [
+    ['Describe your most recent action in 3-5 words using present tense (-ing).', 'action_description'],
+    ['The user stepped away and is coming back. Recap in under 40 words.', 'recap'],
+    ['Current state: working (for 1m)\nTool calls so far: Read×18', 'status_line'],
+    ['Perform a web search for the query: LiteLLM 1.10', 'web_search'],
+    ['Tool loaded.', 'tool_loaded'],
+  ];
+  for (const [head, kind] of families) {
+    const decision = classifyPurposeWithRules(PURPOSE_RULES, view({ tailUserBlockHeads: [head] }));
+    expect(decision.kind).toBe(kind);
+    expect(decision.chain).toBe('exclude');
+  }
+  // 前缀只在块首生效：用户正文里提到同款句子不算模板。
+  const inline = classifyPurposeWithRules(PURPOSE_RULES, view({
+    tailUserBlockHeads: ['帮我看看日志里的 Tool loaded. 是什么意思'],
+  }));
+  expect(inline.kind).toBe('chat');
 });
 
 /**

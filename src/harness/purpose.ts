@@ -4,7 +4,10 @@
  * 者是用途结算（request-purpose.ts），只传已读出的视图、拿回结论，不承担任何
  * Harness 名称。
  */
-import { classifierDecision, compactionDecision, suggestionDecision } from './claude';
+import {
+  classifierDecision, classifierReviewDecision, compactionDecision, suggestionDecision,
+  tailTemplateDecision,
+} from './claude';
 import { hermesDecision } from './hermes';
 import { skillHintDecision } from './omp';
 import {
@@ -30,8 +33,10 @@ export type HarnessPurposeRule = {
 /** 生产登记：次序即同 agent 多条规则时的优先级，新增 Harness 在此加一行。 */
 export const PURPOSE_RULES: readonly HarnessPurposeRule[] = [
   { agent: 'claude', decide: classifierDecision },
+  { agent: 'claude', decide: classifierReviewDecision },
   { agent: 'claude', decide: suggestionDecision },
   { agent: 'claude', decide: compactionDecision },
+  { agent: 'claude', decide: tailTemplateDecision },
   { agent: 'hermes', decide: hermesDecision },
   { agent: 'omp', decide: skillHintDecision },
 ];
