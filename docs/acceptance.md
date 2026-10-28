@@ -595,3 +595,29 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 ### 部署
 
 `bun run service restart` 把采集器重启为 pid 95238，端口 8320，`/api/stats` 可读，游标全部追平。上表「部署后」两列全部在重启后的生产页面复核。合成验收与真实流量验收分开记录：合成本轮只覆盖状态行拼装、六种旧文案不再出现、证据折叠区四行与无缺口不出行。
+
+## 上下文明细条目内容直出（合成 + 生产页面只读，2026-10-29）
+
+前提：worktree `atc-context-detail-content` 的 `feat/context-detail-content-only` 分支（基于 master `4376e7d`，合入 `acdecc4`）。合成用例进 `bun test tests/context-detail.test.ts`（8 项通过），`bun run typecheck` 通过。页面项用 ego lite 打开 worktree 检出的生产页面（`prototypes/serve-local.ts`，端口 8768，只读转发生产 collector 的 GET 接口，生产采集器未停、未写库），合并后在生产的 `127.0.0.1:8320` 复核同一分支的渲染。正文不进 fixture 与本文件。做法与动机见[上下文明细条目内容直出](../.agents/notes/implemented/simplification/2026-10-28-context-detail-content-only.md)。
+
+### 合成覆盖
+
+`entryContentHtml` 五个分支逐项断言：纯文本条目输出单个 `<pre class="ctx-d-text">` 且不夹带 JSON；整条消息对象（`messages[0].value`）抽不出文本时直出缩进 JSON，DOM 里没有「原始对象」字样与 `<details>`；块数组条目只渲染一份内容；`is_error=true` 仍带失败说明；`evicted` 状态仍走状态行。既有 7 项（iid 解析、目录状态行、弹窗 HTML、成员名单、正文 URL）零修改通过。
+
+### 页面实测（生产数据只读）
+
+在页面里直接调用 `web/context-detail.js` 的 `entryContentHtml` 渲染四个内容分支，读 computed style：
+
+| 验收项 | 结果 |
+| --- | --- |
+| 文本分支 | 1 个 `.ctx-d-text`、0 个 `<details>`、无「原始对象」；`max-height: 300px`、`overflow-y: auto`、等宽字体 |
+| 块数组分支 | 文本块与图片占位合并成 1 个 `.ctx-d-text`，限高与滚动同上 |
+| JSON 兜底分支 | 整条消息对象渲染为 `{\n "role": "user", ... }`，1 个 `.ctx-d-text`，限高与滚动与文本分支一致 |
+| `is_error` 分支 | 失败说明行加 1 个 `.ctx-d-text` |
+| `evicted` 分支 | 只有状态行，没有 `.ctx-d-text` |
+
+真实弹窗（会话 `26d868f2` 的 req 51820，对话内容类）：展开条目后 `data-ctx-content` 里是单个 `<pre class="ctx-d-text">`，内容为整条消息对象的缩进 JSON，DOM 内 `details.ctx-d-raw` 为 0，`innerText` 不含「原始对象」。同一结论在合并后的生产 `8320` 复核（`web/` 文件按请求现读，无需重启）。
+
+### 未执行
+
+像素截图仍不可用（`Page.captureScreenshot` 对该页持续超时，与 2026-10-26、2026-10-27 两轮一致），视觉项以 DOM 与 computed style 断言代替。工具结果类条目（`call_ord`/`owner_req` 落点）本轮未能读到正文：`/api/requests/:owner/tools/:ord/result` 用目录所在请求的阅读 token 请求一律 409，换成 owner 自己的 token 才返回 `available`。同一请求在 master 生产页复现同样结果，是既有缺陷，不是本次改动引入，本轮未修。
