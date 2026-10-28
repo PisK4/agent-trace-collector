@@ -201,9 +201,13 @@ export function sessionSummaryFold(s, sessionKey, open) {
 /** 会话头：标题、身份行、窗口合计与汇总折叠区、视图操作行与定位提示。
  *  @param {{sessionKey: string | null, row: SessionRow | null, rows: RequestRow[], refreshedAt: number | null,
  *    missingReqId: number | null, offPageReqId: number | null, windowError: string | null,
- *    summary: SessionSummary | null, summaryFoldOpen: boolean, windowAnchor: 'start' | 'latest'}} input */
+ *    summary: SessionSummary | null, summaryStatus?: 'idle' | 'loading' | 'ready' | 'absent',
+ *    summaryFoldOpen: boolean, windowAnchor: 'start' | 'latest'}} input */
 export function sessionHead(input) {
-  const { sessionKey, row, rows, refreshedAt, missingReqId, offPageReqId, windowError, summary, windowAnchor } = input;
+  const {
+    sessionKey, row, rows, refreshedAt, missingReqId, offPageReqId, windowError,
+    summary, summaryStatus = 'idle', windowAnchor,
+  } = input;
   const unknown = sessionKey !== null && row === null;
   const first = rows[0] ?? null;
   const latest = rows[rows.length - 1] ?? null;
@@ -229,9 +233,11 @@ export function sessionHead(input) {
       ${first && latest ? `<span>${esc(dayTime(first.started_ms))}–${esc(clock(latest.started_ms))}</span>` : ''}
       ${timingParts.length > 0 ? `<span class="sum">${timingParts.join(' · ')}</span>` : ''}
       ${summary !== null ? sessionTotalsHtml(summary)
-      : hasUsage
-        ? `<span class="sum" title="汇总快照读取中；这是已加载窗口的相加，不是会话口径">已加载相加：${kk(totalIn)} 提示 · ${kk(totalOut)} 输出 · $${totalCost.toFixed(4)}${priced.length < rows.length ? ` · ${rows.length - priced.length} 笔未取得费用` : ''}</span>`
-        : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
+      : summaryStatus === 'loading'
+        ? '<span class="sum muted">汇总快照读取中…</span>'
+        : hasUsage
+          ? `<span class="sum" title="汇总快照不可用；这是已加载窗口的相加，不是会话口径">已加载相加：${kk(totalIn)} 提示 · ${kk(totalOut)} 输出 · $${totalCost.toFixed(4)}${priced.length < rows.length ? ` · ${rows.length - priced.length} 笔未取得费用` : ''}</span>`
+          : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
     </div>
     ${sessionSummaryFold(summary, sessionKey, input.summaryFoldOpen)}
     <div class="view-row">

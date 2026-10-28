@@ -533,3 +533,22 @@ test('会话头输出速度只统计计时与输出都在的行', () => {
   const mixed = sessionHead({ ...base, rows: [untimed, timed] as never });
   expect(mixed).toContain('输出 67 tok/s');
 });
+
+test('会话头汇总状态：读取中与不可用分开说', () => {
+  const base = {
+    sessionKey: 'k',
+    row: { conv_key: 'k', title: 't', last_ms: 1, request_count: 1, agents: [], flags: [] },
+    refreshedAt: null, missingReqId: null, offPageReqId: null, windowError: null,
+    summary: null, summaryFoldOpen: false, windowAnchor: 'start' as const,
+  };
+  const loading = sessionHead({ ...base, rows: [], summaryStatus: 'loading' });
+  expect(loading).toContain('汇总快照读取中');
+  const row = {
+    req_id: 1, started_ms: 1, in_tok: null, out_tok: 3, cache_read: null, cache_write: null,
+    cost: null, cost_state: 'absent', ms: null, ttft_ms: null, flow_ms: null,
+  };
+  const absent = sessionHead({ ...base, rows: [row] as never, summaryStatus: 'absent' });
+  expect(absent).toContain('已加载相加');
+  expect(absent).toContain('汇总快照不可用');
+  expect(absent).not.toContain('汇总快照读取中');
+});
