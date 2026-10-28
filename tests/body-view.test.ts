@@ -24,7 +24,8 @@ const missingCapabilities: CapabilityView = {
 
 function page(overrides: Partial<BodyPage> = {}): BodyPage {
   return {
-    state: 'available', protocol: 'anthropic', parse_state: 'ok', reply_state: 'ok',
+    state: 'available', protocol: 'anthropic', message_location: { key: 'messages', form: 'array' },
+    parse_state: 'ok', reply_state: 'ok',
     from: 0, to: 0, total: 2,
     messages: [], request_fields: null, reply: null, reason: null,
     interpretations: [],
@@ -209,7 +210,7 @@ test('回复两种协议都能读出文本、推理与调用', () => {
 
 test('Responses 回复从 output 出块，调用序号与服务端位置同源', () => {
   const view = replyView(page({
-    protocol: 'responses',
+    protocol: 'responses', message_location: { key: 'input', form: 'array' },
     reply: {
       id: 'resp_1',
       status: 'completed',
@@ -236,7 +237,7 @@ test('Responses 回复从 output 出块，调用序号与服务端位置同源',
   }]);
   // 两个消息项各有 content[0]：块序号取项位置，步骤键不撞。
   const twoMessages = replyView(page({
-    protocol: 'responses',
+    protocol: 'responses', message_location: { key: 'input', form: 'array' },
     reply: { status: 'completed', output: [
       { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'a' }] },
       { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'b' }] },
@@ -254,7 +255,7 @@ test('Responses 回复从 output 出块，调用序号与服务端位置同源',
 
 test('Responses 请求项按 type 出块，工具结果不混进用户消息', () => {
   const entries = messageEntries(page({
-    protocol: 'responses',
+    protocol: 'responses', message_location: { key: 'input', form: 'array' },
     messages: [
       { ord: 0, value: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '读配置' }] } },
       { ord: 1, value: { type: 'function_call', call_id: 'c1', name: 'read', arguments: '{}' } },

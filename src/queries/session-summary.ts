@@ -55,7 +55,7 @@ export type SessionSummary = {
     calls_paired: number;
     /** 已配对且失败位可读的调用数；pending/ambiguous/未配对都算未知。 */
     calls_error_known: number;
-    /** 参数事实在本算法下真实提取过的调用数；保留行按旧算法号排除。 */
+    /** 参数事实由当前或已确认兼容的算法提取过的调用数。 */
     calls_fact_known: number;
   };
   /** 已判定失败的调用集合，可直接定位到配对页。 */
@@ -81,7 +81,7 @@ export type SummaryEntries =
 /**
  * 会话口径的有效工具行：发布代有该请求的工具行用发布代，否则回退同步旧表。
  * 与 `getRequest` 的整组取数同一条规则；同步回退是调用身份的家。
- * `source` 标记来源（1=发布代），覆盖度据此判定参数事实是否在当前算法下算过。
+ * `source` 标记来源（1=发布代），覆盖度据此判定参数事实的算法版本是否可用。
  */
 const EFFECTIVE_TOOL_SQL = (extra: string, tail: string): string => `
   SELECT tc.call_id AS call_id, tc.req_id AS req_id, tc.ord AS ord,
@@ -153,11 +153,10 @@ export function getSessionSummary(store: Store, key: string): SessionSummary {
         else if (lower === 'read') read.set(row.arg_path, (read.get(row.arg_path) ?? 0) + 1);
       }
       if (row.arg_skill !== null) skills.set(row.arg_skill, (skills.get(row.arg_skill) ?? 0) + 1);
-      // 事实是否在本算法下真实提取过：发布代行看代际算法号（实验路径的旧代
-      // 也没提取过参数），同步行看组算法号——保留行带着旧算法号，参数从未提取。
+      // 末尾命令判定的升版不影响工具参数提取；前一算法的工具事实仍可用。
       if (row.source === 1
-        ? row.algo === DERIVE_ALGORITHM
-        : row.algo === GROUP_ALGORITHM) factKnown += 1;
+        ? row.algo === DERIVE_ALGORITHM || row.algo === 9
+        : row.algo === GROUP_ALGORITHM || row.algo === 5) factKnown += 1;
     }
 
     const interruptsCol = derivedColSql('q', 'd', 'r', 'interrupt_count');

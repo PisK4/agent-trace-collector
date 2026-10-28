@@ -80,7 +80,7 @@ Status: implemented
 
 行存在即计数;组 dirty 时返回已发布代或同步旧列的事实加 dirty 标志,不猜未完成的派生。
 
-`GET /api/sessions/:key/summary/entries` 承担点击后的按组查询,上限 1000。`kind=tool/written/read/skill` 按组返回调用列表(req_id+ord);`kind=interrupts` 返回中断请求与各自次数。参数不合法显式 400,不静默回退。有效工具行的选源与 `getRequest` 同一条规则:发布代有该请求的工具行用发布代,否则回退同步旧表。`calls_fact_known` 按算法号判——发布代行看 `derive_tool_result.algorithm_version`,同步行看 `tool_call.algorithm_version`;保留行带着旧算法号,参数事实不算已知。
+`GET /api/sessions/:key/summary/entries` 承担点击后的按组查询,上限 1000。`kind=tool/written/read/skill` 按组返回调用列表(req_id+ord);`kind=interrupts` 返回中断请求与各自次数。参数不合法显式 400,不静默回退。有效工具行的选源与 `getRequest` 同一条规则:发布代有该请求的工具行用发布代,否则回退同步旧表。`calls_fact_known` 按算法号判——发布代行看 `derive_tool_result.algorithm_version`,同步行看 `tool_call.algorithm_version`。末尾命令判据升版后，工具参数提取未变，因此同步算法 5 与切片算法 9 的事实仍可用；其他旧版本按其提取能力判断，见[轮次命令定位](../bug-fix/2026-10-28-turn-command-location.md)。
 
 **证据回溯是首批验收,不是附加项**:
 

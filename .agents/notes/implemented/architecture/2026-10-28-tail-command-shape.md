@@ -17,13 +17,13 @@ Status: implemented
 
 `input_preview_kind` 增加取值 `tail_command`：关系未知、另起一支或排除用途的行，在 `tail` 分支里再判一次末条消息形状。末条是用户主动文本记 `tail_command`，否则仍是 `tail`。
 
-判定在 [read.ts](../../../../src/derive/read.ts) 的 `lastUserMessageIsCommand`：从末尾往前跳过 system 消息与注入型 user 消息（归档、技能注入、系统提醒都是壳），遇到工具结果或 assistant 消息即停，最多看 6 条。判据与 `interpretMessage` 同一套——只有 `state='text'` 算用户主动文本，wrapped 与 midturn 都算，注入不算。
+判定由 [read.ts](../../../../src/derive/read.ts) 的 `lastUserMessageIsCommand` 调用 [tail-command.ts](../../../../src/tail-command.ts) 的末尾扫描：从末尾往前跳过 system 消息与注入型 user 消息（归档、技能注入、系统提醒都是壳），遇到工具结果、assistant 消息或无法解码的块即停，最多看 6 条。判据与 `interpretMessage` 同一套——只有 `state='text'` 算用户主动文本，wrapped 与 midturn 都算，注入不算。坏块停止与读侧命令定位见[轮次命令定位](../bug-fix/2026-10-28-turn-command-location.md)。
 
 [轮次读取](../../../../src/queries/turns.ts)的命令判据随之接受两个值：`delta` 或 `tail_command`。`branch` 与 `aux` 行仍不进带，排除在 `purpose_chain='participate'` 与起点资格两层完成。
 
 `tail_command` 只新增取值，不改表结构：列是 `TEXT`，无 DDL，无需 backfill 脚本。历史行靠 `maintain rebuild --session` 按会话换代。
 
-### 为什么不升派生算法号
+### 当时为什么不升派生算法号
 
 `GROUP_ALGORITHM` 与 `DERIVE_ALGORITHM` 的语义是「产物变化时旧结论不得冒充新结论」。这次产物确实多了一个取值，但影响面可以精确圈定：只有「参与链 + 前驱关系 unknown + 当前 kind=tail」的行可能翻成轮起点，其余 tail 行的取值只影响标签文字。
 
@@ -31,13 +31,15 @@ Status: implemented
 
 否决这条取舍的边界：如果以后出现第三类需要「所有 tail 行重新判定」的变更，升版仍然必要，届时应整体重建而不是继续按清单点修。
 
+后续发现坏块可能被跳过并误判成命令，[轮次命令定位](../bug-fix/2026-10-28-turn-command-location.md)对此升了组与切片算法版本，并保留前一算法的工具事实覆盖率；历史派生仍需显式重建。
+
 ## Alternatives considered
 
 **把所有 tail 行都标成 `tail_command`。** 工具回传的 tail 行会被误标成命令，轮次带会为每一笔工具往返都开一轮。判据必须看末条消息形状。不采用。
 
 **按消息数量或工具调用数当门槛。** 上游改形状时门槛会失效，而末条消息的类型是协议里的稳定字段。不采用。
 
-**在读取侧从正文现判，不写派生位。** `listTurns` 是只读快照内的结算，不读正文块；把正文读取塞进轮次查询会让每次翻页都解压消息。派生期写一次，读侧只读列。不采用。
+**在读取侧从正文现判起点，不写派生位。** 派生期写入形状证据，起点与路径污染判定消费该位，不对所有候选重新解压正文。读侧仅对已结算且返回窗口内的起点定位命令，见[轮次命令定位](../bug-fix/2026-10-28-turn-command-location.md)。
 
 **给所有 `tail` 行加一列布尔位而不是新 kind 取值。** 需要 DDL 与全库 backfill，且 kind 列本来就是「摘要是什么」的枚举，多一个取值比多一列更贴近它的职责。不采用。
 

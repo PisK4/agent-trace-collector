@@ -6,7 +6,7 @@ import {
   interruptCountOf, replyCallsOf, requestResultsOf,
 } from '../src/derive/decision';
 import { isUserInterruptMessage } from '../src/input-interpretation';
-import { GROUP_ALGORITHM } from '../src/derive/state';
+import { DERIVE_ALGORITHM, GROUP_ALGORITHM } from '../src/derive/state';
 import { migrateSummaryFacts } from '../scripts/backfill-summary-facts';
 import {
   getSummaryEntries, getSessionSummary,
@@ -51,6 +51,26 @@ function rebuild(store: ReturnType<typeof fixture>['store']): void {
 // ---------------------------------------------------------------------------
 // 提取层：参数键、失败位与中断前缀各只有一份实现。
 // ---------------------------------------------------------------------------
+
+test('末尾判定升版保留前一算法已提取的工具事实覆盖率', () => {
+  const f = fixture();
+  try {
+    seedToolRound(f.store, 1, {
+      startedMs: 100,
+      messages: [{ role: 'user', content: '合成命令' }],
+      reply: { stop_reason: 'tool_use', content: [
+        { type: 'tool_use', id: 'synthetic', name: 'Read', input: { file_path: 'synthetic.txt' } },
+      ] },
+    });
+    rebuild(f.store);
+    expect(GROUP_ALGORITHM).toBe(6);
+    expect(DERIVE_ALGORITHM).toBe(10);
+    f.store.write(db => db.run('UPDATE tool_call SET algorithm_version=5 WHERE req_id=1'));
+    expect(getSessionSummary(f.store, GROUP).coverage.calls_fact_known).toBe(1);
+    f.store.write(db => db.run('UPDATE tool_call SET algorithm_version=4 WHERE req_id=1'));
+    expect(getSessionSummary(f.store, GROUP).coverage.calls_fact_known).toBe(0);
+  } finally { f.close(); }
+});
 
 test('调用提取认 file_path/path 与 skill 键，其余近邻键落 NULL 不猜', () => {
   const reply = { content: [

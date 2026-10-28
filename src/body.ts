@@ -241,22 +241,25 @@ export function readBodyMetaTx(db: Database, reqId: number): BodyMeta | null {
 }
 
 /**
- * 完整读出已保存正文；结构不一致返回 null，不补空位也不抛错。
+ * 完整读出已保存正文及实际拆块的消息；结构不一致返回 null，不补空位也不抛错。
  *
  * `cache` 是可选的一次派生作用域读取上下文：消息块按内容哈希复用解压与
  * JSON 解析，跨请求、跨消费者共享。缓存不替代骨架、状态与引用校验，
  * 命中前仍逐项检查当前读取条件。
  */
-export function readBodyTx(db: Database, reqId: number,
-  cache?: BodyReadCache): StoredBody | null {
+export function readBodyWithMessagesTx(db: Database, reqId: number,
+  cache?: BodyReadCache): { body: StoredBody; messages: unknown[] | null } | null {
   const meta = readBodyMetaTx(db, reqId);
   if (meta === null) return null;
   if (!meta.hasMessages) {
     return {
-      protocol: meta.protocol,
-      request: meta.request,
-      reply: meta.reply,
-      redact_version: meta.redact_version,
+      body: {
+        protocol: meta.protocol,
+        request: meta.request,
+        reply: meta.reply,
+        redact_version: meta.redact_version,
+      },
+      messages: null,
     };
   }
   // 带消息时骨架必须原本就是对象，否则无法无损合并消息数组。
@@ -285,11 +288,20 @@ export function readBodyTx(db: Database, reqId: number,
   const request = withItems(meta.request, meta.messagesKey, meta.messagesForm, messages);
   if (request === null) return null;
   return {
-    protocol: meta.protocol,
-    request,
-    reply: meta.reply,
-    redact_version: meta.redact_version,
+    body: {
+      protocol: meta.protocol,
+      request,
+      reply: meta.reply,
+      redact_version: meta.redact_version,
+    },
+    messages,
   };
+}
+
+/** 只需要原协议对象时复用同一次完整读取。 */
+export function readBodyTx(db: Database, reqId: number,
+  cache?: BodyReadCache): StoredBody | null {
+  return readBodyWithMessagesTx(db, reqId, cache)?.body ?? null;
 }
 
 /** 按请求还原脱敏协议对象；正文已被回收、从未写入或结构损坏时返回 null。 */

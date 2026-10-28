@@ -3,9 +3,9 @@
 import type { Database } from 'bun:sqlite';
 import { deriveJoinSql, derivedColSql, groupCurrentSql } from '../derive/state';
 import { interpretMessage } from '../input-interpretation';
-import { readBodyTx } from '../body';
+import { readBodyMetaTx, readBodyWithMessagesTx } from '../body';
+import { tailCommandOrdinal } from '../tail-command';
 import type { Store } from '../store';
-import { isRecord } from './projection';
 
 /**
  * 已结算轮的目录身份：一条用户命令与它的最终回复。turn 是会话内已结算轮的
@@ -55,20 +55,19 @@ function mainActorOf(read: Database, convKey: string): string | null {
   return row?.actor ?? null;
 }
 
-/**
- * 命令组定位：起点请求内重新解读 delta_ordinals，筛出用户主动文本的消息序号。
- * 解释与派生期的 kind 位同源（interpretMessage 一份判定）；正文不可读或增量
- * 已随回收清空时返回空表，命令面板按回收态呈现。
- */
+/** 命令位置只用于阅读：可信增量筛选主动文本；tail_command 仅定位末尾证据。 */
 function commandOrdinals(read: Database, row: TurnRow): number[] {
+  if (row.input_preview_kind === 'tail_command') {
+    if (readBodyMetaTx(read, row.req_id) === null) return [];
+    const ordinal = tailCommandOrdinal(read, row.req_id);
+    return ordinal === null ? [] : [ordinal];
+  }
   if (row.delta_ordinals === null) return [];
   let delta: unknown;
   try { delta = JSON.parse(row.delta_ordinals); } catch { return []; }
   if (!Array.isArray(delta) || !delta.every(Number.isSafeInteger)) return [];
-  const body = readBodyTx(read, row.req_id);
-  if (body === null || !isRecord(body.request)) return [];
-  const messages = body.request.messages;
-  if (!Array.isArray(messages)) return [];
+  const messages = readBodyWithMessagesTx(read, row.req_id)?.messages;
+  if (messages == null) return [];
   const ords: number[] = [];
   for (const ordinal of delta) {
     const message = messages[ordinal];
@@ -83,7 +82,7 @@ function commandOrdinals(read: Database, row: TurnRow): number[] {
  * 结算一个会话的轮次：命令（起点）到最终回复（终点），跨多笔请求的 agent loop。
  *
  * 起点资格先看链角色（已证明主链，或自身关系未知的行——回收起点照常进带），
- * 命令判据唯一落在派生时写下的 kind 位（`input_preview_kind='delta'`），正文
+ * 命令判据消费派生期的 `delta` 与 `tail_command`，正文
  * 回收后该位保留、起点照常进带。终点沿确定的 parent 前驱边搜索后代：路径上
  * 不经过其他用户命令请求（kind 位同源判定），可达且路径纯净的 `final` 恰好
  * 一个才结算，分叉出多个保守不结算。只消费派生状态为 current 的组，结算在
@@ -121,7 +120,7 @@ export function listTurns(store: Store, key: string, from: number | null = null)
       || row.chain_role === 'unknown';
     const settled: { row: TurnRow; endpoint: number }[] = [];
     for (const row of rows) {
-      // 排除范围：分支链、不确定闭包后继、辅助与标题请求都不参与；起点必须是命令行。
+      // 排除分支链、辅助与标题请求；unknown 闭包中的命令可作为起点。
       if (!isStart(row) || row.req_kind === 'title' || !isCommand(row)) continue;
       // 起点自身收尾：纯对话轮两端同笔，不看后代。
       if (row.reply_shape === 'final') {
@@ -146,13 +145,14 @@ export function listTurns(store: Store, key: string, from: number | null = null)
     }
     const items = settled
       .sort((a, b) => a.row.started_ms - b.row.started_ms || a.row.req_id - b.row.req_id)
-      .map((entry, index) => ({
-        turn: index + 1,
+      .map((entry, index) => ({ entry, turn: index + 1 }))
+      .filter(item => from === null || item.entry.row.req_id >= from)
+      .map(({ entry, turn }) => ({
+        turn,
         start_req: entry.row.req_id,
         ordinals: commandOrdinals(store.read, entry.row),
         reply_req: entry.endpoint,
-      }))
-      .filter(item => from === null || item.start_req >= from);
+      }));
     return { items };
   })();
 }
