@@ -153,6 +153,8 @@ test('中栏选中的消息在结构列表里高亮，不展开详情', () => {
   });
   expect(detail).toContain('data-structure-back="1"');
   expect(detail).not.toContain('data-msg=');
+  // 返回入口排在详情之前：长正文把页脚推出视口时，返回不能跟着沉底。
+  expect(detail.indexOf('data-structure-back')).toBeLessThan(detail.indexOf('body-panel'));
 });
 
 test('delta=null 给关系说明不标新增，delta=[] 显示新增 0', () => {

@@ -144,8 +144,10 @@ export function structureFoldHtml(input) {
     ? null : entries.find(entry => entry.ord === selected) ?? null;
   let body;
   if (chosen !== null) {
-    body = `${renderMessageDetail(chosen, messagePathOf(meta, chosen.ord), pairOf)}
-      <div class="conv-tools"><button class="chip-btn" data-structure-back="${reqId}">返回消息列表</button></div>`;
+    // 返回入口在详情上方：长消息的正文可以把页脚推到视口外，返回就不该跟着正文
+    // 一起沉底。位置与「加载更早」一致，都在列表／详情的上方。
+    body = `<div class="conv-tools"><button class="chip-btn" data-structure-back="${reqId}">返回消息列表</button></div>
+      ${renderMessageDetail(chosen, messagePathOf(meta, chosen.ord), pairOf)}`;
   } else if (entries.length === 0 && !canLoad) {
     body = `<p class="note">${esc(bodyLabelText(row))}</p>`;
   } else if (entries.length === 0 && parseState === 'unsupported') {
