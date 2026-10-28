@@ -40,7 +40,7 @@ import { createMainView } from './trace-dom.js';
 import { renderTracePair } from './trace-pair.js';
 import { projectSteps, renderTraceRow } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
-import { railTabFromParam, railTabParam, resolveTraceTarget } from './url-route.js';
+import { railTabFromParam, railTabParam, resolveTraceTarget, traceIdFromParam } from './url-route.js';
 
 /**
  * 重绘后把滚动位置放回去。内容变短时夹到新的可滚动上限内。
@@ -85,7 +85,7 @@ if (typeof document !== 'undefined') {
   const qp = new URLSearchParams(location.search);
   const state = {
     session: qp.get('session'),
-    reqId: qp.get('trace') ? Number(qp.get('trace')) : null,
+    reqId: traceIdFromParam(qp.get('trace')),
     /** URL 指定的请求在库里不存在。 */
     missingReqId: /** @type {number | null} */ (null),
     /** URL 指定的请求存在，但落在当前载入窗口之外。 */
@@ -1766,10 +1766,9 @@ if (typeof document !== 'undefined') {
 
   window.addEventListener('popstate', () => {
     const p = new URLSearchParams(location.search);
-    const trace = p.get('trace');
     dispatch({
       kind: 'restore-url', session: p.get('session'),
-      trace: trace ? Number(trace) : null, tab: railTabFromParam(p.get('tab')),
+      trace: traceIdFromParam(p.get('trace')), tab: railTabFromParam(p.get('tab')),
     });
     if (state.session !== null) void selectSession(state.session, state.reqId);
   });
@@ -1786,7 +1785,7 @@ if (typeof document !== 'undefined') {
       const first = /** @type {SessionRow | undefined} */ (store.getSessions().items[0]);
       if (first) dispatch({ kind: 'open-session', sessionKey: first.conv_key, wantedTrace: null });
     }
-    if (state.session !== null) await selectSession(state.session, qp.get('trace') !== null ? Number(qp.get('trace')) : null);
+    if (state.session !== null) await selectSession(state.session, traceIdFromParam(qp.get('trace')));
     else renderAll();
   })();
 }

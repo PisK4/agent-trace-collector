@@ -5,6 +5,18 @@
  */
 
 /**
+ * URL 的 trace 参数解析成请求号：只接受十进制正整数。非法值按未指定处理，
+ * 不产生 NaN，也不进入「未找到」分支——那不是一条可以核对的请求号。
+ * @param {string | null} value
+ * @returns {number | null}
+ */
+export function traceIdFromParam(value) {
+  if (value === null || !/^[1-9]\d*$/.test(value)) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) ? id : null;
+}
+
+/**
  * URL 里的 trace 属于哪种情况。合并过的旧 id 会被服务端解析成 canonical：
  * 若 canonical 就在已加载窗口里，直接跳过去，不能报"未在窗口"。
  * @param {{req_id: number}[]} rows
