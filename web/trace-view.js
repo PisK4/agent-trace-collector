@@ -527,7 +527,15 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
   } else if (view === null || view.state === 'absent') {
     record('reply', 'missing_reply', '未收到回复');
   } else if (view.choiceCount !== null && view.choiceCount > 1) {
+    // 多 choice 是回复对象的形状事实，先于状态分支：结构损坏时仍保留原始对象。
     record('choices', null, `多 choice 回复（${view.choiceCount} 项）：保留原始对象，不按冲突序号提供工具定位`);
+  } else if (view.state === 'partial') {
+    record('reply', 'unknown', '回复不在已保存的部分里 · 正文不完整');
+  } else if (view.state === 'invalid') {
+    record('reply', 'unknown', '回复对象无法结构化');
+  } else if (view.state !== 'ok') {
+    // pending / evicted / unsupported / summary：正文状态行已经说明状态，
+    // 这里不再补一条「未收到回复」，避免同屏两句话互相打架。
   } else {
     for (const block of view.blocks) {
       const index = block.index;
@@ -574,7 +582,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
   } else if (row.status === null) {
     record('http', 'unknown', 'HTTP 状态未知');
   }
-  if (view !== null && view.state !== 'absent') {
+  if (view !== null && view.state === 'ok') {
     if (LENGTH_FINISH.has(view.finish ?? '')) {
       record('truncated', 'truncated', `回复因长度上限结束（finish=${view.finish}）；请求仍为 HTTP 成功`);
     } else if (view.finish !== null && !NORMAL_FINISH.has(view.finish)) {

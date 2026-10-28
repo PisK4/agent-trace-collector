@@ -60,6 +60,22 @@ export function contentTextOf(value) {
  * @typedef {{state: string, reason: string | null, notes: string[], entries: ContextEntry[], next_cursor: string | null}} ContextDirectory
  */
 
+/**
+ * 条目的正文 URL。工具结果走配对端点；其余按消息区间读。顶层字段条目没有
+ * 消息序号，走正文根读取——拼 `from=null&to=NaN` 会被服务端 400。
+ * @param {{reqId: number, token: string}} session
+ * @param {{ord: number | null, call_ord: number | null, owner_req: number | null}} entry
+ * @returns {string}
+ */
+export function entryBodyUrl(session, entry) {
+  const token = encodeURIComponent(session.token);
+  if (entry.call_ord !== null && entry.owner_req !== null) {
+    return `/api/requests/${entry.owner_req}/tools/${entry.call_ord}/result?if_reading=${token}`;
+  }
+  if (entry.ord === null) return `/api/requests/${session.reqId}/body?if_reading=${token}`;
+  return `/api/requests/${session.reqId}/body?from=${entry.ord}&to=${entry.ord + 1}&if_reading=${token}`;
+}
+
 /** 目录条目的位置与身份列；正文按 entry 的落点分流到两种既有端点。
  *  @param {ContextEntry} entry */
 function entryMeta(entry) {
@@ -255,10 +271,7 @@ export function createContextMenu({ fetcher }) {
     s.contents.set(index, { phase: 'loading' });
     slot.innerHTML = '<p class="ctx-d-note">读取正文…</p>';
     const gen = generation;
-    const isResult = entry.call_ord !== null && entry.owner_req !== null;
-    const url = isResult
-      ? `/api/requests/${entry.owner_req}/tools/${entry.call_ord}/result?if_reading=${encodeURIComponent(s.s.token)}`
-      : `/api/requests/${s.s.reqId}/body?from=${entry.ord}&to=${Number(entry.ord) + 1}&if_reading=${encodeURIComponent(s.s.token)}`;
+    const url = entryBodyUrl({ reqId: s.s.reqId, token: s.s.token }, entry);
     try {
       const data = await jsonOf(url);
       if (open === null || generation !== gen) return;

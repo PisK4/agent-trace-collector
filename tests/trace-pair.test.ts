@@ -64,7 +64,7 @@ test('面板头色类映射：核心工具各自色类，未确认配对保持�
   expect(pending).toContain('bp-kind tint-read">Read</span>');
 });
 
-test('未读取给待读取与读取入口；失败保留重试；未确认不给正文与读取入口', () => {
+test('未读取给待读取与读取入口；终态不给重试；未确认不给正文与读取入口', () => {
   const unloaded = renderTracePair({
     owner: 7, ownerLabel: '07', call: callOf(),
     pair: pairOf('resolved', { result_req: 9, result_ord: 2 }), reading: null, carrierLabel: '09',
@@ -76,10 +76,20 @@ test('未读取给待读取与读取入口；失败保留重试；未确认不�
     pair: pairOf('resolved', { result_req: 9, result_ord: 2 }),
     reading: readingOf('unavailable', { reason: 'body_evicted' }), carrierLabel: '09',
   });
-  expect(failed).toContain('重试');
-  expect(failed).toContain('data-tool-retry="7"');
-  // 加载失败不改写关联状态。
+  // body_evicted 是终态：重试不会让正文回来，状态行也不再说「可重试」。
+  expect(failed).not.toContain('data-tool-retry');
+  expect(failed).toContain('body_evicted');
+  expect(failed).toContain('正文加载 正文已回收');
+  expect(failed).not.toContain('读取失败，可重试');
   expect(failed).toContain('已确认配对');
+  // 非终态的不可读仍保留重试入口。
+  const retryable = renderTracePair({
+    owner: 7, ownerLabel: '07', call: callOf(),
+    pair: pairOf('resolved', { result_req: 9, result_ord: 2 }),
+    reading: readingOf('unavailable', { reason: 'read_failed' }), carrierLabel: '09',
+  });
+  expect(retryable).toContain('重试读取');
+  expect(retryable).toContain('data-tool-retry="7"');
   for (const state of ['pending', 'ambiguous', 'unpaired']) {
     const html = renderTracePair({
       owner: 7, ownerLabel: '07', call: callOf(), pair: pairOf(state), reading: null, carrierLabel: null,

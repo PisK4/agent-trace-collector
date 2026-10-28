@@ -1114,3 +1114,33 @@ test('轮次快照：按累计窗口下界请求，失败与 404 落 absent，�
   // 每次落地都通知页面重绘。
   expect(changed.length).toBeGreaterThan(0);
 });
+
+const session = (key: string) => ({
+  conv_key: key, title: key, last_ms: 1, request_count: 1, agents: ['claude'], flags: [] as string[],
+});
+
+test('会话列表跨页按 conv_key 去重', async () => {
+  const h = harness(async url => url.includes('cursor=c1')
+    ? respond({ items: [session('b'), session('a')], next_cursor: null })
+    : respond({ items: [session('a'), session('b')], next_cursor: 'c1' }));
+  const store = createReaderStore(h.fetcher);
+  await store.loadSessions();
+  await store.loadSessions('c1');
+  // 分页边界把同一会话返回两次：列表只保留先出现的一条。
+  expect(store.getSessions().items.map(item => item.conv_key)).toEqual(['a', 'b']);
+});
+
+test('会话列表并发加载只发一次请求', async () => {
+  let release = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const h = harness(async () => {
+    await gate;
+    return respond({ items: [session('a')], next_cursor: null });
+  });
+  const store = createReaderStore(h.fetcher);
+  const first = store.loadSessions();
+  const second = store.loadSessions();
+  release();
+  await Promise.all([first, second]);
+  expect(h.count('/api/sessions')).toBe(1);
+});

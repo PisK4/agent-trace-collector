@@ -27,6 +27,12 @@ export function bodyLabelText(r) {
   return '原对象已保存，暂不支持结构化解析。';
 }
 
+/** 空回复的完整性标签按状态分开；只有 absent 是「缺失回复」，其余是状态未知。 */
+const EMPTY_REPLY_LABELS = /** @type {Record<string, string>} */ ({
+  absent: '缺失回复', pending: '回复未到', evicted: '正文已回收',
+  unsupported: '回复暂不可读', summary: '摘要无回复', partial: '正文不完整', invalid: '回复无法解析',
+});
+
 /**
  * 回复完整性（§3.4 四态）。截断是成功响应内的完整性状态，不推翻请求状态；
  * 缺失回复不标完成；finish 未报告或无法解析都算 unknown。
@@ -36,8 +42,13 @@ export function bodyLabelText(r) {
  */
 export function replyCompleteness(row, view) {
   void row;
-  if (view === null || view.state === 'absent') return { key: 'absent', label: '缺失回复' };
-  if (view.state === 'invalid') return { key: 'unknown', label: '回复无法解析' };
+  if (view === null) return { key: 'absent', label: '缺失回复' };
+  if (view.state !== 'ok') {
+    return {
+      key: view.state === 'absent' ? 'absent' : 'unknown',
+      label: EMPTY_REPLY_LABELS[view.state] ?? '回复状态未知',
+    };
+  }
   const finish = view.finish;
   if (finish === null) return { key: 'unknown', label: '完整性未报告' };
   if (finish === 'length' || finish === 'max_tokens') return { key: 'truncated', label: '回复截断' };

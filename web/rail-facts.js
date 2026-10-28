@@ -76,6 +76,22 @@ export function railFactsHtml(parts) {
 }
 
 /**
+ * 结构续读的按钮与失败提示，正文页签与请求结构折叠共用一份。
+ * 加载中禁用按钮，失败时按钮改「重试读取」并附原因；是否显示按钮由调用方判断，
+ * 两个页签对「还有没有下一片」的前置条件不同。
+ * @param {{ next: number, loading: boolean, error: string | null }} structure
+ * @param {number} reqId
+ * @param {number | string | null} total
+ * @returns {{button: string, note: string}}
+ */
+export function structureMoreParts(structure, reqId, total) {
+  return {
+    button: `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${structure.error ? '重试读取' : `加载下一片（已读 ${structure.next} / ${total}）`}</button>`,
+    note: structure.error ? `<p class="note warn">结构读取失败：${esc(structure.error)}</p>` : '',
+  };
+}
+
+/**
  * 请求结构折叠区。默认 closed，开合与选中消息按 req 稳定保存（重绘后由
  * data-fold 恢复）；total 在结构未读时取自元信息页，未读取也显示数量而不是空列表。
  * 列表展示已缓存消息的有序并集：连续历史、定点读与增量读到的消息都在，
@@ -134,10 +150,8 @@ export function structureFoldHtml(input) {
     }
     body = `${deltaNote}${renderMessages(listEntries, { delta, limit: listEntries.length, selectedOrd: selected, gaps })}`;
   }
-  const more = unread && canLoad
-    ? `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${structure.error ? '重试读取' : `加载下一片（已读 ${structure.next} / ${total}）`}</button>`
-    : '';
-  const errorNote = structure.error ? `<p class="note warn">结构读取失败：${esc(structure.error)}</p>` : '';
+  const { button, note: errorNote } = structureMoreParts(structure, reqId, total);
+  const more = unread && canLoad ? button : '';
   return `<details class="rail-fold" data-structure-fold="${reqId}" data-fold="structure:${reqId}"${open ? ' open' : ''}>
     <summary>请求结构<span class="fold-count">${esc(count)}</span></summary>
     <div class="fold-body">${errorNote}${body}${more}</div>
@@ -167,7 +181,7 @@ export function toolOverviewHtml(ownerReq, pair, reading) {
     ${row('配对状态', esc(pairStateText(pairState)))}
     ${pair !== null && pair.state === 'resolved' && pair.result_req !== null
     ? row('结果位置', `请求 ${pair.result_req} · 消息 #${pair.result_ord}`) : ''}
-    ${row('正文加载', esc(loadStateText(loadState)))}
+    ${row('正文加载', esc(loadStateText(loadState, reading?.reason ?? null)))}
     ${reading !== null && reading.state === 'available' ? row('错误标记', esc(isErrorText(reading.is_error))) : ''}
   </div>
   <p class="rail-note">模型响应时长归属承载它的请求；执行段按结果请求开始减调用请求结束推算，含客户端处理与人工确认，是上界。</p>`;

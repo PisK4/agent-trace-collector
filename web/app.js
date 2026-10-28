@@ -24,7 +24,7 @@ import { fillContextMap, iidOf, itemLabel } from './context-map.js';
 import { createContextMenu, iidParse } from './context-detail.js';
 import {
   kk, ledgerRowsHtml, railFactsHtml, readingChangedNote, renderAttemptChain,
-  resolveSelectedSource, structureFoldHtml, systemContextOf, toolOverviewHtml,
+  resolveSelectedSource, structureFoldHtml, structureMoreParts, systemContextOf, toolOverviewHtml,
   toolSchemaSection, usageFoldHtml,
 } from './rail-facts.js';
 import { secs } from './duration.js';
@@ -40,7 +40,7 @@ import { createMainView } from './trace-dom.js';
 import { renderTracePair } from './trace-pair.js';
 import { projectSteps, renderTraceRow } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
-import { railTabFromParam, railTabParam, resolveTraceTarget } from './url-route.js';
+import { railTabFromParam, railTabParam, resolveTraceTarget, traceIdFromParam } from './url-route.js';
 
 /**
  * 重绘后把滚动位置放回去。内容变短时夹到新的可滚动上限内。
@@ -85,7 +85,7 @@ if (typeof document !== 'undefined') {
   const qp = new URLSearchParams(location.search);
   const state = {
     session: qp.get('session'),
-    reqId: qp.get('trace') ? Number(qp.get('trace')) : null,
+    reqId: traceIdFromParam(qp.get('trace')),
     /** URL 指定的请求在库里不存在。 */
     missingReqId: /** @type {number | null} */ (null),
     /** URL 指定的请求存在，但落在当前载入窗口之外。 */
@@ -95,6 +95,8 @@ if (typeof document !== 'undefined') {
      * 最新一页（「回到最新」的追尾模式）。刷新按当前锚点重建，换会话复位。
      */
     windowAnchor: /** @type {'start' | 'latest'} */ ('start'),
+    /** 窗口切换在跑：按钮落禁用态，避免重复点击把自己排成两轮重建。 */
+    windowJumping: false,
     /** 选中的轮次（会话内已结算轮序号）；null 表示请求态。 */
     turn: /** @type {number | null} */ (null),
     selectedStep: /** @type {string | null} */ (null),
@@ -525,6 +527,7 @@ if (typeof document !== 'undefined') {
       offPageReqId: state.offPageReqId,
       windowError: store.getWindow().error,
       summary: summary?.status === 'ready' ? summary.data : null,
+      summaryStatus: summary?.status ?? 'idle',
       summaryFoldOpen: folds.get(`summary:${state.session ?? ''}`) === true,
       windowAnchor: state.windowAnchor,
     });
@@ -1027,6 +1030,7 @@ if (typeof document !== 'undefined') {
     // 结构总数未读时用元信息页的 total 判断：正文页签也能发起首次结构读取。
     const knownTotal = structure.total ?? (page.total ?? null);
     const unread = knownTotal !== null && knownTotal !== undefined && structure.next < knownTotal;
+    const { button: moreButton, note: structureError } = structureMoreParts(structure, r.req_id, knownTotal);
     return `${bodyNotice(page) ? `<p class="rail-note" style="margin-bottom:8px">${esc(bodyNotice(page))}</p>` : ''}
       ${body}
       <div class="conv-tools" style="padding:10px 0 0">
@@ -1038,7 +1042,7 @@ if (typeof document !== 'undefined') {
             </select>`
         : '<span class="muted" style="font-size:10.5px">这一笔没有消息正文</span>'}
       </div>
-      ${unread ? `<div style="margin-top:8px"><button class="chip-btn" data-structure-more="${r.req_id}">加载下一片（已读 ${structure.next} / ${knownTotal}）</button></div>` : ''}`;
+      ${unread ? `<div style="margin-top:8px">${moreButton}</div>${structureError}` : ''}`;
   }
 
   /** @type {string | null} */
@@ -1466,7 +1470,16 @@ if (typeof document !== 'undefined') {
     if (t.closest('summary')) return;
     if (t.closest('#load-later')) { void loadLater(); return; }
     if (t.closest('#refresh-window')) { void refreshWindow(); return; }
-    if (t.closest('#jump-opposite')) { void (state.windowAnchor === 'latest' ? jumpStart() : jumpLatest()); return; }
+    if (t.closest('#jump-opposite')) {
+      const button = /** @type {HTMLButtonElement} */ (t.closest('#jump-opposite'));
+      if (state.windowJumping) return;
+      state.windowJumping = true;
+      button.disabled = true;
+      button.textContent = '正在重建窗口…';
+      void (state.windowAnchor === 'latest' ? jumpStart() : jumpLatest())
+        .finally(() => { state.windowJumping = false; renderAll(); });
+      return;
+    }
     if (t.closest('#switch-window')) { void switchWindowFor(state.offPageReqId); return; }
     // 轮次带点选：轮次行随意图带入，转换层不做查找。
     const turnChip = /** @type {HTMLElement | null} */ (t.closest('[data-turn]'));
@@ -1765,10 +1778,9 @@ if (typeof document !== 'undefined') {
 
   window.addEventListener('popstate', () => {
     const p = new URLSearchParams(location.search);
-    const trace = p.get('trace');
     dispatch({
       kind: 'restore-url', session: p.get('session'),
-      trace: trace ? Number(trace) : null, tab: railTabFromParam(p.get('tab')),
+      trace: traceIdFromParam(p.get('trace')), tab: railTabFromParam(p.get('tab')),
     });
     if (state.session !== null) void selectSession(state.session, state.reqId);
   });
@@ -1785,7 +1797,7 @@ if (typeof document !== 'undefined') {
       const first = /** @type {SessionRow | undefined} */ (store.getSessions().items[0]);
       if (first) dispatch({ kind: 'open-session', sessionKey: first.conv_key, wantedTrace: null });
     }
-    if (state.session !== null) await selectSession(state.session, qp.get('trace') !== null ? Number(qp.get('trace')) : null);
+    if (state.session !== null) await selectSession(state.session, traceIdFromParam(qp.get('trace')));
     else renderAll();
   })();
 }
