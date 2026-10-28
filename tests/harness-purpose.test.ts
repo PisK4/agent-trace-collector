@@ -15,6 +15,7 @@ function view(over: Partial<PurposeView> = {}): PurposeView {
     toolCount: 0,
     replyText: '<block>no',
     userBlockHeads: [],
+    tailUserBlockHeads: [],
     source: { state: 'missing', value: null },
     stored: {
       version: null, status: 'missing', rule: null, signals: [],
@@ -72,7 +73,9 @@ test('规则弃权返回 null，落回通用判定', () => {
 });
 
 test('生产登记只含已知品牌标签', () => {
-  expect(PURPOSE_RULES.map(rule => rule.agent)).toEqual(['claude', 'hermes', 'omp']);
+  // claude 三条（分类器、suggestion、压缩），登记次序即同 agent 内的优先级。
+  expect(PURPOSE_RULES.map(rule => rule.agent))
+    .toEqual(['claude', 'claude', 'claude', 'hermes', 'omp']);
 });
 
 /**

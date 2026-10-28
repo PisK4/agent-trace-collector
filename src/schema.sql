@@ -138,6 +138,7 @@ CREATE TABLE request (
   model_title      TEXT,
   -- 折叠行摘要：派生时写入，列表接口直接返回，不碰正文块。
   -- kind 说明摘要是什么：delta（本轮新增）/ tail（末轮输入，非新增）/
+  -- tail_command（末尾是用户主动文本，关系无法证明新增）/
   -- tool_result（本轮没有用户消息，输入是工具结果）/ title（标题生成请求）。
   input_preview    TEXT,
   input_preview_kind TEXT,

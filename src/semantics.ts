@@ -3,7 +3,7 @@
  * 形状解析，以及跨 Harness 复用的来源 kind、标题兼容与正文不可读保留。Harness
  * 专属强指纹及其编排归 [harness/purpose](./harness/purpose.ts)。
  */
-export const PURPOSE_VERSION = 5;
+export const PURPOSE_VERSION = 6;
 
 export type PurposeStatus =
   | 'recognized' | 'unrecognized' | 'missing' | 'retained' | 'unsupported' | 'error';
@@ -31,6 +31,8 @@ export type PurposeView = {
   replyText: string | null;
   /** user 文本块的块首（每块前若干字符，逐块不拼消息）：旁路强指纹按块首匹配。 */
   userBlockHeads: string[];
+  /** 末尾 2 条 user 消息的文本块块首：suggestion 与压缩模板跟随本次输入写在末尾。 */
+  tailUserBlockHeads: string[];
   source: PurposeSource;
   stored: PurposeStored;
 };
