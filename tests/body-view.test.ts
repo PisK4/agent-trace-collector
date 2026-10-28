@@ -10,6 +10,7 @@ import {
 import { partColor, partLabel, renderAttemptChain } from '../web/rail-facts.js';
 import { replyCompleteness } from '../web/row-summary.js';
 import { esc, mdToHtml } from '../web/html.js';
+import { summaryParts } from '../web/tool-summary.js';
 import type { BodyPage } from '../src/protocols';
 import type { CapabilityView } from '../src/capabilities';
 import type { AttemptChain } from '../src/queries/routes';
@@ -374,6 +375,40 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
   // 没有配对信息的调用不能冒充已配对。
   const orphan = toolEntries(null, page({ reply: { id: 'm', content: [{ type: 'tool_use', id: 'x', name: 'n', input: {} }] } }));
   expect(orphan[0]?.state).toBe('unpaired');
+});
+
+test('工具往返与中栏共用摘要：工具名加参数段，完整参数只在悬停里', () => {
+  type ToolEntry = import('../web/body-model.js').ToolEntry;
+  const row = (over: Partial<ToolEntry>): ToolEntry => ({
+    call_id: 'call', name: 'Read', inputText: '{}', ord: 0, path: 'reply.output[0]',
+    state: 'resolved', owner: 7, result_req: null, result_ord: null, result_path: null,
+    ...over,
+  });
+  const read = JSON.stringify({ file_path: '/Users/pis/src/queries.ts', limit: 130 });
+  const edit = JSON.stringify({ file_path: 'src/derive.ts', old_string: 'a\nb', new_string: 'x' });
+  const bash = JSON.stringify({ command: 'bun test tests/body-view.test.ts', description: '跑窄测' });
+  const skill = JSON.stringify({ skill: 'de-AI-writing', args: '审阅' });
+  const html = renderTools([
+    row({ call_id: 'r', name: 'Read', inputText: read, ord: 0 }),
+    row({ call_id: 'e', name: 'Edit', inputText: edit, ord: 1 }),
+    row({ call_id: 'b', name: 'Bash', inputText: bash, ord: 2 }),
+    row({ call_id: 's', name: 'Skill', inputText: skill, ord: 3 }),
+  ], '7');
+  // 可见文本与中栏同一份摘要的参数段一致（含工具名与分隔符）。
+  for (const [name, input] of [['Read', read], ['Edit', edit], ['Bash', bash], ['Skill', skill]]) {
+    const { label, args } = summaryParts(name, input);
+    expect(html).toContain(`${label} · ${args}`);
+  }
+  // 行内没有原始 JSON：摘掉 title 属性后连键名与花括号都不出现。
+  const inline = html.replace(/ title="[^"]*"/g, '');
+  expect(inline).not.toContain('file_path');
+  expect(inline).not.toContain('{');
+  // 完整参数仍在悬停里。
+  expect(html).toContain('file_path');
+  expect(html).toContain('description');
+  // 未命名工具沿用固定叫法。
+  expect(renderTools([row({ name: '', inputText: 'raw-text', state: 'unpaired' })], ''))
+    .toContain('未命名工具 · raw-text');
 });
 
 test('消息与回复都先转义，XSS 载荷不会成为标签', () => {
