@@ -14,7 +14,7 @@ import {
   roleTag, toolTint,
 } from './body-view.js';
 import {
-  deltaOrdinals, messageCopyText, messagesKeyOf, replyView, toolEntries,
+  deltaOrdinals, messageCopyText, messagePairIndexOf, messagesKeyOf, replyView, toolEntries,
 } from './body-model.js';
 import { esc } from './html.js';
 import { partLabel } from './parts.js';
@@ -910,6 +910,16 @@ if (typeof document !== 'undefined') {
    * 读数页：本次回复（默认展开）→ 请求结构 → 能力清单 → 用量与上下文（默认展开，末位）→ 身份完整性（异常时）。
    * 能力与结构默认折叠；正常态不带状态标签（异常才出现）。
    */
+  /**
+   * 产出请求（已确认前驱）的详情：承载 delta 里的调用行与消息详情按 call_id 对齐
+   * 配对坐标与执行读数。前驱不在窗口、未读到或关系未确认时返回 null，留空不猜。
+   * @param {RequestDetail | null} detail
+   */
+  function prevDetailOf(detail) {
+    if (detail === null || detail.prev_relation !== 'confirmed' || typeof detail.prev_req_id !== 'number') return null;
+    return store.peekRequest(detail.prev_req_id)?.detail ?? null;
+  }
+
   function railFacts() {
     const r = currentRow();
     if (r === null) return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
@@ -945,16 +955,23 @@ if (typeof document !== 'undefined') {
         <div class="fold-body">${renderReply(view, tools, String(r.req_id))}${truncNote}</div>
       </details>`;
     }
+    // 选中消息行时结构折叠展开并选中该消息；用户之后仍可收起（folds 的显式
+    // false 优先于自动展开）。请求级行与无选择保持用户自己的开合状态。
+    const source = resolveSelectedSource(currentSelectedStep(r), state.selectedStep, read);
+    const messageOrd = source.side === 'request' && source.target === 'message' ? source.messageOrd : null;
+    const foldKey = `structure:${r.req_id}`;
+    const foldState = folds.get(foldKey);
     const structureHtml = structureFoldHtml({
       reqId: r.req_id, row: r, meta,
       entries: read?.entries ?? [],
       structure: read?.structure ?? { next: 0, total: null, ords: [], loading: false, error: null },
-      open: folds.get(`structure:${r.req_id}`) === true,
-      selected: structureSelected.get(r.req_id) ?? null,
+      open: foldState ?? (messageOrd !== null),
+      selected: messageOrd ?? structureSelected.get(r.req_id) ?? null,
       delta: detail === null ? null : deltaOrdinals(detail),
       deltaState: read?.delta ?? null,
       parseState: meta?.parse_state ?? null,
       relation: relationTextOf(r.req_id),
+      pairOf: messagePairIndexOf(detail, prevDetailOf(detail)),
     });
     return railFactsHtml({
       replyHtml, structureHtml,
@@ -1046,7 +1063,13 @@ if (typeof document !== 'undefined') {
   /** 当前请求的选中步骤对象；无选择或选中的是别的请求时返回 null。 @param {RequestRow} r */
   function currentSelectedStep(r) {
     if (state.selectedStep === null || !state.selectedStep.startsWith(`${r.req_id}:`)) return null;
-    return stepsOf(r).steps.find(item => item.key === state.selectedStep) ?? null;
+    const key = state.selectedStep;
+    const steps = stepsOf(r).steps;
+    const direct = steps.find(item => item.key === key);
+    if (direct !== undefined) return direct;
+    // 末尾组的行键是 reply:* 与 call:*，与承载组的 message:* 不冲突；只在选中这类键时读末尾投影。
+    if (!key.startsWith(`${r.req_id}:reply:`) && !key.startsWith(`${r.req_id}:call:`)) return null;
+    return tailOf(r)?.steps.find(item => item.key === key) ?? null;
   }
 
   function railBody() {
@@ -1108,7 +1131,8 @@ if (typeof document !== 'undefined') {
       body = renderSystemDetail(source.text, source.path);
     } else if (source.side === 'request') {
       const chosen = read.entries.find((/** @type {{ord: number}} */ entry) => entry.ord === source.messageOrd) ?? null;
-      body = chosen !== null ? renderMessageDetail(chosen, messagesKeyOf(page))
+      body = chosen !== null
+        ? renderMessageDetail(chosen, messagesKeyOf(page), messagePairIndexOf(detail, prevDetailOf(detail)))
         : `<div class="rail-empty"><b>消息未读取</b>${messagesKeyOf(page)}[${source.messageOrd}] 不在已加载的分片里；读取完成后回到这一步。</div>`;
     } else if (source.side === 'reply' && source.target === 'text') {
       body = `${truncNote}${renderReplyBlockDetail(source.path, source.text)}`;
@@ -1413,9 +1437,13 @@ if (typeof document !== 'undefined') {
     }
     // 旧版本显示期间点保留步骤：来源取最近一次完整投影，右栏按当前读取态如实说明。
     const step = stepsOf(row).steps.find(item => item.key === key) ?? null;
-    const source = resolveSelectedSource(step);
-    // 配对判定与页签映射在选择转换里：这里只解析步骤来源。
-    dispatch({ kind: 'select-step', reqId: id, stepKey: String(key), source });
+    // 消息行同时把读数页的结构折到这条消息；请求级行只换选择，不动折叠状态。
+    const source = step?.source ?? null;
+    if (source !== null && source.side === 'request' && typeof source.messageOrd === 'number') {
+      structureSelected.set(id, source.messageOrd);
+      folds.set(`structure:${id}`, true);
+    }
+    dispatch({ kind: 'select-step', reqId: id, stepKey: String(key) });
   }
 
   /** @param {number} id */

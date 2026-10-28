@@ -232,13 +232,16 @@ test('结果步骤反向配对：Anthropic 按内容块路径，Chat 按整条�
   expect(mismatched.find(s => s.kind === 'tool_result')?.pairOwner).toBeNull();
 });
 
-test('选中来源解析：调用与已配对结果都解析成配对目标', () => {
+test('选中来源解析：请求侧一律落到消息本身，配对页不在这里推导', () => {
   const callStep = { kind: 'tool', source: { side: 'reply', path: 'reply.content[1]', messageOrd: null, blockIndex: 1 }, callOrd: 1, reqId: 7, pairOwner: null };
   expect(resolveSelectedSource(callStep as never)).toEqual({
     side: 'reply', target: 'call', path: 'reply.content[1]', callOrd: 1, ownerReq: 7,
   });
+  // 已配对的结果也打开它所在的消息：配对页只由显式按钮进入。
   const pairedResult = { kind: 'tool_result', source: { side: 'request', path: 'request.messages[2].content[0]', messageOrd: 2, blockIndex: 0 }, pairOwner: { reqId: 3, callOrd: 1 }, reqId: 7 };
-  expect(resolveSelectedSource(pairedResult as never)).toEqual({ side: 'pair', ownerReq: 3, callOrd: 1 });
+  expect(resolveSelectedSource(pairedResult as never)).toEqual({
+    side: 'request', target: 'message', path: 'request.messages[2].content[0]', messageOrd: 2,
+  });
   const plainResult = { kind: 'tool_result', source: { side: 'request', path: 'request.messages[2].content[0]', messageOrd: 2, blockIndex: 0 }, pairOwner: null, reqId: 7 };
   expect(resolveSelectedSource(plainResult as never)).toEqual({
     side: 'request', target: 'message', path: 'request.messages[2].content[0]', messageOrd: 2,

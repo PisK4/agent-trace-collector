@@ -108,11 +108,12 @@ export function structureMoreParts(structure, reqId, total) {
  *   relation: string,
  *   open?: boolean,
  *   selected?: number | null,
+ *   pairOf?: ((block: import('./body-model.js').Block) => {owner: number, callOrd: number} | null) | null,
  * }} input
  * @returns {string}
  */
 export function structureFoldHtml(input) {
-  const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation, open = false, selected = null } = input;
+  const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation, open = false, selected = null, pairOf = null } = input;
   const total = structure.total ?? (meta ? meta.total : null);
   const count = total === null || total === undefined ? '消息总数未读取' : `${total} 条消息`;
   const canLoad = row.body_state === 'available' || row.body_state === 'partial';
@@ -121,7 +122,7 @@ export function structureFoldHtml(input) {
     ? null : entries.find(entry => entry.ord === selected) ?? null;
   let body;
   if (chosen !== null) {
-    body = `${renderMessageDetail(chosen)}
+    body = `${renderMessageDetail(chosen, 'messages', pairOf)}
       <div class="conv-tools"><button class="chip-btn" data-structure-back="${reqId}">返回消息列表</button></div>`;
   } else if (entries.length === 0 && !canLoad) {
     body = `<p class="note">${esc(bodyLabelText(row))}</p>`;
@@ -255,8 +256,9 @@ export function systemContextOf(row, readOf) {
 /**
  * 选中来源解析：把当前选中的步骤解析成右栏的阅读目标。
  * `state.selectedStep` 是唯一选择；右栏来源只从这一步解析，不按时间跳别的请求。
- * 调用与已配对的结果步骤都解析成配对目标（owner + 调用序号），右栏就地同屏阅读；
- * 未配对的结果、System 与其余输入步骤打开正文来源；记录步骤打开请求读数。
+ * 请求侧分支处理输入消息、承载真实内容的 assistant 消息与结果消息，按消息号定位；
+ * 回复侧分支只服务末尾组，按回复块定位。配对页不在这里推导：它只由「配对两端」
+ * 与工具页列表等显式入口打开。
  * @param {import('./trace-view.js').TraceStep | null} step
  * @param {string | null} [selectedKey] 消息列表选中的稳定键，主轨迹未投影时用于定位缓存原文。
  * @param {RequestRead | null} [read]
@@ -265,8 +267,7 @@ export function systemContextOf(row, readOf) {
  *   | {side:'request', target:'message', path:string, messageOrd:number}
  *   | {side:'reply', target:'text', path:string, blockIndex:number, text:string}
  *   | {side:'reply', target:'block', path:string, blockIndex:number, raw:unknown}
- *   | {side:'reply', target:'call', path:string, callOrd:number, ownerReq:number}
- *   | {side:'pair', ownerReq:number, callOrd:number}}
+ *   | {side:'reply', target:'call', path:string, callOrd:number, ownerReq:number}}
  */
 export function resolveSelectedSource(step, selectedKey = null, read = null) {
   if (step === null && read?.detail !== null && read?.detail !== undefined && selectedKey !== null) {
@@ -279,10 +280,6 @@ export function resolveSelectedSource(step, selectedKey = null, read = null) {
   }
   if (step === null || step.source === null) return { side: 'none' };
   const s = step.source;
-  // 已配对的结果步骤优先解析成配对目标：它虽然落在 request 侧，阅读入口是两端同屏。
-  if (step.kind === 'tool_result' && step.pairOwner !== null) {
-    return { side: 'pair', ownerReq: step.pairOwner.reqId, callOrd: step.pairOwner.callOrd };
-  }
   if (s.side === 'request') {
     if (typeof s.messageOrd === 'number') {
       return { side: 'request', target: 'message', path: s.path, messageOrd: s.messageOrd };

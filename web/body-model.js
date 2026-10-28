@@ -7,7 +7,7 @@
  * @typedef {import('../src/queries/requests').RequestDetail} RequestDetail
  * @typedef {import('../src/input-interpretation').UserInputView} UserInputView
  * @typedef {'system' | 'user' | 'assistant' | 'tool' | 'unknown'} Role
- * @typedef {{kind: string, text: string, index: number, raw: unknown, path: string, failed?: boolean}} Block
+ * @typedef {{kind: string, text: string, index: number, raw: unknown, path: string, failed?: boolean, callId?: string}} Block
  * @typedef {{ord: number, role: Role, rawRole: string | null, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
  * @typedef {{id: string, name: string, inputText: string, ord: number, path: string}} ToolCallView
  * @typedef {{state: 'ok' | 'absent' | 'invalid' | 'pending' | 'evicted' | 'unsupported' | 'summary' | 'partial', text: string, thinking: string[], calls: ToolCallView[], blocks: Block[], choiceCount: number | null, finish: string | null, model: string | null, raw: unknown}} ReplyView
@@ -127,7 +127,11 @@ export function messageBlocks(message) {
   const out = [];
   const content = message.content;
   if (typeof content === 'string') {
-    out.push({ kind: message.role === 'tool' ? 'result' : 'text', text: content, index: 0, raw: content, path: 'content' });
+    // chat 的工具结果写成 role=tool 的整条消息，身份在消息顶层的 tool_call_id 上；
+    // 块里没有这个字段，归一化时带上，供按 call_id 查找两端。
+    const callId = message.role === 'tool' && typeof message.tool_call_id === 'string'
+      ? message.tool_call_id : undefined;
+    out.push({ kind: message.role === 'tool' ? 'result' : 'text', text: content, index: 0, raw: content, path: 'content', callId });
   } else if (Array.isArray(content)) {
     for (const [index, block] of content.entries()) {
       out.push(blockView(block, index, `content[${index}]`));
@@ -165,6 +169,47 @@ export function toolCallOfBlock(block) {
     inputText: typeof fn.input === 'string' ? fn.input
       : typeof fn.arguments === 'string' ? fn.arguments
         : JSON.stringify(fn.input ?? fn.arguments ?? null) ?? '',
+  };
+}
+
+/**
+ * 结果块指向的调用身份：Anthropic 用 tool_use_id，Responses 用 call_id，chat 的
+ * tool_call_id 落在整条消息上，由 messageBlocks 归一化到块上。读不到返回空串，
+ * 不按块序号猜。
+ * @param {Block} block 结果块（kind='result'）
+ * @returns {string}
+ */
+export function toolResultCallIdOf(block) {
+  if (typeof block.callId === 'string' && block.callId !== '') return block.callId;
+  const raw = isRecord(block.raw) ? block.raw : {};
+  return typeof raw.tool_use_id === 'string' ? raw.tool_use_id
+    : typeof raw.call_id === 'string' ? raw.call_id : '';
+}
+
+/**
+ * 消息详情里的配对入口坐标：call_id 能确认两端才给，读不到返回 null。
+ * 结果块的调用方取本请求的反向配对索引；调用块的调用方是产出请求（已确认前驱），
+ * 按 call_id 在它的调用表里找序号。前驱不在窗口、未读或 call_id 对不上时不给，
+ * 不按块序号猜。
+ * @param {RequestDetail | null} detail
+ * @param {RequestDetail | null} prevDetail
+ * @returns {(block: Block) => {owner: number, callOrd: number} | null}
+ */
+export function messagePairIndexOf(detail, prevDetail) {
+  return (block) => {
+    if (block.kind === 'result') {
+      const id = toolResultCallIdOf(block);
+      if (id === '') return null;
+      const row = detail?.tool_results.find(item => item.call_id === id) ?? null;
+      return row === null || row.state !== 'resolved' ? null : { owner: row.owner_req, callOrd: row.ord };
+    }
+    if (block.kind === 'call') {
+      const id = toolCallOfBlock(block).id;
+      if (id === '' || prevDetail === null) return null;
+      const row = prevDetail.tool_calls.find(item => item.call_id === id) ?? null;
+      return row === null ? null : { owner: prevDetail.req_id, callOrd: row.ord };
+    }
+    return null;
   };
 }
 
