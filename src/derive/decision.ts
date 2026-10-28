@@ -590,6 +590,8 @@ export type PresentationPorts = {
     associations: readonly ResolvedTool[]): string | null;
   /** 正文里最后一条用户文本（末轮输入兜底）。 */
   tailUserPreview(reqId: number): string | null;
+  /** 本笔输入的最后一条用户消息是主动文本（含 wrapped 与 midturn，不含注入与工具结果）。 */
+  lastUserMessageIsCommand(reqId: number): boolean;
 };
 
 /** 正文不可读时保留的旧展示值；白名单之外的取值按 null 处理。 */
@@ -623,7 +625,7 @@ export type PresentationDecision = {
   title: string;
   titleSource: 'user_delta' | 'model_time' | 'model_title';
   inputPreview: string | null;
-  inputKind: 'delta' | 'tail' | 'tool_result' | 'title' | null;
+  inputKind: 'delta' | 'tail' | 'tail_command' | 'tool_result' | 'title' | null;
   replyPreview: string | null;
 };
 
@@ -640,7 +642,7 @@ export function presentationDecision(ports: PresentationPorts, facts: Presentati
   let title = fallback;
   let titleSource: 'user_delta' | 'model_time' | 'model_title' = 'model_time';
   let inputPreview: string | null = null;
-  let inputKind: 'delta' | 'tail' | 'tool_result' | 'title' | null = null;
+  let inputKind: 'delta' | 'tail' | 'tail_command' | 'tool_result' | 'title' | null = null;
   if (facts.isTitle) {
     // 标题请求不产生用户标题；它的正式标题只来自用途阶段写下的 model_title。
     title = facts.modelTitle ?? (facts.current === null ? retained?.title ?? fallback : fallback);
@@ -656,7 +658,8 @@ export function presentationDecision(ports: PresentationPorts, facts: Presentati
       ? retained.titleSource : 'model_time';
     inputPreview = retained?.inputPreview ?? null;
     inputKind = retained !== null && (retained.inputPreviewKind === 'delta'
-      || retained.inputPreviewKind === 'tail' || retained.inputPreviewKind === 'tool_result'
+      || retained.inputPreviewKind === 'tail' || retained.inputPreviewKind === 'tail_command'
+      || retained.inputPreviewKind === 'tool_result'
       || retained.inputPreviewKind === 'title') ? retained.inputPreviewKind : null;
   } else {
     // 排除用途但不是标题请求：不把用户增量变成标题，只用已存的模型标题或时间兜底。
@@ -691,9 +694,11 @@ export function presentationDecision(ports: PresentationPorts, facts: Presentati
       inputKind = 'tool_result';
     } else {
       // 关系未知、另起一支或排除用途：没有"新增"可言，但折叠行仍要有东西可读。
-      // 取正文里最后一条用户消息，界面会把它标成"末轮输入"而不是"新增"。
+      // 末条消息是用户主动文本时，这一笔还带「用户刚发过话」的结构证据，轮次
+      // 起点用它把 tail 与「只是回传工具结果」分开。
       inputPreview = ports.tailUserPreview(facts.reqId);
-      inputKind = inputPreview === null ? null : 'tail';
+      inputKind = inputPreview === null ? null
+        : ports.lastUserMessageIsCommand(facts.reqId) ? 'tail_command' : 'tail';
     }
   }
   return { title, titleSource, inputPreview, inputKind, replyPreview: facts.replyPreview };

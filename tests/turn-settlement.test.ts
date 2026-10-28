@@ -202,10 +202,11 @@ test('轮次结算：正文回收的起点照常进带，ordinals 清空、终�
     expect(evictOldestBodyBatch(f.store, 5000, 1).requests).toBe(1);
     derive(f);
     // req 1 回收：起点 kind 位保留、形状位保留 final、delta_ordinals 已随回收清空，
-    // 回收起点照常进带。req 2 的前驱随回收断链诚实降级（relation unknown、kind 降
-    // tail），不再是命令行——断链让后一轮消失，这是正文回收的代价，不是形状位缺陷。
+    // 回收起点照常进带。req 2 的前驱随回收断链，delta 算不出来，但末条消息是用户
+    // 主动文本，记成 tail_command 并照常成起点。
     expect(listTurns(f.store, SEED_GROUP.convKey).items).toEqual([
       { turn: 1, start_req: 1, ordinals: [], reply_req: 1 },
+      { turn: 2, start_req: 2, ordinals: [], reply_req: 2 },
     ]);
   } finally { f.close(); }
 });
@@ -259,5 +260,38 @@ test('轮次结算：未知会话返回空表，不报错', () => {
   const f = fixture();
   try {
     expect(listTurns(f.store, '["session","missing"]').items).toEqual([]);
+  } finally { f.close(); }
+});
+
+test('轮次结算：不确定闭包里相对可读前驱的新增命令照常成起点', () => {
+  const f = fixture();
+  try {
+    seedTurns(f, [
+      { delta: [U('命令一')], reply: FINAL },
+      { delta: [U('命令二')], reply: FINAL },
+      { delta: [U('命令三')], reply: FINAL },
+      { delta: [U('命令四')], reply: FINAL },
+    ]);
+    derive(f);
+    // 回收 req1：req2 关系 unknown 且 delta 不可算，靠末条消息是用户主动文本记成
+    // tail_command；req3/req4 的前驱可读，delta 成立但被不确定闭包标成 unknown。
+    expect(evictOldestBodyBatch(f.store, 5000, 1).requests).toBe(1);
+    derive(f);
+    expect(listTurns(f.store, SEED_GROUP.convKey).items.map(item => item.start_req)).toEqual([1, 2, 3, 4]);
+  } finally { f.close(); }
+});
+
+test('轮次结算：末尾是工具回传的 tail 不算命令', () => {
+  const f = fixture();
+  try {
+    seedTurns(f, [
+      { delta: [U('命令一')], reply: FINAL },
+      { delta: [R('t1')], reply: FINAL },
+    ]);
+    derive(f);
+    expect(evictOldestBodyBatch(f.store, 5000, 1).requests).toBe(1);
+    derive(f);
+    // req2 的末条消息是 tool_result：末轮输入不是用户主动文本，不进带。
+    expect(listTurns(f.store, SEED_GROUP.convKey).items.map(item => item.start_req)).toEqual([1]);
   } finally { f.close(); }
 });

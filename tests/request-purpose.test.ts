@@ -407,3 +407,26 @@ test('Hermes 标题指纹在缺回复时仍结算为 title 并排除链', () => 
       .toEqual({ actor: null, actor_state: 'unknown' });
   } finally { f.close(); }
 });
+
+test('suggestion 模板贴在末尾 user 消息时，前五条之外也能取到块首', () => {
+  const f = fixture();
+  try {
+    // 前 5 条是历史对话，模板在最后一条 user 消息里：只取前 5 条会全部漏检。
+    const history = Array.from({ length: 5 }, (_, i) => ({ role: 'user', content: `历史对话 ${i}` }));
+    const id = seedPurposeRequest(f.store, {
+      convKey: 'claude-tail', agent: 'claude',
+      messages: [...history, { role: 'user', content: '[SUGGESTION MODE: continue the conversation]' }],
+      reply: { content: [{ type: 'text', text: 'suggested' }] },
+      purposeTarget: 1,
+    });
+    const task = readTask(f.store, id)!;
+    expect(task.view.userBlockHeads).not.toContain('[SUGGESTION MODE: continue the conversation]');
+    expect(task.view.tailUserBlockHeads).toContain('[SUGGESTION MODE: continue the conversation]');
+    drainPurposes(f.store);
+    expect(purposeRow(f.store, id)).toMatchObject({
+      purpose_status: 'recognized', purpose_version: PURPOSE_VERSION,
+      purpose_chain: 'exclude', req_kind: 'suggestion_mode',
+      purpose_rule: 'claude.suggestion-mode.v1',
+    });
+  } finally { f.close(); }
+});

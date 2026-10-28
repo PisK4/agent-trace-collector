@@ -109,14 +109,16 @@ export function listTurns(store: Store, key: string, from: number | null = null)
       if (list === undefined) children.set(row.prev_req_id, [row.req_id]);
       else list.push(row.req_id);
     }
-    const isCommand = (row: TurnRow): boolean => row.input_preview_kind === 'delta';
-    // 起点资格：已证明主链上的行，或自身关系未知的行。正文回收的起点链角色落
-    // unknown（关系同样 unknown），但 kind 位与形状位都是保留值——轮次两端阅读
-    // 的决策是回收起点照常进带，ordinals 清空。它与不确定闭包后继（confirmed 接
-    // 在无法证明的环节之后，链角色同样 unknown）靠 prev_relation 区分：后继一律
-    // 排除，不能因为编码合并重新获得起点资格。
+    // 命令判据：delta（相对可读前驱的新增），或 tail_command（末条消息是
+    // 用户主动文本，关系证明不了但输入形状成立）。
+    const isCommand = (row: TurnRow): boolean =>
+      row.input_preview_kind === 'delta' || row.input_preview_kind === 'tail_command';
+    // 起点资格：已证明主链上的行，或链角色落 unknown 的行。unknown 覆盖两种
+    // 情况：正文回收的起点（自身关系 unknown），以及不确定闭包里的后继
+    // （confirmed）。后者的 delta 相对可读前驱成立，是用户命令的直接证据，
+    // 不因归属不能证明就排除。branch 仍然不进带：它能被证明与主链不相接。
     const isStart = (row: TurnRow): boolean => row.chain_role === 'main'
-      || (row.chain_role === 'unknown' && row.prev_relation === 'unknown');
+      || row.chain_role === 'unknown';
     const settled: { row: TurnRow; endpoint: number }[] = [];
     for (const row of rows) {
       // 排除范围：分支链、不确定闭包后继、辅助与标题请求都不参与；起点必须是命令行。
