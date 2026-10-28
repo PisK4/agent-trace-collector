@@ -27,3 +27,5 @@ Status: implemented
 ## Consequences
 
 生产中栏消费 `projectSteps` + `renderTraceRows`，行 CSS 类名沿用原型验证过的 compact-* 命名。验证：`bun test tests/trace-view.test.ts tests/body-view.test.ts tests/web.test.ts` 全过（顺序与稳定键、unrecognized、注入转义、dirty/branch/unknown、aux、同 call_id 键不冲突、截断/未知/未收到、纯工具回复、多 choice、失败与缺正文并存、摘要按工具分派、System 顶层与消息级来源键、System 上下文三态、混合消息按块出步骤、两类协议回复来源路径、英文标签与工具 chip、systemContextOf 前驱比较），`bun run typecheck` 通过（2026-10-24）。
+
+[中栏按承载请求的 delta 分组](2026-10-28-request-delta-trace-groups.md)部分取代本篇关于 delta 只投影输入消息、回复对象投影，以及 `reqId:reply:*` 与 `reqId:call:*` 行语义的决定：assistant 文本块与 tool_use 调用块现在各出一行，回复只在末尾组投影，普通组不再有回复行。纯投影、稳定步骤键、精确协议来源、可信 delta 闸门与请求状态、配对状态分立的决定继续有效。

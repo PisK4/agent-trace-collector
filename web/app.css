@@ -563,7 +563,6 @@ pre.raw{
 .ctx-row .dot{width:8px;height:8px;border-radius:2.5px;flex:none}
 .ctx-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctx-row .nm b{font-weight:500}
-.ctx-row .nm small{color:var(--muted);font-size:10px}
 .ctx-row .xn{color:var(--muted);font-size:10px;white-space:nowrap}
 .ctx-row .tg{font:10px var(--mono);color:var(--text-2);background:var(--inset);border:1px solid var(--line);border-radius:3px;padding:0 4px;white-space:nowrap}
 .ctx-row .bar{width:72px;flex:none;height:5px;border-radius:2.5px;background:var(--inset);overflow:hidden}

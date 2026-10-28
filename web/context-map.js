@@ -14,7 +14,7 @@
  */
 
 import { esc } from './html.js';
-import { kk, partColor, partLabel, partRank } from './parts.js';
+import { baseNameOf, isPathKind, kk, partColor, partLabel, partRank } from './parts.js';
 
 /** px²：item 布局面积低于此值并入成员集合（≥2 块才并；并完一类无保留块时整类一块）。 */
 const MERGE_AREA = 950;
@@ -44,10 +44,11 @@ function tagText(tag) {
   return ({ mcp: 'MCP', read: 'read', shell: 'shell', result: 'result', user: 'user', project: 'project', reminder: '提醒', skills: 'skills' })[tag] ?? tag;
 }
 
-/** 路径类 item 的目录前缀：名字在前、路径在后。 @param {PromptItem} it @param {string} kind */
-function itemDir(it, kind) {
-  if ((kind !== 'files' && kind !== 'memory') || !it.name.includes('/')) return '';
-  return it.name.slice(0, it.name.lastIndexOf('/') + 1);
+/** 路径类 item 的可见名：只留 basename；轮次与折叠桶的固定叫法、非路径名字原样。
+ *  完整名字由 title 与 aria-label 承担（见 itemLabel），躲开右栏省略号。 @param {string} kind @param {PromptItem} it */
+export function itemDisplay(kind, it) {
+  if (it.tag === 'turn' || it.tag === 'turns' || it.tag === 'more') return itemLabel(it);
+  return isPathKind(kind) ? baseNameOf(it.name) : itemLabel(it);
 }
 
 /**
@@ -156,7 +157,7 @@ export function tilesOf(p, W, H) {
     for (const q of laid) {
       const it = q.a.item ?? null;
       if (it !== null) {
-        tiles.push({ key: iidOf(part.kind, it), kind: part.kind, scope: 'item', item: it, its: [it], name: itemLabel(it), tokens: it.tokens, x: q.x, y: q.y, w: q.w, h: q.h });
+        tiles.push({ key: iidOf(part.kind, it), kind: part.kind, scope: 'item', item: it, its: [it], name: itemDisplay(part.kind, it), tokens: it.tokens, x: q.x, y: q.y, w: q.w, h: q.h });
       } else {
         const its = q.a.rest ?? [];
         const unitemized = its.length === 0;
@@ -248,14 +249,13 @@ export function contextRowsHtml(p, reqId) {
   /** @param {{it: PromptItem, kind: string}} row */
   const rowHtml = (row) => {
     const { it, kind } = row;
-    const dir = itemDir(it, kind);
-    const base = it.tag === 'turn' || it.tag === 'turns' || it.tag === 'more' ? itemLabel(it) : it.name.slice(it.name.lastIndexOf('/') + 1);
+    const base = itemDisplay(kind, it);
     const xn = it.n !== null && it.n > 1 && it.tag !== 'turns' && it.tag !== 'more' ? `×${it.n}` : '';
     const tg = tagText(it.tag);
     const title = `${partLabel(kind)} · ${itemLabel(it)} · ${kk(it.tokens)} tokens · ${Math.round(it.tokens / sum * 100)}%`;
     return `<button type="button" class="ctx-row" data-ctx-key="${esc(iidOf(kind, it))}" data-ctx-kind="${esc(kind)}" data-ctx-req="${reqId}" aria-label="${esc(title)}，打开明细" title="${esc(title)}">
       <i class="dot" style="background:${partColor(kind)}"></i>
-      <span class="nm"><b>${esc(base)}</b>${dir !== '' ? ` <small>${esc(dir)}</small>` : ''}</span>
+      <span class="nm"><b>${esc(base)}</b></span>
       ${xn !== '' ? `<span class="xn">${xn}</span>` : ''}
       ${tg !== '' ? `<span class="tg">${esc(tg)}</span>` : ''}
       <span class="bar"><i style="width:${Math.max(2, it.tokens / most * 100).toFixed(1)}%;background:${partColor(kind)}"></i></span>

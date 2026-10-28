@@ -44,6 +44,8 @@ test('弹窗 HTML：头部范围与 token，单项默认展开，集合块列成
     ], next_cursor: null },
   });
   expect(one).toContain('src/a.ts');
+  // 路径类名字只显示 basename，完整名字在 title 里。
+  expect(one).toContain('<b title="src/a.ts">a.ts</b>');
   expect(one).toContain('8.5k tokens');
   expect(one).toMatch(/ctx-d-entry" open data-ctx-entry="0"/);
   expect(one).toContain('调用 0 · 结果在 req 6');
@@ -64,6 +66,32 @@ test('弹窗 HTML：头部范围与 token，单项默认展开，集合块列成
   expect(rest).toContain('data-ctx-more');
   // 类级目录条目不默认展开。
   expect(rest).not.toContain('data-ctx-entry="0" open');
+});
+
+test('弹窗头与成员名单：路径类只显示 basename，完整名字进 title', () => {
+  const ready = { phase: 'ready', data: { state: 'available', reason: null, notes: [], entries: [], next_cursor: null } };
+  const item = contextDetailHtml({
+    reqId: 7, kind: 'memory', name: '/pis/.claude/AGENTS.md', tag: 'user',
+    label: '/pis/.claude/AGENTS.md', tokens: 1980, token: 'r1-x',
+  }, ready);
+  expect(item).toContain('<b title="/pis/.claude/AGENTS.md">AGENTS.md</b>');
+  // 非路径类范围名不折算，也不挂多余的 title。
+  const category = contextDetailHtml({
+    reqId: 7, kind: 'files', name: null, tag: null, label: '文件引用', tokens: 900, token: 'r1-x',
+  }, ready);
+  expect(category).toContain('<b>文件引用</b>');
+
+  const rest = contextDetailHtml({
+    reqId: 7, kind: 'files', name: null, tag: null, label: '其余文件引用 2 项', tokens: 900, token: 'r1-x',
+    members: ['files\u0001read\u0001src/queries/m1.ts', 'files\u0001read\u0001m2.ts'],
+  }, ready);
+  expect(rest).toContain('成员：<span title="src/queries/m1.ts">m1.ts</span>、m2.ts');
+  // 轮次等非路径类成员保持原名。
+  const chat = contextDetailHtml({
+    reqId: 7, kind: 'chat', name: null, tag: null, label: '对话内容', tokens: 900, token: 'r1-x',
+    members: ['chat\u0001turn\u00012'],
+  }, ready);
+  expect(chat).toContain('成员：2');
 });
 
 test('弹窗 HTML：缺口状态与读取失败如实呈现，不渲染条目列表', () => {

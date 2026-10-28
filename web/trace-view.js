@@ -1,8 +1,12 @@
 // @ts-check
-import { deltaOrdinals, messagePathOf, replyView, systemPathOf } from './body-model.js';
+import { deltaOrdinals, messagePathOf, replyView, systemPathOf, toolCallOfBlock } from './body-model.js';
 import { toolTint } from './body-view.js';
 import { compact, secs, tierOf, TIER_LIMITS, toolCategory } from './duration.js';
 import { esc } from './html.js';
+import { clipChars, summaryParts, toolSummary } from './tool-summary.js';
+
+// 摘要分派住在叶子模块（body-view.js 也要用）；这里继续转发，既有消费者不用改。
+export { toolSummary };
 
 /**
  * 步骤投影：把可信输入与实际回复变成单行轨迹步骤。纯函数、无 DOM、无网络；
@@ -34,6 +38,7 @@ import { esc } from './html.js';
  * @property {'failed'|'missing_body'|'missing_reply'|'unknown'|'truncated'|null} status
  * @property {{state: 'resolved'|'pending'|'ambiguous'|'unpaired', reqId: number|null} | null} result
  * @property {{reqId: number, callOrd: number} | null} pairOwner 结果步骤的反向配对：承载本结果的调用方与调用序号；未确认时为 null
+ * @property {{reqId: number, callOrd: number} | null} [callOwner] 承载消息里调用行的配对坐标：产出请求与调用序号；未确认时缺省
  * @property {string | null} [toolName] 调用步是工具名，结果步是配对索引的 tool_name（缓存外仍可知）；其余步骤缺省
  * @property {string | null} [toolArgs] 调用步的参数段摘要（已按预算截断，不含工具名）；其余步骤缺省
  * @property {string | null} [toolInput] 调用步的完整参数 JSON，供悬停展示；其余步骤缺省
@@ -99,227 +104,6 @@ function bgIndexes(bgJobs) {
   return { bySpawn, byNotice };
 }
 
-/* ---------- 工具行摘要：按工具分派，路径折算成末两段，行区间是显示锚点不是事实 ---------- */
-
-/** 悬停 title 属性的超长护栏：预览文本不按字符截断，属性仍要防大参数撑爆。 */
-const TITLE_MAX = 2000;
-
-/** @param {string} text @param {number} [max] */
-const clipChars = (text, max = TITLE_MAX) => {
-  const chars = [...text];
-  return chars.length <= max ? text : `${chars.slice(0, max).join('')}…`;
-};
-
-/**
- * 路径末两段：扫读锚点是「上层目录 + 文件名」，只有一段时原样返回。
- *
- * 读模型不带 cwd（`raw_hook.cwd` 有列但不在 `RequestDetail`，omp/zcode 侧实测全空），
- * 拿不到项目根，所以按纯后缀切：绝对路径的倒数第二段是直接父目录，
- * `/…/agent-trace-collector/src/harness/semantics.ts` 显示 `harness/semantics.ts`，
- * 仓库根文件显示 `agent-trace-collector/AGENTS.md`。完整路径进悬停与右栏。
- * @param {string} p
- */
-const baseName = (p) => {
-  const parts = p.replace(/\/+$/, '').split('/').filter(Boolean);
-  if (parts.length <= 1) return parts[0] ?? '';
-  return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
-};
-
-/** @param {unknown} v @returns {string | null} 非空字符串原样返回，其余 null。 */
-const nonEmpty = (v) => (typeof v === 'string' && v !== '' ? v : null);
-
-/** 文件类参数取末两段。 @param {unknown} v */
-const fileBase = (v) => {
-  const s = nonEmpty(v);
-  return s === null ? null : baseName(s);
-};
-
-/** @param {unknown} v @returns {number | null} */
-const asNum = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-
-/** 行数按换行计；缺失或空串为 0 行。 @param {string | null} s */
-const lineCount = (s) => (s === null || s === '' ? 0 : s.split('\n').length);
-
-/** 第一个非空行（trim 后）。 @param {string} text */
-const firstNonEmptyLine = (text) => {
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed !== '') return trimmed;
-  }
-  return '';
-};
-
-/** content 字节数读数：不足 1KB 显示 B，满 1MB 换 MB，其余 KB 一位小数。 @param {string} text */
-const byteSize = (text) => {
-  const bytes = new TextEncoder().encode(text).length;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1048576).toFixed(1)} MB`;
-};
-
-/**
- * 逐工具参数段：核心键齐才分派，缺核心键返回 null 走通用回退链。
- * 区间折算与字节读数只服务扫读，原始键值始终在悬停与右栏。
- *
- * 文件目标键有两个来源：Claude Code 用 `file_path`，OMP（oh-my-pi）的同族
- * 小写工具 read/write/edit/grep/glob 用 `path`；两个键同权接受，缺的键走
- * 另一个。大小写变体共用同一分支：工具名只分派一次，别名不重复摘要逻辑。
- *
- * @param {string} name @param {Record<string, unknown>} args @returns {string | null}
- */
-function dispatchSummary(name, args) {
-  switch (name) {
-    case 'Read':
-    case 'read': {
-      const file = fileBase(args.file_path) ?? fileBase(args.path);
-      if (file === null) return null;
-      const offset = asNum(args.offset);
-      const limit = asNum(args.limit);
-      const range = offset !== null && limit !== null ? `${offset}–${offset + limit} 行`
-        : limit !== null ? `前 ${limit} 行`
-          : offset !== null ? `${offset} 行起` : '';
-      return range === '' ? file : `${file} · ${range}`;
-    }
-    case 'Edit':
-    case 'edit': {
-      const file = fileBase(args.file_path) ?? fileBase(args.path);
-      if (file === null) return null;
-      const oldS = typeof args.old_string === 'string' ? args.old_string : null;
-      const newS = typeof args.new_string === 'string' ? args.new_string : null;
-      const parts = [file];
-      if (oldS !== null || newS !== null) parts.push(`${lineCount(oldS)}→${lineCount(newS)} 行`);
-      if (args.replace_all === true) parts.push('全部替换');
-      return parts.join(' · ');
-    }
-    case 'Write':
-    case 'write': {
-      const file = fileBase(args.file_path) ?? fileBase(args.path);
-      if (file === null) return null;
-      const content = typeof args.content === 'string' ? args.content : null;
-      return content !== null ? `${file} · ${byteSize(content)}` : file;
-    }
-    case 'Bash':
-    case 'bash': {
-      const desc = typeof args.description === 'string' && args.description.trim() !== ''
-        ? args.description.trim() : null;
-      if (desc !== null) return desc;
-      const command = typeof args.command === 'string' ? firstNonEmptyLine(args.command) : '';
-      return command !== '' ? command : null;
-    }
-    case 'Skill': {
-      const skill = nonEmpty(args.skill);
-      if (skill === null) return null;
-      const extra = typeof args.args === 'string' && args.args.trim() !== '' ? ` · ${args.args.trim()}` : '';
-      return `${skill}${extra}`;
-    }
-    case 'Agent': {
-      const type = nonEmpty(args.subagent_type);
-      if (type === null) return null;
-      const desc = typeof args.description === 'string' && args.description.trim() !== ''
-        ? ` · ${args.description.trim()}` : '';
-      return `${type}${desc}`;
-    }
-    case 'SendMessage': {
-      const summary = typeof args.summary === 'string' && args.summary.trim() !== '' ? args.summary.trim() : null;
-      const to = nonEmpty(args.to);
-      if (summary === null && to === null) return null;
-      const target = to !== null ? `→ ${[...to].slice(0, 8).join('')}` : null;
-      return [summary, target].filter(Boolean).join(' ');
-    }
-    case 'SubagentHandback': {
-      const message = typeof args.message === 'string' ? firstNonEmptyLine(args.message) : '';
-      return message !== '' ? message : null;
-    }
-    case 'WebFetch': {
-      const url = nonEmpty(args.url);
-      return url === null ? null : url.replace(/^https?:\/\//, '');
-    }
-    case 'ToolSearch': {
-      return typeof args.query === 'string' && args.query.trim() !== '' ? args.query.trim() : null;
-    }
-    // —— OMP 内置工具：参数键以 18.0.10 源码 schema 为准，锚点失配走回退链 ——
-    case 'grep': {
-      const pattern = nonEmpty(args.pattern);
-      return pattern === null ? null : clipChars(pattern, 120);
-    }
-    case 'glob': {
-      // glob 的 pattern 本身就是 path 键的值（"src/**/*.ts"），折成末两段会丢语义。
-      return nonEmpty(args.path);
-    }
-    case 'todo': {
-      const op = nonEmpty(args.op);
-      if (op === null) return null;
-      const detail = nonEmpty(args.task)
-        ?? (Array.isArray(args.items) ? nonEmpty(args.items[0]) : null);
-      const phase = nonEmpty(args.phase);
-      const bits = [op];
-      if (phase !== null) bits.push(phase);
-      if (detail !== null) bits.push(firstNonEmptyLine(detail));
-      return bits.join(' · ');
-    }
-    case 'task': {
-      const agent = nonEmpty(args.agent) ?? 'task';
-      const brief = typeof args.task === 'string' ? firstNonEmptyLine(args.task) : '';
-      return brief !== '' ? `${agent} · ${brief}` : agent;
-    }
-    case 'web_search': {
-      const query = typeof args.query === 'string' && args.query.trim() !== '' ? args.query.trim() : null;
-      return query === null ? null : clipChars(query, 120);
-    }
-    case 'ask': {
-      const questions = Array.isArray(args.questions) ? args.questions : [];
-      const first = questions.find(item => item !== null && typeof item === 'object'
-        && nonEmpty((/** @type {Record<string, unknown>} */ (item)).question)) ?? null;
-      if (first === null) return null;
-      return clipChars(nonEmpty((/** @type {Record<string, unknown>} */ (first)).question) ?? '', 120);
-    }
-    default:
-      return null;
-  }
-}
-
-/**
- * 未知工具的回退链：command→cmd→file_path→path→pattern→原文；file_path 与 path 同样折成末两段。
- * @param {unknown} args @param {string} inputText
- */
-function fallbackSummary(args, inputText) {
-  if (args !== null && typeof args === 'object' && !Array.isArray(args)) {
-    const record = /** @type {Record<string, unknown>} */ (args);
-    for (const key of ['command', 'cmd', 'file_path', 'path', 'pattern']) {
-      const value = record[key];
-      if (value === undefined || value === null || value === '') continue;
-      if (typeof value === 'string') {
-        return key === 'file_path' || key === 'path' ? baseName(value) : value;
-      }
-      const serialized = JSON.stringify(value);
-      if (serialized !== undefined) return serialized;
-    }
-  }
-  return inputText;
-}
-
-/**
- * 摘要拆成身份与参数段：chip 用工具名，预览用参数段，悬停给完整参数。
- * 参数段不做字符数预截断：超长由中栏列宽的省略号处理，工具名与路径末两段不受影响。
- * @param {string} name @param {string} inputText @returns {{label: string, args: string}}
- */
-function summaryParts(name, inputText) {
-  const label = name !== '' ? name : '未命名工具';
-  let args = null;
-  try { args = JSON.parse(inputText); } catch { /* 非 JSON 参数按原文展示 */ }
-  const dispatched = args !== null && typeof args === 'object' && !Array.isArray(args)
-    ? dispatchSummary(name, /** @type {Record<string, unknown>} */ (args))
-    : null;
-  const raw = dispatched ?? fallbackSummary(args, inputText);
-  return { label, args: String(raw ?? '') };
-}
-
-/** 工具行动作摘要 `工具名 · 参数段`；结果正文不当结论，原文进悬停与右栏。 @param {string} name @param {string} inputText @returns {string} */
-export function toolSummary(name, inputText) {
-  const parts = summaryParts(name, inputText);
-  return `${parts.label} · ${parts.args}`;
-}
-
 /**
  * 推理段挂在文本行上：读数属于整笔请求，一段回复有多块文本时每块都标同一个数。
  * 口径与守卫在投影层（reasoning_span_ms），这里只搬运。
@@ -342,15 +126,27 @@ function execReading(pair) {
 }
 
 /**
+ * 承载请求的组投影：组是这一笔请求结构新增部分的可读投影。delta 里的用户消息、
+ * 消息级 System、assistant 文本与调用块、工具结果各出行；顶层 System 与请求级
+ * 记录是请求自己的事实。回复对象不在本组出内容行，它作为下一笔承载请求的
+ * assistant 消息出现，没有承载请求时由 `projectTailReply` 单独成末尾组。
+ *
+ * 调用块的配对坐标与 exec 读数跟随内容的产出请求（`prev_req_id` 的已确认前驱），
+ * 按 call id 匹配；前驱不在窗口、调用 id 不匹配或元信息未读到时留空，不猜归属。
+ * assistant 文本行的推理读数只在承载 delta 只有一条 assistant 消息时挂到该消息
+ * 的第一段文本，值取自产出请求。
+ *
  * @param {import('../src/queries/projection').RequestRow} row
  * @param {import('./reader-store.js').RequestRead | null} read
  * @param {SystemContext} [systemContext] 顶层 System 的当前值与比较结果；由装配层按
  * 同 actor 已确认前驱计算，投影不做时间推断，也不持久化比较结果。
  * @param {import('../src/queries/bg-jobs').BgJobRow[]} [bgJobs] 会话的背景作业配对；
  * 缺省或未读到时不画配对标注。
+ * @param {((prevId: number) => {reasoningMs: number | null, calls: import('../src/queries/requests').ToolCallRow[]} | null) | null} [prevInfoOf]
+ * 产出请求（已确认前驱）的读数与调用表；缺省时调用行不挂配对坐标与执行读数。
  * @returns {TraceStep[]}
  */
-export function projectSteps(row, read, systemContext = null, bgJobs = []) {
+export function projectSteps(row, read, systemContext = null, bgJobs = [], prevInfoOf = null) {
   /** @type {TraceStep[]} */
   const steps = [];
   const detail = read?.detail ?? null;
@@ -416,6 +212,15 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
       ? 'unknown' : null,
     unassigned ? '会话归属未确认 · 以下为本次请求的消息' : `新增输入未确认 · ${detail.prev_relation ?? detail.derived_state}`);
   }
+  // 产出请求：承载 delta 里 assistant 消息的来源。只有已确认前驱才可读它的
+  // 调用表与推理读数；分叉、未知与首笔都没有可对齐的产出请求。
+  const prevId = detail.prev_relation === 'confirmed' && typeof detail.prev_req_id === 'number'
+    ? detail.prev_req_id : null;
+  const prevInfo = prevId !== null && prevInfoOf !== null ? prevInfoOf(prevId) : null;
+  // 推理段只在 delta 只有一条 assistant 消息时可归属到它；多条时无法区分各段。
+  const deltaAssistants = trusted === null ? []
+    : read.entries.filter(entry => trusted.has(entry.ord) && entry.role === 'assistant');
+  const soleAssistantOrd = deltaAssistants.length === 1 ? deltaAssistants[0].ord : null;
   if (trusted !== null || unassigned) {
     for (const entry of read.entries) {
       if (trusted !== null && !trusted.has(entry.ord)) continue;
@@ -469,6 +274,50 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
         });
         continue;
       }
+      // 承载 delta 里的 assistant 消息：每条文本、每个调用各一行；thinking 不常驻，
+      // 结果块已在上面单独出行。块路径按消息内协议位置拼，与结果行同一规则。
+      // 归属未确认时不走这里：按请求原文展示整条消息，不把它读成新增内容。
+      if (entry.role === 'assistant' && !unassigned) {
+        let firstText = true;
+        for (const block of entry.blocks) {
+          if (block.kind !== 'text' && block.kind !== 'call') continue;
+          const path = block.path === '' ? msgBase : `${msgBase}.${block.path}`;
+          if (block.kind === 'text') {
+            if (block.text.length === 0) continue;
+            const reading = firstText && soleAssistantOrd === entry.ord
+              && prevInfo !== null && prevInfo.reasoningMs !== null && prevInfo.reasoningMs > 0
+              ? { kind: /** @type {'reason'} */ ('reason'), ms: prevInfo.reasoningMs }
+              : undefined;
+            firstText = false;
+            steps.push({
+              key: `${row.req_id}:message:${entry.ord}:text:${block.index}`, reqId: row.req_id,
+              kind: 'assistant', text: block.text, messageOrd: entry.ord, callOrd: null,
+              source: { side: 'request', path, messageOrd: entry.ord, blockIndex: block.index },
+              raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null,
+              reading,
+            });
+            continue;
+          }
+          // 调用行的配对坐标与执行读数跟随产出请求：按 call id 匹配，不拿块序号冒充调用序号。
+          const call = toolCallOfBlock(block);
+          const pair = prevInfo !== null && call.id !== ''
+            ? prevInfo.calls.find(item => item.call_id === call.id) ?? null : null;
+          const parts = summaryParts(call.name, call.inputText);
+          steps.push({
+            key: `${row.req_id}:message:${entry.ord}:call:${block.index}`, reqId: row.req_id,
+            kind: 'tool', text: `${parts.label} · ${parts.args}`,
+            toolName: call.name !== '' ? call.name : null, toolArgs: parts.args, toolInput: call.inputText,
+            messageOrd: entry.ord, callOrd: null,
+            source: { side: 'request', path, messageOrd: entry.ord, blockIndex: block.index },
+            raw: block.raw, unrecognized: false, status: null,
+            result: pair === null ? null
+              : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
+            pairOwner: null, callOwner: pair === null || prevId === null ? null : { reqId: prevId, callOrd: pair.ord },
+            reading: execReading(pair),
+          });
+        }
+        continue;
+      }
       if (!entry.isInput) {
         if (unassigned && resultBlocks.length === 0) {
           const role = entry.role === 'assistant' ? 'Assistant' : entry.rawRole ?? 'Unknown';
@@ -498,12 +347,12 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
     }
   }
   if (unassigned) {
-    const { next, total, loading, error } = read.structure;
+    const { back, total, loading, error } = read.structure;
     const count = total ?? read.meta?.total ?? null;
     if (error !== null) {
       record('unassigned-more', 'unknown', `请求消息读取失败 · ${error} · 点击重试`);
-    } else if (count !== null && next < count) {
-      record('unassigned-more', null, loading ? '正在读取请求消息' : `还有 ${count - next} 条请求消息未读取 · 点击续读`);
+    } else if (count !== null && back > 0) {
+      record('unassigned-more', null, loading ? '正在读取请求消息' : `还有 ${back} 条更早的请求消息未读取 · 点击续读`);
     }
   }
   // 增量读取未完成或失败：一条事件记录显示剩余与失败，点击续读两片；完成时不出现。
@@ -514,8 +363,8 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
       ? `新增读取失败 · 已消费 ${Math.min(deltaState.next, total)} / ${total} · ${deltaState.error}`
       : `还有 ${total - deltaState.next} 条新增未读取 · 点击续读`);
   }
-  // 回复块只经 replyView 归一化：块序号沿用协议内位置，路径从回复根算起；
-  // thinking 不常驻，多 choice 不结构化拆行，只出一条保留原始对象的记录。
+  // 回复状态只做事实记录：回复的内容块不在承载请求的组里出步骤，它们作为下一笔
+  // 承载请求的 assistant 消息出现；没有承载请求的回复由 projectTailReply 单独成组。
   const meta = read?.meta ?? null;
   const view = meta === null ? null : replyView(meta);
   const unknownBody = trusted === null && detail.actor_state === 'unknown';
@@ -536,36 +385,6 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
   } else if (view.state !== 'ok') {
     // pending / evicted / unsupported / summary：正文状态行已经说明状态，
     // 这里不再补一条「未收到回复」，避免同屏两句话互相打架。
-  } else {
-    for (const block of view.blocks) {
-      const index = block.index;
-      if (block.kind === 'text' && block.text.length > 0) {
-        steps.push({ key:`${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
-          text: block.text, messageOrd: null, callOrd: null,
-          source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
-          raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null,
-          reading: reasoningReading(row) });
-      } else if (block.kind === 'call') {
-        const call = view.calls.find(item => item.ord === index) ?? null;
-        const pair = detail.tool_calls?.find(item => item.ord === index) ?? null;
-        const parts = summaryParts(call?.name ?? '', call?.inputText ?? '');
-        steps.push({ key: `${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
-          text: `${parts.label} · ${parts.args}`,
-          toolName: call?.name ?? null, toolArgs: parts.args, toolInput: call?.inputText ?? '',
-          messageOrd: null, callOrd: index,
-          source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
-          raw: block.raw,
-          unrecognized: false, status: null,
-          result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
-          pairOwner: null, reading: execReading(pair) });
-      } else if (block.kind !== 'thinking') {
-        // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
-        steps.push({ key: `${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
-          text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
-          source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
-          raw: block.raw, unrecognized: true, status: null, result: null, pairOwner: null });
-      }
-    }
   }
   // 回调只报告自身观察，不由 success 推断 HTTP 状态或具体原因。
   const hookReports = detail.source_facts?.hook?.successes ?? [];
@@ -593,6 +412,83 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
     record('body', 'missing_body', `正文状态：${row.body_state}${row.miss_reason ? `（${row.miss_reason}）` : ''}`);
   }
   return steps;
+}
+
+/**
+ * 末尾组的请求集合（纯判定）：会话已完整加载时，没有后继请求把它当作已确认
+ * 前驱、且它之后没有前驱未定的请求的链末各得一个末尾组。未知前驱可能承载这条
+ * 回复，排除不了就抑制，避免同一回复出现两次。装配层先把窗口行整理成 entries，
+ * 辅助与排除请求不进 entries。
+ * @param {{id: number, prevId: number | null, undetermined: boolean}[]} entries 行序排列
+ * @param {boolean} complete 会话是否已完整加载（后续游标耗尽且不在读取中）
+ * @returns {Set<number>}
+ */
+export function tailEligibleIds(entries, complete) {
+  /** @type {Set<number>} */
+  const eligible = new Set();
+  if (!complete) return eligible;
+  const successors = new Set(entries.map(item => item.prevId).filter(id => id !== null));
+  for (let index = 0; index < entries.length; index += 1) {
+    const item = entries[index];
+    if (successors.has(item.id)) continue;
+    if (entries.slice(index + 1).some(later => later.undetermined)) continue;
+    eligible.add(item.id);
+  }
+  return eligible;
+}
+
+/**
+ * 末尾回复投影：没有承载请求的回复单独成组。只有回复对象可读、状态为 ok 且
+ * 至少有一个文本或调用块才成组；空回复、缺失、部分、非法与多 choice 的说明
+ * 留在产出请求的组里，不在这里重复。
+ *
+ * 行键沿用 `reqId:reply:*` 与 `reqId:call:*`，source 指向回复根；读数「本次回复」
+ * 照旧，推理读数归属产出请求。
+ * @param {import('../src/queries/projection').RequestRow} row
+ * @param {import('./reader-store.js').RequestRead | null} read
+ * @returns {{steps: TraceStep[], eligible: boolean}} eligible 为假时 steps 不作为组显示
+ */
+export function projectTailReply(row, read) {
+  const meta = read?.meta ?? null;
+  const view = meta === null ? null : replyView(meta);
+  if (view === null || view.state !== 'ok' || (view.choiceCount !== null && view.choiceCount > 1)) {
+    return { steps: [], eligible: false };
+  }
+  /** @type {TraceStep[]} */
+  const steps = [];
+  let content = false;
+  for (const block of view.blocks) {
+    const index = block.index;
+    if (block.kind === 'text' && block.text.length > 0) {
+      content = true;
+      steps.push({ key: `${row.req_id}:reply:text:${index}`, reqId: row.req_id, kind: 'assistant',
+        text: block.text, messageOrd: null, callOrd: null,
+        source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
+        raw: block.text, unrecognized: false, status: null, result: null, pairOwner: null,
+        reading: reasoningReading(row) });
+    } else if (block.kind === 'call') {
+      const call = view.calls.find(item => item.ord === index) ?? null;
+      const pair = read?.detail?.tool_calls?.find(item => item.ord === index) ?? null;
+      const parts = summaryParts(call?.name ?? '', call?.inputText ?? '');
+      content = true;
+      steps.push({ key: `${row.req_id}:call:${index}`, reqId: row.req_id, kind: 'tool',
+        text: `${parts.label} · ${parts.args}`,
+        toolName: call?.name ?? null, toolArgs: parts.args, toolInput: call?.inputText ?? '',
+        messageOrd: null, callOrd: index,
+        source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
+        raw: block.raw,
+        unrecognized: false, status: null,
+        result: pair === null ? null : { state: /** @type {'resolved'|'pending'|'ambiguous'|'unpaired'} */ (pair.state), reqId: pair.result_req },
+        pairOwner: null, reading: execReading(pair) });
+    } else if (block.kind !== 'thinking') {
+      // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
+      steps.push({ key: `${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
+        text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
+        source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
+        raw: block.raw, unrecognized: true, status: null, result: null, pairOwner: null });
+    }
+  }
+  return { steps, eligible: content };
 }
 
 // 参与角色英文标签 + 内容类型：调用由 Assistant 发出、结果显示在 Tool 上，
