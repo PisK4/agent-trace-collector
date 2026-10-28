@@ -10,7 +10,7 @@
  * @typedef {{kind: string, text: string, index: number, raw: unknown, path: string, failed?: boolean}} Block
  * @typedef {{ord: number, role: Role, rawRole: string | null, blocks: Block[], preview: string, input: UserInputView | null, isInput: boolean}} Entry
  * @typedef {{id: string, name: string, inputText: string, ord: number, path: string}} ToolCallView
- * @typedef {{state: 'ok' | 'absent' | 'invalid', text: string, thinking: string[], calls: ToolCallView[], blocks: Block[], choiceCount: number | null, finish: string | null, model: string | null, raw: unknown}} ReplyView
+ * @typedef {{state: 'ok' | 'absent' | 'invalid' | 'pending' | 'evicted' | 'unsupported' | 'summary' | 'partial', text: string, thinking: string[], calls: ToolCallView[], blocks: Block[], choiceCount: number | null, finish: string | null, model: string | null, raw: unknown}} ReplyView
  * @typedef {{call_id: string, name: string, inputText: string, ord: number, path: string, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null, result_label?: string | null}} ToolEntry
  */
 
@@ -356,6 +356,22 @@ function responsesFinish(reply) {
 }
 
 /**
+ * 没有回复对象时继承正文状态。正文未到（pending）不等于上游没有提供回复，
+ * 已回收、未适配与摘要也不是同一件事；正文可读时才用 reply_state 解释，
+ * 那是服务端对回复本身的判定。只有读得到正文且服务端明说没有回复，才是 absent。
+ * @param {BodyPage | null} page
+ * @returns {'absent' | 'invalid' | 'pending' | 'evicted' | 'unsupported' | 'summary' | 'partial'}
+ */
+function emptyReplyState(page) {
+  if (page === null || page === undefined) return 'absent';
+  if (page.state === 'pending' || page.state === 'evicted' || page.state === 'unsupported'
+    || page.state === 'summary' || page.state === 'partial') return page.state;
+  if (page.reply_state === 'invalid') return 'invalid';
+  if (page.reply_state === 'unsupported') return 'unsupported';
+  return 'absent';
+}
+
+/**
  * 回复归一化，是回复协议形状的唯一拆分点。anthropic 读 content 块数组，chat 读
  * choices[0].message。blocks 按协议原始顺序给出，路径从回复根算起
  * （reply.content[i] / reply.choices[0].message.*），序号沿用协议内位置。
@@ -367,7 +383,7 @@ function responsesFinish(reply) {
 export function replyView(page) {
   const reply = page === null || page === undefined ? null : page.reply;
   if (reply === null || reply === undefined) {
-    return { state: 'absent', text: '', thinking: [], calls: [], blocks: [], choiceCount: null, finish: null, model: null, raw: null };
+    return { state: emptyReplyState(page), text: '', thinking: [], calls: [], blocks: [], choiceCount: null, finish: null, model: null, raw: null };
   }
   if (!isRecord(reply)) {
     return { state: 'invalid', text: '', thinking: [], calls: [], blocks: [], choiceCount: null, finish: null, model: null, raw: reply };
