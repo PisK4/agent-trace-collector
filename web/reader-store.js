@@ -109,7 +109,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   let windowError = null;
   /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/turns').TurnPairRow[]}} */
   let turns = { status: 'idle', items: [] };
-  /** @type {Promise<void> | null} 轮次读取串行化：加载更早触发的重取排在前一次之后，后到先得。 */
+  /** @type {Promise<void> | null} 轮次读取串行化：换窗触发的重取排在前一次之后，后到先得。 */
   let turnsInflight = null;
   /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/bg-jobs').BgJobRow[]}} */
   let bgJobs = { status: 'idle', items: [] };
@@ -263,7 +263,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
   /**
    * 按当前会话与窗口下界取轮次列表。结算单位是累计窗口：下界取已加载窗口的
    * 最早请求，服务端只返回起点在下界之后的轮。404（后端未部署）与读取失败都
-   * 落 absent——带不渲染、不占位、不留错误态，下次触发（选会话、刷新、加载更早）重取。
+   * 落 absent——带不渲染、不占位、不留错误态，下次触发（选会话、刷新、换窗）重取。
    * 换会话代次变更后，迟到响应不写入。
    */
   async function loadTurns() {

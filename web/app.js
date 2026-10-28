@@ -1120,9 +1120,12 @@ if (typeof document !== 'undefined') {
   }
 
   async function loadLater() {
-    const button = document.getElementById('load-later');
-    if (button !== null) (/** @type {HTMLButtonElement} */ (button)).disabled = true;
-    await store.loadLater();
+    // 加载态由渲染输入表达：store 起跑后 window.loading 已为真，入口换成
+    // 「正在读取后续记录…」。就地改 disabled 会被键控提交原地保留（同款 HTML
+    // 不换节点），加载完成后按钮就永远点不动了。
+    const pending = store.loadLater();
+    renderMain();
+    await pending;
     // append 不动既有内容，位置由每次提交自带的锚点补偿保持，不再手接快照。
     renderMain();
     renderSessions();
