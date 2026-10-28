@@ -24,7 +24,7 @@ import { fillContextMap, iidOf, itemLabel } from './context-map.js';
 import { createContextMenu, iidParse } from './context-detail.js';
 import {
   kk, ledgerRowsHtml, railFactsHtml, readingChangedNote, renderAttemptChain,
-  resolveSelectedSource, structureFoldHtml, structureMoreParts, systemContextOf, toolOverviewHtml,
+  resolveSelectedSource, structureFoldHtml, structureMoreParts, structureUnread, systemContextOf, toolOverviewHtml,
   toolSchemaSection, usageFoldHtml,
 } from './rail-facts.js';
 import { secs } from './duration.js';
@@ -67,6 +67,12 @@ if (typeof document !== 'undefined') {
   const folds = new Map();
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
   const structureSelected = new Map();
+  /**
+   * 中栏点中的结构消息：右栏下一次渲染把列表滚到这一条，让「打开所在结构」
+   * 落在消息本身而不是列表末尾。行还没进列表（读取中）时保留，换请求即作废。
+   * @type {{reqId: number, ord: number} | null}
+   */
+  let structureReveal = null;
   /**
    * 最近一次完整投影：详情在手时更新；作废或读取失败期间退回它显示，由组上的
    * 旧版本标记声明归属。它是显示缓存，不参与证据判定，换会话与刷新即清。
@@ -867,8 +873,9 @@ if (typeof document !== 'undefined') {
         <div class="fold-body">${renderReply(view, tools, String(r.req_id))}${truncNote}</div>
       </details>`;
     }
-    // 选中消息行时结构折叠展开并选中该消息；用户之后仍可收起（folds 的显式
-    // false 优先于自动展开）。请求级行与无选择保持用户自己的开合状态。
+    // 选中消息行时结构折叠展开，列表里高亮这条消息；详情只由结构列表内的点击
+    // 打开（structureSelected），中栏点击不落进详情。用户之后仍可收起（folds 的
+    // 显式 false 优先于自动展开）。请求级行与无选择保持用户自己的开合状态。
     const source = resolveSelectedSource(currentSelectedStep(r), state.selectedStep, read);
     const messageOrd = source.side === 'request' && source.target === 'message' ? source.messageOrd : null;
     const foldKey = `structure:${r.req_id}`;
@@ -878,7 +885,8 @@ if (typeof document !== 'undefined') {
       entries: read?.entries ?? [],
       structure: read?.structure ?? { back: 0, next: 0, total: null, ords: [], loading: false, error: null },
       open: foldState ?? (messageOrd !== null),
-      selected: messageOrd ?? structureSelected.get(r.req_id) ?? null,
+      selected: structureSelected.get(r.req_id) ?? null,
+      highlight: messageOrd,
       delta: detail === null ? null : deltaOrdinals(detail),
       deltaState: read?.delta ?? null,
       parseState: meta?.parse_state ?? null,
@@ -1070,11 +1078,9 @@ if (typeof document !== 'undefined') {
       body = `<div class="rail-empty"><b>没有可读的回复</b>${esc(bodyNotice(page) || '这一笔只有请求。')}</div>`;
     }
     const structure = read.structure;
-    // 结构总数未读时用元信息页的 total 判断；未读条件是「前面还有更早的消息」，
-    // 与读数页折叠同一口径，首读由结构折叠发起。
+    // 结构总数未读时用元信息页的 total 判断；未读口径与读数页折叠共用一份。
     const knownTotal = structure.total ?? (page.total ?? null);
-    const unread = (knownTotal !== null && knownTotal !== undefined && structure.back > 0)
-      || structure.error !== null;
+    const unread = structureUnread(structure, knownTotal);
     const { button: moreButton, note: structureError } = structureMoreParts(structure, r.req_id, knownTotal);
     return `${bodyNotice(page) ? `<p class="rail-note" style="margin-bottom:8px">${esc(bodyNotice(page))}</p>` : ''}
       ${body}
@@ -1175,15 +1181,27 @@ if (typeof document !== 'undefined') {
   }
 
   /**
-   * 结构列表的滚动恢复：锚点还在就按序号与偏移归位（「加载更早」前插不把读者
-   * 拉回顶部）；锚点不在（首读、换请求或列表刚出现）时落到最新一条——读取方向
-   * 是尾片优先。
+   * 结构列表的滚动恢复：中栏刚点过的消息优先滚到它（居中，留出前后邻居）；
+   * 否则锚点还在就按序号与偏移归位（「加载更早」前插不把读者拉回顶部）；
+   * 锚点不在（首读、换请求或列表刚出现）时落到最新一条——读取方向是尾片优先。
    * @param {HTMLElement} rail
    * @param {{ord: number, offset: number} | null} anchor
    */
   function restoreMsgList(rail, anchor) {
     const list = /** @type {HTMLElement | null} */ (rail.querySelector('.rail-fold .msg-list'));
     if (list === null) return;
+    if (structureReveal !== null && structureReveal.reqId !== state.reqId) structureReveal = null;
+    // 折叠收起时列表不可见：待定位保留到展开后的渲染，不在这里消耗。
+    if (structureReveal !== null && list.clientHeight > 0) {
+      const item = list.querySelector(`li[data-ord="${structureReveal.ord}"]`);
+      if (item !== null) {
+        structureReveal = null;
+        const offset = item.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        list.scrollTop += offset - (list.clientHeight - item.clientHeight) / 2;
+        return;
+      }
+      // 行还没进列表（读取中或不在已读分片）：保留待定位，这次按锚点或落底。
+    }
     if (anchor !== null) {
       const item = list.querySelector(`li[data-ord="${anchor.ord}"]`);
       if (item !== null) {
@@ -1340,6 +1358,13 @@ if (typeof document !== 'undefined') {
       const ord = Number(ordMatch[1]);
       if (Number.isFinite(ord)) await ensureMessageOrd(id, ord);
     }
+    // 自动展开的结构折叠不经过 toggle 事件：展开本该触发的尾片读取在这里补上，
+    // 否则列表里只有定点读到的这一条，也没有「更早」可加载。
+    const after = store.peekRequest(id);
+    if (after !== null && (folds.get(`structure:${id}`) ?? ordMatch !== null)
+      && after.structure.total === null && !after.structure.loading) {
+      await loadStructure(id);
+    }
     renderMain();
     renderRail();
   }
@@ -1426,10 +1451,12 @@ if (typeof document !== 'undefined') {
     // 旧投影仅供显示；消息选择只从当前版本取得来源。
     const projected = stepsOf(row);
     const step = projected.stale === null ? projected.steps.find(item => item.key === key) ?? null : null;
+    // 消息行把读数页的结构折到这条消息：展开折叠，在列表里高亮并滚到它。
+    // 详情只在结构列表里再点一次才展开；请求级行只换选择，不动折叠状态。
     const source = step?.source ?? null;
     if (source !== null && source.side === 'request' && typeof source.messageOrd === 'number') {
-      structureSelected.set(id, source.messageOrd);
       folds.set(`structure:${id}`, true);
+      structureReveal = { reqId: id, ord: source.messageOrd };
     }
     dispatch({ kind: 'select-step', reqId: id, stepKey: String(key) });
   }
@@ -1609,18 +1636,10 @@ if (typeof document !== 'undefined') {
     if (deltaMore !== null) { void resumeDelta(Number(deltaMore.dataset.deltaMore)); return; }
     const structureBack = /** @type {HTMLElement | null} */ (t.closest('[data-structure-back]'));
     if (structureBack !== null) {
+      // 返回列表只清结构自己的选择。步骤选择不再把折叠钉在详情上（它只给列表
+      // 里的这一行高亮），所以不必连带清掉中栏选择。
       structureSelected.delete(Number(structureBack.dataset.structureBack));
-      // 选中步骤同样会把结构折叠钉在消息详情上：返回列表要一并退出步骤选择，
-      // 否则按钮点下去没有可见变化。
-      const r = currentRow();
-      const step = r === null || state.selectedStep === null ? null : currentSelectedStep(r);
-      const source = step === null ? null : resolveSelectedSource(step, state.selectedStep, currentRead());
-      if (source !== null && source.side === 'request' && source.target === 'message') {
-        dispatch({ kind: 'clear-step' });
-        renderMain();
-      } else {
-        renderRail();
-      }
+      renderRail();
       return;
     }
     // 会话汇总折叠区的条目点击：先开右栏条目列表，逐项跳配对页或定位请求。
