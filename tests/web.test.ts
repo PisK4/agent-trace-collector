@@ -3,7 +3,8 @@ import { restoreScroll } from '../web/app.js';
 import { replyCompleteness } from '../web/row-summary.js';
 import {
   ledgerParts, ledgerRowsHtml, railFactsHtml, readingChangedNote,
-  structureFoldHtml, systemContextOf, toolOverviewHtml, toolSchemaSection, usageFoldHtml,
+  structureFoldHtml, structureMoreParts, systemContextOf, toolOverviewHtml, toolSchemaSection,
+  usageFoldHtml,
 } from '../web/rail-facts.js';
 import {
   railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget,
@@ -499,4 +500,15 @@ test('agent 标签覆盖三条通道的已知来源，未知来源原样透出',
   expect(agentLabel('codex')).toBe('Codex');
   expect(agentLabel('hermes')).toBe('Hermes');
   expect(agentLabel('someone-new')).toBe('someone-new');
+});
+
+test('结构续读按钮：读取中禁用，失败时改重试并给出原因', () => {
+  const loading = structureMoreParts({ next: 0, loading: true, error: null }, 7, 44);
+  expect(loading.button).toContain('disabled');
+  expect(loading.button).toContain('加载下一片（已读 0 / 44）');
+  expect(loading.note).toBe('');
+  const failed = structureMoreParts({ next: 3, loading: false, error: 'body_page_gap' }, 7, 44);
+  expect(failed.button).toContain('重试读取');
+  expect(failed.button).not.toContain('disabled');
+  expect(failed.note).toContain('结构读取失败：body_page_gap');
 });
