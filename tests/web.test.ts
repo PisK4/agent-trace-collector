@@ -9,7 +9,7 @@ import {
 import {
   railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget,
 } from '../web/url-route.js';
-import { agentLabel, sessionsListBypassHtml } from '../web/session-view.js';
+import { agentLabel, sessionHead, sessionsListBypassHtml } from '../web/session-view.js';
 
 test('旁路折叠行：有旁路条目才渲染，展开与收起各自如实计数', () => {
   const row = (flags: string[]) => ({
@@ -511,4 +511,25 @@ test('结构续读按钮：读取中禁用，失败时改重试并给出原因',
   expect(failed.button).toContain('重试读取');
   expect(failed.button).not.toContain('disabled');
   expect(failed.note).toContain('结构读取失败：body_page_gap');
+});
+
+test('会话头输出速度只统计计时与输出都在的行', () => {
+  const requestRow = (over: Record<string, unknown> = {}) => ({
+    req_id: 1, started_ms: 1, in_tok: null, out_tok: null, cache_read: null, cache_write: null,
+    cost: null, cost_state: 'absent', ms: null, ttft_ms: null, flow_ms: null, ...over,
+  });
+  const base = {
+    sessionKey: 'k',
+    row: { conv_key: 'k', title: 't', last_ms: 1, request_count: 2, agents: [], flags: [] },
+    refreshedAt: null, missingReqId: null, offPageReqId: null, windowError: null,
+    summary: null, summaryFoldOpen: false, windowAnchor: 'start' as const,
+  };
+  // 只有输出、没有任何计时：没有分母，不给速度。
+  const untimed = requestRow({ req_id: 1, out_tok: 4 });
+  const noTiming = sessionHead({ ...base, rows: [untimed] as never });
+  expect(noTiming).not.toContain('tok/s');
+  // 一行无计时、一行有计时：分母只算有计时的那行，分子也必须只算同一行。
+  const timed = requestRow({ req_id: 2, out_tok: 100, ms: 2000, ttft_ms: 500, flow_ms: 1500 });
+  const mixed = sessionHead({ ...base, rows: [untimed, timed] as never });
+  expect(mixed).toContain('输出 67 tok/s');
 });
