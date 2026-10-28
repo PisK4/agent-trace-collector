@@ -15,6 +15,7 @@ function view(over: Partial<PurposeView> = {}): PurposeView {
     toolCount: 0,
     replyText: '<block>no',
     userBlockHeads: [],
+    tailUserBlockHeads: [],
     source: { state: 'missing', value: null },
     stored: {
       version: null, status: 'missing', rule: null, signals: [],
@@ -263,4 +264,23 @@ test('Hermes 专属指纹不跨 harness，普通 Hermes 请求仍参与主链', 
     agent: 'hermes', systemTexts: ['You are Hermes Agent, built by Nous Research.'],
     replyText: '好的',
   }))).toMatchObject({ status: 'unrecognized', kind: 'chat', chain: 'participate' });
+});
+
+test('claude suggestion 与上下文压缩按尾部块首识别为旁路', () => {
+  expect(classifyPurpose(view({
+    agent: 'claude',
+    tailUserBlockHeads: ['[SUGGESTION MODE: continue the conversation'],
+  }))).toMatchObject({ chain: 'exclude', kind: 'suggestion_mode', rule: 'claude.suggestion-mode.v1' });
+
+  expect(classifyPurpose(view({
+    agent: 'claude',
+    tailUserBlockHeads: ['CRITICAL: Respond with TEXT ONLY. Do not call tools.'],
+  }))).toMatchObject({ chain: 'exclude', kind: 'context_compaction', rule: 'claude.compaction.v1' });
+
+  // 指纹在前几条 user 消息里不算：那是历史上下文，不是本次旁路模板。
+  expect(classifyPurpose(view({
+    agent: 'claude',
+    userBlockHeads: ['[SUGGESTION MODE: old'],
+    tailUserBlockHeads: ['普通用户消息'],
+  }))).toMatchObject({ chain: 'participate' });
 });

@@ -35,6 +35,8 @@ export const MAX_PURPOSE_RETRIES = 3;
 
 /** 用途取数解压的 user 消息条数上限：旁路请求通常只有 1–2 条 user 消息。 */
 const PURPOSE_USER_MESSAGES = 5;
+/** 末尾 user 消息条数：suggestion 与上下文压缩的模板总是贴在本次输入的最后。 */
+const PURPOSE_TAIL_MESSAGES = 2;
 /** 每个文本块保留的块首长度：强指纹锚点远短于此，成本不随正文体积增长。 */
 const PURPOSE_HEAD_CHARS = 200;
 
@@ -156,6 +158,7 @@ function emptyView(identity: PurposeIdentity, parse: PurposeParse, reply: unknow
     replyText: reply === null || reply === undefined
       ? null : (replyTextsOf(reply).join('\n') || null),
     userBlockHeads: [],
+    tailUserBlockHeads: [],
     source: identity.source,
     stored: identity.stored,
   };
@@ -191,6 +194,24 @@ function purposeUserBlockHeadsTx(db: Database, reqId: number): string[] {
   const rows = db.query<{ z: Uint8Array }, [number, number]>(`
     SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord LIMIT ?`).all(reqId, PURPOSE_USER_MESSAGES);
+  return blockHeadsOf(rows);
+}
+
+/**
+ * 末尾若干条 user 消息的文本块块首。旁路模板（suggestion、上下文压缩）
+ * 写在本次输入的最后一条 user 消息里，只取前几条会全部漏检；条数与块首
+ * 长度沿用同一组限额，成本不随正文体积增长。
+ */
+function purposeTailUserBlockHeadsTx(db: Database, reqId: number): string[] {
+  const rows = db.query<{ z: Uint8Array }, [number, number]>(`
+    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord DESC LIMIT ?`)
+    .all(reqId, PURPOSE_TAIL_MESSAGES);
+  return blockHeadsOf(rows.reverse());
+}
+
+/** 已取出的 user 消息块解压成块首；解压失败的消息跳过，不猜内容。 */
+function blockHeadsOf(rows: readonly { z: Uint8Array }[]): string[] {
   const heads: string[] = [];
   for (const row of rows) {
     let message: unknown;
@@ -252,6 +273,7 @@ export function readPurposeViewTx(db: Database, identity: PurposeIdentity): Purp
     toolCount: toolCountOf(body.request),
     replyText: replyTextsOf(body.reply).join('\n') || null,
     userBlockHeads: purposeUserBlockHeadsTx(db, identity.reqId),
+    tailUserBlockHeads: purposeTailUserBlockHeadsTx(db, identity.reqId),
     source: identity.source,
     stored: identity.stored,
   };
