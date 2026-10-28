@@ -5,6 +5,7 @@ import type { ChainSeed } from './fixtures';
 import { persistBody } from '../src/body';
 import { drainDeriveTx, enqueueDerive } from '../src/derive/sync';
 import { DERIVE_ALGORITHM, GROUP_ALGORITHM } from '../src/derive/state';
+import { getSessionSummary } from '../src/queries/session-summary';
 import {
   beginGeneration, discardGeneration,
   publishGeneration, readEffectiveGroup, recoverSlice, type SliceStep,
@@ -686,6 +687,12 @@ test('摘要阶段与同步路径给出同一套标题与摘录，随后发布',
 
     expect(sliceReadyStage(slice.store, generation, DEFAULT_DERIVE_BUDGET, 20,
       join(slice.dir, 'trace.db')).status).toBe('published');
+    const known = getSessionSummary(slice.store, SEED_GROUP.convKey).coverage.calls_fact_known;
+    expect(known).toBeGreaterThan(0);
+    slice.store.write(db => db.run('UPDATE derive_tool_result SET algorithm_version=9 WHERE generation=?', [generation]));
+    expect(getSessionSummary(slice.store, SEED_GROUP.convKey).coverage.calls_fact_known).toBe(known);
+    slice.store.write(db => db.run('UPDATE derive_tool_result SET algorithm_version=8 WHERE generation=?', [generation]));
+    expect(getSessionSummary(slice.store, SEED_GROUP.convKey).coverage.calls_fact_known).toBe(0);
     expect(slice.store.read.query('SELECT * FROM derive_queue').get())
       .toMatchObject({ state: 'clean', published_generation: generation });
     // 构建期的祖先台账与扫描状态发布后不再留着。
@@ -693,6 +700,68 @@ test('摘要阶段与同步路径给出同一套标题与摘录，随后发布',
       .get(generation)).toEqual({ n: 0 });
     expect(slice.store.read.query('SELECT COUNT(*) AS n FROM derive_role_work WHERE generation=?')
       .get(generation)).toEqual({ n: 0 });
+  } finally { slice.close(); sync.close(); }
+});
+
+test('不可比较的 Responses 末尾命令在同步和切片中同源', () => {
+  const slice = fixture();
+  const sync = fixture();
+  const seed = (f: ReturnType<typeof fixture>) => {
+    seedRequest(f.store, [{ req_id: 1, started_ms: 100, sort_source: 'ledger', sort_key: 'ledger|0000' }]);
+    persistBody(f.store, 1, { protocol: 'responses', request: { input: '合成命令', previous_response_id: 'synthetic' },
+      reply: { status: 'completed', output: [] }, redact_version: 1 });
+    f.store.write(db => db.run('UPDATE request SET purpose_pending=0 WHERE req_id=1'));
+    enqueueDerive(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, '');
+  };
+  try {
+    seed(slice); seed(sync);
+    sync.store.write(db => drainDeriveTx(db, { limit: 10 }));
+    const oracle = sync.store.read.query<PresentationRow, []>(`SELECT req_id,${PRESENTATION_COLUMNS} FROM request`).get();
+    switchToSliceAlgorithm(slice);
+    const generation = beginGeneration(slice.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    runStage(slice, generation, sliceRequestsStage);
+    runStage(slice, generation, sliceRolesStage);
+    runStage(slice, generation, sliceToolsStage);
+    runStage(slice, generation, sliceSummaryStage);
+    const result = slice.store.read.query<PresentationRow, [string]>(
+      `SELECT req_id,${PRESENTATION_COLUMNS} FROM derive_request_result WHERE generation=?`).get(generation);
+    expect(result).toEqual(oracle);
+    expect(result?.input_preview_kind).toBe('tail_command');
+  } finally { slice.close(); sync.close(); }
+});
+
+test('末尾块损坏时同步与切片都不把旧用户消息判成新命令', () => {
+  const slice = fixture();
+  const sync = fixture();
+  const seed = (f: ReturnType<typeof fixture>) => {
+    seedRequest(f.store, [{ req_id: 1, started_ms: 100, sort_source: 'ledger', sort_key: 'ledger|0000' }]);
+    persistBody(f.store, 1, { protocol: 'responses', request: {
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '合成旧命令' }] },
+        { type: 'function_call_output', call_id: 'synthetic', output: '合成结果' },
+      ], previous_response_id: 'synthetic',
+    }, reply: { status: 'completed', output: [] }, redact_version: 1 });
+    f.store.write(db => {
+      db.run('UPDATE request SET purpose_pending=0 WHERE req_id=1');
+      db.run('UPDATE block SET z=? WHERE id=(SELECT block FROM request_block WHERE req_id=1 AND ord=1)',
+        [Buffer.from('invalid')]);
+    });
+    enqueueDerive(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, '');
+  };
+  try {
+    seed(slice); seed(sync);
+    sync.store.write(db => drainDeriveTx(db, { limit: 10 }));
+    const oracle = sync.store.read.query<PresentationRow, []>(`SELECT req_id,${PRESENTATION_COLUMNS} FROM request`).get();
+    switchToSliceAlgorithm(slice);
+    const generation = beginGeneration(slice.store, SEED_GROUP.convKey, SEED_GROUP.actor, 10)!;
+    runStage(slice, generation, sliceRequestsStage);
+    runStage(slice, generation, sliceRolesStage);
+    runStage(slice, generation, sliceToolsStage);
+    runStage(slice, generation, sliceSummaryStage);
+    const result = slice.store.read.query<PresentationRow, [string]>(
+      `SELECT req_id,${PRESENTATION_COLUMNS} FROM derive_request_result WHERE generation=?`).get(generation);
+    expect(result).toEqual(oracle);
+    expect(result?.input_preview_kind).toBe('tail');
   } finally { slice.close(); sync.close(); }
 });
 

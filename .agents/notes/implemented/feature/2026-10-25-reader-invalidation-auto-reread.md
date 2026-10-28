@@ -10,7 +10,7 @@ Status: implemented
 
 作废态归 reader-store 单一家。作废从「删除记录」改为「记录原地重置」：正文缓存清空，快照 `status` 落为 `invalidated`（`reading | fresh | invalidated | failed` 四值，只描述 detail/meta/token 层，结构、增量与逐工具的局部失败态保持独立），记录修订 `rev` 自增，迟到的详情响应凭它不得写入已重置的记录。
 
-作废即自动重读：同一笔按冷却窗口限频（默认 10 秒，`createReaderStore` 第三参 `autoRereadCooldownMs` 可注入），不设尝试上限，会话切换或记录被取代、重建时放弃；深度与手动重读一致（详情 + 元信息，再补最多两片可信增量）。自动换新不再置页面可见的成功标记；版本恢复期间中栏保留上一版投影并标旧版本，见[版本恢复期间保留旧投影](2026-10-27-trace-version-retention.md)。手动「立即重读」随时可用。
+作废即自动重读：同一笔按冷却窗口限频（默认 10 秒，`createReaderStore` 第三参 `autoRereadCooldownMs` 可注入），不设尝试上限，会话切换或记录被取代、重建时放弃；深度与手动重读一致（详情 + 元信息，再补最多两片可信增量）。异步通知检查记录仍属当前会话，见[阅读准备的版本守卫](../bug-fix/2026-10-28-trace-preparation-version-guards.md)。自动换新不再置页面可见的成功标记；版本恢复期间中栏保留上一版投影并标旧版本，见[版本恢复期间保留旧投影](2026-10-27-trace-version-retention.md)。手动「立即重读」随时可用。
 
 读取接口收成单出口：`peekRequest` 记录存在即返回带 `status`/`detailError` 的快照，null 只表示本会话没有这笔记录；`peekDetailError` 退役。页面 `readingChanged` 集合、`readGapOf` 与 projectSteps 的 `ReadGap` 参数一并退役，缺口行文案由快照 status 推导（「阅读版本已变化 · 自动重读中，点击立即重读」）。窗口准备只圈未备齐的请求，作废项归自动重读管，两条路不重复；准备流程见[中栏窗口读取的准备流水线](../architecture/2026-10-27-trace-window-preparation.md)。作废与自动重读的页面重绘由 `onReadChanged`（原 `onInvalidated` 扩义：作废、自动重读各阶段完成都通知）驱动，页面按落点是否影响右栏决定重绘范围。`invalidate` 公共入口保留为原地重置，不通知、不排自动重读，供测试与强制失效。projectSteps 仍只收纯数据，不访问 store。
 

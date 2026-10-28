@@ -212,10 +212,11 @@ export function createReaderStore(fetcher, onReadChanged, options) {
         try {
           await readRequest(rec.id);
         } catch { /* 重读失败：failed 态如实可见，由用户或批次重试 */ }
+        if (reads.get(rec.id) !== rec) return;
         onReadChanged?.(rec.id);
-        if (reads.get(rec.id) === rec && rec.detail !== null && !rec.delta.done) {
+        if (rec.detail !== null && !rec.delta.done) {
           try { await loadDelta(rec.id, 2); } catch { /* 增量失败保留事件行，可再续读 */ }
-          onReadChanged?.(rec.id);
+          if (reads.get(rec.id) === rec) onReadChanged?.(rec.id);
         }
       })();
     }, wait);

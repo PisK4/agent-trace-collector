@@ -91,11 +91,11 @@ export function renderMessages(entries, options) {
 
 /**
  * 单条消息的完整内容。用户与工具结果按原文保留换行，助手文本按 Markdown 显示。
- * `arrayKey` 是消息数组在协议对象里的键（messages / input），只影响位置标签。
+ * `path` 是原始请求对象里的消息位置；未知时不显示位置。
  * @param {Entry} entry
- * @param {string} [arrayKey]
+ * @param {string} [path]
  */
-export function renderMessageDetail(entry, arrayKey = 'messages') {
+export function renderMessageDetail(entry, path = '') {
   const displayRole = displayRoleOf(entry);
   const blocks = entry.blocks.map(block => {
     if (block.kind === 'text') {
@@ -117,7 +117,7 @@ export function renderMessageDetail(entry, arrayKey = 'messages') {
   return `<div class="body-panel">
     <div class="bp-head">
       <span class="kind ${roleClass(displayRole)} bp-kind">${roleTag(displayRole)}</span>
-      <span class="bp-path">${esc(arrayKey)}[${entry.ord}]</span>
+      ${path === '' ? '' : `<span class="bp-path">${esc(path.replace(/^request\./, ''))}</span>`}
       <button class="chip-btn" data-copy-msg="${entry.ord}">复制原文</button>
     </div>
     <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${entry.blocks.length} 个内容块</span></div>

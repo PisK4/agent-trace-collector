@@ -419,7 +419,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
   if (trusted !== null || unassigned) {
     for (const entry of read.entries) {
       if (trusted !== null && !trusted.has(entry.ord)) continue;
-      // 路径按协议的数组键拼（messages / input），不写死键名。
+      // 原始位置来自正文骨架；未知时不能拼出内容块路径。
       const msgBase = messagePathOf(read.meta, entry.ord);
       // 工具结果块按内容块出独立步骤；混合消息的真实用户文本只产生一次。
       const resultBlocks = entry.blocks.filter(block => block.kind === 'result');
@@ -427,7 +427,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = []) {
         // Chat 的 role=tool 结果按整条协议消息配对（后端 result_path 到 messages[N] 为止）；
         // Anthropic 的结果块配对到内容块路径。反向配对只认已确认的精确位置。
         const wholeMessage = entry.rawRole === 'tool';
-        const path = wholeMessage || block.path === '' ? msgBase : `${msgBase}.${block.path}`;
+        const path = msgBase === '' || wholeMessage || block.path === '' ? msgBase : `${msgBase}.${block.path}`;
         const indexed = trusted === null ? null : (detail.tool_results ?? []).find(item => item.state === 'resolved'
           && item.result_ord === entry.ord && item.result_path === path) ?? null;
         const bgSpawn = trusted === null ? [] : bg.bySpawn.get(`${row.req_id}:${entry.ord}`) ?? [];

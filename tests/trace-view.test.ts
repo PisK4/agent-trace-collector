@@ -36,7 +36,7 @@ type ProjectableRead = Parameters<typeof projectSteps>[1];
 function read(detailJson: unknown, entries: unknown[], reply: unknown): ProjectableRead {
   return {
     status: 'fresh', detailError: null,
-    detail: detailJson, meta: reply === null ? null : { reply, capabilities: null },
+    detail: detailJson, meta: reply === null ? null : { reply, capabilities: null, message_location: { key: 'messages', form: 'array' } },
     messages: new Map(), entries,
     structure: { open: false, next: 0, total: null, ords: [], selected: null, loading: false, error: null },
     delta: { next: 0, done: true, loading: false, error: null, unconfirmed: false },
@@ -214,6 +214,25 @@ test('结果步骤反向配对：Anthropic 按内容块路径，Chat 按整条�
   const mismatched = projectSteps(row(), read(detail({ delta_ordinals: [2], tool_results: [] }), [anthropicEntry],
     { stop_reason: 'end_turn', content: [] }));
   expect(mismatched.find(s => s.kind === 'tool_result')?.pairOwner).toBeNull();
+});
+
+test('旧 Responses 骨架的消息路径不同于 input 时不按序号错配结果', () => {
+  const indexed = [{ call_id: 'c', ord: 1, tool_name: 'read', owner_req: 3, result_req: 7,
+    result_ord: 2, result_path: 'request.input[2]', state: 'resolved' }];
+  const result = {
+    ord: 2, role: 'tool', rawRole: 'tool',
+    blocks: [{ kind: 'result', text: '合成结果', index: 0, raw: '合成结果', path: 'output' }],
+    preview: '合成结果', input: null, isInput: false,
+  };
+  const snapshot = read(detail({ delta_ordinals: [2], tool_results: indexed }), [result], { output: [] })!;
+  snapshot.meta = { ...snapshot.meta!, protocol: 'responses', message_location: { key: 'messages', form: 'array' } };
+  const legacy = projectSteps(row(), snapshot).find(step => step.kind === 'tool_result');
+  expect(legacy?.source?.path).toBe('request.messages[2]');
+  expect(legacy?.pairOwner).toBeNull();
+  snapshot.meta = { ...snapshot.meta!, message_location: { key: 'input', form: 'array' } };
+  const current = projectSteps(row(), snapshot).find(step => step.kind === 'tool_result');
+  expect(current?.source?.path).toBe('request.input[2]');
+  expect(current?.pairOwner).toEqual({ reqId: 3, callOrd: 1 });
 });
 
 test('选中来源解析：调用与已配对结果都解析成配对目标', () => {
@@ -407,10 +426,25 @@ test('消息列表选择未投影的历史时仍定位请求原文', () => {
     preview: 'earlier', input: null, isInput: false,
   };
   const snapshot = read(detail({ prev_relation: 'unknown', delta_ordinals: null }), [historical], { output: [] })!;
-  snapshot.meta = { ...snapshot.meta!, state: 'available', protocol: 'responses', total: 1 };
+  snapshot.meta = { ...snapshot.meta!, state: 'available', protocol: 'responses', total: 1,
+    message_location: { key: 'input', form: 'array' } };
   expect(resolveSelectedSource(null, '7:message:0', snapshot)).toEqual({ side: 'request', target: 'message', path: 'request.input[0]', messageOrd: 0 });
   expect(resolveSelectedSource(null, '7:message:1', snapshot)).toEqual({ side: 'none' });
   expect(resolveSelectedSource(null, '9:message:0', snapshot)).toEqual({ side: 'none' });
+});
+
+test('轨迹来源按骨架形态定位，不给未知位置拼接内容块', () => {
+  const user = { ...entry(0, { state: 'text', text: '合成命令', original: '合成命令' }, true), rawRole: 'user' };
+  const snapshot = read(detail({ delta_ordinals: [0] }), [user], { output: [] })!;
+  snapshot.meta = { ...snapshot.meta!, message_location: { key: 'input', form: 'string' } };
+  expect(projectSteps(row(), snapshot).find(step => step.kind === 'user')?.source?.path).toBe('request.input');
+  snapshot.meta = { ...snapshot.meta!, message_location: { key: 'input', form: 'array' } };
+  expect(projectSteps(row(), snapshot).find(step => step.kind === 'user')?.source?.path).toBe('request.input[0]');
+  const result = { ...user, isInput: false, input: null,
+    blocks: [{ kind: 'result', index: 0, text: '合成结果', raw: '合成结果', path: 'content[0]' }] };
+  snapshot.entries = [result] as never;
+  snapshot.meta = { ...snapshot.meta!, message_location: null };
+  expect(projectSteps(row(), snapshot).find(step => step.kind === 'tool_result')?.source?.path).toBe('');
 });
 
 test('孤立请求按详情归属显示携带的历史，其他快照不冒充新增', () => {

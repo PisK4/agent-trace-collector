@@ -2,8 +2,8 @@
  * 协议形状表：消息数组键、裸输入形态、角色推断与工具项位置。
  *
  * 纯函数，不 import store/sqlite：存储拆块、无损恢复、解析状态、派生抽取与
- * 工具结果定位读同一份事实。浏览器侧不打包本模块，改从 `BodyPage.protocol`
- * 取同一个协议名，再按协议拼 `request.messages[...]` 或 `request.input[...]`。
+ * 工具结果定位读同一份事实。浏览器侧从 `BodyPage.message_location` 读取
+ * 骨架确认的原始键与形态，内部消息序号不冒充裸字符串下标。
  */
 
 export type MessagesKey = 'messages' | 'input';

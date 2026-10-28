@@ -10,7 +10,7 @@ Status: implemented
 
 ## Decision
 
-准备单元改成请求组，准备与提交分开。详情、显示依赖与增量预算都到位后，页面才把这笔记为可提交（[app.js](../../../../web/app.js) 的 `readyRequests`），提交时才按当前读取生成完整投影。
+准备单元是请求组，准备与提交分开。详情、显示依赖与增量预算都到位后，[trace-preparation.js](../../../../web/trace-preparation.js) 才把这笔记为可提交，页面提交时按当前读取生成完整投影。准备任务的代次与请求 token 守卫见[阅读准备的版本守卫](../bug-fix/2026-10-28-trace-preparation-version-guards.md)。
 
 **显示依赖**（`settleDependencies`）：已确认前驱的元信息（System 比较）与已配对结果所属调用方的元信息（工具摘要）。依赖只读详情与元信息，不消费增量；只补窗口内的依赖，不扩大缓存边界；失败降级显示，不阻塞本组。
 
@@ -24,7 +24,7 @@ Status: implemented
 
 **增量消费去重**（[reader-store.js](../../../../web/reader-store.js) 的 `loadDelta`）：同一记录同一时刻只跑一条增量任务，并发调用共享同一任务与同一份页数预算；任务结束后释放。预算循环因此不会空转，存储层也不会被两个消费者各自推进消费位置。切换会话或重置阅读版本时释放对应的任务登记，旧任务不能被新快照复用。actor 未知时首片原文的读取及其证据边界见[孤立请求的正文与来源报告](../bug-fix/2026-10-27-unassigned-request-reading.md)。
 
-窗口内点击走同一条准备路径（`ensureRead` → `prepareGroup`），已登记的组不因点击重新扩量；窗口外请求保持旧深度：详情、元信息与两片增量。
+窗口内点击走同一条准备路径（`ensureRead` → `preparation.prepare`），已登记的组不因点击重新扩量；窗口外请求保持原有深度：详情、元信息与两片增量。
 
 ## Alternatives considered
 
@@ -36,7 +36,7 @@ Status: implemented
 
 **每组自动排空全部增量。** 预算无界，单笔超大请求会把整段历史正文读进页面缓存；增量事件行与显式续读本就是这条路径的诚实表达，不需要在准备阶段抹平。
 
-**页面另存一份可写读取缓存供准备阶段使用。** store 仍是唯一读取缓存；页面只持有显示投影（`retainedSteps`）与准备结论（`readyRequests`），不复制正文。
+**页面另存一份可写读取缓存供准备阶段使用。** store 是唯一读取缓存；页面持有显示投影（`retainedSteps`），准备模块持有提交资格，不复制正文。
 
 ## Consequences
 
