@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { toolTint } from '../web/body-view.js';
-import { resolveSelectedSource } from '../web/rail-facts.js';
+import { evidenceFoldHtml, resolveSelectedSource } from '../web/rail-facts.js';
 import { projectSteps, projectTailReply, renderTraceRows, tailEligibleIds, toolSummary } from '../web/trace-view.js';
 
 const TOKEN = 'r1-' + 'a'.repeat(64);
@@ -413,11 +413,12 @@ test('dirty、branch、unknown 没有确定用户步骤', () => {
   for (const d of cases) {
     const steps = projectSteps(row(), read(d, [], { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
     expect(steps.some(s => s.kind === 'user')).toBe(false);
-    expect(steps.some(s => s.kind === 'record')).toBe(true);
+    // 缺口收成一条组级状态行，不再为每个缺口各出一条 Event。
+    expect(steps.find(s => s.kind === 'flag')?.text).toBe('新增未确认');
   }
-  // branch 保留归属标记。
+  // 分支归属是派生实现细节，不再单独占一行。
   const branch = projectSteps(row({ chain_role: 'branch' }), read(cases[2]!, [], { stop_reason: 'end_turn', content: [] }));
-  expect(branch.some(s => s.text.includes('分支链请求'))).toBe(true);
+  expect(branch.some(s => s.text.includes('分支链请求'))).toBe(false);
 });
 
 test('已确认归属但关系未确认时不把已缓存历史当成新增', () => {
@@ -429,16 +430,17 @@ test('已确认归属但关系未确认时不把已缓存历史当成新增', ()
   ]) {
     const steps = projectSteps(row(), read(d, cached, { stop_reason: 'end_turn', content: [] }));
     expect(steps.some(step => step.kind === 'user')).toBe(false);
-    expect(steps.some(step => step.text.includes('新增输入未确认'))).toBe(true);
+    expect(steps.find(step => step.kind === 'flag')?.text).toContain('新增未确认');
   }
 });
 
 test('回调失败与冲突只作来源报告，不推断 HTTP 状态', () => {
   const snapshot = read(detail({ source_facts: { hook: { successes: ['failure'] } } }), [], null)!;
   const failed = projectSteps(row({ status: null }), snapshot);
-  expect(failed.some(step => step.text === '回调报告失败 · 未提供失败原因')).toBe(true);
-  expect(failed.some(step => step.text === 'HTTP 状态未知')).toBe(true);
+  // 回调失败与「无回复」「无账本」是同一个根因的三路表述，收成一条状态行。
+  expect(failed.find(step => step.kind === 'flag')?.text).toBe('无回复 · 无账本');
   expect(failed.some(step => step.text.includes('HTTP 失败'))).toBe(false);
+  expect(failed.some(step => step.text.includes('回调报告失败'))).toBe(false);
   snapshot.detail = { ...snapshot.detail!, source_facts: { hook: { successes: ['success', 'failure'] } } } as never;
   expect(projectSteps(row({ status: null }), snapshot).some(step => step.text === '回调的成功与失败报告冲突')).toBe(true);
 });
@@ -449,13 +451,18 @@ test('账本错误显示来源与原文，正文缺失不影响错误展示', ()
     source_facts: { selected: { error: '<unknown model>' }, hook: null } }), [], null)!;
   const r = row({ status: 404, body_state: 'pending', miss_reason: 'hook_absent' });
   const steps = projectSteps(r, snapshot);
-  expect(steps.some(step => step.text === '账本报告错误 · <unknown model>')).toBe(true);
-  expect(steps.some(step => step.text.includes('HTTP 404'))).toBe(true);
-  expect(steps.some(step => step.text.includes('hook_absent'))).toBe(true);
-  expect(steps.some(step => step.text === '回复状态未知')).toBe(true);
+  // 账本原始错误与 HTTP 失败合成一条，原文照旧可读。
+  expect(steps.filter(step => step.kind === 'record').map(step => step.text)).toEqual(['上游报错 · <unknown model>']);
+  // 缺口短语不再带存储层原因码：hook_absent 只留在右栏证据区。
+  const flag = steps.find(step => step.kind === 'flag');
+  expect(flag?.text).toBe('正文未到 · 新增未确认');
+  expect(flag?.status).toBe('failed');
+  expect(steps.some(step => step.text.includes('hook_absent'))).toBe(false);
   expect(steps.some(step => step.text.includes('正文信息未读到'))).toBe(false);
-  snapshot.meta = { state: 'pending', reply: null } as never;
-  expect(projectSteps(r, snapshot).some(step => step.text === '回复状态未知')).toBe(true);
+  // 正文可读但回复没到：此时才补一条回复缺口。
+  snapshot.meta = { state: 'available', reply: null, capabilities: null } as never;
+  const readable = projectSteps(row({ status: 404, body_state: 'available' }), snapshot);
+  expect(readable.find(step => step.kind === 'flag')?.text).toContain('无回复');
   expect(renderTraceRows(r, steps, 1, null)).toContain('&lt;unknown model&gt;');
 });
 
@@ -520,7 +527,7 @@ test('孤立请求按详情归属显示携带的历史，其他快照不冒充�
   const knownSnapshot = { ...snapshot, detail: { ...snapshot.detail!, actor_state: 'known' as const } };
   const knownSteps = projectSteps(row({ actor_state: 'unknown' }), knownSnapshot);
   expect(knownSteps.some(step => step.key === '7:message:0')).toBe(false);
-  expect(knownSteps.some(step => step.text.includes('新增输入未确认'))).toBe(true);
+  expect(knownSteps.find(step => step.kind === 'flag')?.text).toContain('新增未确认');
 });
 
 test('辅助请求只有一条辅助记录；同 call_id 不同请求的键不冲突', () => {
@@ -530,8 +537,8 @@ test('辅助请求只有一条辅助记录；同 call_id 不同请求的键不�
   const callBlock = { kind: 'call', text: 'x({})', index: 0, raw: { type: 'tool_use', id: 'same', name: 'x', input: {} }, path: 'content[0]' };
   const a = projectSteps(row({ req_id: 7 }), read(detail({ req_id: 7, delta_ordinals: [4] }), [assistantEntry(4, [callBlock])], null));
   const b = projectSteps(row({ req_id: 9 }), read(detail({ req_id: 9, delta_ordinals: [4] }), [assistantEntry(4, [callBlock])], null));
-  expect(a[0]?.key).toBe('7:message:4:call:0');
-  expect(b[0]?.key).toBe('9:message:4:call:0');
+  expect(a.find(step => step.kind === 'tool')?.key).toBe('7:message:4:call:0');
+  expect(b.find(step => step.kind === 'tool')?.key).toBe('9:message:4:call:0');
   // 末尾组沿用 reply/call 键，与承载组的 message:* 键不冲突。
   const reply = { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'same', name: 'x', input: {} }] };
   expect(projectTailReply(row({ req_id: 7 }), read(detail({ req_id: 7 }), [], reply)).steps[0]?.key).toBe('7:call:0');
@@ -576,11 +583,11 @@ test('HTTP 失败、缺正文与已有步骤并存', () => {
   expect(html).not.toContain('step-status');
   const missingBody = projectSteps(row({ body_state: 'evicted' }), read(detail(), entries, { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
   expect(missingBody.some(s => s.status === 'missing_body')).toBe(true);
-  // 正文状态记录带缺失原因，与 row-summary 的正文未到文案同口径；原因为空保持原文案。
+  // 正文缺口只留短语，存储层原因码（hook_absent）不再进中栏；原因为空时文案相同。
   const absent = projectSteps(row({ body_state: 'pending', miss_reason: 'hook_absent' }), read(detail(), entries, { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
-  expect(absent.find(s => s.key === '7:body')?.text).toBe('正文状态：pending（hook_absent）');
+  expect(absent.find(s => s.key === '7:flag')?.text).toBe('正文未到');
   const plain = projectSteps(row({ body_state: 'pending', miss_reason: null }), read(detail(), entries, { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
-  expect(plain.find(s => s.key === '7:body')?.text).toBe('正文状态：pending');
+  expect(plain.find(s => s.key === '7:flag')?.text).toBe('正文未到');
 });
 
 test('工具摘要按工具分派：Read 行区间四种组合', () => {
@@ -868,7 +875,7 @@ test('行尾读数：承载消息的文本行挂产出请求的推理段，调�
   const d = detail({ prev_req_id: 5, delta_ordinals: [2, 3] });
   const calls = [{ call_id: 'c1', ord: 1, tool_name: 'Bash', result_req: 8, result_ord: 0, result_path: 'p', state: 'resolved', exec_ms: 2400 }];
   const steps = projectSteps(r, read(d, entries, null), null, [], () => ({ reasoningMs: 2100, calls }));
-  expect(steps.filter(s => s.kind !== 'record').map(s => s.kind)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+  expect(steps.filter(s => s.kind !== 'record' && s.kind !== 'flag').map(s => s.kind)).toEqual(['user', 'assistant', 'tool', 'assistant']);
   // 推理段只挂到唯一 assistant 消息的第一段文本；同消息的第二段不重复。
   expect(steps.filter(s => s.kind === 'assistant').map(s => s.reading ?? null))
     .toEqual([{ kind: 'reason', ms: 2100 }, null]);
@@ -915,13 +922,13 @@ test('读不出时不写 0：推理段与执行段缺值都留空槽', () => {
   const calls = [{ call_id: 'c1', ord: 1, tool_name: 'Bash', result_req: null, result_ord: null, result_path: null, state: 'pending', exec_ms: null }];
   // 产出请求可读但没有推理段与结算时长：两行读数都留空。
   const steps = projectSteps(r, read(d, entries, null), null, [], () => ({ reasoningMs: null, calls }));
-  expect(steps.filter(s => s.kind !== 'record').map(s => s.reading ?? null)).toEqual([null, null]);
-  const html = renderTraceRows(r, steps.filter(s => s.kind !== 'record'), 1, null);
+  expect(steps.filter(s => s.kind !== 'record' && s.kind !== 'flag').map(s => s.reading ?? null)).toEqual([null, null]);
+  const html = renderTraceRows(r, steps.filter(s => s.kind !== 'record' && s.kind !== 'flag'), 1, null);
   expect(html).not.toContain('class="row-reading');
   expect(html.match(/<span class="compact-reading"><\/span>/g)?.length).toBe(2);
   // 已确认但产出请求不在窗口（prev_req_id 缺失）时同样不留读数。
   const noPrev = projectSteps(r, read(detail({ delta_ordinals: [3] }), entries, null), null, [], () => ({ reasoningMs: 9, calls }));
-  expect(noPrev.filter(s => s.kind !== 'record').map(s => s.reading ?? null)).toEqual([null, null]);
+  expect(noPrev.filter(s => s.kind !== 'record' && s.kind !== 'flag').map(s => s.reading ?? null)).toEqual([null, null]);
 });
 
 test('正文未到的请求不补「未收到回复」，只报正文状态', () => {
@@ -932,8 +939,8 @@ test('正文未到的请求不补「未收到回复」，只报正文状态', ()
     ...snapshot, meta: { state: 'pending', reply: null, capabilities: null },
   } as unknown as ProjectableRead;
   const steps = projectSteps(row({ body_state: 'pending', miss_reason: 'hook_absent' }), pending);
-  expect(steps.some(s => s.text === '未收到回复')).toBe(false);
-  expect(steps.find(s => s.key === '7:body')?.text).toBe('正文状态：pending（hook_absent）');
+  // 正文未到时回复状态继承正文，状态行只说一次，不补一句「无回复」。
+  expect(steps.find(s => s.kind === 'flag')?.text).toBe('正文未到');
 });
 
 test('末尾组判定：只在完整加载时给出，后继承载与前驱未知各抑制一次', () => {
@@ -958,4 +965,55 @@ test('末尾组判定：只在完整加载时给出，后继承载与前驱未�
   expect([...tailEligibleIds(branches, true)]).toEqual([8, 9]);
   // 空窗口没有候选。
   expect(tailEligibleIds([], true).size).toBe(0);
+});
+
+test('无缺口不产出状态行；缺口收成一条并排在最前', () => {
+  const clean = projectSteps(row(), read(detail(), [entry(2, { state: 'text', text: 'q', original: 'q' }, true)],
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
+  expect(clean.some(step => step.kind === 'flag')).toBe(false);
+
+  const gapRow = row({ status: null, body_state: 'pending', miss_reason: 'hook_absent' });
+  const gapRead = read(detail({ actor_state: 'unknown', delta_ordinals: null, prev_relation: 'unknown' }),
+    [entry(2, { state: 'text', text: 'q', original: 'q' }, true)], null);
+  const steps = projectSteps(gapRow, gapRead);
+  const flag = steps.find(step => step.kind === 'flag');
+  // 状态行在最前，短语按固定槽位（正文 → 回复 → 账本 → 归属）拼接。
+  expect(steps[0]?.kind).toBe('flag');
+  expect(flag?.key).toBe('7:flag');
+  expect(flag?.text).toBe('正文未到 · 无账本 · 新增未确认');
+  expect(flag?.status).toBe('missing_body');
+  // 被取代的六种逐条文案不再出现在任何步骤里。
+  for (const text of ['分支链请求', '会话归属未确认', '新增输入未确认', '未收到回复', 'HTTP 状态未知', '回调报告失败']) {
+    expect(steps.some(step => step.text.includes(text))).toBe(false);
+  }
+  const html = renderTraceRows(gapRow, steps, 1, null);
+  expect(html).toContain('data-kind="flag"');
+  expect(html).toContain('class="compact-row step-flag" data-flag="missing_body"');
+  // 状态行不伪装成 Event 角色行。
+  expect(html).not.toContain('>Event<');
+});
+
+test('证据折叠区：四路证据各写自己的到达情况', () => {
+  const r = row({ req_id: 9, status: 502, body_state: 'pending', miss_reason: 'hook_absent', have: 6 });
+  const hit = {
+    req_id: 9, actor_state: 'known', prev_relation: 'confirmed', delta_ordinals: [2],
+    reply_state: 'absent', source_facts: { selected: { error: 'upstream timeout' }, hook: null },
+  };
+  const html = evidenceFoldHtml(r, hit as never, null);
+  expect(html).toContain('HTTP 502 · upstream timeout');
+  expect(html).toContain('无关联证据 · 等满 1 小时仍没有回调关联到本笔');
+  expect(html).toContain('正文未到 · hook_absent');
+  expect(html).toContain('依赖正文');
+  // 账本到了、回调没到：结论句只写本库没有收到，不推断上游没发。
+  expect(html).toContain('本库没有这笔的回调证据');
+
+  // 只有回调证据的一笔：账本那一路写「没有关联到账本行」，结论换成账本口径。
+  const orphan = row({ req_id: 11, status: null, via: 'hook', have: 1, body_state: 'available' });
+  const orphanHtml = evidenceFoldHtml(orphan, { req_id: 11, reply_state: 'absent',
+    source_facts: { selected: null, hook: { successes: ['failure'] } } } as never,
+  { state: 'available', reply: null, capabilities: null } as never);
+  expect(orphanHtml).toContain('没有关联到账本行');
+  expect(orphanHtml).toContain('已收到 · 报告失败');
+  expect(orphanHtml).toContain('本库没有这笔的账本证据');
+  expect(orphanHtml).toContain('无回复');
 });

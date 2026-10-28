@@ -30,6 +30,7 @@ import { routeReadTarget } from './url-route.js';
 
 /**
  * @typedef {{side: 'none'}
+ *   | {side: 'evidence'}
  *   | {side: 'request', target: 'message' | 'system'}
  *   | {side: 'reply', target: 'call' | 'text' | 'block', callOrd?: number, ownerReq?: number}
  * } SelectedSource 装配层经 resolveSelectedSource 解析出的步骤来源，只带转换需要的字段。

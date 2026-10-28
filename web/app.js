@@ -23,7 +23,7 @@ import { initLayout, openRail } from './layout.js';
 import { fillContextMap, iidOf, itemLabel } from './context-map.js';
 import { createContextMenu, iidParse } from './context-detail.js';
 import {
-  kk, ledgerRowsHtml, railFactsHtml, readingChangedNote, renderAttemptChain,
+  evidenceFoldHtml, kk, ledgerRowsHtml, railFactsHtml, readingChangedNote, renderAttemptChain,
   resolveSelectedSource, structureFoldHtml, structureMoreParts, structureUnread, systemContextOf, toolOverviewHtml,
   toolSchemaSection, usageFoldHtml,
 } from './rail-facts.js';
@@ -894,6 +894,8 @@ if (typeof document !== 'undefined') {
       pairOf: messagePairIndexOf(detail, prevDetailOf(detail)),
     });
     return railFactsHtml({
+      // 选中组级状态行时，四路证据排在读数页最前：读者点它就是为了问「缺什么」。
+      evidenceHtml: source.side === 'evidence' ? evidenceFoldHtml(r, detail, meta) : '',
       replyHtml, structureHtml,
       capabilitiesHtml: meta !== null ? renderCapabilities(meta) : '',
       usageHtml: usageFoldHtml(r, detail, meta),
