@@ -95,6 +95,8 @@ if (typeof document !== 'undefined') {
      * 最新一页（「回到最新」的追尾模式）。刷新按当前锚点重建，换会话复位。
      */
     windowAnchor: /** @type {'start' | 'latest'} */ ('start'),
+    /** 窗口切换在跑：按钮落禁用态，避免重复点击把自己排成两轮重建。 */
+    windowJumping: false,
     /** 选中的轮次（会话内已结算轮序号）；null 表示请求态。 */
     turn: /** @type {number | null} */ (null),
     selectedStep: /** @type {string | null} */ (null),
@@ -525,6 +527,7 @@ if (typeof document !== 'undefined') {
       offPageReqId: state.offPageReqId,
       windowError: store.getWindow().error,
       summary: summary?.status === 'ready' ? summary.data : null,
+      summaryStatus: summary?.status ?? 'idle',
       summaryFoldOpen: folds.get(`summary:${state.session ?? ''}`) === true,
       windowAnchor: state.windowAnchor,
     });
@@ -1467,7 +1470,16 @@ if (typeof document !== 'undefined') {
     if (t.closest('summary')) return;
     if (t.closest('#load-later')) { void loadLater(); return; }
     if (t.closest('#refresh-window')) { void refreshWindow(); return; }
-    if (t.closest('#jump-opposite')) { void (state.windowAnchor === 'latest' ? jumpStart() : jumpLatest()); return; }
+    if (t.closest('#jump-opposite')) {
+      const button = /** @type {HTMLButtonElement} */ (t.closest('#jump-opposite'));
+      if (state.windowJumping) return;
+      state.windowJumping = true;
+      button.disabled = true;
+      button.textContent = '正在重建窗口…';
+      void (state.windowAnchor === 'latest' ? jumpStart() : jumpLatest())
+        .finally(() => { state.windowJumping = false; renderAll(); });
+      return;
+    }
     if (t.closest('#switch-window')) { void switchWindowFor(state.offPageReqId); return; }
     // 轮次带点选：轮次行随意图带入，转换层不做查找。
     const turnChip = /** @type {HTMLElement | null} */ (t.closest('[data-turn]'));

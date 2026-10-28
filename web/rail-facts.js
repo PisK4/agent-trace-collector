@@ -181,7 +181,7 @@ export function toolOverviewHtml(ownerReq, pair, reading) {
     ${row('配对状态', esc(pairStateText(pairState)))}
     ${pair !== null && pair.state === 'resolved' && pair.result_req !== null
     ? row('结果位置', `请求 ${pair.result_req} · 消息 #${pair.result_ord}`) : ''}
-    ${row('正文加载', esc(loadStateText(loadState)))}
+    ${row('正文加载', esc(loadStateText(loadState, reading?.reason ?? null)))}
     ${reading !== null && reading.state === 'available' ? row('错误标记', esc(isErrorText(reading.is_error))) : ''}
   </div>
   <p class="rail-note">模型响应时长归属承载它的请求；执行段按结果请求开始减调用请求结束推算，含客户端处理与人工确认，是上界。</p>`;
