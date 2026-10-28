@@ -8,6 +8,7 @@ import {
   topSystemText,
 } from '../web/body-model.js';
 import { partColor, partLabel, renderAttemptChain } from '../web/rail-facts.js';
+import { replyCompleteness } from '../web/row-summary.js';
 import { esc, mdToHtml } from '../web/html.js';
 import type { BodyPage } from '../src/protocols';
 import type { CapabilityView } from '../src/capabilities';
@@ -719,4 +720,22 @@ test('协议未适配的能力行说明解释边界，不显示零技能', () =>
     },
   }));
   expect(missing).toContain('工具定义缺失');
+});
+
+test('空回复继承正文状态：未到、回收、摘要与部分正文分开报', () => {
+  expect(replyView(page({ state: 'pending', reply: null })).state).toBe('pending');
+  expect(replyView(page({ state: 'evicted', reply: null })).state).toBe('evicted');
+  expect(replyView(page({ state: 'summary', reply: null })).state).toBe('summary');
+  expect(replyView(page({ state: 'partial', reply: null })).state).toBe('partial');
+  expect(replyView(page({ state: 'unsupported', reply: null })).state).toBe('unsupported');
+  // 正文可读却确实没有回复对象，才落到 absent。
+  expect(replyView(page({ state: 'available', reply_state: 'absent', reply: null })).state).toBe('absent');
+
+  const pending = replyView(page({ state: 'pending', reply: null }));
+  expect(renderReply(pending)).toContain('回复还没到');
+  expect(renderReply(pending)).not.toContain('上游没有提供可用回复');
+  expect(replyCompleteness({ status: 200 }, pending)).toEqual({ key: 'unknown', label: '回复未到' });
+  const evicted = replyView(page({ state: 'evicted', reply: null }));
+  expect(renderReply(evicted)).toContain('正文已回收');
+  expect(replyCompleteness({ status: 200 }, evicted)).toEqual({ key: 'unknown', label: '正文已回收' });
 });
