@@ -24,7 +24,7 @@ import { fillContextMap, iidOf, itemLabel } from './context-map.js';
 import { createContextMenu, iidParse } from './context-detail.js';
 import {
   kk, ledgerRowsHtml, railFactsHtml, readingChangedNote, renderAttemptChain,
-  resolveSelectedSource, structureFoldHtml, systemContextOf, toolOverviewHtml,
+  resolveSelectedSource, structureFoldHtml, structureMoreParts, systemContextOf, toolOverviewHtml,
   toolSchemaSection, usageFoldHtml,
 } from './rail-facts.js';
 import { secs } from './duration.js';
@@ -1027,6 +1027,7 @@ if (typeof document !== 'undefined') {
     // 结构总数未读时用元信息页的 total 判断：正文页签也能发起首次结构读取。
     const knownTotal = structure.total ?? (page.total ?? null);
     const unread = knownTotal !== null && knownTotal !== undefined && structure.next < knownTotal;
+    const { button: moreButton, note: structureError } = structureMoreParts(structure, r.req_id, knownTotal);
     return `${bodyNotice(page) ? `<p class="rail-note" style="margin-bottom:8px">${esc(bodyNotice(page))}</p>` : ''}
       ${body}
       <div class="conv-tools" style="padding:10px 0 0">
@@ -1038,7 +1039,7 @@ if (typeof document !== 'undefined') {
             </select>`
         : '<span class="muted" style="font-size:10.5px">这一笔没有消息正文</span>'}
       </div>
-      ${unread ? `<div style="margin-top:8px"><button class="chip-btn" data-structure-more="${r.req_id}">加载下一片（已读 ${structure.next} / ${knownTotal}）</button></div>` : ''}`;
+      ${unread ? `<div style="margin-top:8px">${moreButton}</div>${structureError}` : ''}`;
   }
 
   /** @type {string | null} */
