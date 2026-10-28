@@ -46,7 +46,7 @@ P1 交付明细视图。后端把 `safePrompt` 白名单扩到 item 级（`name/
 
 ## Related
 
-[上下文矩阵布局与点击明细](./2026-10-26-context-treemap-drilldown.md)已交付，部分取代本文关于非线性空闲区、面积下限、标称宽布局与暂不提供正文点击的决定：面积改为按真实 token 值铺满绘图区，tile 改为绝对定位 HTML button，内容块与图例项可点开明细弹窗。本文的类别来源、七类颜色身份与只读查询原则继续有效。
+[上下文矩阵布局与点击明细](./2026-10-26-context-treemap-drilldown.md)已交付，部分取代本文关于非线性空闲区、面积下限、标称宽布局与暂不提供正文点击的决定：面积改为按真实 token 值铺满绘图区，tile 改为绝对定位 HTML button，内容块与图例项可点开明细弹窗。本文的类别来源、七类颜色身份与只读查询原则继续有效。[中栏按承载请求的 delta 分组](2026-10-28-request-delta-trace-groups.md)把文件与记忆类条目的可见名改为只显示 basename，完整名字进 `title` 与 `aria-label`；类别身份与颜色不受影响。
 
 ## Testing
 
