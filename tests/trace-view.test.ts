@@ -467,7 +467,7 @@ test('孤立请求按详情归属显示携带的历史，其他快照不冒充�
   const unknown = detail({ actor_state: 'unknown', derived_state: 'dirty', derivation: { chain_state: 'unavailable' }, delta_ordinals: null });
   const snapshot = read(unknown, [history, injected], { choices: [] })!;
   snapshot.meta = { ...snapshot.meta!, state: 'available', protocol: 'chat', total: 2 };
-  snapshot.structure = { next: 2, total: 2, ords: [0, 1], loading: false, error: null };
+  snapshot.structure = { back: 0, next: 2, total: 2, ords: [0, 1], loading: false, error: null };
   const steps = projectSteps(row({ actor_state: 'known' }), snapshot);
   const pastAssistant = steps.find(step => step.key === '7:message:0');
   expect(pastAssistant?.kind).toBe('assistant');

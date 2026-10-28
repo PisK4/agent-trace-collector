@@ -78,15 +78,15 @@ export function railFactsHtml(parts) {
 /**
  * 结构续读的按钮与失败提示，正文页签与请求结构折叠共用一份。
  * 加载中禁用按钮，失败时按钮改「重试读取」并附原因；是否显示按钮由调用方判断，
- * 两个页签对「还有没有下一片」的前置条件不同。
- * @param {{ next: number, loading: boolean, error: string | null }} structure
+ * 两个页签的正文可读性前置条件不同。已读窗口是 `[back, next)`，向前读更早的片。
+ * @param {{ back: number, next: number, loading: boolean, error: string | null }} structure
  * @param {number} reqId
  * @param {number | string | null} total
  * @returns {{button: string, note: string}}
  */
 export function structureMoreParts(structure, reqId, total) {
   return {
-    button: `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${structure.error ? '重试读取' : `加载下一片（已读 ${structure.next} / ${total}）`}</button>`,
+    button: `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${structure.error ? '重试读取' : `加载更早（已读 ${structure.back}–${structure.next} / ${total}）`}</button>`,
     note: structure.error ? `<p class="note warn">结构读取失败：${esc(structure.error)}</p>` : '',
   };
 }
@@ -101,7 +101,7 @@ export function structureMoreParts(structure, reqId, total) {
  *   row: { body_state: string, miss_reason?: string | null },
  *   meta: { total: number | null } | null,
  *   entries: import('./body-model.js').Entry[],
- *   structure: { next: number, total: number | null, ords: number[], loading: boolean, error: string | null },
+ *   structure: { back: number, next: number, total: number | null, ords: number[], loading: boolean, error: string | null },
  *   delta: Set<number> | null,
  *   deltaState?: { next: number, done: boolean, loading: boolean, error: string | null } | null,
  *   parseState?: string | null,
@@ -117,7 +117,8 @@ export function structureFoldHtml(input) {
   const total = structure.total ?? (meta ? meta.total : null);
   const count = total === null || total === undefined ? '消息总数未读取' : `${total} 条消息`;
   const canLoad = row.body_state === 'available' || row.body_state === 'partial';
-  const unread = total !== null && total !== undefined && structure.next < total;
+  // 已读窗口是 [back, next)：back > 0 表示前面还有更早的消息；读取失败保留重试入口。
+  const unread = (total !== null && total !== undefined && structure.back > 0) || structure.error !== null;
   const chosen = selected === null
     ? null : entries.find(entry => entry.ord === selected) ?? null;
   let body;
@@ -130,7 +131,7 @@ export function structureFoldHtml(input) {
     // 协议未适配是解释边界：原文完整也不按已知协议展开消息结构。
     body = '<p class="note">协议未适配：原对象已保存，但不按已知协议解释消息结构；请求字段与回复按原文阅读。</p>';
   } else if (entries.length === 0) {
-    body = `<p class="note">${structure.loading ? '正在读取消息结构…' : '尚未读取消息正文；展开后从开头读取前 40 条。'}</p>`;
+    body = `<p class="note">${structure.loading ? '正在读取消息结构…' : '尚未读取消息正文；展开后从末尾读取最近 40 条。'}</p>`;
   } else {
     const consumed = deltaState === null ? delta?.size ?? 0 : Math.min(deltaState.next, delta?.size ?? 0);
     const deltaNote = delta === null
@@ -152,10 +153,11 @@ export function structureFoldHtml(input) {
     body = `${deltaNote}${renderMessages(listEntries, { delta, limit: listEntries.length, selectedOrd: selected, gaps })}`;
   }
   const { button, note: errorNote } = structureMoreParts(structure, reqId, total);
+  // 按钮与失败说明放在列表上方，与「向前读更早」的方向一致。
   const more = unread && canLoad ? button : '';
   return `<details class="rail-fold" data-structure-fold="${reqId}" data-fold="structure:${reqId}"${open ? ' open' : ''}>
     <summary>请求结构<span class="fold-count">${esc(count)}</span></summary>
-    <div class="fold-body">${errorNote}${body}${more}</div>
+    <div class="fold-body">${errorNote}${more}${body}</div>
   </details>`;
 }
 

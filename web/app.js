@@ -964,7 +964,7 @@ if (typeof document !== 'undefined') {
     const structureHtml = structureFoldHtml({
       reqId: r.req_id, row: r, meta,
       entries: read?.entries ?? [],
-      structure: read?.structure ?? { next: 0, total: null, ords: [], loading: false, error: null },
+      structure: read?.structure ?? { back: 0, next: 0, total: null, ords: [], loading: false, error: null },
       open: foldState ?? (messageOrd !== null),
       selected: messageOrd ?? structureSelected.get(r.req_id) ?? null,
       delta: detail === null ? null : deltaOrdinals(detail),
@@ -1144,9 +1144,11 @@ if (typeof document !== 'undefined') {
       body = `<div class="rail-empty"><b>没有可读的回复</b>${esc(bodyNotice(page) || '这一笔只有请求。')}</div>`;
     }
     const structure = read.structure;
-    // 结构总数未读时用元信息页的 total 判断：正文页签也能发起首次结构读取。
+    // 结构总数未读时用元信息页的 total 判断；未读条件是「前面还有更早的消息」，
+    // 与读数页折叠同一口径，首读由结构折叠发起。
     const knownTotal = structure.total ?? (page.total ?? null);
-    const unread = knownTotal !== null && knownTotal !== undefined && structure.next < knownTotal;
+    const unread = (knownTotal !== null && knownTotal !== undefined && structure.back > 0)
+      || structure.error !== null;
     const { button: moreButton, note: structureError } = structureMoreParts(structure, r.req_id, knownTotal);
     return `${bodyNotice(page) ? `<p class="rail-note" style="margin-bottom:8px">${esc(bodyNotice(page))}</p>` : ''}
       ${body}
@@ -1212,12 +1214,55 @@ if (typeof document !== 'undefined') {
     // 滚动只在「同请求同页签的重绘」里保持；页签切换与换请求都回到顶部，行为可预期。
     // 轮次态的键带轮号：逐轮翻阅时滚动回顶，不把上一轮的阅读位置带过去。
     const key = `${state.turn ?? ''}:${state.reqId}:${state.railTab}`;
-    const keep = key === lastRailKey ? rail.scrollTop : 0;
+    const sameRail = key === lastRailKey;
+    const keep = sameRail ? rail.scrollTop : 0;
+    const listAnchor = sameRail ? captureMsgAnchor(rail) : null;
     rail.innerHTML = railBody();
     restoreFolds(rail);
+    // 结构列表是独立滚动区：重绘按首条可见消息归位，首次到达落到最新一条。
+    restoreMsgList(rail, listAnchor);
     restoreScroll(rail, keep);
     lastRailKey = key;
     wireContextMap();
+  }
+
+  /**
+   * 结构列表的滚动锚点：右栏重绘会重建内层列表，scrollTop 不保留。记下当前
+   * 可见的首条消息序号与相对偏移，重绘后按它归位；没有锚点时交给恢复方落底。
+   * @param {HTMLElement} rail
+   * @returns {{ord: number, offset: number} | null}
+   */
+  function captureMsgAnchor(rail) {
+    const list = /** @type {HTMLElement | null} */ (rail.querySelector('.rail-fold .msg-list'));
+    if (list === null) return null;
+    const box = list.getBoundingClientRect();
+    for (const node of list.querySelectorAll('li[data-ord]')) {
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom <= box.top) continue;
+      return { ord: Number(/** @type {HTMLElement} */ (node).dataset.ord), offset: rect.top - box.top };
+    }
+    return null;
+  }
+
+  /**
+   * 结构列表的滚动恢复：锚点还在就按序号与偏移归位（「加载更早」前插不把读者
+   * 拉回顶部）；锚点不在（首读、换请求或列表刚出现）时落到最新一条——读取方向
+   * 是尾片优先。
+   * @param {HTMLElement} rail
+   * @param {{ord: number, offset: number} | null} anchor
+   */
+  function restoreMsgList(rail, anchor) {
+    const list = /** @type {HTMLElement | null} */ (rail.querySelector('.rail-fold .msg-list'));
+    if (list === null) return;
+    if (anchor !== null) {
+      const item = list.querySelector(`li[data-ord="${anchor.ord}"]`);
+      if (item !== null) {
+        const offset = item.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        list.scrollTop += offset - anchor.offset;
+        return;
+      }
+    }
+    list.scrollTop = list.scrollHeight;
   }
 
   function renderAll() {

@@ -564,12 +564,12 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
     }
   }
   if (unassigned) {
-    const { next, total, loading, error } = read.structure;
+    const { back, total, loading, error } = read.structure;
     const count = total ?? read.meta?.total ?? null;
     if (error !== null) {
       record('unassigned-more', 'unknown', `请求消息读取失败 · ${error} · 点击重试`);
-    } else if (count !== null && next < count) {
-      record('unassigned-more', null, loading ? '正在读取请求消息' : `还有 ${count - next} 条请求消息未读取 · 点击续读`);
+    } else if (count !== null && back > 0) {
+      record('unassigned-more', null, loading ? '正在读取请求消息' : `还有 ${back} 条更早的请求消息未读取 · 点击续读`);
     }
   }
   // 增量读取未完成或失败：一条事件记录显示剩余与失败，点击续读两片；完成时不出现。
