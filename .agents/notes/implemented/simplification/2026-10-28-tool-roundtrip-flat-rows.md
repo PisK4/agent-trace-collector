@@ -43,3 +43,5 @@ chip 回到工具身份色：Read 蓝、Edit 橙、Bash 玫红等，正常态不
 ## Testing
 
 `bun test tests/body-view.test.ts`（34 项）与 `bun run typecheck` 通过。测试锁定：`renderTools` 输出 `.tool-rows` 容器、每次调用一个 `.tool-row`、没有 `<details>` 与 `data-fold="round:`、chip 带 `tool-chip call tint-*` 类。页面实测见[验收记录](../../../../docs/acceptance.md)。
+
+2026-10-29 复核收口：会话页配对列表的调用 chip 当时漏了 `toolTint`，`.tool-chip.call` 交出颜色后该处退成中性色，与上面「三处共用同一个 `toolTint` 映射」不符。已在同一批 review 修复中补上，并由 `tests/web.test.ts` 锁定：已知工具出 `tool-chip call tint-bash`，`tool_name` 缺失落 `tint-other`。

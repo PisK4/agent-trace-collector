@@ -277,7 +277,7 @@ export function railSummaryListHtml(list, labelOf) {
       const warn = item.state !== 'resolved'
         ? `<span class="tool-chip miss"><span>${esc(pairStateText(item.state))}</span></span>` : '';
       return `<button class="tool-row tool-link" data-summary-pair="1" data-owner="${item.req_id}" data-ord="${item.ord}">
-        <span class="tool-chip call" title="${esc(item.tool_name ?? '')}"><span>${esc(item.tool_name ?? 'unknown')} · 调用 #${item.ord}</span></span>
+        <span class="tool-chip call ${toolTint(item.tool_name ?? '')}" title="${esc(item.tool_name ?? '')}"><span>${esc(item.tool_name ?? 'unknown')} · 调用 #${item.ord}</span></span>
         <span class="muted">${esc(labelOf(item.req_id))}</span>${warn}
       </button>`;
     });

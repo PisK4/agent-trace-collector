@@ -405,12 +405,12 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
   } else if (view.state !== 'ok') {
     // pending / evicted / unsupported / summary：正文状态已经说明，回复不单独成短语。
   }
-  // 回调只报告自身观察，不由 success 推断 HTTP 状态或具体原因；失败与「无回复」
-  // 是同一个根因的两路表述，已有回复缺口时不再叠一句。
+  // 回调只报告自身观察，不由 success 推断 HTTP 状态或具体原因。回调的到达与失败
+  // 只在右栏证据折叠区读，中栏不为此另立短语：回复没读到时上面的回复槽已经说了，
+  // 正文本身是缺口时更不叠；失败与成功并存是渠道内冲突，保留一条记录行。
   const hookReports = detail.source_facts?.hook?.successes ?? [];
-  if (hookReports.includes('failure')) {
-    if (hookReports.includes('success')) record('hook', 'unknown', '回调的成功与失败报告冲突');
-    else if (gaps.reply === null) gap('reply', '回调报告失败', 'unknown');
+  if (hookReports.includes('failure') && hookReports.includes('success')) {
+    record('hook', 'unknown', '回调的成功与失败报告冲突');
   }
   const ledgerError = detail.source_facts?.selected?.error;
   // 请求级失败是这一组最强的一档：状态行跟着变红，读者不必逐行比对。
