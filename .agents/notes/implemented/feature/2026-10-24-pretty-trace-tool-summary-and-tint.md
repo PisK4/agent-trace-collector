@@ -66,7 +66,7 @@ Status: implemented
 - 不复用 `--p1..p6`，那是上下文组成条的固定槽位，两套语义不混。
 - 色类只包工具名（2026-10-25 用户修订），参数摘要与结果正文以普通文本渲染，不进色类；着色元素只承担「这是哪个工具」一个识别任务。
 - 中栏应用位：调用行 chip 显示工具名、结果行按三级前缀，取代 `Tool call` / `Tool result` 文字小标（`row-kind` 类删除）。配对 result 沿用 call 的颜色，未配对用 `--tool-other`。
-- 右栏应用位：配对页 Call 与 Result 面板头（`bp-kind`）与正文页 `tool-chip.call`（工具往返折叠行、工具页列表）换用同款色类，配对页 Call 面板头的工具名不再在 `bp-meta` 重复。Result 面板头配对确认后显示工具名并沿用 call 色类，未确认保持中性 `Tool result`。
+- 右栏应用位：配对页 Call 与 Result 面板头（`bp-kind`）与正文页 `tool-chip.call`（工具往返行、工具页列表）换用同款色类，配对页 Call 面板头的工具名不再在 `bp-meta` 重复。Result 面板头配对确认后显示工具名并沿用 call 色类，未确认保持中性 `Tool result`。
 - 角色标签 `User` / `Assistant` / `Tool` / `System` 的文案与配色不动。颜色只承载工具身份一个语义，正常态无装饰，异常才着色。
 
 ### 失败异常态、Edit 对照与悬停

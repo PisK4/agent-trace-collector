@@ -346,10 +346,17 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
     },
   }));
   expect(tools.map(tool => tool.state)).toEqual(['resolved', 'pending']);
-  const html = renderTools(tools, '7');
+  const html = renderTools(tools);
   expect(html).toContain(`data-tool-owner="${detail.req_id}"`);
   expect(html).toContain('data-call-ord="0"');
-  expect(html).toContain('data-fold="round:7"');
+  // 一次调用一行直出，没有折叠壳、标题与持久化键。
+  expect(html).toContain('class="tool-rows"');
+  expect((html.match(/class="tool-row"/g) ?? []).length).toBe(2);
+  expect(html).not.toContain('<details');
+  expect(html).not.toContain('工具往返');
+  expect(html).not.toContain('data-fold="round:');
+  // chip 带工具身份色类，颜色由 CSS 的 .tint-* 决定。
+  expect(html).toContain('tool-chip call tint-read');
   // 每次调用都提供右栏内配对入口，不跳转；未确认与无结果按「没有就不显示」不出状态。
   expect(html).toContain('配对两端');
   expect(html).not.toContain('data-result-owner');
@@ -365,7 +372,7 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
       { type: 'tool_use', id: 'b', name: 'read', input: { path: 'b' } },
     ] },
   }));
-  const twinHtml = renderTools(twin, '42');
+  const twinHtml = renderTools(twin);
   expect(twin.filter(t => t.result_path !== null).map(t => t.result_path)).toEqual([
     'request.messages[2].content[0]', 'request.messages[2].content[1]',
   ]);
@@ -394,7 +401,7 @@ test('工具往返与中栏共用摘要：工具名加参数段，完整参数�
     row({ call_id: 'e', name: 'Edit', inputText: edit, ord: 1 }),
     row({ call_id: 'b', name: 'Bash', inputText: bash, ord: 2 }),
     row({ call_id: 's', name: 'Skill', inputText: skill, ord: 3 }),
-  ], '7');
+  ]);
   // 可见文本与中栏同一份摘要的参数段一致（含工具名与分隔符）。
   for (const [name, input] of [['Read', read], ['Edit', edit], ['Bash', bash], ['Skill', skill]]) {
     const { label, args } = summaryParts(name, input);
@@ -408,7 +415,7 @@ test('工具往返与中栏共用摘要：工具名加参数段，完整参数�
   expect(html).toContain('file_path');
   expect(html).toContain('description');
   // 未命名工具沿用固定叫法。
-  expect(renderTools([row({ name: '', inputText: 'raw-text', state: 'unpaired' })], ''))
+  expect(renderTools([row({ name: '', inputText: 'raw-text', state: 'unpaired' })]))
     .toContain('未命名工具 · raw-text');
 });
 
@@ -718,7 +725,7 @@ test('右栏回复详情的推理块默认折叠', () => {
   expect(html).toContain('<details class="rail-fold sub">');
   expect(html).toContain('推理块');
   expect(html).not.toContain('<details class="rail-fold sub" open');
-  // 推理块与工具往返默认收起/展开由外层控制；这里锁定推理块默认收起。
+  // 推理块默认收起；工具往返已无折叠壳，作为行直出，不参与这里的开合断言。
 });
 
 test('能力折叠区带稳定键，重绘后按名字恢复开合', () => {
