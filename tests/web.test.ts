@@ -9,7 +9,7 @@ import {
 import {
   railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget,
 } from '../web/url-route.js';
-import { agentLabel, sessionHead, sessionsListBypassHtml } from '../web/session-view.js';
+import { agentLabel, railSummaryListHtml, sessionHead, sessionsListBypassHtml } from '../web/session-view.js';
 
 test('旁路折叠行：有旁路条目才渲染，展开与收起各自如实计数', () => {
   const row = (flags: string[]) => ({
@@ -19,6 +19,25 @@ test('旁路折叠行：有旁路条目才渲染，展开与收起各自如实�
   expect(sessionsListBypassHtml([row(['bypass']), row(['bypass']), row([])], false))
     .toContain('已折叠 2 条旁路会话');
   expect(sessionsListBypassHtml([row(['bypass'])], true)).toContain('收起 1 条旁路会话');
+});
+
+test('会话汇总配对列表的调用 chip 带工具身份色', () => {
+  const list = {
+    kind: 'pair', param: 'Bash', label: 'Bash 调用', loading: false, error: null,
+    data: {
+      items: [
+        { req_id: 7, ord: 1, tool_name: 'Bash', state: 'resolved' },
+        { req_id: 8, ord: 2, tool_name: null, state: 'resolved' },
+      ],
+      truncated: false,
+    },
+  };
+  const html = railSummaryListHtml(list, id => `#${id}`);
+  // 与正文页、工具页共用同一个 toolTint 映射：颜色只承载工具身份。
+  expect(html).toContain('<span class="tool-chip call tint-bash" title="Bash">');
+  // 名字缺失时不冒充已知工具：中性色，文本照旧写 unknown。
+  expect(html).toContain('tool-chip call tint-other');
+  expect(html).toContain('unknown · 调用 #2');
 });
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {

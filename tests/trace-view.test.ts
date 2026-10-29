@@ -445,6 +445,14 @@ test('回调失败与冲突只作来源报告，不推断 HTTP 状态', () => {
   expect(projectSteps(row({ status: null }), snapshot).some(step => step.text === '回调的成功与失败报告冲突')).toBe(true);
 });
 
+test('正文本身是缺口时回复槽留空，回调失败不叠短语', () => {
+  const snapshot = read(detail({ body_state: 'pending', source_facts: { hook: { successes: ['failure'] } } }), [], null)!;
+  const steps = projectSteps(row({ status: null, body_state: 'pending', miss_reason: 'hook_absent' }), snapshot);
+  // 正文缺口已经说明没有内容可读，回复槽不再补一句；回调失败只在右栏证据区读。
+  expect(steps.find(step => step.kind === 'flag')?.text).toBe('正文未到 · 无账本');
+  expect(steps.some(step => step.text.includes('回调报告失败'))).toBe(false);
+});
+
 test('账本错误显示来源与原文，正文缺失不影响错误展示', () => {
   const snapshot = read(detail({ actor_state: 'unknown', body_state: 'pending', reply_state: null,
     delta_ordinals: null, prev_relation: 'unknown',
