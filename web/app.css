@@ -207,7 +207,10 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
   border:1px solid var(--line);border-radius:3px;background:var(--surface);color:var(--text-2);max-width:100%;
 }
 .tool-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tool-chip.call{border-color:var(--k-assistant);color:var(--k-assistant);background:var(--k-assistant-bg)}
+/* 调用 chip 只承载工具身份：色相与底色交给 .tint-*（单类选择器）。这里若写
+   color/background，双类权重会压过身份色，所有调用都变成同一种琥珀。边框透明
+   保留 1px 占位，视觉上不再画框。 */
+.tool-chip.call{border-color:transparent}
 .tool-chip.res{border-color:var(--k-tool);color:var(--k-tool);background:var(--k-tool-bg)}
 .tool-chip.miss{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
 .conv-tools details{padding:0 11px 9px;width:100%;cursor:default}
@@ -371,6 +374,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .msg-thinking pre{margin:0 0 8px}
 .bp-plain{white-space:pre-wrap}
 .tool-row{display:flex;flex-wrap:wrap;gap:5px;align-items:center;width:100%;padding:2px 0}
+.tool-rows{display:flex;flex-direction:column;gap:4px;margin-top:10px}
 .raw-group{margin-bottom:12px}
 .raw-group .label{margin-bottom:4px}
 

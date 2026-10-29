@@ -181,13 +181,13 @@ export function renderUnknownBlockDetail(path, raw) {
 }
 
 /**
- * 工具往返折叠行。每次调用都提供右栏内打开配对页的入口，阅读就地完成；
- * 没有配对信息就不显示状态，只有异常（多候选）才提示。行内摘要与中栏调用行
- * 同源（tool-summary 叶子模块）：工具名加参数段，完整 inputText 只在悬停里。
+ * 工具往返：一次调用一行，不套折叠壳。每次调用都提供右栏内打开配对页的入口，
+ * 阅读就地完成；没有配对信息就不显示状态，只有异常（多候选）才提示。
+ * 行内摘要与中栏调用行同源（tool-summary 叶子模块）：工具名加参数段，
+ * 完整 inputText 只在悬停里。
  * @param {ToolEntry[]} tools
- * @param {string} [foldKey] 折叠持久化键前缀（req id）；空串不持久化
  */
-export function renderTools(tools, foldKey = '') {
+export function renderTools(tools) {
   if (tools.length === 0) return '';
   const rows = tools.map(tool => {
     const open = `<button class="chip-btn" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}">配对两端 ▸</button>`;
@@ -200,11 +200,7 @@ export function renderTools(tools, foldKey = '') {
       ${open}${warn}
     </div>`;
   }).join('');
-  const foldAttr = foldKey === '' ? '' : ` data-fold="round:${esc(foldKey)}"`;
-  return `<details class="rail-fold sub"${foldAttr} open>
-    <summary>工具往返<span class="fold-count">${tools.length} 次</span></summary>
-    <div class="fold-body">${rows}</div>
-  </details>`;
+  return `<div class="tool-rows">${rows}</div>`;
 }
 
 /** 空回复的文案按正文状态分开：未到可等，回收与摘要不可等，缺失才是真的没有。 */
@@ -244,7 +240,7 @@ export function renderReply(view, tools = [], foldKey = '') {
   const text = view.text.length > 0
     ? `<div class="reply-text">${mdToHtml(view.text)}</div>`
     : view.calls.length === 0 ? '<div class="reply-empty"><span>回复对象存在，但没有文本内容。</span></div>' : '';
-  return `${thinking}${text}${renderTools(tools, foldKey)}`;
+  return `${thinking}${text}${renderTools(tools)}`;
 }
 
 /**
