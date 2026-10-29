@@ -644,3 +644,23 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 ### 未执行
 
 像素截图仍不可用（`Page.captureScreenshot` 对该页持续超时），视觉项以 DOM 与 computed style 断言代替。`egress` 之外的浏览器仅用只读 GET，未写库、未改生产请求。
+
+## review 收口：配对列表 chip 身份色与回调失败短语退出状态行（合成 + 生产页面只读，2026-10-29）
+
+前提：worktree `atc-review-fixes` 的 `fix/review-2026-10-29` 分支（基于 master `630da7d`，合入 `ff8b7d3`）。两项都是对前两轮改动的复核修复：会话页配对列表的调用 chip 补 `toolTint`；`projectSteps` 删除「回调报告失败」填回复槽的兜底。动机与否决的备选见[工具往返去壳改行](../.agents/notes/implemented/simplification/2026-10-28-tool-roundtrip-flat-rows.md)与[中栏证据缺口记录行的收敛](../.agents/notes/implemented/bug-fix/2026-10-28-evidence-gap-row-collapse.md)的 2026-10-29 收口段。
+
+### 合成覆盖
+
+`tests/web.test.ts` 锁定会话汇总配对列表：`Bash` 条目输出 `tool-chip call tint-bash`，`tool_name` 为 null 时落 `tint-other`、文本仍是 `unknown`。`tests/trace-view.test.ts` 锁定正文缺口时状态行只有 `正文未到 · 无账本`，不出现 `回调报告失败`。两个文件 77 项通过，`bun run typecheck` 通过。两处新增断言在修改前的代码上各失败一次，是本轮改动的直接回归面。
+
+### 页面实测（生产数据只读）
+
+| 验收项 | 结果 |
+| --- | --- |
+| 会话汇总「Bash 的调用」（会话 `26d868f2`，473 条） | 每行 chip 为 `tool-chip call tint-bash`，文字 `rgb(194, 73, 125)`、底色 `rgba(194,73,125,.11)`、边框透明 |
+| 组级状态行（req 51836 / 51837） | `无回复 · 无账本 · 归属未确认`（`data-flag="missing_reply"`）与 `正文未到 · 新增未确认`（`data-flag="failed"`），两行都不含 `回调报告失败` |
+| 生产 `8320` 复核 | 同一列表与两行状态与 worktree 一致（`web/` 按请求现读，未重启采集器） |
+
+### 未执行与边界
+
+工作树页面用 `prototypes/serve-local.ts`（端口 8768）打开，合并后在 `8320` 复核，浏览器只发只读 GET。像素截图本轮可用：配对列表截了一张，前两轮记录的「持续超时」不复现。生产库里 959 笔回调失败记录全部 `body_state='available'`、`reply_state='absent'`，回复槽已被「无回复」占住，删除的兜底短语在真实数据上没有可见行；它的回归保护只有合成用例。
