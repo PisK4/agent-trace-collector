@@ -621,3 +621,26 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 ### 未执行
 
 像素截图仍不可用（`Page.captureScreenshot` 对该页持续超时，与 2026-10-26、2026-10-27 两轮一致），视觉项以 DOM 与 computed style 断言代替。工具结果类条目（`call_ord`/`owner_req` 落点）本轮未能读到正文：`/api/requests/:owner/tools/:ord/result` 用目录所在请求的阅读 token 请求一律 409，换成 owner 自己的 token 才返回 `available`。同一请求在 master 生产页复现同样结果，是既有缺陷，不是本次改动引入，本轮未修。
+
+## 工具往返去壳改行与调用 chip 归位（合成 + 生产页面只读，2026-10-29）
+
+前提：worktree `atc-rail-tools-flat` 的 `feat/rail-tools-flat` 分支（基于 master `3b1c492`，合入 `48cd87a`）。合成用例进 `bun test`，页面项用 ego lite 打开 worktree 检出的生产页面（`prototypes/serve-local.ts`，端口 8768，只读转发生产 collector），合并后在生产的 `127.0.0.1:8320` 复核同一渲染。正文不进 fixture 与本文件。做法与动机见[工具往返去壳改行](../.agents/notes/implemented/simplification/2026-10-28-tool-roundtrip-flat-rows.md)。
+
+### 合成覆盖
+
+`renderTools` 的输出结构锁进 `tests/body-view.test.ts`（34 项通过）：两次调用渲染两个 `.tool-row`，外层是 `.tool-rows`，没有 `<details>`、没有「工具往返」标题、没有 `data-fold="round:`；chip 带 `tool-chip call tint-*` 类；配对入口按调用序号各一个。`bun test tests/web.test.ts tests/trace-pair.test.ts tests/trace-view.test.ts`（82 项）与 `bun run typecheck` 通过。
+
+### 页面实测（生产数据只读）
+
+| 验收项 | 结果 |
+| --- | --- |
+| 正文页工具行（req 52419，4 次 Read） | 1 个 `.tool-rows` 容器、4 个 `.tool-row`；无折叠壳、无「工具往返」标题、无 `data-fold="round:` |
+| chip 身份色（req 52428，Read ×3 + Bash ×1） | Read 为 `rgb(37, 105, 196)` / `rgba(37,105,196,.11)`，Bash 为 `rgb(194, 73, 125)` / `rgba(194,73,125,.11)`；边框 1px 透明，无琥珀框 |
+| 读数页「本次回复」折叠 | 工具行在折叠内直出，4 行；页内无「工具往返」标题 |
+| 工具页工具列表（`tab=tools`） | 4 个调用 chip 同用身份色，Read 蓝、Bash 玫红；不再统一琥珀 |
+| 320px 右栏 | 4 行 `clientWidth` 与 `scrollWidth` 都是 291，列宽 319 无横向溢出 |
+| 生产 `8320` 复核 | 同一请求无折叠壳、无标题，4 行，chip 色与边框同上 |
+
+### 未执行
+
+像素截图仍不可用（`Page.captureScreenshot` 对该页持续超时），视觉项以 DOM 与 computed style 断言代替。`egress` 之外的浏览器仅用只读 GET，未写库、未改生产请求。
