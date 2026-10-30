@@ -6,6 +6,7 @@
  * @typedef {import('../src/queries/requests').RequestDetail} RequestDetail
  * @typedef {import('../src/protocols').BodyPage} BodyPage
  * @typedef {import('./reader-store.js').RequestRead} RequestRead
+ * @typedef {import('../src/queries/readings').PromptReading} PromptReading
  */
 
 import {
@@ -414,7 +415,7 @@ export function ledgerParts(r, detail = null) {
     usage = [
       row('入', r.in_tok === null ? null : n(r.in_tok), '输入 token，不含缓存读取与写入'),
       row('出', r.out_tok === null ? null : n(r.out_tok), '输出 token'),
-      row('缓读', r.cache_read === null ? null : n(r.cache_read), '缓存读取 token；命中率是会话级读数，见会话头合计行'),
+      row('缓读', r.cache_read === null ? null : n(r.cache_read), '缓存读取 token；请求级命中见构成区「提示词缓存」，会话级命中见会话头合计行'),
       row('缓写', r.cache_write === null ? null : n(r.cache_write), '缓存写入 token'),
       r.cost_state === 'priced' && r.cost !== null ? row('费用', `$${fmtCost(r.cost)}`, '费用（上游报告）') : '',
       r.cost_state === 'zero' ? row('费用', '$0', '费用（上游报告）') : '',
@@ -451,13 +452,88 @@ export function requestEffortOf(page) {
 }
 
 /**
+ * 请求级缓存命中：`cache_read ÷ (in_tok + cache_read)`，与会话头合计行同口径，
+ * 只计两个读数都在的请求。缺任一读数或分母为 0 时不给数（不写 0，不当作未命中）；
+ * 合法的 0 是「读了 0 个缓存 token」，显示 0%。
+ * @param {RequestRow} r
+ * @returns {{hit: number | null, read: number | null, fresh: number | null}}
+ */
+export function cacheHitOf(r) {
+  const read = r.cache_read;
+  const fresh = r.in_tok;
+  if (read === null || read === undefined || fresh === null || fresh === undefined) {
+    return { hit: null, read: null, fresh: null };
+  }
+  const total = read + fresh;
+  return { hit: total > 0 ? read / total : null, read, fresh };
+}
+
+/** 占比读数的整数百分比；无值返回 null，不写 0。 @param {number | null} ratio */
+const pctOf = (ratio) => (ratio === null ? null : Math.round(ratio * 100));
+
+/**
+ * 构成区顶部的三个指标：已用上下文 / 总上下文、窗口进度、提示词缓存。
+ *
+ * 已用上下文是提示总量，与 treemap 面积同源；总上下文是回答模型的窗口，
+ * 分母只在 `recomputed` 且窗口为正时出现，否则写「模型的窗口大小未知」——
+ * 不给分母就不给进度，不按旧结果或默认值编一个分母出来。
+ * 窗口进度取 `ratio` 的整百分点，异常态 pill 挂在标签行：≥90% 占满、≥75% 接近占满；
+ * 估算行（counted=false）的「本地估计」挂已用上下文标签行，两处都只在异常时出现。
+ * 缓存列缺读数时写「—」且不画条；有读数才画条，条宽按命中率，颜色用中性墨色
+ * （命中率不是好坏状态，不给 good/bad 着色）。
+ * @param {RequestRow} r
+ * @param {PromptReading} p
+ * @returns {string}
+ */
+export function contextStatsHtml(r, p) {
+  const used = p.tokens === null ? null : kk(p.tokens);
+  const window = p.window !== null && p.window > 0 ? p.window : null;
+  const pct = pctOf(p.ratio);
+  const est = p.counted === false
+    ? '<span class="u-pill" title="分类按请求正文估算，未经本次回复的实测 token 校准">本地估计</span>' : '';
+  const full = p.ratio !== null && p.ratio >= 0.9 ? '占满' : p.ratio !== null && p.ratio >= 0.75 ? '接近占满' : '';
+  const cache = cacheHitOf(r);
+  const hitPct = pctOf(cache.hit);
+  const cacheBar = hitPct === null ? ''
+    : `<div class="ctx-bar" role="img" aria-label="提示词缓存命中 ${hitPct}%"><i style="width:${hitPct}%"></i></div>`;
+  const cacheSub = hitPct === null
+    ? '缓存读数未上报'
+    : `缓读 ${kk(cache.read)} · 新入 ${kk(cache.fresh)}`;
+  const usedSub = window === null
+    ? '模型的窗口大小未知'
+    : null;
+  const progressSub = pct !== null
+    ? '已用 ÷ 总上下文'
+    : p.state !== 'recomputed'
+      ? ({ retained: '旧结果，不计算进度', missing: '结果缺失，不计算进度' }[p.state] ?? '不计算进度')
+      : window === null ? '没有可用分母' : '没有可用 token 读数';
+  return `<div class="ctx-stats">
+    <div class="ctx-stat">
+      <div class="ctx-k">已用上下文${est}</div>
+      <div class="ctx-big"><b>${used === null ? '<i class="miss">—</i>' : used}</b><span>token</span>${window === null ? '' : `<span class="ctx-of">/ 总上下文 ${kk(window)}</span>`}</div>
+      ${usedSub === null ? '' : `<div class="ctx-sub" title="路由侧没有报告回答模型的上下文窗口">${usedSub}</div>`}
+    </div>
+    <div class="ctx-stat">
+      <div class="ctx-k">窗口进度${full !== '' ? `<span class="u-pill warn">${full}</span>` : ''}</div>
+      <div class="ctx-big"><b>${pct === null ? '<i class="miss">—</i>' : pct + '%'}</b></div>
+      <div class="ctx-sub" title="${pct === null ? '没有可用比例，不计算进度' : '已用上下文 ÷ 总上下文，取整百分点'}">${progressSub}</div>
+    </div>
+    <div class="ctx-stat">
+      <div class="ctx-k">提示词缓存</div>
+      <div class="ctx-big"><b>${hitPct === null ? '<i class="miss">—</i>' : hitPct + '%'}</b><span>命中</span></div>
+      ${cacheBar}
+      <div class="ctx-sub" title="缓存命中＝cache_read ÷（入 + cache_read）；只计两个读数都在的请求">${cacheSub}</div>
+    </div>
+  </div>`;
+}
+
+/**
  * 用量与上下文折叠行（读数页末位，默认展开）：计时与用量两列读数 + 构成区。
- * 构成区自上而下是 treemap、图例与内容列表，末行 u-total 汇总总量、
- * 窗口与占用读数；treemap 外壳在此渲染，tile 由 app.js 测量容器后填充。
- * 图例按 token 数降序。异常态才出标签：占用 ≥75% 出「接近占满」、≥90% 出
- * 「占满」warn pill，估算行（counted=false）出「本地估计」pill 且贴在构成区
- * 末行，正常态零状态提示。没有正值类别时不留空的图例容器，总量、窗口、
- * 占用与缺失或估计说明保留。
+ * 构成区自上而下是三个指标、treemap、图例与内容列表；treemap 外壳在此渲染，
+ * tile 由 app.js 测量容器后填充。图例按 token 数降序。异常态才出标签：占用 ≥75%
+ * 出「接近占满」、≥90% 出「占满」warn pill，估算行（counted=false）出「本地估计」
+ * pill，两者都挂在指标行；正常态零状态提示。没有正值类别时不留空的图例容器，
+ * 三个指标与缺失或估计说明保留。
  * @param {RequestRow} r
  * @param {RequestDetail | null} detail
  * @param {BodyPage | null} [meta] 正文首片；effort 从 request_fields 取，未读到不显示该行
@@ -483,14 +559,10 @@ export function usageFoldHtml(r, detail, meta = null) {
       ? `<div class="comp-legend">${[...positive].sort((a, b) => b.tokens - a.tokens).map(x => `<button type="button" class="name" data-ctx-kind="${esc(String(x.kind))}" data-ctx-req="${r.req_id}" aria-label="${esc(partLabel(String(x.kind)))}，打开明细"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></button>
         <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>`
       : '';
-    const full = p.ratio !== null && p.ratio >= 0.9 ? '占满' : p.ratio !== null && p.ratio >= 0.75 ? '接近占满' : '';
-    const est = p.counted === false
-      ? '<span class="u-pill" title="分类按请求正文估算，未经本次回复的实测 token 校准">本地估计</span>' : '';
-    const total = `<div class="u-total" style="margin-top:8px"><span>提示总量 <b>${p.tokens === null ? '<i class="miss">—</i>' : n(p.tokens)}</b></span><span>${p.window ? `窗口 <b>${kk(p.window)}</b>` : '窗口未知'}</span>${p.ratio !== null ? `<span>占用 <b>${(p.ratio * 100).toFixed(1)}%</b></span>` : ''}${est}${full !== '' ? `<span class="u-pill warn">${full}</span>` : ''}</div>`;
-    comp = `${mapHtml}${legend}${rowsHtml}${total}`;
+    comp = `${contextStatsHtml(r, p)}${mapHtml}${legend}${rowsHtml}`;
   }
   const note = hasComp
-    ? (p?.note ?? (p?.window === null ? '没有可用分母，不显示占用率。' : '分类是估计分配，不是逐类精确计数。'))
+    ? (p?.note ?? '分类是估计分配，不是逐类精确计数。')
     : (p?.note ?? '没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。');
   const effort = requestEffortOf(meta);
   const effortHtml = effort === null ? ''
