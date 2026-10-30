@@ -44,4 +44,4 @@ bun run verify:notes   # 提交前
 
 ## 目录与上位文档
 
-目录一眼可见，只有三处不显然：`prototypes/` 只提供数据源、加载同一份生产页面；`plugins/` 是给 magpie 的薄插件；`.agents/` 是 note 规则与 kit 版本基线。工作流规格与本仓库在父知识库的引用边界见父仓库根 `../../AGENTS.md`；中文写作遵守 de-AI-writing 与 `Agent知识库/docs/文档落笔风格.md`。
+目录一眼可见，只有三处不显然：`prototypes/` 只提供数据源、加载同一份生产页面；`plugins/` 是给 magpie 的薄插件；`.agents/` 是 note 规则与 kit 版本基线。工作流规格与本仓库在父知识库的引用边界见父仓库根 `../../AGENTS.md`；中文写作遵守 de-AI-writing 与 `../../规则/文档落笔风格.md`。
