@@ -72,6 +72,10 @@ bun run maintain reparse --db '<dataDir>/trace.db' --protocol responses
 bun run maintain migrate-hook-identity --db '<dataDir>/trace.db'
 bun run maintain migrate-hook-identity --db '<dataDir>/trace.db' --apply --approval-id '<你的审批标识>'
 
+# response id 前缀重算与等待队列重试，默认只预览
+bun run maintain normalize-response-ids --db '<dataDir>/trace.db'
+bun run maintain normalize-response-ids --db '<dataDir>/trace.db' --apply --approval-id '<你的审批标识>'
+
 # 长期元数据淘汰，默认只预览
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --apply --approval-id '<你的审批标识>'
@@ -244,6 +248,16 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 每行一个独立事务，事务内重新校验；迁移只改 `conv_key`、`conv_source`、`session`、`actor` 与 `updated_at`，随后按现有归属规则处理旧组并推进输入修订。`actor_state` 仍是 `unknown`，未知归属行不凭空建派生组。报告里的 `conservation` 对账请求、证据、块、别名、工具链接的行数与费用合计，`conserved` 必须为真。
 
 重复执行时桶里只剩被拒绝的行：`migrated` 为 0，不推进修订。迁移不改变后续关联：hook 证据与等待队列不动，唯一 response ID 到达时仍按 `mergeHookInto` 并入账本目标。
+
+### normalize-response-ids
+
+按当前的 `normalizeResponseId` 重算存量 `response_id_norm`，让同一响应在 hook 与账本两侧落在同一个匹配键上，然后重试等待队列里的 hook。旧规则只剥一层前缀：OMP 的 hook 回执是 `chatcmpl-msg_<hash>`，账本是 `msg_<hash>`，两个键不相等，同一笔调用被拆成两行。
+
+默认只预览：`requests`、`pending_hooks`、`raw_ledger` 是三个存量列里会改动的行数；`merges` 是重算后能唯一命中路由行的等待项数；`ambiguous` 是多候选、会留在队列里的数量；`without_id` 是没有 response id、无法按 id 关联的等待项。加 `--apply` 必须同时给 `--approval-id`，否则退出码 1 且错误码 `approval_id_required`。
+
+应用时先在一个写事务里重算三个列的存量键（`raw_ledger.response_id` 原始列不动），再循环调用 `reconcilePending`。唯一候选按 `mergeHookInto` 合并，正文迁到路由行，重复行删除，多候选保持 pending。只改派生键与等待队列，不动正文、不改 schema。重复执行时三个存量计数都是 0，已合并的等待项不再出现。
+
+这条命令用于修幂等规范化之前的存量；新到的 hook 已经按新规则剥到裸键，不需要再跑。`without_id` 的等待项不会因为这条命令合并，它们没有可用于 join 的响应键。
 
 ### purge-metadata
 

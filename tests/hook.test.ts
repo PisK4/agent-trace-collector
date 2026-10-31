@@ -145,6 +145,30 @@ test('有账本时hook并入账本请求并迁移正文', () => {
   }
 });
 
+test('hook回执多一层前缀时仍并入账本请求', () => {
+  const f = fixture();
+  try {
+    // 账本侧的规范键是裸 hash；hook 回执多一层 chatcmpl-，剥到不能再剥才对齐。
+    f.store.write(db => db.run(
+      `INSERT INTO request(req_id,route_id,response_id_norm,agent,session,conv_key,conv_source,actor,actor_state,
+         started_ms,day,via,status,body_state,derive_version,have,created_at,updated_at,title,title_source)
+       VALUES (1,102,'synthetic_2','alpha','synthetic-session',?,'session','synthetic-session','known',
+         1700000000000,'2026-10-20','through',200,'pending',0,2,1,1,'ledger title','model_time')`,
+      [JSON.stringify(['session', 'synthetic-session'])],
+    ));
+    const result = acceptHook(f.store, envelope({ reply: { id: 'chatcmpl-msg_synthetic_2', content: [] } }), 2, salt);
+    expect(result.req_id).toBe(1);
+    expect(f.store.read.query('SELECT count(*) AS n FROM request').get()).toEqual({ n: 1 });
+    const row = f.store.read.query<{ body_state: string; have: number }, [number]>(
+      'SELECT body_state, have FROM request WHERE req_id=?',
+    ).get(1);
+    expect(row).toEqual({ body_state: 'available', have: 3 });
+    expect(f.store.read.query('SELECT count(*) AS n FROM pending_hook').get()).toEqual({ n: 0 });
+  } finally {
+    f.close();
+  }
+});
+
 test('hook写事务具名：写统计按 by_name.hook 归属而非 other', () => {
   const f = fixture();
   try {
