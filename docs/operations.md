@@ -329,6 +329,10 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 | 总盘 ≥ 95% | hook 一律 507，什么都不写；OTLP 端点同样整批 507 | 跌回 90% 以下 |
 | 剩余空间 < `max(256 MiB, 2 × 本批上界)` | 暂停 | 余量回到门槛以上 |
 
+总盘量的是数据目录下所有普通文件之和（深度 3），目录里的备份、导出与临时文件同样计入。占用卡在 75–80% 滞回带里迟迟不恢复时，先看目录里有没有这类文件，不要只量库本身。
+
+页面顶栏在降级时显示标签：`metadata_only` 出「存储降级 · 正文暂停」，`paused` 出「存储降级 · 采集暂停」，正常态不占位。标签在启动、显式刷新与点按时各读一次 `/api/stats` 的 `admission`，不轮询，所以切换后可能滞后，点按即重新读取。标签只说明当前准入与原因；哪些正文没保存，看每笔记录的 `miss_reason`。
+
 回收在单个事务里删引用、删孤儿块、清骨架、改状态，`have` 与历史读数不动，`body_prev_state` 保留原状态。raw 层保留 7 天，到期只删原文、给证据标 `payload_state=expired`；仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。
 
 ## 派生切片与代际

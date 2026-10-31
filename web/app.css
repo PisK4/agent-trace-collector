@@ -110,6 +110,11 @@ code,pre,.mono{font-family:var(--mono)}
   display:inline-flex;align-items:center;justify-content:center;color:var(--text-2);font-size:12px;padding:0 8px;
 }
 .icon-btn:hover{background:var(--hover)}
+/* 后端降级标签：正常态不渲染；点按重新读取准入状态。 */
+.backend-chip{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 8px;border:1px solid currentColor;border-radius:4px;font:10.5px var(--ui);cursor:pointer;white-space:nowrap}
+.backend-chip .d{width:5px;height:5px;border-radius:50%;background:currentColor}
+.backend-chip.warn{color:var(--warn);background:var(--warn-soft)}
+.backend-chip.bad{color:var(--bad);background:var(--bad-soft)}
 
 /* ---------- 三栏工作台：每栏独立滚动；侧栏与详情栏可折叠，详情栏可调宽 ---------- */
 :root{--sidebar-width:250px;--rail-width:clamp(280px,calc(100vw - var(--sidebar-width) - 326px),640px)}

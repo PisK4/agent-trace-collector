@@ -1109,6 +1109,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | 解析失败计数 | 按来源与原因分桶 |
 | 待关联数与最老待关联年龄 | 判断 hook 与账本的对账是否卡住 |
 | 磁盘 | 库、WAL、临时文件的字节，正文预算占用 |
+| 存储准入 | `normal` / `metadata_only` / `paused`，最近一次切换的原因与时间；顶栏降级标签读这一项 |
 | 版本探针结果 | 当前 magpie 版本是否在已验证区间 |
 
 新进程刚启动、回放尚未追平的时候，某一路缺数据不代表它永久缺失，健康页先标为追赶中。
@@ -1136,7 +1137,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | `GET /api/requests/:owner/tools/:ord/result?if_reading=` | 按调用位置读取一个工具结果内容块与原始协议对象；token 必填 | 无 |
 | `GET /api/requests/:id/context-item?kind=&name=&if_reading=&cursor=` | 上下文类别的条目目录：已保存正文中的承载块与配对结果位置；token 必填 | 上限 80 条；keyset 游标绑定请求与类别 |
 | `GET /api/requests/:id/route` | 路由决策与尝试链，来自 `route_summary` | 无 |
-| `GET /api/stats` | 体积、覆盖位统计、健康状态、探针结果 | 无 |
+| `GET /api/stats` | 体积、覆盖位统计、健康状态、探针结果、存储准入 | 无 |
 
 列表接口不返回骨架。会话内 1,825 笔的列表，每笔骨架 9.5 KB，全取就是 17 MB，列表只返回 `req_id`、时间、状态、模型、四个读数、标题、`have`、`body_state`、`via`。
 
