@@ -13,12 +13,12 @@ import {
   renderMessageDetail, renderMessages,
 } from './body-view.js';
 import { esc } from './html.js';
-import { kk, partColor, partLabel } from './parts.js';
+import { isFixedKind, kk, partColor, partLabel } from './parts.js';
 import { contextMapShellHtml, contextRowsHtml } from './context-map.js';
 import { messagePathOf, replyView, topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
 import { bodyLabelText, bodyStateText } from './row-summary.js';
-import { secs, tierOf, TIER_LIMITS } from './duration.js';
+import { secs, secsValue, tierOf, TIER_LIMITS } from './duration.js';
 
 // 类别口径与 token 缩写的定义在 parts.js（与 context-map 共用），这里转发既有消费者。
 export { kk, partColor, partLabel };
@@ -385,20 +385,32 @@ const n = (v) => (v == null ? '—' : v.toLocaleString('en-US'));
 const fmtCost = (v) => String(Number(v.toPrecision(6)));
 
 /**
- * 计时与用量读数：「用量与上下文」折叠行与窗口外请求共用。
- * 首 token 与首个文本是两个测量事件（第一个内容 vs 第一个文本块），分别成行，不按数值接近合并；
+ * 计时读数的唯一口径：「耗时」指标与窗口外请求的读数行共用。
+ * 首 token 与首个文本是两个测量事件（第一个内容 vs 第一个文本块），分别取值，不按数值接近合并；
  * 速度分母用「总 − 首 token」，缺首 token 才退回账本 flow_ms（存在 1ms 这类退化值）。
- * 口径解释放每个数值的 title；计时有值才展示，合法的 0 不按缺失处理；数值缺位显示「—」，不当作 0。
+ * 首个文本只从详情读：账本行没有这个字段，未读正文时不给值，不当作 0。
  * @param {RequestRow} r
  * @param {RequestDetail | null} [detail]
- * @returns {{timing: string, usage: string, headline: string}}
+ * @returns {{ttft: number | null, ms: number | null, speed: number | null, firstText: number | null}}
  */
-export function ledgerParts(r, detail = null) {
+function timingReadingsOf(r, detail = null) {
   const ttft = detail?.ttft_ms ?? r.ttft_ms;
   const ms = detail?.ms ?? r.ms;
   const flow = ttft !== null && ms !== null ? Math.max(0, ms - ttft) : (detail?.flow_ms ?? r.flow_ms);
   const speed = flow && r.out_tok ? Math.round(r.out_tok / (flow / 1000)) : null;
   const firstText = detail?.first_text_ms ?? null;
+  return { ttft, ms, speed, firstText };
+}
+
+/**
+ * 计时与用量读数：窗口外请求的读数行共用。
+ * 口径解释放每个数值的 title；计时有值才展示，合法的 0 不按缺失处理；数值缺位显示「—」，不当作 0。
+ * @param {RequestRow} r
+ * @param {RequestDetail | null} [detail]
+ * @returns {{timing: string, usage: string}}
+ */
+export function ledgerParts(r, detail = null) {
+  const { ttft, ms, speed, firstText } = timingReadingsOf(r, detail);
   /** @param {string} label @param {string | null} v @param {string} tip */
   const row = (label, v, tip) =>
     `<div class="chain-row"><dt>${label}</dt><dd title="${esc(tip)}">${v === null ? '<i class="miss">—</i>' : v}</dd></div>`;
@@ -410,7 +422,6 @@ export function ledgerParts(r, detail = null) {
   ].filter(Boolean).join('');
   const anyUsage = r.in_tok !== null || r.out_tok !== null || r.cache_read !== null || r.cache_write !== null;
   let usage = '';
-  let headline = '';
   if (anyUsage) {
     usage = [
       row('入', r.in_tok === null ? null : n(r.in_tok), '输入 token，不含缓存读取与写入'),
@@ -420,15 +431,10 @@ export function ledgerParts(r, detail = null) {
       r.cost_state === 'priced' && r.cost !== null ? row('费用', `$${fmtCost(r.cost)}`, '费用（上游报告）') : '',
       r.cost_state === 'zero' ? row('费用', '$0', '费用（上游报告）') : '',
     ].join('');
-    headline = [
-      ms !== null ? `总 ${secs(ms)}` : '',
-      r.out_tok !== null ? `出 ${n(r.out_tok)}` : '',
-    ].filter(Boolean).join(' · ');
   }
   return {
     timing: timing === '' ? '' : `<dl class="chain ledger-chain">${timing}</dl>`,
     usage: usage === '' ? '' : `<dl class="chain ledger-chain">${usage}</dl>`,
-    headline,
   };
 }
 
@@ -472,68 +478,98 @@ export function cacheHitOf(r) {
 const pctOf = (ratio) => (ratio === null ? null : Math.round(ratio * 100));
 
 /**
- * 构成区顶部的三个指标：已用上下文 / 总上下文、窗口进度、提示词缓存。
+ * 固定开销：系统提示 + 工具定义 + 技能 + 记忆的 token 和。
+ * 口径按类别集合算，不按「总量减去其余」倒推，所以已知类别之外的 kind 不计入。
+ * 没有构成分类时返回 null（不给数、不写 0）；集合内全为 0 是合法的 0。
+ * @param {import('../src/queries/routes').RoutePromptPart[]} list
+ * @returns {number | null}
+ */
+function fixedOverheadOf(list) {
+  if (list.length === 0) return null;
+  return list.reduce((sum, part) => sum + (isFixedKind(String(part.kind)) ? part.tokens : 0), 0);
+}
+
+/**
+ * 构成区顶部的四个指标：已用上下文、固定开销、提示词缓存、耗时。
  *
- * 已用上下文是提示总量，与 treemap 面积同源；总上下文是回答模型的窗口，
- * 分母只在 `recomputed` 且窗口为正时出现，否则写「模型的窗口大小未知」——
- * 不给分母就不给进度，不按旧结果或默认值编一个分母出来。
- * 窗口进度取 `ratio` 的整百分点，异常态 pill 挂在标签行：≥90% 占满、≥75% 接近占满；
- * 估算行（counted=false）的「本地估计」挂已用上下文标签行，两处都只在异常时出现。
- * 缓存列缺读数时写「—」且不画条；有读数才画条，条宽按命中率，颜色用中性墨色
- * （命中率不是好坏状态，不给 good/bad 着色）。
+ * 已用上下文是提示总量，与 treemap 面积同源；窗口与已用比例降为副行，分母只在
+ * `recomputed` 且窗口为正时出现，否则写「模型的窗口大小未知」——不给分母就不给比例，
+ * 不按旧结果或默认值编一个分母出来。异常态 pill 挂在标签行：比例 ≥90% 占满、
+ * ≥75% 接近占满；估算行（counted=false）的「本地估计」也挂这一行，两处都只在异常时出现。
+ * 固定开销按类别集合算，副行是它占已用的比例；缺构成分类时写「—」。
+ * 提示词缓存缺读数时写「—」并说明未上报，有读数才给整百分点。
+ * 耗时把计时四行合成一个读数，副行依次是首 token、首个文本与速度，缺项跳过。
+ * 每个指标在缺值处写一句缺什么，不把缺失画成 0 或空条。
  * @param {RequestRow} r
- * @param {PromptReading} p
+ * @param {PromptReading | null} p 没有路由侧的 prompt 分析时四格留白说明
+ * @param {RequestDetail | null} [detail] 首个文本只在详情里，未读正文时耗时副行没有这一项
  * @returns {string}
  */
-export function contextStatsHtml(r, p) {
-  const used = p.tokens === null ? null : kk(p.tokens);
-  const window = p.window !== null && p.window > 0 ? p.window : null;
-  const pct = pctOf(p.ratio);
-  const est = p.counted === false
+export function contextStatsHtml(r, p, detail = null) {
+  const list = /** @type {import('../src/queries/routes').RoutePromptPart[]} */ (p?.parts ?? []);
+  const used = p === null || p.tokens === null ? null : kk(p.tokens);
+  const window = p !== null && p.window !== null && p.window > 0 ? p.window : null;
+  const pct = pctOf(p?.ratio ?? null);
+  const est = p !== null && p.counted === false
     ? '<span class="u-pill" title="分类按请求正文估算，未经本次回复的实测 token 校准">本地估计</span>' : '';
-  const full = p.ratio !== null && p.ratio >= 0.9 ? '占满' : p.ratio !== null && p.ratio >= 0.75 ? '接近占满' : '';
+  const full = p === null || p.ratio === null ? '' : p.ratio >= 0.9 ? '占满' : p.ratio >= 0.75 ? '接近占满' : '';
+  const usedSub = p === null ? '没有路由侧的 prompt 分析'
+    : used === null ? '没有可用 token 读数'
+      : window === null ? '模型的窗口大小未知'
+        : pct === null ? `总 ${kk(window)} · 不计算进度` : `总 ${kk(window)} · 已用 ${pct}%`;
+  const usedTip = p === null
+    ? '路由侧没有这份请求的 prompt 分析'
+    : window === null
+      ? '路由侧没有报告回答模型的上下文窗口'
+      : pct !== null
+        ? '已用上下文 ÷ 总上下文，取整百分点'
+        : p.state === 'recomputed'
+          ? '没有可用 token 读数'
+          : ({ retained: '旧结果，不计算进度', missing: '结果缺失，不计算进度' }[p.state] ?? '不计算进度');
+  const fixed = fixedOverheadOf(list);
+  const fixedSub = fixed === null
+    ? '没有构成分类'
+    : p !== null && p.tokens !== null && p.tokens > 0 ? `占已用 ${Math.round(fixed / p.tokens * 100)}%` : '没有可用分母';
   const cache = cacheHitOf(r);
   const hitPct = pctOf(cache.hit);
-  const cacheBar = hitPct === null ? ''
-    : `<div class="ctx-bar" role="img" aria-label="提示词缓存命中 ${hitPct}%"><i style="width:${hitPct}%"></i></div>`;
-  const cacheSub = hitPct === null
-    ? '缓存读数未上报'
-    : `缓读 ${kk(cache.read)} · 新入 ${kk(cache.fresh)}`;
-  const usedSub = window === null
-    ? '模型的窗口大小未知'
-    : null;
-  const progressSub = pct !== null
-    ? '已用 ÷ 总上下文'
-    : p.state !== 'recomputed'
-      ? ({ retained: '旧结果，不计算进度', missing: '结果缺失，不计算进度' }[p.state] ?? '不计算进度')
-      : window === null ? '没有可用分母' : '没有可用 token 读数';
+  const { ttft, ms, speed, firstText } = timingReadingsOf(r, detail);
+  const timeSub = [
+    ttft !== null ? `首 token ${secs(ttft)}` : '',
+    firstText !== null ? `首个文本 ${secs(firstText)}` : '',
+    speed !== null && speed > 0 ? `${n(speed)} tok/s` : '',
+  ].filter(Boolean).join(' · ');
   return `<div class="ctx-stats">
     <div class="ctx-stat">
-      <div class="ctx-k">已用上下文${est}</div>
-      <div class="ctx-big"><b>${used === null ? '<i class="miss">—</i>' : used}</b><span>token</span>${window === null ? '' : `<span class="ctx-of">/ 总上下文 ${kk(window)}</span>`}</div>
-      ${usedSub === null ? '' : `<div class="ctx-sub" title="路由侧没有报告回答模型的上下文窗口">${usedSub}</div>`}
+      <div class="ctx-k">已用上下文${est}${full !== '' ? `<span class="u-pill warn">${full}</span>` : ''}</div>
+      <div class="ctx-big"><b>${used === null ? '<i class="miss">—</i>' : used}</b>${used === null ? '' : '<span>token</span>'}</div>
+      <div class="ctx-sub" title="${esc(usedTip)}">${usedSub}</div>
     </div>
     <div class="ctx-stat">
-      <div class="ctx-k">窗口进度${full !== '' ? `<span class="u-pill warn">${full}</span>` : ''}</div>
-      <div class="ctx-big"><b>${pct === null ? '<i class="miss">—</i>' : pct + '%'}</b></div>
-      <div class="ctx-sub" title="${pct === null ? '没有可用比例，不计算进度' : '已用上下文 ÷ 总上下文，取整百分点'}">${progressSub}</div>
+      <div class="ctx-k">固定开销</div>
+      <div class="ctx-big"><b>${fixed === null ? '<i class="miss">—</i>' : kk(fixed)}</b>${fixed === null ? '' : '<span>token</span>'}</div>
+      <div class="ctx-sub" title="系统提示 + 工具定义 + 技能 + 记忆：每笔请求都要背的部分，与对话无关">${fixedSub}</div>
     </div>
     <div class="ctx-stat">
-      <div class="ctx-k">提示词缓存</div>
-      <div class="ctx-big"><b>${hitPct === null ? '<i class="miss">—</i>' : hitPct + '%'}</b><span>命中</span></div>
-      ${cacheBar}
-      <div class="ctx-sub" title="缓存命中＝cache_read ÷（入 + cache_read）；只计两个读数都在的请求">${cacheSub}</div>
+      <div class="ctx-k" title="缓存命中＝cache_read ÷（入 + cache_read）；只计两个读数都在的请求">提示词缓存</div>
+      <div class="ctx-big"><b>${hitPct === null ? '<i class="miss">—</i>' : hitPct + '%'}</b>${hitPct === null ? '' : '<span>命中</span>'}</div>
+      ${hitPct === null ? '<div class="ctx-sub">缓存读数未上报</div>' : ''}
+    </div>
+    <div class="ctx-stat ctx-stat-time">
+      <div class="ctx-k">耗时</div>
+      <div class="ctx-big"><b>${ms === null ? '<i class="miss">—</i>' : secsValue(ms)}</b>${ms === null ? '' : '<span>s</span>'}</div>
+      <div class="ctx-sub" title="总时长；首 token 到第一个内容，首个文本到第一个文本块，速度＝输出 ÷（总 − 首 token）">${ms === null ? '没有计时读数' : timeSub}</div>
     </div>
   </div>`;
 }
 
 /**
- * 用量与上下文折叠行（读数页末位，默认展开）：计时与用量两列读数 + 构成区。
- * 构成区自上而下是三个指标、treemap、图例与内容列表；treemap 外壳在此渲染，
- * tile 由 app.js 测量容器后填充。图例按 token 数降序。异常态才出标签：占用 ≥75%
- * 出「接近占满」、≥90% 出「占满」warn pill，估算行（counted=false）出「本地估计」
- * pill，两者都挂在指标行；正常态零状态提示。没有正值类别时不留空的图例容器，
- * 三个指标与缺失或估计说明保留。
+ * 用量与上下文折叠行（读数页末位，默认展开）：四个指标 → treemap → 图例 → 内容列表，
+ * 最后是默认收起的「用量明细」（入/出/缓读/缓写/费用与 effort）。
+ * 指标行已经回答「多少、多快」，逐项账本只是回看时偶尔要对数的账目，收进二级折叠
+ * 把折叠行省下的高度留住。treemap 外壳在此渲染，tile 由 app.js 测量容器后填充；
+ * 图例按 token 数降序。异常态才出标签：占用 ≥75% 出「接近占满」、≥90% 出「占满」，
+ * 估算行（counted=false）出「本地估计」，两者都挂在指标行；正常态零状态提示。
+ * 没有正值类别时不留空的图例容器，四个指标与缺失或估计说明保留。
  * @param {RequestRow} r
  * @param {RequestDetail | null} detail
  * @param {BodyPage | null} [meta] 正文首片；effort 从 request_fields 取，未读到不显示该行
@@ -543,11 +579,7 @@ export function usageFoldHtml(r, detail, meta = null) {
   const p = detail?.prompt ?? null;
   const list = /** @type {import('../src/queries/routes').RoutePromptPart[]} */ (p?.parts ?? []);
   const hasComp = p !== null && !(p.tokens === null && list.length === 0);
-  const ledger = ledgerParts(r, detail);
-  const hint = p === null || p.state === 'recomputed' ? '' : [
-    ({ recomputed: '当前结果', retained: '旧结果', missing: '缺失' }[p.state] ?? p.state),
-  ].filter(Boolean).join(' · ');
-  let comp = '';
+  let comp = contextStatsHtml(r, p, detail);
   if (hasComp) {
     // Prompt.calibrate 按总量缩放各类并舍入，已估计的正值类别也可能得到 0；
     // 零值与缺失类别在图例中均不可见，总量只保留总数口径。
@@ -559,20 +591,30 @@ export function usageFoldHtml(r, detail, meta = null) {
       ? `<div class="comp-legend">${[...positive].sort((a, b) => b.tokens - a.tokens).map(x => `<button type="button" class="name" data-ctx-kind="${esc(String(x.kind))}" data-ctx-req="${r.req_id}" aria-label="${esc(partLabel(String(x.kind)))}，打开明细"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></button>
         <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>`
       : '';
-    comp = `${contextStatsHtml(r, p)}${mapHtml}${legend}${rowsHtml}`;
+    comp += `${mapHtml}${legend}${rowsHtml}`;
   }
+  const hint = p === null || p.state === 'recomputed' ? '' : [
+    ({ recomputed: '当前结果', retained: '旧结果', missing: '缺失' }[p.state] ?? p.state),
+  ].filter(Boolean).join(' · ');
   const note = hasComp
     ? (p?.note ?? '分类是估计分配，不是逐类精确计数。')
     : (p?.note ?? '没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。');
   const effort = requestEffortOf(meta);
   const effortHtml = effort === null ? ''
     : `<dl class="chain ledger-chain"><div class="chain-row"><dt>effort</dt><dd title="客户端随请求声明的 reasoning_effort">${esc(effort)}</dd></div></dl>`;
+  const usageRows = ledgerParts(r, detail).usage;
+  const more = usageRows === '' && effortHtml === ''
+    ? ''
+    : `<details class="usage-more" data-fold="usage:${r.req_id}">
+        <summary>用量明细</summary>
+        ${usageRows}${effortHtml}
+      </details>`;
   return `<details class="rail-fold" data-fold="prompt:${r.req_id}" open>
-    <summary>用量与上下文${ledger.headline !== '' ? `<span class="fold-count">${esc(ledger.headline)}</span>` : ''}</summary>
+    <summary>用量与上下文</summary>
     <div class="fold-body">
-      ${ledger.timing}${ledger.usage}${effortHtml}
       ${hint !== '' ? `<p class="note">${esc(hint)}</p>` : ''}
       ${comp}
+      ${more}
       <p class="rail-note">${esc(note)}</p>
     </div>
   </details>`;

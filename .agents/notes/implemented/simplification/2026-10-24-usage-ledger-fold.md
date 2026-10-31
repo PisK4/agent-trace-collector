@@ -10,7 +10,9 @@ Status: implemented
 
 头部收敛为一行身份：req 号 · 时间 · 客户端 · 模型（加粗，`model_served` 缺失回退 `model_requested`）＋状态点，四个页签常驻；数字全部移出头部。
 
-读数页末位的折叠行由「上下文组成」改为「用量与上下文」（稳定键仍是 `prompt:<req>`，默认展开）：状态提示（仅非常态）、构成单条柱、图例、u-total、口径注——展开态构成区其后由[读数页上下文分布 treemap](../feature/2026-10-26-context-distribution-treemap.md)扩展出 treemap 与内容列表，口径注的估算项改为贴 u-total 的「本地估计」pill，本篇的折叠键、摘要与「异常才提醒」规则不变；读数本体现按标签和值两列展示（计时与用量各一组 `<dl class="chain">`，数值列右对齐），该排版由[中栏间距、历史提示与右栏读数修正](2026-10-24-reader-layout-and-entry-fixes.md)部分调整，首 token 与首个文本在该篇定名并分立成行。速度分母沿用「总 − 首 token」，缺首 token 才退回账本 `flow_ms`；费用按 6 位有效数字渲染（`fmtCost`）；「共」删除，提示总量由 u-total 一处承载且缺值显「—」不再落 0；占用率删除进度条，只保留 u-total 文字（占用 X%）。折叠行收起时摘要给「总 / 出 / 命中」三项关键读数。窗口外请求分支复用同一读数的无折叠版本（`ledgerRowsHtml`）。
+读数页末位的折叠行由「上下文组成」改为「用量与上下文」（稳定键仍是 `prompt:<req>`，默认展开）：状态提示（仅非常态）、构成单条柱、图例、u-total、口径注——展开态构成区其后由[读数页上下文分布 treemap](../feature/2026-10-26-context-distribution-treemap.md)扩展出 treemap 与内容列表，口径注的估算项改为贴 u-total 的「本地估计」pill，本篇的折叠键与「异常才提醒」规则不变；读数本体现按标签和值两列展示（计时与用量各一组 `<dl class="chain">`，数值列右对齐），该排版由[中栏间距、历史提示与右栏读数修正](2026-10-24-reader-layout-and-entry-fixes.md)部分调整，首 token 与首个文本在该篇定名并分立成行。速度分母沿用「总 − 首 token」，缺首 token 才退回账本 `flow_ms`；费用按 6 位有效数字渲染（`fmtCost`）；「共」删除，提示总量由 u-total 一处承载且缺值显「—」不再落 0；占用率删除进度条，只保留 u-total 文字（占用 X%）。折叠行收起时摘要给「总 / 出 / 命中」三项关键读数。窗口外请求分支复用同一读数的无折叠版本（`ledgerRowsHtml`）。
+
+2026-10-31 起读数本体的计时四行合成「耗时」指标、用量五行收进二级折叠「用量明细」，摘要不再挂读数，见[读数页四格上下文指标](../feature/2026-10-31-context-metrics-four-cells.md)。本篇仍然成立的是：账目归同一个折叠行、默认展开、折叠键 `prompt:<req>`、速度分母与 `fmtCost` 口径、窗口外请求复用无折叠版本。
 
 ## Alternatives considered
 
