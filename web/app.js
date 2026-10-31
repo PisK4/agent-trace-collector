@@ -16,6 +16,7 @@ import {
 import {
   deltaOrdinals, messageCopyText, messagePairIndexOf, messagePathOf, replyView, toolEntries,
 } from './body-model.js';
+import { backendStateHtml } from './backend-state.js';
 import { esc } from './html.js';
 import { partLabel } from './parts.js';
 import { createReaderStore } from './reader-store.js';
@@ -1271,6 +1272,23 @@ if (typeof document !== 'undefined') {
     updateURL();
   }
 
+  /** 顶栏只在降级时出标签；正常与未知模式不占位置。 @param {import('./backend-state.js').Admission | null} admission */
+  function applyBackendState(admission) {
+    const slot = document.getElementById('backend-slot');
+    if (slot === null) return;
+    slot.innerHTML = backendStateHtml(admission);
+  }
+
+  /** 启动、显式刷新与点按降级标签时各读一次；不做轮询，读取失败保留上一次显示。 */
+  async function refreshBackendState() {
+    try {
+      const response = await fetch('/api/stats');
+      if (!response.ok) return;
+      const stats = /** @type {{admission?: import('./backend-state.js').Admission | null}} */ (await response.json());
+      applyBackendState(stats.admission ?? null);
+    } catch { /* 状态未知不冒充正常，也不清掉已知降级 */ }
+  }
+
   /* ---------------- 窗口导航 ---------------- */
   /** 当前滚动容器：main 独立滚动时用 main，窄屏文档流用滚动根；根元素缺失时退回 main。 */
   function scroller() {
@@ -1298,6 +1316,8 @@ if (typeof document !== 'undefined') {
     const mySelection = selectionEpoch;
     state.refreshedAt = Date.now();
     state.revealed = false;
+    // 显式刷新顺带重读后端状态；降级标签只在启动、刷新与点按时更新。
+    void refreshBackendState();
     // 显式刷新按用户要求换新：准备结论与旧版本显示一并清掉，不从上一版接着画。
     resetReading();
     dispatch({ kind: 'refresh-start' });
@@ -1609,6 +1629,8 @@ if (typeof document !== 'undefined') {
 
   document.addEventListener('click', (e) => {
     const t = /** @type {HTMLElement} */ (e.target);
+    // 降级标签本身是重新读取入口，标签随读取重建，统一走委托。
+    if (t.closest('#backend-state')) { void refreshBackendState(); return; }
     // 上下文明细：tile、图例与列表行带同一组 data-ctx-*，统一从这里解析范围。
     // 范围以统计为准（kind + item 身份），集合块与整类按类别取目录。
     const ctxSource = /** @type {HTMLElement | null} */ (t.closest('[data-ctx-kind]'));
@@ -1991,6 +2013,7 @@ if (typeof document !== 'undefined') {
 
   initLayout();
   void (async () => {
+    void refreshBackendState();
     try {
       await store.loadSessions();
     } catch (error) {

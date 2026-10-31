@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { restoreScroll } from '../web/app.js';
+import { backendStateHtml, backendStateText } from '../web/backend-state.js';
 import { replyCompleteness } from '../web/row-summary.js';
 import {
   cacheHitOf, contextStatsHtml,
@@ -11,6 +12,28 @@ import {
   railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget,
 } from '../web/url-route.js';
 import { agentLabel, railSummaryListHtml, sessionHead, sessionHiddenFold, sessionsListBypassHtml } from '../web/session-view.js';
+
+test('后端降级只出两种标签，正常与未知模式不占顶栏', () => {
+  expect(backendStateText(null)).toBeNull();
+  expect(backendStateText({ mode: 'normal', reason: null, at_ms: 1 })).toBeNull();
+  expect(backendStateText({ mode: 'future_mode', reason: null, at_ms: 1 })).toBeNull();
+  const meta = backendStateText({ mode: 'metadata_only', reason: 'disk_budget', at_ms: 1 });
+  expect(meta).toMatchObject({ level: 'warn', label: '存储降级 · 正文暂停' });
+  expect(meta?.detail).toContain('磁盘预算已满');
+  expect(backendStateText({ mode: 'metadata_only', reason: 'body_budget', at_ms: 1 })?.detail)
+    .toContain('正文预算已满');
+  const paused = backendStateText({ mode: 'paused', reason: 'disk_free', at_ms: 1 });
+  expect(paused).toMatchObject({ level: 'bad', label: '存储降级 · 采集暂停' });
+  expect(paused?.detail).toContain('磁盘剩余空间不足');
+  // 正常态不渲染节点：顶栏不为正常状态留空位。
+  expect(backendStateHtml(null)).toBe('');
+  expect(backendStateHtml({ mode: 'normal', reason: null, at_ms: 1 })).toBe('');
+  const html = backendStateHtml({ mode: 'metadata_only', reason: 'disk_budget', at_ms: 1 });
+  expect(html).toContain('id="backend-state"');
+  expect(html).toContain('class="backend-chip warn"');
+  expect(html).toContain('存储降级 · 正文暂停');
+  expect(html).toContain('磁盘预算已满');
+});
 
 test('请求记录入口只列被省略的请求，按窗口序号定位', () => {
   const rows = [

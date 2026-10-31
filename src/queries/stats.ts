@@ -14,10 +14,23 @@ export type Stats = {
   requests: number;
   body_states: { state: string; count: number }[];
   open_gaps: number;
+  /** 存储准入最近一次切换；从未切换过时为 null，等同 normal。 */
+  admission: { mode: string; reason: string | null; at_ms: number | null } | null;
   /** 费用扫描因系统时钟回退停住时的计数与阻塞时点；正常时为 null。 */
   cost_health: unknown;
   probe: unknown;
 };
+
+function admissionOf(value: unknown): Stats['admission'] {
+  if (value === null || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.mode !== 'string') return null;
+  return {
+    mode: record.mode,
+    reason: typeof record.reason === 'string' ? record.reason : null,
+    at_ms: typeof record.at_ms === 'number' ? record.at_ms : null,
+  };
+}
 
 export function getStats(store: Store): Stats {
   const cursors = store.read.query(`
@@ -42,6 +55,9 @@ export function getStats(store: Store): Stats {
   const costHealth = store.read.query<{ value_json: string }, [string]>(
     'SELECT value_json FROM collector_state WHERE key=?',
   ).get(JSON.stringify(['cost', 'clock_conflict']));
+  const admission = store.read.query<{ value_json: string }, [string]>(
+    'SELECT value_json FROM collector_state WHERE key=?',
+  ).get(JSON.stringify(['retention', 'admission']));
   return {
     cursors,
     issues,
@@ -50,6 +66,7 @@ export function getStats(store: Store): Stats {
     requests: requests.n,
     body_states: bodyStates,
     open_gaps: openGaps.n,
+    admission: admission == null ? null : admissionOf(parseJsonOrNull(admission.value_json)),
     cost_health: costHealth == null ? null : parseJsonOrNull(costHealth.value_json),
     probe: probe == null ? null : parseJsonOrNull(probe.value_json),
   };

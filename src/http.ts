@@ -39,6 +39,7 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/session-view.js': { file: 'session-view.js', type: 'text/javascript; charset=utf-8' },
   '/layout.js': { file: 'layout.js', type: 'text/javascript; charset=utf-8' },
+  '/backend-state.js': { file: 'backend-state.js', type: 'text/javascript; charset=utf-8' },
   '/body-model.js': { file: 'body-model.js', type: 'text/javascript; charset=utf-8' },
   '/body-view.js': { file: 'body-view.js', type: 'text/javascript; charset=utf-8' },
   '/duration.js': { file: 'duration.js', type: 'text/javascript; charset=utf-8' },

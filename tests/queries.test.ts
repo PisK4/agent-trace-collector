@@ -86,6 +86,10 @@ test('stats暴露游标、issue与正文状态分布', () => {
     f.store.write(db => {
       db.run("INSERT INTO ingest_issue(source_kind,ref_key,reason,observed_at) VALUES ('ledger','r1','ledger_invalid_json',1)");
       db.run("INSERT INTO source_gap(source_kind,source_name,file_generation,from_off,to_off,reason,state,updated_at) VALUES ('ledger','usage.jsonl','g:0',10,20,'disk_paused','unrecoverable',1)");
+      db.run('INSERT INTO collector_state(key,value_json) VALUES (?,?)', [
+        JSON.stringify(['retention', 'admission']),
+        JSON.stringify({ mode: 'metadata_only', reason: 'disk_budget', at_ms: 7 }),
+      ]);
     });
     const stats = getStats(f.store);
     expect(stats.requests).toBe(2);
@@ -94,6 +98,8 @@ test('stats暴露游标、issue与正文状态分布', () => {
     expect(stats.body_states).toEqual([{ state: 'pending', count: 2 }]);
     // 那条 unrecoverable 缺口不算未了，未了缺口单独计数。
     expect(stats.open_gaps).toBe(0);
+    // 准入记录原样读出：界面据此只在降级时出标签。
+    expect(stats.admission).toEqual({ mode: 'metadata_only', reason: 'disk_budget', at_ms: 7 });
   } finally {
     f.close();
   }
