@@ -717,3 +717,33 @@ Codex 走 magpie 网关后，库里的 `responses` 请求一直停在「原对�
 - `bun run service restart` 的首次就绪探针 30 秒超时（`restart_failed:not_ready_after_30s`），随后 `service status` 显示 running、`/api/stats` 冷启动首查 25.7 秒、再查 0.7 秒，静态资源与页面正常返回。重启命令本身以退出码 1 结束，超时原因未查明，不记为通过；服务随后稳定运行，页面已加载新代码。
 - 生产抽样窗口里的请求都带 `prompt_window` 与构成分类；窗口未知、无构成分类、旧结果与无 prompt 分析的格子只有合成用例与合成页面覆盖。
 - 真实数据只发只读 GET，未读正文进日志，未写生产库。
+
+## response id 幂等规范化与 OMP 证据合并（合成 + 生产库写入与页面只读，2026-10-31）
+
+前提：worktree `atc-omp-id-normalize` 的 `fix/omp-response-id-normalize` 分支（基于 master `e35470c`，提交 `3b8f3d5`，合入 `0430d36`）。诊断、做法与被否决的备选见[response id 规范化改为幂等](../.agents/notes/implemented/bug-fix/2026-10-31-response-id-idempotent-normalization.md)。
+
+### 合成覆盖
+
+`tests/magpie.test.ts`、`tests/hook.test.ts` 与 `tests/response-ids.test.ts` 共 64 项通过，`bun run typecheck` 通过；共享规范化规则改动后全量 `bun test` 930 项通过。锁定的行为：叠层前缀（`chatcmpl-msg_…`、`msg_resp_…`、`resp_msg_…`、双层 `chatcmpl-`）剥到同一个裸值，前缀本身不产出空键，结果幂等；hook 回执带 `chatcmpl-` 时仍与裸 hash 的账本行合并，只剩一条请求；维护命令在合成旧库上预览 1 行请求、1 条等待项、1 行原始账本、1 个唯一候选，应用后正文迁到路由行、hook 行删除、证据 `merged`、原始账本键重算，重复执行计数归零。
+
+### 生产写入与只读复核
+
+采集器按 launchd 流程停止后，先备份到 `trace.db.bak-before-response-ids-20261031.db`（3.1 GB，`0600`，`ingestion_restorable=false`，不含脱敏盐），再执行预览与应用。应用使用 `--apply --approval-id omp-response-id-2026-10-31`，随后启动服务，用时 12 秒。
+
+| 项目 | 写前 | 写后 |
+| --- | --- | --- |
+| `request.response_id_norm` 仍带前缀 | 795 | 0 |
+| `raw_ledger.response_id_norm` 仍带前缀 | 773 | 0 |
+| `pending_hook` 带 `msg_` 前缀 | 22 | 0 |
+| OMP hook 行 | 35 | 13 |
+| `pending_hook` 总数 | 1163 | 1141（应用报告） |
+
+命令报告 `merged=22`、`remaining=1141`、`ambiguous=0`。复核时等待队列为 1142 条，差额是运行期新到的等待项。req 64165（hook 行）已删除；req 64167（路由行）吸并正文后 `body_state='available'`、`have=7`、`prompt_tokens=45,252`、`prompt_window=1,000,000`。
+
+页面只读复核：OMP 会话 `5a9c3e17-8d24-4b6f-a0e5-3f7c2d9b4a68` 从 22 组降到 15 组；选中的 req 64167 四格为 `已用上下文 45.3k token / 总 1.0M · 已用 5%`、`固定开销 20.1k token / 占已用 44%`、`提示词缓存 0% 命中`、`耗时 5.25 s / 首 token 5.23 s · 8,000 tok/s`，右栏不再出现「没有路由侧的 prompt 分析」与「待关联」，请求结构、工具清单与本次回复都能从同一行读出。
+
+### 未执行与边界
+
+- 13 条 OMP 流式 hook 没有可用回执 id（12 条留存回执为 `absent`），这次不按 session 加时间猜配，仍作为独立 hook 行留在库里；同会话的 req 64263 与 64264 就是这种成对残影。Claude 的 1101 条同类孤儿保持不变。
+- 备份不含脱敏盐，不能恢复占位符连续性；它只用于这次派生键重算的回退，不当作可恢复快照。
+- 生产写入只走 `maintain normalize-response-ids` 的既有事务与 `mergeHookInto` 路径；页面复核只发只读 GET，未读请求正文进日志。
