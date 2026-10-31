@@ -435,6 +435,8 @@ hook 的 `model` 与 `success` 只作为独立报告保留在 `raw_hook`：前�
 
 hook 是 best-effort 通道，缺证据有三种来源：回调没发生、回调到达但按 response ID 对不上、合并还没跑。三者都表现为请求行没有 hook 证据，`have` 位图看不出来，只能靠窗口聚合分开计数。
 
+匹配键先按固定前缀表反复剥离，直到不再匹配：同一响应的 hook 回执与账本可能报出层数不同的前缀（`chatcmpl-msg_…` 与 `msg_…`），只剥一层会得到两个键。剥离规则只有 `normalizeResponseId` 一处。
+
 `maintain hook-delivery` 是只读诊断：请求侧按 `started_ms` 落窗，以窗口右端退一个等待阈值（与 `hook_absent` 老化同值）分 settled 与 young；已有账本、路由或 OTLP 的行仍缺 hook 的计 `missing_with_sources`，等待队列里有指向本行的回调计 `awaiting_candidate`，缺 response ID 的计 `missing_without_response_id`。按 agent、状态码、请求类别与体积分档计数，未知值单列。字段与命令见[运维手册](operations.md#hook-delivery)。
 
 插件侧的失败码只存在宿主内存的插件状态里，ATC 不读。薄插件把单次 fetch 超时、宿主中止、网络错误与 HTTP 拒收分成四个固定码：调大宿主预算只影响宿主中止那一种，接收方晚于插件单次截止返回成功也按失败记，不因为最终拿到了响应改写成投递成功。

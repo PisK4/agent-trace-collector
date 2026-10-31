@@ -216,12 +216,18 @@ export function parseTimestamp(value: unknown): number | null {
 
 const RESPONSE_PREFIXES = ['chatcmpl-', 'msg_resp_', 'msg_', 'resp_'];
 
+// 前缀会叠层：同一响应的 hook 侧与账本侧可能报出层数不同的 id
+// （如 chatcmpl-msg_<id> 与 msg_<id>）。循环剥到不再匹配，保证
+// normalize(normalize(x)) === normalize(x)，两侧才落在同一个匹配键上。
 export function normalizeResponseId(id: string | null): string | null {
   if (id === null || id.length === 0) return null;
-  for (const prefix of RESPONSE_PREFIXES) {
-    if (id.startsWith(prefix) && id.length > prefix.length) return id.slice(prefix.length);
+  let current = id;
+  for (;;) {
+    const prefix = RESPONSE_PREFIXES.find(prefix =>
+      current.startsWith(prefix) && current.length > prefix.length);
+    if (prefix === undefined) return current;
+    current = current.slice(prefix.length);
   }
-  return id;
 }
 
 export function classifyLedger(row: Record<string, unknown>): 'through' | 'rejected' {

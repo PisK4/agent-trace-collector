@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { loadLocalSecret } from '../src/config';
 import { assertCostPagePeriod, costState, syncCosts, validateCostPeriod } from '../src/sources/magpie/costs';
-import { classifyLedger, mapLedgerRow, mapRouteRow } from '../src/sources/magpie/mapping';
+import { classifyLedger, mapLedgerRow, mapRouteRow, normalizeResponseId } from '../src/sources/magpie/mapping';
 import { probeMagpie } from '../src/sources/magpie/probe';
 import { getStats } from '../src/queries/stats';
 
@@ -517,4 +517,18 @@ test('时钟回退时整页回滚并记录冲突计数与阻塞时点', async ()
   } finally {
     f.close();
   }
+});
+
+test('response id 叠层前缀剥到一个裸值且结果幂等', () => {
+  // OMP 两侧各报一层：hook 回执 chatcmpl-msg_<id>，账本 msg_<id>。
+  expect(normalizeResponseId('chatcmpl-msg_synthetic')).toBe('synthetic');
+  expect(normalizeResponseId('msg_resp_synthetic')).toBe('synthetic');
+  expect(normalizeResponseId('resp_msg_synthetic')).toBe('synthetic');
+  expect(normalizeResponseId('chatcmpl-chatcmpl-synthetic')).toBe('synthetic');
+  expect(normalizeResponseId('synthetic')).toBe('synthetic');
+  // 只有前缀本身时原样保留，不产出空键。
+  expect(normalizeResponseId('msg_')).toBe('msg_');
+  expect(normalizeResponseId(null)).toBeNull();
+  expect(normalizeResponseId('')).toBeNull();
+  expect(normalizeResponseId(normalizeResponseId('chatcmpl-msg_synthetic'))).toBe('synthetic');
 });
