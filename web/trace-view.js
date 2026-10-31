@@ -445,6 +445,20 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
 }
 
 /**
+ * 空组判定（纯函数）：投影已备齐，步骤集合里只剩组级状态行。没有可读正文的
+ * 成功请求就是这种形状；辅助、失败、截断、压缩与读取失败各带一条记录行，
+ * 读取中与保留投影还在变，都不判空。用步骤集合而不是条数，缺口组总有一条
+ * 状态行；步骤集合为空同样不渲染任何行，一并算空。
+ * @param {{steps: TraceStep[], stale: 'reading' | 'failed' | null,
+ *   placeholder: boolean}} projection
+ * @returns {boolean}
+ */
+export function isEmptyGroup(projection) {
+  if (projection.placeholder || projection.stale !== null) return false;
+  return projection.steps.every(step => step.kind === 'flag');
+}
+
+/**
  * 末尾组的请求集合（纯判定）：会话已完整加载时，没有后继请求把它当作已确认
  * 前驱、且它之后没有前驱未定的请求的链末各得一个末尾组。未知前驱可能承载这条
  * 回复，排除不了就抑制，避免同一回复出现两次。装配层先把窗口行整理成 entries，

@@ -11,6 +11,7 @@
 import { toolTint } from './body-view.js';
 import { esc } from './html.js';
 import { kk } from './rail-facts.js';
+import { bodyStateText } from './row-summary.js';
 import { secs } from './duration.js';
 import { pairStateText } from './trace-pair.js';
 
@@ -198,16 +199,36 @@ export function sessionSummaryFold(s, sessionKey, open) {
   </details>`;
 }
 
+/** 默认对话时间线省略的请求：只在有省略时出现，点条目走现有的请求定位。
+ *  这是请求记录的入口，不是第二套导航：序号与正文状态足以认出是哪一笔。
+ *  @param {RequestRow[]} rows 当前窗口全部请求 @param {RequestRow[]} hidden 被省略的请求
+ *  @param {string | null} sessionKey @param {boolean} open */
+export function sessionHiddenFold(rows, hidden, sessionKey, open) {
+  if (hidden.length === 0) return '';
+  const items = hidden.map(item => {
+    const ordinal = rows.findIndex(row => row.req_id === item.req_id) + 1;
+    return `<button class="tool-row tool-link" data-summary-req="${item.req_id}">
+      <span class="mono">${String(ordinal).padStart(2, '0')}</span><span class="muted">· ${esc(bodyStateText(item))}</span>
+    </button>`;
+  });
+  return `<details class="rail-fold session-fold" data-fold="hidden:${esc(sessionKey ?? '')}"${open ? ' open' : ''}>
+    <summary><span class="sum-line"><b>${hidden.length}</b> 笔请求没有可读正文，默认不占对话时间线</span></summary>
+    <div class="fold-body">${items.join('')}</div>
+  </details>`;
+}
+
 /** 会话头：标题、身份行、窗口合计与汇总折叠区、视图操作行与定位提示。
  *  @param {{sessionKey: string | null, row: SessionRow | null, rows: RequestRow[], refreshedAt: number | null,
  *    missingReqId: number | null, offPageReqId: number | null, windowError: string | null,
  *    summary: SessionSummary | null, summaryStatus?: 'idle' | 'loading' | 'ready' | 'absent',
- *    summaryFoldOpen: boolean, windowAnchor: 'start' | 'latest'}} input */
+ *    summaryFoldOpen: boolean, hiddenRows?: RequestRow[], hiddenFoldOpen?: boolean,
+ *    windowAnchor: 'start' | 'latest'}} input */
 export function sessionHead(input) {
   const {
     sessionKey, row, rows, refreshedAt, missingReqId, offPageReqId, windowError,
     summary, summaryStatus = 'idle', windowAnchor,
   } = input;
+  const hidden = input.hiddenRows ?? [];
   const unknown = sessionKey !== null && row === null;
   const first = rows[0] ?? null;
   const latest = rows[rows.length - 1] ?? null;
@@ -240,6 +261,7 @@ export function sessionHead(input) {
           : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
     </div>
     ${sessionSummaryFold(summary, sessionKey, input.summaryFoldOpen)}
+    ${sessionHiddenFold(rows, hidden, sessionKey, input.hiddenFoldOpen === true)}
     <div class="view-row">
       <span class="grow"></span>
       ${refreshedAt !== null ? `<span class="muted" style="font-size:10.5px">刷新于 ${esc(clock(refreshedAt))}</span>` : ''}

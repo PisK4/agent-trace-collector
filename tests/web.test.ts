@@ -10,7 +10,24 @@ import {
 import {
   railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget,
 } from '../web/url-route.js';
-import { agentLabel, railSummaryListHtml, sessionHead, sessionsListBypassHtml } from '../web/session-view.js';
+import { agentLabel, railSummaryListHtml, sessionHead, sessionHiddenFold, sessionsListBypassHtml } from '../web/session-view.js';
+
+test('请求记录入口只列被省略的请求，按窗口序号定位', () => {
+  const rows = [
+    { req_id: 4, body_state: 'available' }, { req_id: 7, body_state: 'evicted' }, { req_id: 9, body_state: 'pending' },
+  ] as never[];
+  // 没有省略就不出入口。
+  expect(sessionHiddenFold(rows, [], 'k', false)).toBe('');
+  const html = sessionHiddenFold(rows, rows.slice(1), 'k', false);
+  expect(html).toContain('data-fold="hidden:k"');
+  expect(html).toContain('data-summary-req="7"');
+  expect(html).toContain('data-summary-req="9"');
+  // 序号是窗口内位置，不是请求号；正文状态原样说出缺口类型。
+  expect(html).toContain('<span class="mono">02</span>');
+  expect(html).toContain('正文已回收');
+  expect(html).toContain('正文未到');
+  expect(html).not.toContain('data-summary-req="4"');
+});
 
 test('旁路折叠行：有旁路条目才渲染，展开与收起各自如实计数', () => {
   const row = (flags: string[]) => ({
