@@ -39,7 +39,7 @@ import { applyIntent } from './selection.js';
 import { createMainView } from './trace-dom.js';
 import { createTracePreparation } from './trace-preparation.js';
 import { renderTracePair } from './trace-pair.js';
-import { projectSteps, projectTailReply, renderTraceRow, tailEligibleIds as tailIds } from './trace-view.js';
+import { isEmptyGroup, projectSteps, projectTailReply, renderTraceRow, tailEligibleIds as tailIds } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
 import { railTabFromParam, railTabParam, resolveTraceTarget, traceIdFromParam } from './url-route.js';
 
@@ -223,6 +223,33 @@ if (typeof document !== 'undefined') {
   }
   function currentRow() {
     return currentRows().find(row => row.req_id === state.reqId) ?? null;
+  }
+  /**
+   * 窗口里第一笔或最后一笔有内容的请求：默认锚点与「回到开头/最新」跳过空组。
+   * 准备未完成时判不出空组，会先落在首行，备齐后由 settleAnchor 再挪。
+   * @param {'first' | 'last'} side
+   */
+  function contentAnchorId(side) {
+    const rows = currentRows();
+    const ordered = side === 'first' ? rows : [...rows].reverse();
+    return ordered.find(row => !isEmptyGroup(stepsOf(row)))?.req_id ?? null;
+  }
+  /**
+   * 锚点落在空组上时，等准备完成再挪到有内容的一笔：默认选中发生在准备之前。
+   * 读者中途换了选择或点了步骤就不动。
+   * @param {number | null} anchor 锚点意图实际写入的请求
+   */
+  function settleAnchor(anchor) {
+    if (anchor === null || state.reqId !== anchor || state.selectedStep !== null) return;
+    const row = currentRows().find(item => item.req_id === anchor);
+    if (row === undefined || !isEmptyGroup(stepsOf(row))) return;
+    const visible = contentAnchorId(state.windowAnchor === 'latest' ? 'last' : 'first');
+    if (state.windowAnchor === 'latest') dispatch({ kind: 'select-latest', latestReqId: visible });
+    else dispatch({ kind: 'select-first', firstReqId: visible });
+    // 锚点意图本身不渲染（调用方原本在同步流程里补），异步挪动要自己补一次。
+    renderAll();
+    dispatch({ kind: 'nav-settled' });
+    ensureSelectedVisible();
   }
   function currentRead() {
     return state.reqId === null ? null : store.peekRequest(state.reqId);
@@ -438,8 +465,9 @@ if (typeof document !== 'undefined') {
     return '';
   }
 
-  /** 会话头装配：store 与选择状态在此读齐，纯展示在 session-view。 */
-  function sessionHead() {
+  /** 会话头装配：store 与选择状态在此读齐，纯展示在 session-view。
+   *  @param {import('../src/queries/projection').RequestRow[]} hiddenRows 默认时间线省略的空组 */
+  function sessionHead(hiddenRows) {
     const summary = store.peekSummary();
     return sessionHeadView({
       sessionKey: state.session,
@@ -452,6 +480,8 @@ if (typeof document !== 'undefined') {
       summary: summary?.status === 'ready' ? summary.data : null,
       summaryStatus: summary?.status ?? 'idle',
       summaryFoldOpen: folds.get(`summary:${state.session ?? ''}`) === true,
+      hiddenRows,
+      hiddenFoldOpen: folds.get(`hidden:${state.session ?? ''}`) === true,
       windowAnchor: state.windowAnchor,
     });
   }
@@ -649,27 +679,39 @@ if (typeof document !== 'undefined') {
         ? '<div class="history-loader"><button id="load-later" class="history-button">↓ 加载后续记录</button></div>'
         : '';
     const tails = tailEligibleIds();
+    // 轮次带点得到被省略的起点时，中栏也要有这一行：选中态之外再放行轮次起点。
+    const turnStart = state.turn === null ? null : turnOf(state.turn)?.start_req ?? null;
+    /** 没有可读正文的请求：请求记录入口在会话头，选中时这一组临时显示也不移出列表。
+     *  @type {import('../src/queries/projection').RequestRow[]} */
+    const hiddenRows = [];
     /** @type {import('./trace-dom.js').GroupModel[]} */
     const groups = [];
     for (const r of rows) {
-      const { steps, stale, placeholder } = stepsOf(r);
+      const projection = stepsOf(r);
+      const { steps, stale, placeholder } = projection;
       const ordinal = ordinalOf(r.req_id);
       const callOf = callOfFor(steps, stale === null);
       const status = r.status === null ? 'unknown' : r.status >= 400 ? 'failed' : 'success';
+      const empty = isEmptyGroup(projection);
+      if (empty) hiddenRows.push(r);
+      // 空组不占默认时间线；显式选中的请求与轮次起点临时留下状态行，选择不悬空。
+      const hidden = empty && r.req_id !== state.reqId && r.req_id !== turnStart;
       /** @type {import('./trace-dom.js').CommitItem[]} */
       const items = [];
-      for (const step of steps) {
-        items.push({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) });
+      if (!hidden) {
+        for (const step of steps) {
+          items.push({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) });
+        }
+        groups.push({
+          key: `req:${r.req_id}`,
+          reqId: r.req_id,
+          status,
+          current: r.req_id === state.reqId,
+          stale,
+          placeholder,
+          rows: items,
+        });
       }
-      groups.push({
-        key: `req:${r.req_id}`,
-        reqId: r.req_id,
-        status,
-        current: r.req_id === state.reqId,
-        stale,
-        placeholder,
-        rows: items,
-      });
       // 末尾组不挂请求级 aria-current：它是同一请求的回复，不是第二笔请求。
       const tail = tails.has(r.req_id) ? tailOf(r) : null;
       if (tail === null) continue;
@@ -684,14 +726,16 @@ if (typeof document !== 'undefined') {
       });
     }
     return {
-      headHtml: sessionHead(),
+      headHtml: sessionHead(hiddenRows),
       bandHtml: band,
       listClass: `step-list${band !== '' ? ' band-above' : ''}`,
       ordDigits,
       loaderHtml,
       emptyHtml: rows.length === 0
         ? `<p class="sess-empty">${state.pendingSession !== null ? '正在读取请求…' : '这个会话没有已记录的请求。'}</p>`
-        : '',
+        : groups.length === 0
+          ? '<p class="sess-empty">当前窗口的请求都没有可读正文，不在对话时间线里；请求记录在会话头。</p>'
+          : '',
       // 「已是最新记录」只在后续游标耗尽后出现：还有更晚记录时不冒充结尾。
       endHtml: window.loading || window.newerCursor !== null ? ''
         : '<div class="timeline-end"><span></span> 已是最新记录</div>',
@@ -876,7 +920,10 @@ if (typeof document !== 'undefined') {
     // 选中消息行时结构折叠展开，列表里高亮这条消息；详情只由结构列表内的点击
     // 打开（structureSelected），中栏点击不落进详情。用户之后仍可收起（folds 的
     // 显式 false 优先于自动展开）。请求级行与无选择保持用户自己的开合状态。
-    const source = resolveSelectedSource(currentSelectedStep(r), state.selectedStep, read);
+    const selectedStep = currentSelectedStep(r);
+    const source = resolveSelectedSource(selectedStep, state.selectedStep, read);
+    // 选中空组时中栏只有一条状态行：读者还没有步骤可点，右栏直接给四路证据。
+    const emptySelected = selectedStep === null && isEmptyGroup(stepsOf(r));
     const messageOrd = source.side === 'request' && source.target === 'message' ? source.messageOrd : null;
     const foldKey = `structure:${r.req_id}`;
     const foldState = folds.get(foldKey);
@@ -895,7 +942,7 @@ if (typeof document !== 'undefined') {
     });
     return railFactsHtml({
       // 选中组级状态行时，四路证据排在读数页最前：读者点它就是为了问「缺什么」。
-      evidenceHtml: source.side === 'evidence' ? evidenceFoldHtml(r, detail, meta) : '',
+      evidenceHtml: source.side === 'evidence' || emptySelected ? evidenceFoldHtml(r, detail, meta) : '',
       replyHtml, structureHtml,
       capabilitiesHtml: meta !== null ? renderCapabilities(meta) : '',
       usageHtml: usageFoldHtml(r, detail, meta),
@@ -1257,11 +1304,15 @@ if (typeof document !== 'undefined') {
     await store.selectSession(state.session, windowLimit(), state.windowAnchor);
     if (myNav !== navEpoch) return;
     const rows = currentRows();
+    /** @type {number | null} 锚点意图写入的请求；准备完成后确认它有没有内容 */
+    let anchor = null;
     if (mySelection === selectionEpoch) {
       if (state.windowAnchor === 'latest') {
-        dispatch({ kind: 'select-latest', latestReqId: rows[rows.length - 1]?.req_id ?? null });
+        anchor = contentAnchorId('last');
+        dispatch({ kind: 'select-latest', latestReqId: anchor });
       } else {
-        dispatch({ kind: 'select-first', firstReqId: rows[0]?.req_id ?? null });
+        anchor = contentAnchorId('first');
+        dispatch({ kind: 'select-first', firstReqId: anchor });
       }
     } else if (state.reqId !== null && !rows.some(row => row.req_id === state.reqId)) {
       dispatch({ kind: 'open-offpage', reqId: state.reqId });
@@ -1269,7 +1320,7 @@ if (typeof document !== 'undefined') {
     renderAll();
     // 导航完成：路由页随重建后的选中请求读取（效果经 nav-settled 统一发出）。
     dispatch({ kind: 'nav-settled' });
-    void prepareWindow();
+    void prepareWindow().then(() => { if (mySelection === selectionEpoch) settleAnchor(anchor); });
     if (mySelection === selectionEpoch) ensureSelectedVisible();
   }
 
@@ -1538,11 +1589,14 @@ if (typeof document !== 'undefined') {
     state.pendingSession = null;
     await resolveInitialTrace();
     if (myNav !== navEpoch) return;
-    // 默认选第一笔；窗口外 trace 保留其语义，不用第一笔顶替。
+    // 默认选第一笔有内容的请求；窗口外 trace 保留其语义，不用第一笔顶替。
     const rows = currentRows();
-    dispatch({ kind: 'session-default', firstReqId: rows[0]?.req_id ?? null });
+    const before = state.reqId;
+    dispatch({ kind: 'session-default', firstReqId: contentAnchorId('first') });
+    // 准备完成前判不出空组：锚点落在空组上时，备齐后再挪到有内容的一笔。
+    const anchor = state.reqId !== before ? state.reqId : null;
     renderAll();
-    void prepareWindow();
+    void prepareWindow().then(() => settleAnchor(anchor));
     // 导航完成处补路由读取：URL 直达与切会话后路由页不要求再点一次页签。
     dispatch({ kind: 'nav-settled' });
     if (state.offPageReqId !== null) {

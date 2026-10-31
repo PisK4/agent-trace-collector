@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { toolTint } from '../web/body-view.js';
 import { evidenceFoldHtml, resolveSelectedSource } from '../web/rail-facts.js';
-import { projectSteps, projectTailReply, renderTraceRows, tailEligibleIds, toolSummary } from '../web/trace-view.js';
+import { isEmptyGroup, projectSteps, projectTailReply, renderTraceRows, tailEligibleIds, toolSummary } from '../web/trace-view.js';
 
 const TOKEN = 'r1-' + 'a'.repeat(64);
 
@@ -1024,4 +1024,24 @@ test('证据折叠区：四路证据各写自己的到达情况', () => {
   expect(orphanHtml).toContain('已收到 · 报告失败');
   expect(orphanHtml).toContain('本库没有这笔的账本证据');
   expect(orphanHtml).toContain('无回复');
+});
+
+test('空组判定：投影备齐且只剩状态行才离开默认时间线', () => {
+  const steps = projectSteps(row({ status: 200, body_state: 'evicted', miss_reason: 'evicted' }),
+    read(detail({ delta_ordinals: [] }), [], null));
+  expect(steps.map(step => step.kind)).toEqual(['flag']);
+  expect(isEmptyGroup({ steps, stale: null, placeholder: false })).toBe(true);
+  // 读取失败、辅助事件、内容行都各有一条步骤，不判空。
+  const failed = projectSteps(row({ status: 502, body_state: 'evicted' }),
+    read(detail({ delta_ordinals: [] }), [], null));
+  expect(isEmptyGroup({ steps: failed, stale: null, placeholder: false })).toBe(false);
+  const content = projectSteps(row(), read(detail(),
+    [entry(2, { state: 'text', text: 'q', original: 'q' }, true)], null));
+  expect(isEmptyGroup({ steps: content, stale: null, placeholder: false })).toBe(false);
+  // 读取中与保留投影还在变：先留着，别让整组在备齐时突然出现。
+  expect(isEmptyGroup({ steps, stale: null, placeholder: true })).toBe(false);
+  expect(isEmptyGroup({ steps, stale: 'reading', placeholder: false })).toBe(false);
+  expect(isEmptyGroup({ steps, stale: 'failed', placeholder: false })).toBe(false);
+  // 空步骤集合本来就不渲染任何行，一并算空。
+  expect(isEmptyGroup({ steps: [], stale: null, placeholder: false })).toBe(true);
 });
