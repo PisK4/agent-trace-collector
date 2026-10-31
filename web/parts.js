@@ -46,6 +46,12 @@ const PATH_KINDS = new Set(['files', 'memory']);
 /** @param {string} kind */
 export const isPathKind = (kind) => PATH_KINDS.has(kind);
 
+/** 固定开销类别：与对话无关、每笔请求都要背的部分；其余类别随对话增长。 */
+const FIXED_KINDS = new Set(['system', 'tools', 'skills', 'memory']);
+
+/** @param {string} kind */
+export const isFixedKind = (kind) => FIXED_KINDS.has(kind);
+
 /** 末段路径：没有目录时原样返回，末尾斜杠不算名字。 @param {string} name */
 export const baseNameOf = (name) => {
   const parts = name.split('/').filter(Boolean);

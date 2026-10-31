@@ -419,14 +419,11 @@ test('用量两列：缺值显示 —，全缺不渲染，缓存读数悬停指�
   // 会话级命中在会话头合计行，缓读行的悬停两处都指过去。
   expect(p.usage).not.toContain('>命中<');
   expect(p.usage).toContain('请求级命中见构成区「提示词缓存」，会话级命中见会话头合计行');
-  expect(p.headline).toBe('总 2.10 s · 出 120');
   // 基础字段缺值保留槽位显示 —。
   const missing = ledgerParts(ledgerRow({ out_tok: null }) as never, null);
   expect(missing.usage.match(/class="miss"/g)?.length).toBe(1);
-  expect(missing.headline).toBe('总 2.10 s');
   const allMissing = ledgerParts(ledgerRow({ in_tok: null, out_tok: null, cache_read: null, cache_write: null }) as never, null);
   expect(allMissing.usage).toBe('');
-  expect(allMissing.headline).toBe('');
 });
 
 test('窗口外请求传入详情保留首个文本；fold 图例只列正值类别，全零不留空容器', () => {
@@ -449,16 +446,31 @@ test('窗口外请求传入详情保留首个文本；fold 图例只列正值类
   expect(fold).toContain('data-fold="prompt:7"');
   expect(fold).toContain('系统提示');
   expect(fold).toContain('对话内容');
-  expect(fold).not.toContain('工具定义');
-  expect(fold).not.toContain('记忆与技能');
+  // 零值类别不进图例；固定开销的悬停说明里出现类别名不算图例。
+  expect(fold).not.toContain('data-ctx-kind="tools"');
+  expect(fold).not.toContain('data-ctx-kind="memory"');
   expect(fold).toContain('已用上下文');
   expect(fold).toContain('33.5k');
-  expect(fold).toContain('/ 总上下文 200.0k');
-  expect(fold).toContain('窗口进度');
-  expect(fold).toContain('17%');
+  // 窗口与已用比例降为副行；缓存读数不再与命中率重复，缓读/新入收进用量明细。
+  expect(fold).toContain('总 200.0k · 已用 17%');
+  expect(fold).not.toContain('/ 总上下文');
+  expect(fold).not.toContain('窗口进度');
+  expect(fold).toContain('固定开销');
+  expect(fold).toContain('占已用 95%');
   expect(fold).toContain('提示词缓存');
   expect(fold).toContain('53%');
-  expect(fold).toContain('缓读 10.0k · 新入 9.0k');
+  expect(fold).not.toContain('缓读 10.0k · 新入 9.0k');
+  // 计时四行合成一个耗时指标，副行保留首 token、首个文本与速度。
+  expect(fold).toContain('耗时');
+  expect(fold).toContain('<b>2.10</b><span>s</span>');
+  expect(fold).toContain('首 token 0.42 s · 首个文本 0.48 s · 71 tok/s');
+  // 用量明细是二级折叠，默认收起，开合按 data-fold 恢复。
+  expect(fold).toContain('<details class="usage-more" data-fold="usage:7">');
+  expect(fold).not.toContain('<details class="usage-more" data-fold="usage:7" open>');
+  expect(fold).toContain('>入<');
+  expect(fold).toContain('$0.0034');
+  // 折叠行摘要不再挂「总 · 出」：总在耗时里，出在明细里。
+  expect(fold).not.toContain('class="fold-count"');
   const zeroFold = usageFoldHtml(ledgerRow() as never, {
     ...ledgerRow(),
     prompt: {
@@ -472,9 +484,12 @@ test('窗口外请求传入详情保留首个文本；fold 图例只列正值类
   expect(zeroFold).toContain('已用上下文');
   expect(zeroFold).toContain('模型的窗口大小未知');
   expect(zeroFold).toContain('没有可用分母');
+  // 没有路由侧的 prompt 分析时指标仍然渲染，四格各自说明缺什么。
   const noPrompt = usageFoldHtml(ledgerRow() as never, { ...ledgerRow(), prompt: null } as never);
   expect(noPrompt).toContain('用量与上下文');
-  expect(noPrompt).not.toContain('class="ctx-stats"');
+  expect(noPrompt).toContain('class="ctx-stats"');
+  expect(noPrompt).toContain('没有路由侧的 prompt 分析');
+  expect(noPrompt).toContain('没有构成分类');
 });
 
 test('构成区集成：treemap 与内容列表进折叠行，本地估计贴构成区，占用 pill 按阈值出现', () => {
@@ -499,7 +514,7 @@ test('构成区集成：treemap 与内容列表进折叠行，本地估计贴构
       { kind: 'chat', tokens: 79770, items: [{ name: '2', tag: 'turn', n: null, tokens: 79770 }] },
     ],
   };
-  // 校准行、占用 ≥90%：treemap、图例、列表、三指标都在，pill 出「占满」。
+  // 校准行、占用 ≥90%：treemap、图例、列表、四指标都在，pill 出「占满」。
   const full = usageFoldHtml(ledgerRow() as never, { ...ledgerRow(), prompt: sevenKinds } as never);
   expect(full).toContain('class="ctx-map"');
   expect(full).toContain('class="ctx-rows"');
@@ -507,8 +522,10 @@ test('构成区集成：treemap 与内容列表进折叠行，本地估计贴构
   expect(full).toContain('×62');
   expect(full).toContain('已用上下文');
   expect(full).toContain('185.3k');
-  expect(full).toContain('/ 总上下文 200.0k');
-  expect(full).toContain('93%');
+  expect(full).toContain('总 200.0k · 已用 93%');
+  expect(full).toContain('固定开销');
+  expect(full).toContain('8.6k');
+  expect(full).toContain('占已用 5%');
   expect(full).toContain('提示词缓存');
   expect(full).toContain('class="u-pill warn">占满</span>');
   expect(full).not.toContain('本地估计');
@@ -531,50 +548,77 @@ test('构成区集成：treemap 与内容列表进折叠行，本地估计贴构
   } as never);
   expect(est).toContain('已用上下文<span class="u-pill" title="分类按请求正文估算，未经本次回复的实测 token 校准">本地估计</span>');
   expect(est).not.toContain('<p class="note">本地估计');
-  // 窗口未知：进度留空并说明缺分母，treemap 全幅铺已用部分。
+  // 窗口未知：副行说明缺窗口，不给分母与比例，treemap 全幅铺已用部分。
   const nowin = usageFoldHtml(ledgerRow() as never, {
     ...ledgerRow(),
     prompt: { ...sevenKinds, window: null, ratio: null },
   } as never);
   expect(nowin).toContain('模型的窗口大小未知');
-  expect(nowin).toContain('没有可用分母');
+  // 固定开销的分母是已用上下文，窗口未知不影响它。
+  expect(nowin).toContain('占已用 5%');
+  expect(nowin).not.toContain('总 200.0k');
   expect(nowin).not.toContain('93%');
   expect(nowin).not.toContain('stroke-dasharray');
 });
 
-test('上下文三指标：已用/总上下文、进度、请求级缓存按缺失态各自留白', () => {
+test('上下文四指标：已用、固定开销、请求级缓存与耗时按缺失态各自留白', () => {
   const prompt = (extra: Record<string, unknown> = {}) => ({
     state: 'recomputed', reason: 'complete', actual_version: 1, tokens: 22200, counted: true,
     window: 128000, held: false, ratio: 0.1734, legacy: false, note: null,
-    parts: [{ kind: 'system', tokens: 22200 }], ...extra,
+    parts: [
+      { kind: 'system', tokens: 12000 }, { kind: 'tools', tokens: 3000 }, { kind: 'chat', tokens: 7200 },
+    ], ...extra,
   });
   const stats = contextStatsHtml(ledgerRow() as never, prompt() as never);
   expect(stats).toContain('已用上下文');
   expect(stats).toContain('22.2k');
-  expect(stats).toContain('/ 总上下文 128.0k');
-  expect(stats).toContain('窗口进度');
-  expect(stats).toContain('17%');
+  // 窗口与进度合成副行一句，不再另起一列。
+  expect(stats).toContain('总 128.0k · 已用 17%');
+  expect(stats).not.toContain('窗口进度');
+  expect(stats).toContain('固定开销');
+  expect(stats).toContain('15.0k');
+  expect(stats).toContain('占已用 68%');
   expect(stats).toContain('提示词缓存');
   expect(stats).toContain('53%');
-  expect(stats).toContain('缓读 10.0k · 新入 9.0k');
-  // 窗口未知：不给分母、不给进度，缓存照常。
+  // 缓存不再画条，也不复述缓读与新入：明细在「用量明细」。
+  expect(stats).not.toContain('class="ctx-bar"');
+  expect(stats).not.toContain('缓读');
+  // 耗时是整笔时长，副行写首 token 与速度；首个文本只从详情取，未读正文时副行没有这一项。
+  expect(stats).toContain('耗时');
+  expect(stats).toContain('<b>2.10</b><span>s</span>');
+  expect(stats).toContain('首 token 0.42 s · 71 tok/s');
+  expect(stats).not.toContain('首个文本 0.48 s');
+  const withDetail = contextStatsHtml(ledgerRow() as never, prompt() as never,
+    { ttft_ms: 420, ms: 2100, first_text_ms: 480, flow_ms: null } as never);
+  expect(withDetail).toContain('首 token 0.42 s · 首个文本 0.48 s · 71 tok/s');
+  // 窗口未知：不给分母、不给比例，固定开销与缓存照常。
   const nowin = contextStatsHtml(ledgerRow() as never, prompt({ window: null, ratio: null }) as never);
   expect(nowin).toContain('模型的窗口大小未知');
-  expect(nowin).toContain('没有可用分母');
-  expect(nowin).not.toContain('17%');
+  expect(nowin).not.toContain('已用 17%');
+  expect(nowin).not.toContain('没有可用分母');
+  expect(nowin).toContain('占已用 68%');
   expect(nowin).toContain('53%');
-  // 旧结果不按旧输入算比例，说明与「缺分母」分开。
+  // 旧结果不按旧输入算比例，副行只留总上下文。
   const retained = contextStatsHtml(ledgerRow() as never, prompt({ state: 'retained', ratio: null }) as never);
-  expect(retained).toContain('旧结果，不计算进度');
+  expect(retained).toContain('总 128.0k · 不计算进度');
   expect(retained).not.toContain('17%');
-  // 缺缓存读数：— 与说明，不画空条。
+  // 缺缓存读数：— 与说明。
   const nocache = contextStatsHtml(ledgerRow({ in_tok: null }) as never, prompt() as never);
   expect(nocache).toContain('缓存读数未上报');
-  expect(nocache).not.toContain('class="ctx-bar"');
   // 合法 0 照常显示，不当作缺失。
   const zero = contextStatsHtml(ledgerRow({ cache_read: 0 }) as never, prompt() as never);
   expect(zero).toContain('0%');
-  expect(zero).toContain('width:0%');
+  // 没有构成分类不给数；分类内全为 0 是真实读数，照常给 0 与占比。
+  const noParts = contextStatsHtml(ledgerRow() as never, prompt({ parts: [] }) as never);
+  expect(noParts).toContain('没有构成分类');
+  expect(noParts).not.toContain('占已用');
+  const zeroFixed = contextStatsHtml(ledgerRow() as never, prompt({ parts: [{ kind: 'chat', tokens: 22200 }] }) as never);
+  expect(zeroFixed).toContain('占已用 0%');
+  // 没有 prompt 分析：四格留白并各自说明缺什么，不整块隐藏。
+  const noPrompt = contextStatsHtml(ledgerRow() as never, null);
+  expect(noPrompt).toContain('没有路由侧的 prompt 分析');
+  expect(noPrompt).toContain('没有构成分类');
+  expect(noPrompt).toContain('耗时');
 });
 
 test('缓存命中与会话头同口径：缺一读数或分母为 0 不给数，0 命中照常给 0', () => {

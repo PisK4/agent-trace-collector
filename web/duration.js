@@ -30,8 +30,11 @@ export function tierOf(ms, limits) {
   return ms <= limits[0] ? 'good' : ms <= limits[1] ? 'warn' : 'bad';
 }
 
+/** 大号读数只要数值、单位单独排：与 secs 同一取整口径，缺值写 —。 @param {number|null|undefined} ms */
+export const secsValue = (ms) => (ms == null ? '—' : (ms / 1000).toFixed(2));
+
 /** 两位小数秒：右栏读数密度，缺值写 —。 @param {number|null|undefined} ms */
-export const secs = (ms) => (ms == null ? '—' : (ms / 1000).toFixed(2) + ' s');
+export const secs = (ms) => (ms == null ? '—' : secsValue(ms) + ' s');
 
 /**
  * 紧凑时长：中栏行尾槽的密度。不足 1 秒用毫秒，1 分钟内一位小数秒，

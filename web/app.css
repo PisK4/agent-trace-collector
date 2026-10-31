@@ -549,20 +549,23 @@ pre.raw{
 .rail-section h3 .grow{flex:1}
 .rail-section h3 .hint{font-size:9.5px;letter-spacing:0;text-transform:none;color:var(--muted)}
 
-/* 构成区顶部的三个指标：已用上下文 / 总上下文、窗口进度、提示词缓存。
-   三列在窄栏也保留，标签与 pill 可换行、分母与缓存读数折行；正常态零标签，
-   异常 pill 挂在对应指标标签行。缓存条用中性墨色，命中率不是好坏状态。 */
-.ctx-stats{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr);gap:10px 12px;margin:2px 0 9px}
+/* 构成区顶部的四个指标：已用上下文、固定开销、提示词缓存、耗时。
+   窄栏 已用与耗时各占整行，固定开销与缓存成对；宽栏一行四列，耗时最宽。
+   断点按折叠行正文的容器宽度走：右栏是 clamp(280px, …) 的弹性宽度，同一视口下差别很大。
+   正常态零标签，异常 pill 挂在已用上下文标签行。 */
+.ctx-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px;margin:2px 0 9px}
+.ctx-stat:first-child,.ctx-stat-time{grid-column:1/-1}
+@container (min-width:560px){
+  .ctx-stats{grid-template-columns:minmax(0,1.28fr) minmax(0,1.18fr) minmax(0,1.18fr) minmax(0,1.5fr)}
+  .ctx-stat:first-child,.ctx-stat-time{grid-column:auto}
+}
 .ctx-stat{display:flex;flex-direction:column;gap:3px;min-width:0}
 .ctx-k{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;font:500 9.5px var(--ui);letter-spacing:.06em;color:var(--muted)}
 .ctx-big{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px .3em;min-width:0;overflow:hidden;font:600 20px/1.15 var(--ui);font-variant-numeric:tabular-nums;color:var(--text)}
 .ctx-big b{font-weight:600}
 .ctx-big span{font:10.5px/1.5 var(--mono);color:var(--muted);font-weight:400}
-.ctx-big .ctx-of{font-size:10px;letter-spacing:0}
 .ctx-stat .miss{color:var(--missing);font-style:normal}
 .ctx-sub{font-size:10px;line-height:1.35;color:var(--muted);overflow-wrap:anywhere}
-.ctx-bar{height:3px;border-radius:2px;background:var(--line);overflow:hidden;margin:2px 0 1px}
-.ctx-bar i{display:block;height:100%;border-radius:2px;background:var(--text-2)}
 
 .comp-legend{display:grid;grid-template-columns:1fr auto auto;gap:3px 8px;font-size:10.5px}
 .comp-legend .name{display:flex;align-items:center;gap:6px;color:var(--text-2);min-width:0}
@@ -622,13 +625,20 @@ pre.raw{
 .rail-fold .fold-count{margin-left:auto;font:10.5px var(--mono);color:var(--muted);font-weight:400}
 .rail-fold .fold-count.warn{color:var(--warn)}
 .rail-fold .fold-count.bad{color:var(--bad)}
-.rail-fold .fold-body{padding:2px 10px 10px;border-top:1px solid var(--line)}
+.rail-fold .fold-body{padding:2px 10px 10px;border-top:1px solid var(--line);container-type:inline-size}
 .rail-fold .fold-body>.note:first-child{margin-top:8px}
 .rail-fold .msg-list{max-height:300px;overflow:auto}
 .rail-fold .body-panel{border:0;padding:6px 0 0}
 /* 回复折叠行内部再嵌的推理块与工具往返：浅一档背景，与外层行区分。 */
 .rail-fold .rail-fold.sub{background:var(--surface);margin:8px 0 0}
 .rail-fold .fold-body .conv-tools{padding:8px 0 2px}
+/* 用量明细：折叠行里的二级 disclosure，收起时只占一行小字，开合随 data-fold 恢复。 */
+.usage-more{margin:8px 0 0;border-top:1px solid var(--line)}
+.usage-more>summary{display:flex;align-items:center;gap:6px;padding:6px 0 2px;font-size:10px;color:var(--muted);cursor:pointer;list-style:none}
+.usage-more>summary::-webkit-details-marker{display:none}
+.usage-more>summary::before{content:"▸";font-size:8px;flex:none;transition:transform .12s}
+.usage-more[open]>summary::before{transform:rotate(90deg)}
+.usage-more>summary:hover{color:var(--text-2)}
 
 /* 工具四页：概览/参数/结果/Schema 与返回按钮。 */
 .tool-page-head{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
