@@ -303,8 +303,9 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 
 /* ---------- 会话头双列分组板：左资源/结构/性能，右工具/Skill/路径 ---------- */
 /* 双列由列间距与细分隔线区分，不加嵌套卡片或整组彩色底板；分组只在有
-   可展示事实时渲染，整列都空时不保留空列与分隔线。窄中栏退成单列。 */
-.cue-board{display:grid;grid-template-columns:minmax(200px,.8fr) minmax(0,1.6fr);gap:4px 18px;margin-top:10px}
+   可展示事实时渲染，整列都空时不保留空列与分隔线。每个分组严格一行。
+   左列 1fr/1.3fr：统计行不再换行后需要足额宽度，右列放不下由 chip 收缩承担。 */
+.cue-board{display:grid;grid-template-columns:minmax(200px,1fr) minmax(0,1.3fr);gap:4px 18px;margin-top:10px}
 .cue-board.solo{grid-template-columns:minmax(0,1fr)}
 .cue-account,.cue-activity{min-width:0;display:flex;flex-direction:column;gap:8px}
 .cue-account{padding-right:14px;border-right:1px solid var(--line)}
@@ -328,34 +329,38 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
   box-shadow:0 4px 14px rgba(0,0,0,.08);pointer-events:none;
 }
 .cue:hover::after,.cue:focus-visible::after{display:block}
-.cue-data{display:flex;align-items:center;flex-wrap:wrap;gap:3px 10px;min-width:0;font-size:11px;line-height:1.7;color:var(--muted)}
+/* 每组一行：放不下的不换行——统计行整段省略，chip 收缩省略，+N 与异常入口 flex:none 不被裁。 */
+.cue-data{display:flex;align-items:center;flex-wrap:nowrap;gap:3px 10px;min-width:0;overflow:hidden;font-size:11px;line-height:1.7;color:var(--muted)}
+.cue-data.open-wrap{flex-wrap:wrap;overflow:visible}
 .cue-data>span{white-space:nowrap}
+.cue-data .cue-line{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .cue-data b{color:var(--text);font-weight:550;font-variant-numeric:tabular-nums}
-.cue-data .tool-chip{cursor:pointer;max-width:220px}
+.cue-data .tool-chip{cursor:pointer;max-width:220px;flex:0 1 auto;min-width:0}
 .cue-data .tool-chip .n{font-weight:550;color:var(--text)}
 .cue-data .tool-chip[class*="tint-"] .n{color:inherit}
 .cue-data .tool-chip .err{color:var(--warn);font-weight:550;margin-left:2px}
-.cue-data .warn-n{color:var(--warn);font-weight:550;font-size:10.5px;background:none;border:0;padding:0;cursor:pointer;white-space:nowrap}
-.cue-data .interrupt{font-size:10px;white-space:nowrap}
+.cue-data .warn-n{color:var(--warn);font-weight:550;font-size:10.5px;background:none;border:0;padding:0;cursor:pointer;white-space:nowrap;flex:none}
+.cue-data .interrupt{font-size:10px;white-space:nowrap;flex:none}
 /* 汇总未就绪时的资源回退标记：可见地更换统计口径，不只是悬停说明。 */
-.cue-data .scope-tag{font-size:10px;color:var(--warn);background:var(--warn-soft);border-radius:3px;padding:0 5px}
-/* 无正文请求入口：按需展开的清单，收起时只占一行。 */
-.hidden-more{display:flex;flex-wrap:wrap;flex-basis:100%;min-width:0}
+.cue-data .scope-tag{font-size:10px;color:var(--warn);background:var(--warn-soft);border-radius:3px;padding:0 5px;flex:none}
+/* 无正文请求入口：性能行末的按需清单，展开时该行恢复换行。 */
+.hidden-more{display:inline-flex;flex-wrap:wrap;flex:none;min-width:0}
 .hidden-more summary{color:var(--accent);font:10.5px/1.7 var(--ui);cursor:pointer;list-style:none;white-space:nowrap}
 .hidden-more summary::-webkit-details-marker{display:none}
 .hidden-more summary:hover,.hidden-more summary:focus-visible{text-decoration:underline;outline:0}
 .hidden-more summary b{font-variant-numeric:tabular-nums}
 .hidden-more .more-body{display:flex;flex-direction:column;gap:2px;flex-basis:100%;padding:5px 0 2px}
-.path-chip{display:inline-flex;align-items:baseline;gap:6px;font:10.5px var(--mono);padding:2px 7px;border-radius:3px;cursor:pointer;border:0;max-width:260px}
+.path-chip{display:inline-flex;align-items:baseline;gap:6px;font:10.5px var(--mono);padding:2px 7px;border-radius:3px;cursor:pointer;border:0;max-width:260px;flex:0 1 auto;min-width:0}
 .path-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .path-chip:hover{filter:brightness(.96)}
 .path-chip .c{font-weight:550}
 .path-chip.w{color:var(--tool-edit);background:var(--tool-edit-bg)}
 .path-chip.r{color:var(--tool-read);background:var(--tool-read-bg)}
-.path-more{display:inline-flex;flex-wrap:wrap}
+.path-more{display:inline-flex;flex-wrap:wrap;flex:none;min-width:0}
 .path-more summary{font:10.5px var(--mono);padding:2px 7px;border-radius:3px;cursor:pointer;list-style:none;font-weight:550}
 .path-more summary::-webkit-details-marker{display:none}
 .path-more summary:hover{filter:brightness(.96)}
+.path-more.t summary{color:var(--tool-other);background:var(--tool-other-bg)}
 .path-more.w summary{color:var(--tool-edit);background:var(--tool-edit-bg)}
 .path-more.r summary{color:var(--tool-read);background:var(--tool-read-bg)}
 .path-more.s summary{color:var(--tool-skill);background:var(--tool-skill-bg)}

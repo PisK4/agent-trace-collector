@@ -766,8 +766,8 @@ test('会话头输出速度只统计计时与输出都在的行', () => {
   // 一行无计时、一行有计时：分母只算有计时的那行，分子也必须只算同一行。
   const timed = requestRow({ req_id: 2, out_tok: 100, ms: 2000, ttft_ms: 500, flow_ms: 1500 });
   const mixed = sessionHead({ ...headBase, rows: [untimed, timed] as never });
-  expect(mixed).toContain('输出 <b>67 tok/s</b>');
-  expect(mixed).toContain('首字 p50 <b>0.50 s</b>');
+  expect(mixed).toContain('<b>67</b> tok/s');
+  expect(mixed).toContain('首字 <b>0.50 s</b>');
 });
 
 test('会话头汇总状态：资源回退可见标明已加载窗口，读取中与不可用分开说', () => {
@@ -885,7 +885,7 @@ test('结构组条件字段非零才出现', () => {
     summaryStatus: 'ready',
   });
   expect(html).toContain('主链 <b>4</b> · 旁路 <b>1</b>');
-  expect(html).toContain('上下文峰值 <b>41%</b>');
+  expect(html).toContain('峰值 <b>41%</b>');
   expect(html).toContain('子代理 <b>2</b> 个 · <b>5</b> 笔');
   expect(html).toContain('重试 <b>3</b> 笔');
   expect(html).toContain('模型 <b>2</b>');
@@ -929,6 +929,27 @@ test('无正文请求入口落在性能组，展开清单可定位', () => {
   expect(html).toContain('无正文 <b>2</b> 笔');
   expect(html).toContain('<strong>性能</strong>');
   expect(html).toContain('data-summary-req="7"');
+});
+
+test('工具组前三直接可见，其余进 +N 展开', () => {
+  const five = ['Bash', 'Read', 'Edit', 'Write', 'ToolSearch'].map((name, i) => ({
+    name, count: 5 - i, paired: 5 - i, error_known: 5 - i, errors: 0,
+  }));
+  const capped = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({ tools: five }) as never, summaryStatus: 'ready',
+  });
+  expect(capped).toContain('path-more t');
+  expect(capped).toContain('<summary title="工具共 5 把">+2</summary>');
+  expect(capped).toContain('data-summary-tool="Bash"');
+  expect(capped).toContain('data-summary-tool="Write"');
+  expect(capped).toContain('data-summary-tool="ToolSearch"');
+  const three = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({ tools: five.slice(0, 3) }) as never, summaryStatus: 'ready',
+  });
+  expect(three).not.toContain('path-more t');
+  expect(three).toContain('data-summary-tool="Edit"');
 });
 
 test('会话标题转义后进入头部', () => {
