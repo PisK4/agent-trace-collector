@@ -6,6 +6,23 @@ import { Database } from 'bun:sqlite';
 import { fixture } from './fixtures';
 import { commitUnit, openStore } from '../src/store';
 
+/** 库里用户表上的全部索引名。 */
+function indexNames(db: Database): string[] {
+  return (db.query(
+    "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL ORDER BY name",
+  ).all() as { name: string }[]).map(row => row.name);
+}
+
+/** @param {Database} db @param {string} sql */
+function queryAll(db: Database, sql: string): unknown[] {
+  return db.query(sql).all();
+}
+
+/** @param {Database} db @param {string} sql */
+function plan(db: Database, sql: string): string[] {
+  return (db.query(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[]).map(row => row.detail);
+}
+
 test('事务失败不留下证据或游标', () => {
   const f = fixture();
   try {
@@ -248,14 +265,14 @@ test('过低版本库拒绝打开，空库建到当前版本', () => {
     expect(() => openStore(legacy)).toThrow('schema_rebuild_required');
     const store = openStore(join(dir, 'fresh', 'trace.db'));
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 7 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 8 });
     } finally { store.close(); }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('v6库原地升到v7：纯新增表，既有数据不动', () => {
+test('v6库原地升到当前版本：纯新增表与索引，既有数据不动', () => {
   const dir = mkdtempSync(join(tmpdir(), 'atc-store-upgrade-'));
   try {
     // 先按当前版本建库、写入一行数据，再降级 user_version 模拟 v6 库。
@@ -270,10 +287,55 @@ test('v6库原地升到v7：纯新增表，既有数据不动', () => {
     raw.close();
     const store = openStore(path);
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 7 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 8 });
       expect((store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(1);
-      // 升级是纯新增：OTLP 原始层表就位且为空。
+      // 升级是纯新增：OTLP 原始层表就位且为空，反向索引就位。
       expect((store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(0);
+      expect(indexNames(store.read)).toContain('i_req_prev');
+      expect(indexNames(store.read)).toContain('i_tool_result_req');
+    } finally { store.close(); }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v7库原地升到v8：引用不变，中断后的半迁移状态可重试', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'atc-store-v8-upgrade-'));
+  try {
+    const path = join(dir, 'trace.db');
+    const seed = openStore(path);
+    seed.write(db => {
+      db.run(
+        `INSERT INTO request(req_id, started_ms, day, via, body_state, derive_version, have, created_at, updated_at, prev_req_id)
+         VALUES (1, 1, '2026-11-01', 'through', 'pending', 0, 2, 1, 1, NULL),
+                (2, 2, '2026-11-01', 'through', 'pending', 0, 2, 1, 1, 1),
+                (3, 3, '2026-11-01', 'through', 'pending', 0, 2, 1, 1, NULL)`);
+      db.run(`INSERT INTO tool_call(call_id, req_id, ord, state) VALUES ('callu-1', 2, 0, 'resolved')`);
+      db.run(`UPDATE tool_call SET result_req=3 WHERE call_id='callu-1'`);
+    });
+    seed.close();
+    // 模拟升级中断：v7 库上建索引的事务被回滚后的状态——索引缺失、版本停在 7。
+    const raw = new Database(path);
+    raw.exec('DROP INDEX IF EXISTS i_req_prev; DROP INDEX IF EXISTS i_tool_result_req; PRAGMA user_version=7');
+    raw.close();
+    const before = {
+      prev: queryAll(new Database(path), 'SELECT req_id, prev_req_id FROM request ORDER BY req_id'),
+      result: queryAll(new Database(path), 'SELECT call_id, result_req FROM tool_call'),
+    };
+    const store = openStore(path);
+    try {
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 8 });
+      expect(indexNames(store.read)).toContain('i_req_prev');
+      expect(indexNames(store.read)).toContain('i_tool_result_req');
+      expect(queryAll(store.read, 'SELECT req_id, prev_req_id FROM request ORDER BY req_id')).toEqual(before.prev);
+      expect(queryAll(store.read, 'SELECT call_id, result_req FROM tool_call')).toEqual(before.result);
+      // 计划断言：hook 合并的两条反向更新走索引定位，不再全表扫描。
+      const reqPlan = plan(store.read, 'UPDATE request SET prev_req_id=2 WHERE prev_req_id=1');
+      expect(reqPlan.join('\n')).toContain('i_req_prev');
+      expect(reqPlan.join('\n')).not.toContain('SCAN request');
+      const toolPlan = plan(store.read, 'UPDATE tool_call SET result_req=2 WHERE result_req=1');
+      expect(toolPlan.join('\n')).toContain('i_tool_result_req');
+      expect(toolPlan.join('\n')).not.toContain('SCAN tool_call');
     } finally { store.close(); }
   } finally {
     rmSync(dir, { recursive: true, force: true });

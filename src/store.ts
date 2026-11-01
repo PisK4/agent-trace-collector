@@ -65,7 +65,8 @@ export function commitUnit<T>(store: Store, name: string,
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
 const SCHEMA_V6 = readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8');
 const SCHEMA_V7 = readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 7;
+const SCHEMA_V8 = readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8');
+const SCHEMA_VERSION = 8;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -88,17 +89,26 @@ function migrate(db: Database): void {
       db.exec(SCHEMA);
       db.exec(SCHEMA_V6);
       db.exec(SCHEMA_V7);
+      db.exec(SCHEMA_V8);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
     return;
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
-  // v6→v7 是纯新增（OTLP 原始层表），原地执行即可；更低的库没有升级路径：
-  // 普通启动不做 ALTER，也不搬旧数据，旧库由运维显式删除后重建。
+  // v6→v8 与 v7→v8 都是纯新增（OTLP 原始层表、两条部分反向索引），原地执行即可；
+  // 更低的库没有升级路径：普通启动不做 ALTER，也不搬旧数据，
+  // 旧库由运维显式删除后重建。索引在存量数据上的构建耗时随历史线性增长，
+  // 属于启动契约的一部分，见 docs/operations.md 的 schema 升级一节。
   if (version === 6) {
     db.transaction(() => {
       db.exec(SCHEMA_V7);
+      db.exec(SCHEMA_V8);
+      db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+    }).immediate();
+  } else if (version === 7) {
+    db.transaction(() => {
+      db.exec(SCHEMA_V8);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version < SCHEMA_VERSION) {
