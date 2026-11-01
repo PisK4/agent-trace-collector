@@ -13,13 +13,19 @@ export type SessionRow = {
 type SessionDbRow = {
   conv_key: string; last_ms: number; request_count: number; title: string | null; agents: string | null;
   has_failed: number; has_unknown: number; has_missing: number; has_participate: number;
+  all_probe_kind: number; has_readable_body: number; has_usage: number; has_actor: number;
 };
 
 /**
- * 会话状态只从确定事实聚合，四个标志固定按失败、待确认、缺正文、旁路的顺序输出。
- * 失败看 HTTP 状态；待确认看身份未知或前驱关系未知；缺正文看正文不在可读状态
- * 或没拿到回调（`have` 第 1 位是回调位）；旁路看会话内是否存在参与链请求。
+ * 会话状态只从确定事实聚合，五个标志固定按失败、待确认、缺正文、旁路、探针的
+ * 顺序输出。失败看 HTTP 状态；待确认看身份未知或前驱关系未知；缺正文看正文
+ * 不在可读状态或没拿到回调（`have` 第 1 位是回调位）；旁路看会话内是否存在
+ * 参与链请求；探针看整组是否都是 magpie 自己的探测请求。
  */
+
+/** magpie `probelog` 的三个封闭 kind：模型列表、provider 连通性测试、接口探测。 */
+const PROBE_KINDS = `'source:model_list','source:provider_test','source:api_detect'`;
+
 const SESSION_FLAG_COLUMNS = `
   MAX(CASE WHEN status IS NOT NULL AND status >= 400 THEN 1 ELSE 0 END) AS has_failed,
   MAX(CASE WHEN actor_state = 'unknown' OR prev_relation = 'unknown' THEN 1 ELSE 0 END) AS has_unknown,
@@ -35,7 +41,15 @@ const SESSION_FLAG_COLUMNS = `
       ELSE body_state <> 'available' OR (have & ${HAVE_BODY}) = 0
     END
   ) THEN 1 ELSE 0 END) AS has_missing,
-  MAX(CASE WHEN purpose_chain = 'participate' THEN 1 ELSE 0 END) AS has_participate`;
+  MAX(CASE WHEN purpose_chain = 'participate' THEN 1 ELSE 0 END) AS has_participate,
+  -- 探针组要四个条件同时成立：全组都是探针 kind、没有可读正文、没有 token 与
+  -- 费用、没有任何 actor 归属。任一条件不满足都留在列表里：错折真流量的代价
+  -- 高于多显示几行噪音。
+  MIN(CASE WHEN req_kind IN (${PROBE_KINDS}) THEN 1 ELSE 0 END) AS all_probe_kind,
+  MAX(CASE WHEN body_state = 'available' THEN 1 ELSE 0 END) AS has_readable_body,
+  MAX(CASE WHEN coalesce(in_tok,0)+coalesce(out_tok,0)+coalesce(cache_read,0)+coalesce(cache_write,0) > 0
+    OR coalesce(cost,0) <> 0 THEN 1 ELSE 0 END) AS has_usage,
+  MAX(CASE WHEN actor IS NOT NULL THEN 1 ELSE 0 END) AS has_actor`;
 
 /**
  * 会话标题只取已经结算的当前结果：排除用途提供模型标题，参与链提供用户标题。
@@ -103,7 +117,8 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
         LIMIT ?`)
       .all(size + 1)
     : store.read.query<SessionDbRow, [number, string, number]>(`
-        SELECT conv_key, last_ms, request_count, title, agents, has_failed, has_unknown, has_missing, has_participate FROM (
+        SELECT conv_key, last_ms, request_count, title, agents, has_failed, has_unknown, has_missing, has_participate,
+               all_probe_kind, has_readable_body, has_usage, has_actor FROM (
           SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
                  ${SESSION_TITLE_SQL} AS title,
                  -- 同首查：agents 是 magpie 的客户端标签，不是 actor 身份。
@@ -128,6 +143,10 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
     // 渲染层做，这里只给事实标志。任一笔参与链请求都不折叠，错藏真会话的
     // 代价远高于多显示一条噪音。
     if (row.has_participate === 0) flags.push('bypass');
+    // 探针组是 magpie 自己的探测请求，不是对话：没有正文可读，没有用量，也没有
+    // 会话归属。四个条件全满足才折叠，判定依据留在读模型里，渲染层只认标志。
+    if (row.all_probe_kind === 1 && row.has_readable_body === 0
+      && row.has_usage === 0 && row.has_actor === 0) flags.push('probe');
     return {
       conv_key: row.conv_key,
       title: row.title ?? '',
