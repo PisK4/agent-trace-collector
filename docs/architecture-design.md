@@ -449,9 +449,11 @@ SQLite，WAL，单文件，放仓库外。默认路径 `~/Library/Application Su
 
 ### 版本与破坏式替换
 
-当前结构版本是 v7。空库在同一个事务里建到 v7。存量库只有一条升级路径：v6 打开时在单个事务里原地升到 v7（纯新增表与索引，不动旧行），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
+当前结构版本是 v8。空库在同一个事务里建到 v8。存量库的原地升级路径：v6 与 v7 打开时在单个事务里升到 v8（纯新增表与索引，不动旧行），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
 
-首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6→v7 不走这条路，原因是仓库已有本机真实数据且 v7 变更纯新增，原地升级可执行、可验证。备份白名单随之收两版：v6 与 v7 的 bundle 都可恢复，v6 包恢复后首次打开时同样原地升级。
+首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6 起不走这条路，原因是仓库已有本机真实数据且各步变更纯新增，原地升级可执行、可验证。备份白名单收 v6、v7 与 v8 三版，低版本包恢复后首次打开时同样原地升级。
+
+v8 在 v7 之上加的是两条部分反向索引：`i_req_prev`（`request(prev_req_id) WHERE prev_req_id IS NOT NULL`）与 `i_tool_result_req`（`tool_call(result_req) WHERE result_req IS NOT NULL`）。hook 合并按旧 id 反向改指前驱与工具结果位置，这两条 UPDATE 没有索引时是全表扫描（[采集期间交互延迟](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)）；部分形状匹配写路径，两个更新绑定的参数都非空。存量库建索引的启动停顿与失败恢复归[运维手册](operations.md#schema-版本)。
 
 v7 在 v6 之上加的是 OTLP 三张表：`raw_otlp_span`（span 原始层，主键 `(trace_id, span_id)`）、`raw_otlp_log`（logs 原始层，按记录内容哈希判重）与 `otlp_body_ref`（Claude Code 正文指针状态机）。v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，切片模式不写它们，同步模式照旧写。
 

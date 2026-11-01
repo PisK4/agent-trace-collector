@@ -479,6 +479,8 @@ sqlite3 "$HOME/Library/Application Support/agent-trace-collector/trace.db" \
 
 ## schema 版本
 
-当前 `user_version=7`。空数据目录首次启动直接建到 v7；v6 库打开时在单个事务里原地升到 v7（纯新增，不动旧行），更早版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 与 v7，v6 包恢复后首次打开同样原地升级。
+当前 `user_version=8`。空数据目录首次启动直接建到 v8；v6 与 v7 库打开时在单个事务里原地升到 v8（纯新增，不动旧行），更早版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6、v7 与 v8，v6/v7 包恢复后首次打开同样原地升级。
 
-首版发布前的破坏式替换只对 v6 之前的库：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库；旧库里的正文与派生结果一起丢弃，没有"结构已升级、数据未迁移"的中间态。重建后的历史只有元数据：账本与路由的重放不产生正文，正文只能从 hook 或 OTLP 的 body_ref 拿到，所以重建前的正文、预览与工具配对都补不回来。要留住正文就在升级前导出：正文落在旧库的 `block.z` 与 `request.skeleton_z`，`raw_hook` 里的原文在完成关联后通常已经清空，不是可靠的导出源。`scripts/backfill-fingerprint.ts` 补的是 v3/v4 时代的派生列，不是到 v7 的路径——它把 `user_version` 写成 4，v7 的代码打不开它。不要手改 `user_version`。
+v8 在 v7 之上加的两条部分索引（`i_req_prev`、`i_tool_result_req`）要在存量数据上扫描建索引。升级在启动路径里执行，属一次性成本：本机 3.1 GB 库实测约 6.2 s（扫描 `request` 全表，骨架 BLOB 使表页散布在大文件里，冷缓存占大头），同一次启动内其余步骤毫秒级。之后启动只查 `sqlite_schema` 即短路，不再扫描。接受一次秒级启动停顿换来零新增维护机制；存量规模再涨一个量级、停顿不可接受时，改为先停采集器、显式执行升级再启动，那个决定属于运维契约变更，要改这一节。建索引在单个事务里，中断即整体回滚，`user_version` 停在旧版本，索引不存在，下次启动从头重跑；升级失败时库保持原版本可打开状态，先看启动日志里的 SQLite 错误再重试。
+
+首版发布前的破坏式替换只对 v6 之前的库：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库；旧库里的正文与派生结果一起丢弃，没有"结构已升级、数据未迁移"的中间态。重建后的历史只有元数据：账本与路由的重放不产生正文，正文只能从 hook 或 OTLP 的 body_ref 拿到，所以重建前的正文、预览与工具配对都补不回来。要留住正文就在升级前导出：正文落在旧库的 `block.z` 与 `request.skeleton_z`，`raw_hook` 里的原文在完成关联后通常已经清空，不是可靠的导出源。`scripts/backfill-fingerprint.ts` 补的是 v3/v4 时代的派生列，不是到当前版本的路径——它把 `user_version` 写成 4，当前代码打不开它。不要手改 `user_version`。

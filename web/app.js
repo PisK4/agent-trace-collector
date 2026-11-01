@@ -2034,11 +2034,16 @@ if (typeof document !== 'undefined') {
 
   initLayout();
   void (async () => {
-    void refreshBackendState();
+    let listError = null;
     try {
       await store.loadSessions();
     } catch (error) {
-      el('sessions-list').innerHTML = `<p class="sess-empty">会话列表加载失败:${esc(error instanceof Error ? error.message : 'unknown')}</p>`;
+      listError = error;
+    }
+    // 统计读取排在列表之后：不再与 /api/sessions 竞争首屏的服务端时间窗。
+    void refreshBackendState();
+    if (listError !== null) {
+      el('sessions-list').innerHTML = `<p class="sess-empty">会话列表加载失败:${esc(listError instanceof Error ? listError.message : 'unknown')}</p>`;
       return;
     }
     if (state.session === null) {
@@ -2047,6 +2052,10 @@ if (typeof document !== 'undefined') {
         .find(s => !s.flags.includes('probe') && !s.flags.includes('bypass')));
       if (first) dispatch({ kind: 'open-session', sessionKey: first.conv_key, wantedTrace: null });
     }
+    // 列表（与默认选中意图）到手先提交左栏：请求窗口是另一个请求，可能等很久；
+    // 会话列表可独立使用，不等正文。此后 renderAll 会按窗口结果重画全部区块。
+    renderSessions();
+    renderFilters();
     if (state.session !== null) await selectSession(state.session, traceIdFromParam(qp.get('trace')));
     else renderAll();
   })();

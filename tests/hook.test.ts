@@ -181,6 +181,43 @@ test('hook写事务具名：写统计按 by_name.hook 归属而非 other', () =>
   }
 });
 
+test('合并把旧链接改指目标：前驱引用与工具结果引用', () => {
+  const f = fixture();
+  try {
+    // hook 回执先独立落库；账本请求后到，合并它。
+    const hook = acceptHook(f.store, envelope(), 1, salt);
+    const sourceId = hook.req_id;
+    // 同组后继 C 的前驱、D 的工具结果都指向待合并行：合并必须把它们改到目标。
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,conv_key,actor,prev_req_id)
+         VALUES (3,1700000001000,'2026-10-20','through','pending',0,2,1,1,?,'synthetic-session',?)`,
+        [JSON.stringify(['session', 'synthetic-session']), sourceId],
+      );
+      db.run(
+        `INSERT INTO tool_call(call_id,req_id,ord,tool_name,state,result_req,result_ord) VALUES ('callu-9',3,0,'Bash','resolved',?,0)`,
+        [sourceId],
+      );
+    });
+    f.store.write(db => db.run(
+      `INSERT INTO request(req_id,route_id,response_id_norm,agent,session,conv_key,conv_source,actor,actor_state,
+         started_ms,day,via,status,body_state,derive_version,have,created_at,updated_at,title,title_source)
+       VALUES (2,202,'synthetic_1','alpha','synthetic-session',?,'session','synthetic-session','known',
+         1700000000000,'2026-10-20','through',200,'pending',0,2,1,1,'ledger title','model_time')`,
+      [JSON.stringify(['session', 'synthetic-session'])],
+    ));
+    const stats = reconcilePending(f.store, 3);
+    expect(stats.merged).toBe(1);
+    expect(f.store.read.query('SELECT count(*) AS n FROM request WHERE req_id=?').get(sourceId)).toEqual({ n: 0 });
+    expect(f.store.read.query('SELECT prev_req_id FROM request WHERE req_id=3').get())
+      .toEqual({ prev_req_id: 2 });
+    expect(f.store.read.query("SELECT result_req FROM tool_call WHERE call_id='callu-9'").all())
+      .toEqual([{ result_req: 2 }]);
+  } finally {
+    f.close();
+  }
+});
+
 test('hook先到时账本后到，pending重试完成合并', () => {
   const f = fixture();
   try {

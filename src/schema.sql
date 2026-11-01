@@ -202,6 +202,8 @@ CREATE INDEX i_req_fail ON request(started_ms DESC) WHERE status >= 400;
 CREATE INDEX i_req_model_title ON request(conv_key, started_ms DESC, req_id DESC) WHERE req_kind = 'title';
 CREATE INDEX i_req_purpose_pending ON request(purpose_pending,req_id)
   WHERE purpose_pending=1;
+-- hook 合并按旧 id 反向改指前驱：UPDATE request SET prev_req_id=? WHERE prev_req_id=?。
+CREATE INDEX i_req_prev ON request(prev_req_id) WHERE prev_req_id IS NOT NULL;
 
 CREATE TABLE request_evidence (
   req_id      INTEGER NOT NULL,
@@ -316,6 +318,8 @@ CREATE TABLE tool_call (
   PRIMARY KEY (req_id, ord)
 ) WITHOUT ROWID;
 CREATE INDEX i_tool_call_id ON tool_call(call_id, req_id);
+-- hook 合并按旧请求 id 反向改指结果位置：UPDATE tool_call SET result_req=? WHERE result_req=?。
+CREATE INDEX i_tool_result_req ON tool_call(result_req) WHERE result_req IS NOT NULL;
 
 -- OMP bash 后台作业的发起→通知配对，纯派生结算表、可整体重建。
 -- spawn/notice 各记最早出现的（请求, 消息序号）；主键带 conv_key：
