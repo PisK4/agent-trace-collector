@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fixture } from './fixtures';
+import { fixture, seedPurposeRequest } from './fixtures';
 import { loadConfig } from '../src/config';
 import { createHandler, loadReadToken, STATIC_FILES } from '../src/http';
 import { getRequest, listRequests } from '../src/queries/requests';
@@ -526,6 +526,69 @@ test('轮次端点按累计窗口下界返回结算结果，参数非法显式 4
     ]);
     expect((await get(`/api/sessions/${encodeURIComponent(convKey)}/turns?from=-1`)).status).toBe(400);
     expect((await get('/api/sessions/["session","missing"]/turns')).status).toBe(200);
+  } finally {
+    f.close();
+  }
+});
+
+test('阅读批端点：合法批次、逐项错误与参数边界', async () => {
+  const f = fixture();
+  try {
+    const COMMON = { cleanGroup: true, purposePending: 0, summaryState: 'recomputed', summaryAlgorithm: 1 } as const;
+    const key = 'batch-http';
+    const ids = [1, 2].map(n => seedPurposeRequest(f.store, {
+      convKey: key, startedMs: n, messages: [{ role: 'user', content: `synthetic ${n}` }], ...COMMON,
+    }));
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
+    const call = (path: string) => handler(new Request(`http://127.0.0.1:8320${path}`, {
+      headers: { host: '127.0.0.1:8320', authorization: 'Bearer synthetic-read-token' },
+    }));
+
+    const okBatch = await (await call(`/api/sessions/${encodeURIComponent(key)}/readings?ids=${encodeURIComponent(JSON.stringify(ids))}`)).json() as {
+      items: { index: number; requested_id: number; state: string; value?: { detail: { reading_token: string } } }[];
+      next_index: number | null;
+    };
+    expect(okBatch.items.map(item => item.state)).toEqual(['ok', 'ok']);
+    expect(okBatch.items.map(item => item.requested_id)).toEqual(ids);
+    expect(okBatch.next_index).toBeNull();
+    const token = okBatch.items[0]!.value!.detail.reading_token;
+    expect(token).toMatch(/^r1-[0-9a-f]{64}$/);
+
+    // 跨会话与不存在的 id 单列 not_found，成功项照常返回。
+    const mixed = await (await call(`/api/sessions/${encodeURIComponent(key)}/readings?ids=${encodeURIComponent(JSON.stringify([ids[0], 999999]))}`)).json() as { items: { state: string }[] };
+    expect(mixed.items.map(item => item.state)).toEqual(['ok', 'not_found']);
+
+    // 参数非法整体 400：缺失、空串、非数组、0 项、超 32 项、非正整数、坏 JSON。
+    for (const raw of ['ids=', `ids=${encodeURIComponent('[]')}`, `ids=${encodeURIComponent('{}')}`, 'ids=not-json',
+      `ids=${encodeURIComponent('[0]')}`, `ids=${encodeURIComponent(JSON.stringify(Array.from({ length: 33 }, (_, i) => i + 1)))}`]) {
+      expect((await call(`/api/sessions/${encodeURIComponent(key)}/readings?${raw}`)).status).toBe(400);
+    }
+
+    // URL 超 16 KiB 先于参数解析：414，客户端据此折半。
+    const giant = `/api/sessions/${encodeURIComponent(key)}/readings?ids=${encodeURIComponent('[' + '1,'.repeat(9000) + '1]')}`;
+    expect((await call(giant)).status).toBe(414);
+
+    // 区间批：同 id 多区间保留每 index；旧 token 单列 reading_changed。
+    const rangePath = `/api/sessions/${encodeURIComponent(key)}/reading-ranges?items=`;
+    const ranges = encodeURIComponent(JSON.stringify([
+      { id: ids[0], token, from: 0, to: 1 },
+      { id: ids[0], token, from: 1, to: 2 },
+      { id: ids[0], token: 'r1-' + 'f'.repeat(64), from: 0, to: 1 },
+    ]));
+    const rangeBatch = await (await call(rangePath + ranges)).json() as { items: { index: number; state: string }[]; next_index: number | null };
+    expect(rangeBatch.items.map(item => item.state)).toEqual(['ok', 'ok', 'reading_changed']);
+    expect(rangeBatch.next_index).toBeNull();
+
+    // 区间参数非法整体 400：token 格式、跨度越界、to<from、0 项、坏 JSON、超 64 项。
+    for (const raw of [
+      JSON.stringify([{ id: ids[0], token: 'bad', from: 0, to: 1 }]),
+      JSON.stringify([{ id: ids[0], token, from: 0, to: 41 }]),
+      JSON.stringify([{ id: ids[0], token, from: 5, to: 2 }]),
+      '[]', 'not-json',
+      JSON.stringify(Array.from({ length: 65 }, (_, i) => ({ id: ids[0], token, from: 0, to: 1 }))),
+    ]) {
+      expect((await call(rangePath + encodeURIComponent(raw))).status).toBe(400);
+    }
   } finally {
     f.close();
   }

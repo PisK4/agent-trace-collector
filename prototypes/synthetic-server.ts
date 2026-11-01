@@ -883,6 +883,57 @@ Bun.serve({
       if (!r) return json({error:'not_found'}, 404);
       return json(routeOf(r));
     }
+    // 阅读批端点与生产同形：参数校验与逐项状态一一对应；合成数据不设预算，
+    // 生产语义由 SQLite 契约测试验证，这里只负责交互夹具。
+    const readings = /^\/api\/sessions\/([^/]+)\/readings$/.exec(url.pathname);
+    if (readings) {
+      if (Buffer.byteLength(req.url) > 16*1024) return json({error:'batch_too_large'}, 414);
+      const key = decodeURIComponent(readings[1]!);
+      let ids: unknown;
+      try { ids = JSON.parse(url.searchParams.get('ids') ?? ''); } catch { ids = null; }
+      if (!Array.isArray(ids) || ids.length === 0 || ids.length > 32
+        || !ids.every(v => typeof v === 'number' && Number.isSafeInteger(v) && v > 0)) {
+        return json({error:'invalid_input'}, 400);
+      }
+      const items = (ids as number[]).map((id, index) => {
+        const r = byId.get(id);
+        if (!r || convOf(r) !== key) return {index, requested_id:id, state:'not_found', reason:'not_found'};
+        const token = readingTokenOf(r);
+        return {index, requested_id:id, state:'ok', value:{
+          detail: detailOf(r), meta: {...bodyPageOf(r, 0, 0), req_id:id, reading_token:token}}};
+      });
+      return json({items, next_index:null});
+    }
+    const readingRanges = /^\/api\/sessions\/([^/]+)\/reading-ranges$/.exec(url.pathname);
+    if (readingRanges) {
+      if (Buffer.byteLength(req.url) > 16*1024) return json({error:'batch_too_large'}, 414);
+      const key = decodeURIComponent(readingRanges[1]!);
+      let rawItems: unknown;
+      try { rawItems = JSON.parse(url.searchParams.get('items') ?? ''); } catch { rawItems = null; }
+      if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > 64) {
+        return json({error:'invalid_input'}, 400);
+      }
+      const tokenOk = (t:unknown): t is string => typeof t === 'string' && /^r1-[0-9a-f]{64}$/.test(t);
+      const rangeOk = (v:unknown): v is {id:number; token:string; from:number; to:number} => {
+        if (typeof v !== 'object' || v === null) return false;
+        const {id, token, from, to} = v as Record<string, unknown>;
+        return typeof id === 'number' && Number.isSafeInteger(id) && id > 0
+          && tokenOk(token)
+          && typeof from === 'number' && typeof to === 'number'
+          && Number.isInteger(from) && Number.isInteger(to) && from >= 0 && to >= from && to-from <= 40;
+      };
+      if (!rawItems.every(rangeOk)) return json({error:'invalid_input'}, 400);
+      const items = (rawItems as {id:number; token:string; from:number; to:number}[]).map((range, index) => {
+        const r = byId.get(range.id);
+        if (!r || convOf(r) !== key) return {index, requested_id:range.id, state:'not_found', reason:'not_found'};
+        if (readingTokenOf(r) !== range.token) {
+          return {index, requested_id:range.id, state:'reading_changed', reason:'reading_changed'};
+        }
+        return {index, requested_id:range.id, state:'ok', value:{
+          ...bodyPageOf(r, range.from, range.to), req_id:range.id, reading_token:range.token}};
+      });
+      return json({items, next_index:null});
+    }
     const detail = /^\/api\/requests\/(\d+)$/.exec(url.pathname);
     if (detail) {
       const r = byId.get(Number(detail[1]));

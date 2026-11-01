@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
-import { getBodyPage, SUPPORTED_PROTOCOLS } from './protocols';
+import { appendMessages, bodyRangeError, getBodyPage, preparedPage, prepareBody, SUPPORTED_PROTOCOLS } from './protocols';
 import type { BodyPage } from './protocols';
+import type { BodyPrep } from './protocols';
 import { encodeCursor, decodeCursor } from './queries/cursor';
 import { getRequest } from './queries/requests';
 import type { RequestDetail } from './queries/requests';
 import { deriveJoinSql } from './derive/state';
 import { resolveRequestId, type Store } from './store';
+import type { BatchItem, BatchPage, RangeInput } from './read-contract';
+import type { ReadingBundle } from './read-contract';
 
 /**
  * 阅读身份：一笔请求在某个读取时点的轨迹输入与派生位置指纹。
@@ -223,6 +226,161 @@ export function getToolResultReading(
       is_error: flagged === true ? true : flagged === false ? false : null, reason:null };
   })();
 }
+// —— 有界阅读批：一次只读事务内的版本化批量读取 ——
+
+/** 批次预算：单项完成后检查；单项解码不可抢占，超时计入观测不截断当前项。 */
+export type BatchBudget = { maxBytes: number; maxMs: number; clock: () => number };
+
+/** 默认预算：HTTP 端固定使用，不接受调用者覆盖；进程内测试可注入。 */
+export const READING_BATCH_BUDGET: BatchBudget = {
+  maxBytes: 1024 * 1024, maxMs: 20, clock: () => performance.now(),
+};
+
+/** 外层 envelope（{items:[],next_index}）的固定字节开销近似。 */
+const ENVELOPE_OVERHEAD = 64;
+
+/**
+ * 逐项读取一批详情与回复元信息。canonical 别名按旧 id 请求返回折叠后的现身
+ * 内容；每项先 canonical 解析再核对所属会话，跨会话一律 not_found 不返回内容。
+ * 同批项共享同一只读快照，全部带同一时点的阅读身份。
+ */
+export function getReadingBatch(
+  store: Store, key: string, ids: readonly number[],
+  budget: BatchBudget = READING_BATCH_BUDGET,
+): BatchPage<ReadingBundle> {
+  return store.read.transaction(() => {
+    const start = budget.clock();
+    const items: BatchItem<ReadingBundle>[] = [];
+    let bytes = ENVELOPE_OVERHEAD;
+    for (let index = 0; index < ids.length; index += 1) {
+      const requested = ids[index]!;
+      const bounded = boundAndMeasure(batchBundle(store, key, requested, index), budget);
+      bytes += bounded.size;
+      items.push(bounded.item);
+      // 软预算只在项边界检查：单项解码不可抢占，超时计入观测、不截断当前项。
+      if (budget.clock() - start >= budget.maxMs || bytes > budget.maxBytes) break;
+    }
+    return { items, next_index: items.length < ids.length ? items.length : null };
+  })();
+}
+
+/**
+ * 逐项读取一批正文区间。同一请求的多个区间共享一次准备（状态行、骨架、系统
+ * 文本与解压缓存），不跨版本缓存；token 冲突单列 reading_changed，不抛出整批。
+ */
+export function getReadingRangeBatch(
+  store: Store, key: string, ranges: readonly RangeInput[],
+  budget: BatchBudget = READING_BATCH_BUDGET,
+): BatchPage<BodyPage & { req_id: number; reading_token: string }> {
+  return store.read.transaction(() => {
+    const start = budget.clock();
+    const items: BatchItem<BodyPage & { req_id: number; reading_token: string }>[] = [];
+    /** canonical → 共享准备与阅读身份；null 表示请求不存在。 */
+    const prepared = new Map<number, { prep: BodyPrep; token: string } | null>();
+    let bytes = ENVELOPE_OVERHEAD;
+    for (let index = 0; index < ranges.length; index += 1) {
+      const range = ranges[index]!;
+      const bounded = boundAndMeasure(batchRange(store, key, range, index, prepared), budget);
+      bytes += bounded.size;
+      items.push(bounded.item);
+      if (budget.clock() - start >= budget.maxMs || bytes > budget.maxBytes) break;
+    }
+    return { items, next_index: items.length < ranges.length ? items.length : null };
+  })();
+}
+
+/**
+ * 逐项结果归一：ok 项序列化超过单项上限时替换为 oversized（内容不返回），
+ * 预算仍按原始内容字节计——单项顶爆了本批预算，剩余项留给续读。
+ * @returns 归一后的项与测量字节
+ */
+function boundAndMeasure<T>(
+  item: BatchItem<T>, budget: BatchBudget,
+): { item: BatchItem<T>; size: number } {
+  if (item.state !== 'ok') return { item, size: Buffer.byteLength(JSON.stringify(item)) };
+  const size = Buffer.byteLength(JSON.stringify(item));
+  if (size > budget.maxBytes) {
+    return {
+      item: {
+        index: item.index, requested_id: item.requested_id,
+        state: 'oversized', reason: 'item_too_large',
+      },
+      size,
+    };
+  }
+  return { item, size };
+}
+
+/** 单项详情+元信息：身份与正文同快照；内部异常只返回固定 failed 原因。 */
+function batchBundle(
+  store: Store, key: string, requested: number, index: number,
+): BatchItem<ReadingBundle> {
+  const fail = (state: 'not_found' | 'failed', reason: string): BatchItem<ReadingBundle> =>
+    ({ index, requested_id: requested, state, reason });
+  try {
+    const canonical = resolveRequestId(store, requested);
+    if (canonical === null) return fail('not_found', 'not_found');
+    const row = store.read.query<IdentityRow, [number]>(IDENTITY_SQL).get(canonical);
+    if (row === null) return fail('not_found', 'not_found');
+    // 先 canonical 解析再核对所属会话：跨会话 id 不返回内容。
+    if (row.conv_key !== key) return fail('not_found', 'session_mismatch');
+    const detail = getRequest(store, canonical);
+    if (detail === null) return fail('not_found', 'not_found');
+    const meta = getBodyPage(store, canonical, 0, 0);
+    if (meta === null) return fail('not_found', 'not_found');
+    const token = identityOf(row);
+    return {
+      index, requested_id: requested, state: 'ok',
+      value: {
+        detail: { ...detail, reading_token: token },
+        meta: { ...meta, req_id: canonical, reading_token: token },
+      },
+    };
+  } catch {
+    return fail('failed', 'read_failed');
+  }
+}
+
+/** 单项正文区间：token 核对冲突单列 reading_changed；区间规则防御共用 bodyRangeError。 */
+function batchRange(
+  store: Store, key: string, range: RangeInput, index: number,
+  prepared: Map<number, { prep: BodyPrep; token: string } | null>,
+): BatchItem<BodyPage & { req_id: number; reading_token: string }> {
+  const fail = (state: 'not_found' | 'reading_changed' | 'failed', reason: string):
+    BatchItem<BodyPage & { req_id: number; reading_token: string }> =>
+    ({ index, requested_id: range.id, state, reason });
+  try {
+    parseBodyRange(range.from, range.to);
+    const canonical = resolveRequestId(store, range.id);
+    if (canonical === null) return fail('not_found', 'not_found');
+    let entry = prepared.get(canonical);
+    if (entry === undefined) {
+      const prep = prepareBody(store, canonical);
+      entry = prep === null ? null
+        : { prep, token: identityOf(store.read.query<IdentityRow, [number]>(IDENTITY_SQL).get(canonical)!) };
+      prepared.set(canonical, entry);
+    }
+    if (entry === null) return fail('not_found', 'not_found');
+    if (entry.prep.stateRow.conv_key !== key) return fail('not_found', 'session_mismatch');
+    requireReading(entry.token, range.token);
+    const page = preparedPage(entry.prep, range.from, range.to);
+    appendMessages(store, entry.prep, canonical, page, range.from, range.to);
+    return {
+      index, requested_id: range.id, state: 'ok',
+      value: { ...page, req_id: canonical, reading_token: entry.token },
+    };
+  } catch (error) {
+    if (error instanceof ReadingConflictError) return fail('reading_changed', 'reading_changed');
+    return fail('failed', 'read_failed');
+  }
+}
+
+/** 批内区间防御：与 HTTP 层共用同一条规则（bodyRangeError）。 */
+function parseBodyRange(from: number, to: number): void {
+  const error = bodyRangeError(from, to);
+  if (error !== null) throw new Error(error);
+}
+
 // —— 上下文条目目录：点击明细的第一跳 ——
 
 /**

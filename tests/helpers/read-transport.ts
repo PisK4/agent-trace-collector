@@ -15,7 +15,8 @@ import type { Store } from '../../src/store';
 import { listSessions } from '../../src/queries/sessions';
 import { listRequests } from '../../src/queries/requests';
 import {
-  getContextItemReading, getReadingBody, getReadingDetail, getToolResultReading,
+  getContextItemReading, getReadingBatch, getReadingBody, getReadingDetail,
+  getReadingRangeBatch, getToolResultReading,
 } from '../../src/reading';
 import { ReadingConflictError } from '../../src/reading';
 import { getRoute } from '../../src/queries/routes';
@@ -216,6 +217,14 @@ function dispatchQuery(store: Store, operation: keyof ReadOperations, rawInput: 
     case 'contextItem': {
       const input = rawInput as ReadInput<'contextItem'>;
       return requireValue(getContextItemReading(store, input.id, input.query, input.token));
+    }
+    case 'readings': {
+      const input = rawInput as ReadInput<'readings'>;
+      return getReadingBatch(store, input.key, input.ids);
+    }
+    case 'bodyRanges': {
+      const input = rawInput as ReadInput<'bodyRanges'>;
+      return getReadingRangeBatch(store, input.key, input.ranges);
     }
     case 'stats':
       return getStats(store);
