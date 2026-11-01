@@ -1,6 +1,6 @@
 # 读取功能接入规则
 
-本文是[读取架构提案](../.agents/notes/proposed/architecture/2026-11-02-read-architecture-and-client-seams.md)配套的评审草案，尚未作为现行实现生效。批准并落地后，入口只保留一条指向本文的规则；行为与类型归代码及[架构设计](architecture-design.md)，不在各 feature 再抄一份。
+读取架构[提案](../.agents/notes/implemented/architecture/2026-11-02-read-architecture-and-client-seams.md)已交付：具名读取契约、统一调度、批端点、批量窗口准备与依赖感知显示模型都是现行实现。新增页面功能按本文接入；行为与类型归代码及[架构设计](architecture-design.md)，不在各 feature 再抄一份。
 
 ## 先确定读取用途
 
