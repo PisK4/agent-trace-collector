@@ -32,11 +32,13 @@ test('配对页两端同屏：Call 在上、Result 在下，身份是文本不�
     }),
     carrierLabel: '09',
   });
-  // 两端面板头都是工具名 chip：配对 result 沿用 call 的色类。
-  const callChip = html.indexOf('bp-kind tint-other">read_file</span>');
-  expect(callChip).toBeGreaterThanOrEqual(0);
-  expect(html.match(/bp-kind tint-other">read_file</g)?.length).toBe(2);
-  expect(html.indexOf('first result')).toBeGreaterThan(callChip);
+  // 两段各带一个角色标：调用在上、结果在下，来源路径 mono 弱化。
+  const callFrole = html.indexOf('<b>调用</b>');
+  expect(callFrole).toBeGreaterThanOrEqual(0);
+  expect(html.indexOf('<b>结果</b>')).toBeGreaterThan(callFrole);
+  expect(html.indexOf('first result')).toBeGreaterThan(callFrole);
+  // 已确认配对给弱化连接语交代因果。
+  expect(html).toContain('下一条请求带回结果');
   // 两端同一套 pre.raw 缩进样式；调用参数按格式化 JSON 显示。
   expect(html).toContain('&quot;path&quot;: &quot;a.txt&quot;');
   // 身份行：调用方与承载请求都以文本出现。
@@ -48,20 +50,23 @@ test('配对页两端同屏：Call 在上、Result 在下，身份是文本不�
   expect(html).not.toContain('data-locate');
 });
 
-test('面板头色类映射：核心工具各自色类，未确认配对保持中性 Tool result', () => {
+test('两段角色标固定，连接语只在已确认配对出现', () => {
   const read = renderTracePair({
     owner: 7, ownerLabel: '07', call: callOf({ name: 'Read', inputText: '{"file_path":"a.txt"}' }),
     pair: pairOf('resolved', { result_req: 9, result_ord: 2 }),
     reading: readingOf('available', { content: 'x' }), carrierLabel: '09',
   });
-  expect(read.match(/bp-kind tint-read">Read</g)?.length).toBe(2);
-  // 未确认（pending/ambiguous/unpaired）不给结果正文也不借用 call 颜色。
+  // 角色标各出现一次；工具名只在页头，配对片段内不再重复。
+  expect(read.match(/<b>调用<\/b>/g)?.length).toBe(1);
+  expect(read.match(/<b>结果<\/b>/g)?.length).toBe(1);
+  expect(read).not.toContain('Read</');
   const pending = renderTracePair({
     owner: 7, ownerLabel: '07', call: callOf({ name: 'Read', inputText: '{"file_path":"a.txt"}' }),
     pair: pairOf('pending'), reading: null, carrierLabel: null,
   });
-  expect(pending).toContain('bp-kind tint-other">Tool result</span>');
-  expect(pending).toContain('bp-kind tint-read">Read</span>');
+  // 未确认不给连接语，因果由顶部状态行说明。
+  expect(pending).not.toContain('下一条请求带回结果');
+  expect(pending).toContain('<b>结果</b>');
 });
 
 test('未读取给待读取与读取入口；终态不给重试；未确认不给正文与读取入口', () => {
@@ -166,7 +171,7 @@ test('Edit 调用渲染红绿对照块，其余键维持缩进 JSON，原始 JSO
   expect(editCompareHtml('Read', '{"file_path":"a"}', 'k')).toBeNull();
 });
 
-test('正文与工具名转义；非 JSON 参数按原文展示', () => {
+test('正文转义；非 JSON 参数按原文展示；工具名不渲染进页面', () => {
   const html = renderTracePair({
     owner: 7, ownerLabel: '07', call: callOf({ name: '<script>alert(1)</script>', inputText: 'plain args' }),
     pair: pairOf('resolved', { result_req: 9, result_ord: 2 }),
@@ -178,7 +183,8 @@ test('正文与工具名转义；非 JSON 参数按原文展示', () => {
   });
   expect(html).not.toContain('<script>');
   expect(html).not.toContain('<img src=x');
-  expect(html).toContain('&lt;script&gt;');
+  // 工具名不再渲染进配对页（只在页头），原始与转义形态都不出现。
+  expect(html).not.toContain('&lt;script&gt;');
   expect(html).toContain('&lt;img src=x');
   expect(html).toContain('plain args');
   expect(prettyJson('{"a":1}')).toBe('{\n  "a": 1\n}');

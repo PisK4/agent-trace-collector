@@ -491,6 +491,68 @@ const POOLS = [
   { key: convTurns, title: '轮次配对样本（合成）', agent: 'claude', rows: TURN_REQUESTS, flags: ['missing_body'] },
 ];
 
+/** 会话级汇总：形状对齐 src/queries/session-summary 的 SessionSummary，数字贴合各池故事。 */
+const SESSION_SUMMARIES = new Map<string, unknown>([
+  [convKey, {
+    dirty: false,
+    tools: [
+      { name: 'read_file', count: 3, paired: 2, error_known: 3, errors: 1 },
+      { name: 'Bash', count: 2, paired: 2, error_known: 2, errors: 0 },
+      { name: 'TodoWrite', count: 1, paired: 1, error_known: 1, errors: 0 },
+    ],
+    paths: {
+      written: [{ path: 'src/parse-helper.ts', count: 1 }],
+      read: [{ path: 'src/parse-helper.ts', count: 2 }, { path: 'tests/render.test.ts', count: 1 }],
+    },
+    skills: [{ name: 'doc-render', count: 2 }, { name: 'atc-notes', count: 1 }],
+    interrupts: { count: 1, requests: [5], unknown: 1 },
+    totals: { in_tok: 236300, out_tok: 7400, cost: 0.1222, cost_absent: 1, cache_hit: 0 },
+    structure: {
+      requests_total: 19, main: 17, bypass: 2, subagent_actors: 1, subagent_requests: 2,
+      retries: 0, context_peak_pct: 18, models: [{ name: 'claude-synth', count: 19 }],
+    },
+    coverage: { calls_total: 6, calls_paired: 5, calls_error_known: 5, calls_fact_known: 6 },
+    failures: [{ req_id: 101, ord: 3, tool_name: 'read_file' }],
+    failures_truncated: false,
+  }],
+  [convWindow, {
+    dirty: false, tools: [], paths: { written: [], read: [] }, skills: [],
+    interrupts: { count: 0, requests: [], unknown: 0 },
+    totals: { in_tok: 3400, out_tok: 600, cost: 0.03, cost_absent: 0, cache_hit: 0.11 },
+    structure: {
+      requests_total: 52, main: 30, bypass: 22, subagent_actors: 0, subagent_requests: 0,
+      retries: 1, context_peak_pct: 4, models: [{ name: 'omp-synth', count: 52 }],
+    },
+    coverage: { calls_total: 0, calls_paired: 0, calls_error_known: 0, calls_fact_known: 0 },
+    failures: [], failures_truncated: false,
+  }],
+  [convHook, {
+    dirty: false, tools: [], paths: { written: [], read: [] }, skills: [],
+    interrupts: { count: 0, requests: [], unknown: 0 },
+    totals: { in_tok: 900, out_tok: 120, cost: null, cost_absent: 2, cache_hit: null },
+    structure: {
+      requests_total: 2, main: 2, bypass: 0, subagent_actors: 0, subagent_requests: 0,
+      retries: 0, context_peak_pct: null, models: [{ name: 'claude-synth', count: 2 }],
+    },
+    coverage: { calls_total: 0, calls_paired: 0, calls_error_known: 0, calls_fact_known: 0 },
+    failures: [], failures_truncated: false,
+  }],
+  [convTurns, {
+    dirty: false,
+    tools: [{ name: 'Bash', count: 2, paired: 2, error_known: 2, errors: 0 }],
+    paths: { written: [], read: [{ path: 'src/turns.ts', count: 1 }] },
+    skills: [{ name: 'atc-notes', count: 1 }],
+    interrupts: { count: 0, requests: [], unknown: 0 },
+    totals: { in_tok: 12100, out_tok: 1800, cost: 0.0406, cost_absent: 0, cache_hit: 0.07 },
+    structure: {
+      requests_total: 12, main: 12, bypass: 0, subagent_actors: 0, subagent_requests: 0,
+      retries: 0, context_peak_pct: 9, models: [{ name: 'claude-synth', count: 12 }],
+    },
+    coverage: { calls_total: 3, calls_paired: 3, calls_error_known: 3, calls_fact_known: 3 },
+    failures: [], failures_truncated: false,
+  }],
+]);
+
 const convOf = (r: SynthRequest) => r.id >= 700 ? convTurns : r.id >= 600 ? convHook : r.id >= 500 ? convWindow : convKey;
 const agentOf = (r: SynthRequest) => r.id >= 500 && r.id < 600 ? 'omp' : 'claude';
 const haveOf = (r: SynthRequest) => r.have ?? 7;
@@ -833,6 +895,47 @@ Bun.serve({
       if (rawFrom !== null && !/^\d+$/.test(rawFrom)) return json({error:'invalid_from'}, 400);
       const from = rawFrom === null ? null : Number(rawFrom);
       return json({items: from === null ? all : all.filter(t => t.start_req >= from)});
+    }
+    const summary = /^\/api\/sessions\/([^/]+)\/summary$/.exec(url.pathname);
+    if (summary) {
+      const key = decodeURIComponent(summary[1]!);
+      const data = SESSION_SUMMARIES.get(key);
+      // 与生产同形：未知会话 404，前端回退已加载窗口相加。
+      if (!data) return json({error:'not_found'}, 404);
+      return json(data);
+    }
+    const entries = /^\/api\/sessions\/([^/]+)\/summary\/entries$/.exec(url.pathname);
+    if (entries) {
+      const key = decodeURIComponent(entries[1]!);
+      const kind = url.searchParams.get('kind');
+      const name = url.searchParams.get('name');
+      const path = url.searchParams.get('path');
+      if (!SESSION_SUMMARIES.has(key)) return json({error:'not_found'}, 404);
+      if (kind === 'tool') {
+        // tool 列表从池内真实调用派生：点进配对页时 ord 与 detail 一致。
+        const pool = POOLS.find(p => p.key === key);
+        const items = (pool?.rows ?? []).flatMap(r =>
+          r.toolCalls.filter(c => c.tool_name === name).map(c => ({
+            req_id: r.id, ord: c.ord, tool_name: c.tool_name, state: c.state,
+          })));
+        return json({items, truncated: false});
+      }
+      if (kind === 'interrupts') {
+        const data = SESSION_SUMMARIES.get(key) as {interrupts: {requests: number[]}} | undefined;
+        return json({requests: (data?.interrupts.requests ?? []).map(id => ({req_id: id, count: 1}))});
+      }
+      // written/read/skill 的调用序号是手写示数：点进配对页若无对应调用会兜底回列表。
+      const STATIC_ENTRIES: Record<string, {req_id: number, ord: number, tool_name: string | null, state: string}[]> = {
+        [convKey]: [
+          {req_id: 101, ord: 1, tool_name: 'Edit', state: 'resolved'},
+          {req_id: 101, ord: 0, tool_name: 'Skill', state: 'resolved'},
+          {req_id: 104, ord: 0, tool_name: 'Skill', state: 'resolved'},
+        ],
+      };
+      if (kind === 'written' || kind === 'read' || kind === 'skill') {
+        return json({items: STATIC_ENTRIES[key] ?? [], truncated: false});
+      }
+      return json({error:'invalid_entries_query'}, 400);
     }
     const body = /^\/api\/requests\/(\d+)\/body$/.exec(url.pathname);
     if (body) {

@@ -1,73 +1,54 @@
 /* ------------------------------------------------------------------
    Token：证据仪表盘。深色与浅色是两套成对表面，不是反色。
    accent 只表示选中与当前路径，不表示成功；状态色只用于状态。
+   色值来源：方向 A 细节样张 token 映射（Geist 中性 + Apple 校准，2026-11-02）。
    ------------------------------------------------------------------ */
 :root{
   color-scheme:light;
-  --page:#f2f6f8; --canvas:#edf2f5; --surface:#ffffff;
-  --inset:#f4f7f9; --hover:#e8eff3; --line:#d9e2e9; --line-strong:#b7c6d1;
-  --text:#15232d; --text-2:#4d6372; --muted:#6d7d88;
-  --accent:#007f83; --accent-strong:#005d61; --accent-soft:rgba(0,127,131,.10);
-  --good:#167a4f; --warn:#99600a; --bad:#b32e37; --missing:#667580;
+  --page:#F7F7F6; --canvas:#FAFAFA; --surface:#FFFFFF;
+  --inset:#F5F5F4; --hover:#EFEFEE; --line:#ECECEA; --line-strong:#DEDEDB;
+  --text:#171717; --text-2:#52525B; --muted:#A1A1AA;
+  --accent:#007AFF; --accent-soft:rgba(0,122,255,.07);
+  --good:#167a4f; --warn:#99600a; --bad:#b32e37; --missing:#A1A1AA;
   --good-soft:rgba(22,122,79,.10); --warn-soft:rgba(153,96,10,.12); --bad-soft:rgba(179,46,55,.10);
-  --k-system:#6b4fbb; --k-user:#1c7a4f; --k-assistant:#9a6206; --k-tool:#0f6f78; --k-field:#5c6c7a;
-  --k-system-bg:rgba(107,79,187,.10); --k-user-bg:rgba(28,122,79,.10); --k-assistant-bg:rgba(154,98,6,.12);
-  --k-tool-bg:rgba(15,111,120,.10); --k-field-bg:rgba(92,108,122,.10);
-  /* 工具身份强调色：Read 蓝、Edit 橙、Write 紫、Bash 玫红（红留给失败语义）、
-     Skill 黄、Agent 绿、其余中性青灰。与 --p1..p6 上下文槽位是两套语义，不共用变量。 */
-  --tool-read:#2569c4; --tool-read-bg:rgba(37,105,196,.11);
-  --tool-edit:#d95d28; --tool-edit-bg:rgba(217,93,40,.11);
-  --tool-write:#7a52c9; --tool-write-bg:rgba(122,82,201,.11);
-  --tool-bash:#c2497d; --tool-bash-bg:rgba(194,73,125,.11);
-  --tool-skill:#8f7408; --tool-skill-bg:rgba(143,116,8,.13);
-  --tool-agent:#187a52; --tool-agent-bg:rgba(24,122,82,.11);
-  --tool-other:#566b7a; --tool-other-bg:rgba(86,107,122,.11);
-  /* 上下文类别槽位：固定不按大小重排，skills 落第七槽；类别按 parts 数据动态渲染，未知 kind 落 --p-unknown。
-     七槽按浅色表面方案校验（dataviz validate_palette）：亮 #6250d6 / 暗 #9085e9 的 skills 紫过亮度带与对比度，
-     旧值 #30287e/#3d3480 按白字高饱和填充设计，在浅色表面方案下越带或近不可见。--p-unknown 保持灰色是有意例外。 */
-  --p1:#2a78d6; --p2:#eb6834; --p3:#1baf7a; --p4:#eda100; --p5:#e87ba4; --p6:#008300;
-  --p7:#6250d6; --p-unknown:#7a8794;
-  --shadow:0 1px 2px rgba(16,32,48,.06);
+  --k-system:#52525B; --k-user:#0066CC; --k-assistant:#8E44AD; --k-tool:#B45309;
+  --k-system-bg:rgba(161,161,170,.16); --k-user-bg:rgba(0,102,204,.10); --k-assistant-bg:rgba(142,68,173,.12);
+  --k-tool-bg:rgba(180,83,9,.10);
+  /* 构成面积四档单色（方向 A 第 6 步）：份额越大越实，不再用颜色分类；
+     档位判定在 parts.js partShade。alpha 是示意值，真实会话验证深色区分度后可调。 */
+  --t1:rgba(0,122,255,.16); --t2:rgba(0,122,255,.12); --t3:rgba(0,122,255,.08); --t4:rgba(0,122,255,.05);
+  --shadow:0 1px 2px rgba(0,0,0,.06);
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     color-scheme:dark;
-    --page:#0b1118; --canvas:#101923; --surface:#151f2a;
-    --inset:#0a0f15; --hover:#202f3d; --line:#263645; --line-strong:#3b4d5f;
-    --text:#e9f1f7; --text-2:#a7b8c6; --muted:#738595;
-    --accent:#64dad7; --accent-strong:#9cf0ec; --accent-soft:rgba(100,218,215,.12);
-    --good:#59d88d; --warn:#f1c46b; --bad:#f27a7a; --missing:#8797a5;
+    --page:#0F0F0F; --canvas:#0A0A0A; --surface:#111111;
+    --inset:#181818; --hover:#1D1D1D; --line:#232323; --line-strong:#2F2F2F;
+    --text:#EDEDED; --text-2:#A1A1AA; --muted:#6B6B74;
+    --accent:#0A84FF; --accent-soft:rgba(10,132,255,.10);
+    --good:#59d88d; --warn:#f1c46b; --bad:#f27a7a; --missing:#6B6B74;
     --good-soft:rgba(89,216,141,.12); --warn-soft:rgba(241,196,107,.12); --bad-soft:rgba(242,122,122,.12);
-    --k-system:#b6a3f0; --k-user:#8fd8ae; --k-assistant:#e6c07a; --k-tool:#7fd4d9; --k-field:#93a5b3;
-    --k-system-bg:rgba(182,163,240,.13); --k-user-bg:rgba(143,216,174,.12); --k-assistant-bg:rgba(230,192,122,.13);
-    --k-tool-bg:rgba(127,212,217,.12); --k-field-bg:rgba(147,165,179,.12);
-    --tool-read:#6fa9ee; --tool-read-bg:rgba(111,169,238,.14);
-    --tool-edit:#ef8a55; --tool-edit-bg:rgba(239,138,85,.14);
-    --tool-write:#b49af0; --tool-write-bg:rgba(180,154,240,.14);
-    --tool-bash:#f190bd; --tool-bash-bg:rgba(241,144,189,.13);
-    --tool-skill:#e3c96a; --tool-skill-bg:rgba(227,201,106,.14);
-    --tool-agent:#6fd0a0; --tool-agent-bg:rgba(111,208,160,.13);
-    --tool-other:#93a5b3; --tool-other-bg:rgba(147,165,179,.13);
-    --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
-    --p7:#9085e9; --p-unknown:#93a5b3;
+    --k-system:#A1A1AA; --k-user:#409CFF; --k-assistant:#C77FEA; --k-tool:#FFB340;
+    --k-system-bg:rgba(161,161,170,.14); --k-user-bg:rgba(64,156,255,.13); --k-assistant-bg:rgba(199,127,234,.13);
+    --k-tool-bg:rgba(255,179,64,.12);
+    --t1:rgba(10,132,255,.18); --t2:rgba(10,132,255,.13); --t3:rgba(10,132,255,.08); --t4:rgba(10,132,255,.04);
     --shadow:0 1px 2px rgba(0,0,0,.35);
   }
 }
 :root[data-theme="dark"]{
   color-scheme:dark;
-  --page:#0b1118; --canvas:#101923; --surface:#151f2a;
-  --inset:#0a0f15; --hover:#202f3d; --line:#263645; --line-strong:#3b4d5f;
-  --text:#e9f1f7; --text-2:#a7b8c6; --muted:#738595;
-  --accent:#64dad7; --accent-strong:#9cf0ec; --accent-soft:rgba(100,218,215,.12);
-  --good:#59d88d; --warn:#f1c46b; --bad:#f27a7a; --missing:#8797a5;
+  --page:#0F0F0F; --canvas:#0A0A0A; --surface:#111111;
+  --inset:#181818; --hover:#1D1D1D; --line:#232323; --line-strong:#2F2F2F;
+  --text:#EDEDED; --text-2:#A1A1AA; --muted:#6B6B74;
+  --accent:#0A84FF; --accent-soft:rgba(10,132,255,.10);
+  --good:#59d88d; --warn:#f1c46b; --bad:#f27a7a; --missing:#6B6B74;
   --good-soft:rgba(89,216,141,.12); --warn-soft:rgba(241,196,107,.12); --bad-soft:rgba(242,122,122,.12);
-  --k-system:#b6a3f0; --k-user:#8fd8ae; --k-assistant:#e6c07a; --k-tool:#7fd4d9; --k-field:#93a5b3;
-  --k-system-bg:rgba(182,163,240,.13); --k-user-bg:rgba(143,216,174,.12); --k-assistant-bg:rgba(230,192,122,.13);
-  --k-tool-bg:rgba(127,212,217,.12); --k-field-bg:rgba(147,165,179,.12);
-  --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
-  --p7:#9085e9; --p-unknown:#93a5b3;
+  --k-system:#A1A1AA; --k-user:#409CFF; --k-assistant:#C77FEA; --k-tool:#FFB340;
+  --k-system-bg:rgba(161,161,170,.14); --k-user-bg:rgba(64,156,255,.13); --k-assistant-bg:rgba(199,127,234,.13);
+  --k-tool-bg:rgba(255,179,64,.12);
+  --t1:rgba(10,132,255,.18); --t2:rgba(10,132,255,.13); --t3:rgba(10,132,255,.08); --t4:rgba(10,132,255,.04);
   --shadow:0 1px 2px rgba(0,0,0,.35);
 }
 
@@ -91,9 +72,9 @@ code,pre,.mono{font-family:var(--mono)}
 .sep{color:var(--line-strong)}
 .label{font:500 10px/1.3 var(--ui);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
 
-/* ---------- 顶栏：一条 52px 的仪器横条，不做首屏大标题 ---------- */
+/* ---------- 顶栏：一条 44px 的仪器横条，不做首屏大标题 ---------- */
 .topbar{
-  flex:none;height:52px;display:flex;align-items:center;gap:14px;
+  flex:none;height:44px;display:flex;align-items:center;gap:14px;
   padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line);
   position:relative;z-index:5;
 }
@@ -106,7 +87,7 @@ code,pre,.mono{font-family:var(--mono)}
 .grow{flex:1;min-width:8px}
 .toolbar-right{display:flex;align-items:center;gap:6px}
 .icon-btn{
-  height:28px;min-width:28px;border:1px solid var(--line);border-radius:4px;background:var(--surface);
+  height:28px;min-width:28px;border:1px solid transparent;border-radius:5px;background:transparent;
   display:inline-flex;align-items:center;justify-content:center;color:var(--text-2);font-size:12px;padding:0 8px;
 }
 .icon-btn:hover{background:var(--hover)}
@@ -146,11 +127,20 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .sessions-title span{font-size:11px;color:var(--muted)}
 .search{position:relative}
 .search input{
-  width:100%;height:30px;border:1px solid var(--line);border-radius:4px;background:var(--surface);
+  width:100%;height:30px;border:1px solid transparent;border-radius:6px;background:var(--inset);
   padding:0 8px 0 26px;font-size:12px;color:var(--text);
 }
+.search input:focus{outline:0;border-color:var(--accent);background:var(--surface)}
 .search svg{position:absolute;left:8px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
-.filters{display:flex;gap:4px;flex-wrap:wrap}
+/* Agent 筛选是一段分段控件：容器 inset 底承载分组，选中段用 surface 浮起，
+   不再逐个 chip 描边上色。 */
+.filters{
+  display:flex;gap:2px;padding:2px;border-radius:7px;background:var(--inset);
+  width:max-content;max-width:100%;overflow-x:auto;
+}
+.filters .chip-btn{border:0;background:transparent;border-radius:5px;padding:3px 9px}
+.filters .chip-btn:hover{background:transparent;color:var(--text)}
+.filters .chip-btn[aria-pressed="true"]{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
 .chip-btn{
   font-size:11px;padding:3px 7px;border:1px solid var(--line);border-radius:3px;color:var(--text-2);
   background:var(--surface);white-space:nowrap;
@@ -164,16 +154,18 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 }
 .group-label::after{content:"";flex:1;height:1px;background:var(--line)}
 .sess{
-  display:grid;grid-template-columns:1fr auto;gap:1px 8px;width:100%;
-  padding:8px 8px 8px 9px;border-radius:4px;border-left:2px solid transparent;margin-bottom:1px;
+  display:grid;grid-template-columns:1fr auto auto;gap:1px 8px;width:100%;
+  padding:8px 8px 8px 9px;border-radius:6px;margin-bottom:1px;
 }
-.sess:hover{background:var(--hover)}
-.sess[aria-current="true"]{background:var(--surface);border-left-color:var(--accent);box-shadow:var(--shadow)}
+/* 导航选中是中性的灰底：accent 只留给内容区选中态。 */
+.sess:hover{background:var(--inset)}
+.sess[aria-current="true"]{background:var(--hover)}
 .sess-title{font-size:12.5px;font-weight:550;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess-count{font:10.5px var(--mono);color:var(--muted);align-self:start;padding-top:1px}
 .sess-meta{grid-column:1/-1;display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);min-width:0}
 .sess-meta .dot{width:5px;height:5px;border-radius:50%;flex:none}
 .sess-meta .who{color:var(--text-2);white-space:nowrap}
-.sess-time{font-size:10.5px;color:var(--muted);align-self:start;padding-top:1px}
+.sess-time{font:10.5px var(--mono);color:var(--muted);align-self:start;padding-top:1px}
 .sess-empty{padding:16px 8px;font-size:12px;color:var(--muted)}
 .sess-fold{padding:8px 10px;border-top:1px dashed var(--line)}
 .bg-note{font-size:10.5px;color:var(--muted);white-space:nowrap}
@@ -215,9 +207,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
   border:1px solid var(--line);border-radius:3px;background:var(--surface);color:var(--text-2);max-width:100%;
 }
 .tool-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* 调用 chip 只承载工具身份：色相与底色交给 .tint-*（单类选择器）。这里若写
-   color/background，双类权重会压过身份色，所有调用都变成同一种琥珀。边框透明
-   保留 1px 占位，视觉上不再画框。 */
+/* 调用 chip 中性化：不再携带工具身份色，边框透明保留 1px 占位，视觉上不画框。 */
 .tool-chip.call{border-color:transparent}
 .tool-chip.res{border-color:var(--k-tool);color:var(--k-tool);background:var(--k-tool-bg)}
 .tool-chip.miss{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
@@ -256,39 +246,38 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-row{display:flex;align-items:center;gap:10px;height:36px;min-width:0;padding-inline:5px}
 .compact-select{display:flex;align-items:center;gap:9px;flex:1;min-width:0;text-align:left;height:100%}
 .compact-select:hover{background:var(--hover)}
-.compact-select[aria-current="true"]{background:var(--accent-soft)}
+.compact-select[aria-current="true"]{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
 /* 序号槽整个当前窗口共用一个宽度：基准 28px，按窗口最大序号的位数以等宽
    字体的 ch 加内距扩展（--ord-digits 由步骤列表按 rows.length 写入），
    不按每行的数字单独撑宽，标签起点不参差。 */
 .compact-meta{display:flex;align-items:center;flex:none;width:max(28px,calc(var(--ord-digits,1)*1ch + 8px));font:9px var(--mono);color:var(--muted)}
 .compact-meta b{font-weight:400;color:var(--text-2)}
 /* 角色标签用英文（User/Assistant/Tool/System/Aux/Event），列宽按最宽的 Assistant 给足，
-   不截断；工具身份由着色 chip 承载（调用行工具名、结果行调用方摘要或中性 Tool result），
-   颜色只表达工具身份，正常态不加装饰。 */
-.row-label{width:62px;flex:none;padding:2px 3px;border-radius:3px;text-align:center;font:10px var(--ui);color:var(--k-user);background:var(--k-user-bg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+   不截断；pill 形状（全圆角）压缩色块观感，四档角色色封顶。 */
+.row-label{width:62px;flex:none;padding:2px 3px;border-radius:999px;text-align:center;font:10px var(--ui);color:var(--k-user);background:var(--k-user-bg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-label.tool{color:var(--k-tool);background:var(--k-tool-bg)}
 .row-label.reply{color:var(--k-assistant);background:var(--k-assistant-bg)}
 .row-label.system{color:var(--k-system);background:var(--k-system-bg)}
 .row-label.aux{color:var(--k-system);background:var(--k-system-bg)}
-/* 组级证据状态行：标签位是警示符号，整行按缺口强度着色——失败用 bad、其余用 warn。
-   正常请求不产出这一行，所以颜色只出现在真有缺口的组里。 */
+/* 组级证据状态行：标签位是警示符号，不再满铺行底，用虚线左缘标记缺口强度——
+   失败用 bad、其余用 warn。正常请求不产出这一行。 */
 .row-label.flag{color:var(--warn);background:var(--warn-soft);font:600 11px var(--mono)}
-.compact-row.step-flag{background:var(--warn-soft)}
-.compact-row.step-flag[data-flag="failed"]{background:var(--bad-soft)}
+.compact-row.step-flag{border-left:2px dashed var(--warn);padding-left:3px}
+.compact-row.step-flag[data-flag="failed"]{border-left-color:var(--bad)}
 .compact-row.step-flag[data-flag="failed"] .row-label.flag{color:var(--bad)}
 /* 工具 chip 沿用 row-label 的低饱和底色模式，色类只包工具名；宽度随内容伸缩，
    超长省略号截断。参数摘要与结果正文以普通文本跟随，不进色类。 */
-.row-tint{flex:none;max-width:170px;padding:2px 5px;border-radius:3px;font:9.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-tint{flex:none;max-width:170px;padding:2px 5px;border-radius:999px;font:9.5px var(--mono);background:var(--inset);color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-arrow{color:var(--muted);font-size:10px;margin:0 4px}
-/* 失败的工具结果行整行 warn 软色；正常行不新增状态元素。 */
-.compact-row.step-error{background:var(--warn-soft)}
+/* 失败的工具结果行不再满铺 warn 软色，改虚线左缘。 */
+.compact-row.step-error{border-left:2px dashed var(--warn);padding-left:3px}
 .compact-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:11px}
 .compact-preview code{font-size:10px;color:var(--text-2)}
 /* 行尾读数槽：定宽右对齐，没有读数的行也占位，读数右边缘在所有行上成一条竖线。
    标签带角色底色（推理=Assistant 琥珀、执行=Tool 青），只有数字按档位换色；
    等待型工具没有档位，整枚标签退成中性色。正常态不加边框、图标或说明。 */
 .compact-reading{flex:none;margin-left:auto;min-width:78px;display:flex;justify-content:flex-end}
-.row-reading{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 5px;border-radius:3px;font:9.5px var(--mono);white-space:nowrap}
+.row-reading{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 5px;border-radius:999px;font:9.5px var(--mono);white-space:nowrap}
 .row-reading.reason{color:var(--k-assistant);background:var(--k-assistant-bg)}
 .row-reading.exec{color:var(--k-tool);background:var(--k-tool-bg)}
 .row-reading.wait{color:var(--muted);background:var(--inset)}
@@ -310,36 +299,29 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .cue-account,.cue-activity{min-width:0;display:flex;flex-direction:column;gap:8px}
 .cue-account{padding-right:14px;border-right:1px solid var(--line)}
 .cue-board.solo .cue-account{border-right:0;padding-right:0}
-.cue-row{display:grid;grid-template-columns:87px minmax(0,1fr);gap:3px 8px;align-items:start}
-.cue-account .cue-row{grid-template-columns:minmax(0,1fr)}
+.cue-row{display:grid;grid-template-columns:minmax(0,1fr);gap:3px 8px;align-items:start}
 @container (max-width:650px){
   .cue-board{grid-template-columns:1fr;gap:12px}
   .cue-account{border-right:0;padding-right:0}
-  .cue-account .cue-row{grid-template-columns:87px minmax(0,1fr)}
 }
-/* 分组标题：图标加短标签；按需说明放 data-desc，悬停与键盘聚焦都可见。 */
-.cue{position:relative;display:inline-flex;align-items:center;gap:5px;min-height:19px;padding-top:2px;color:var(--text-2);cursor:default;min-width:0}
-.cue svg{flex:none;color:var(--muted)}
-.cue strong{font:550 10.5px/1.5 var(--ui);white-space:nowrap}
-.cue:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.cue::after{
+/* 摘要行不再带图标与标签，两列分工靠列间 1px 细线与间距；按需说明放 data-desc，
+   悬停与键盘聚焦都可见。 */
+.cue-data{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:3px 10px;min-width:0;overflow:hidden;font-size:11px;line-height:1.7;color:var(--muted);cursor:default}
+.cue-data.open-wrap{flex-wrap:wrap;overflow:visible}
+.cue-data>span{white-space:nowrap}
+.cue-data .cue-line{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cue-data:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cue-data::after{
   content:attr(data-desc);display:none;position:absolute;left:0;top:calc(100% + 4px);z-index:6;
   width:max-content;max-width:min(300px,100%);padding:5px 8px;border:1px solid var(--line);border-radius:4px;
   background:var(--surface);color:var(--text-2);font-size:10.5px;line-height:1.6;white-space:normal;text-align:left;
   box-shadow:0 4px 14px rgba(0,0,0,.08);pointer-events:none;
 }
-.cue:hover::after,.cue:focus-visible::after{display:block}
-/* 每组一行：放不下的不换行——统计行整段省略，chip 收缩省略，+N 与异常入口 flex:none 不被裁。 */
-.cue-data{display:flex;align-items:center;flex-wrap:nowrap;gap:3px 10px;min-width:0;overflow:hidden;font-size:11px;line-height:1.7;color:var(--muted)}
-.cue-data.open-wrap{flex-wrap:wrap;overflow:visible}
-.cue-data>span{white-space:nowrap}
-.cue-data .cue-line{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cue-data:hover::after,.cue-data:focus-visible::after{display:block}
 .cue-data b{color:var(--text);font-weight:550;font-variant-numeric:tabular-nums}
 .cue-data .tool-chip{cursor:pointer;max-width:220px;flex:0 1 auto;min-width:0}
 .cue-data .tool-chip .n{font-weight:550;color:var(--text)}
-.cue-data .tool-chip[class*="tint-"] .n{color:inherit}
-.cue-data .tool-chip .err{color:var(--warn);font-weight:550;margin-left:2px}
-.cue-data .warn-n{color:var(--warn);font-weight:550;font-size:10.5px;background:none;border:0;padding:0;cursor:pointer;white-space:nowrap;flex:none}
+.cue-data .tool-chip .err{color:var(--bad);font-weight:550;margin-left:2px}
 .cue-data .interrupt{font-size:10px;white-space:nowrap;flex:none}
 /* 汇总未就绪时的资源回退标记：可见地更换统计口径，不只是悬停说明。 */
 .cue-data .scope-tag{font-size:10px;color:var(--warn);background:var(--warn-soft);border-radius:3px;padding:0 5px;flex:none}
@@ -350,20 +332,14 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .hidden-more summary:hover,.hidden-more summary:focus-visible{text-decoration:underline;outline:0}
 .hidden-more summary b{font-variant-numeric:tabular-nums}
 .hidden-more .more-body{display:flex;flex-direction:column;gap:2px;flex-basis:100%;padding:5px 0 2px}
-.path-chip{display:inline-flex;align-items:baseline;gap:6px;font:10.5px var(--mono);padding:2px 7px;border-radius:3px;cursor:pointer;border:0;max-width:260px;flex:0 1 auto;min-width:0}
+.path-chip{display:inline-flex;align-items:baseline;gap:6px;font:10.5px var(--mono);padding:2px 7px;border-radius:3px;cursor:pointer;border:0;background:var(--inset);color:var(--text-2);max-width:260px;flex:0 1 auto;min-width:0}
 .path-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .path-chip:hover{filter:brightness(.96)}
 .path-chip .c{font-weight:550}
-.path-chip.w{color:var(--tool-edit);background:var(--tool-edit-bg)}
-.path-chip.r{color:var(--tool-read);background:var(--tool-read-bg)}
 .path-more{display:inline-flex;flex-wrap:wrap;flex:none;min-width:0}
-.path-more summary{font:10.5px var(--mono);padding:2px 7px;border-radius:3px;cursor:pointer;list-style:none;font-weight:550}
+.path-more summary{font:10.5px var(--mono);padding:2px 7px;border-radius:3px;cursor:pointer;list-style:none;font-weight:550;background:var(--inset);color:var(--text-2)}
 .path-more summary::-webkit-details-marker{display:none}
 .path-more summary:hover{filter:brightness(.96)}
-.path-more.t summary{color:var(--tool-other);background:var(--tool-other-bg)}
-.path-more.w summary{color:var(--tool-edit);background:var(--tool-edit-bg)}
-.path-more.r summary{color:var(--tool-read);background:var(--tool-read-bg)}
-.path-more.s summary{color:var(--tool-skill);background:var(--tool-skill-bg)}
 .path-more .more-body{display:flex;flex-wrap:wrap;gap:5px;padding:5px 0 2px;flex-basis:100%}
 
 /* ---------- 轮次带：轨迹的目录层，吸顶贴 session-head 下沿随滚动常驻 ---------- */
@@ -401,7 +377,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .msg[aria-current="true"] .msg-head{background:var(--accent-soft);border-left-color:var(--accent)}
 .msg-ord{font:10px var(--mono);color:var(--muted);text-align:right}
 .msg-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
-.msg-new{font:9px var(--ui);color:var(--accent);white-space:nowrap}
+/* 新增消息：行左缘 2px accent（方向 A 第 6 步），无底色——选中态才有浅蓝底，两态可区分。 */
+.msg.msg-new .msg-head{border-left-color:var(--accent)}
 .msg-more{padding:8px 10px;text-align:center;border-top:1px solid var(--line)}
 /* 未读区间：已缓存序号之间的空洞，原样说明，不冒充已读。 */
 .msg-gap{padding:5px 10px;font-size:10.5px;color:var(--muted);border-bottom:1px dashed var(--line);list-style:none}
@@ -470,7 +447,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .mini-search{height:24px;border:1px solid var(--line);border-radius:4px;background:var(--surface);padding:0 7px;font-size:11px;width:150px}
 
 .kind{
-  display:inline-block;font:500 9px/1 var(--mono);letter-spacing:.05em;padding:3px 4px;border-radius:2px;
+  display:inline-block;font:500 9px/1 var(--mono);letter-spacing:.05em;padding:2px 8px;border-radius:999px;
   text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 /* 消息列表的角色类名用稳定小写（roleClass）；REPLY 等大写类仍由回复详情等固定标签使用。 */
@@ -478,22 +455,13 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .kind.user{color:var(--k-user);background:var(--k-user-bg)}
 .kind.assistant{color:var(--k-assistant);background:var(--k-assistant-bg)}
 .kind.tool{color:var(--k-tool);background:var(--k-tool-bg)}
-.kind.unknown{color:var(--k-field);background:var(--k-field-bg)}
+.kind.unknown{color:var(--k-system);background:var(--k-system-bg)}
 .kind.SYSTEM{color:var(--k-system);background:var(--k-system-bg)}
 .kind.USER{color:var(--k-user);background:var(--k-user-bg)}
 .kind.ASSISTANT,.kind.CALL{color:var(--k-assistant);background:var(--k-assistant-bg)}
 .kind.TOOL,.kind.SCHEMA{color:var(--k-tool);background:var(--k-tool-bg)}
-.kind.FIELD,.kind.PARAM{color:var(--k-field);background:var(--k-field-bg)}
+.kind.FIELD,.kind.PARAM{color:var(--k-system);background:var(--k-system-bg)}
 .kind.REPLY{color:var(--accent);background:var(--accent-soft);font-weight:600}
-/* 工具身份色类：行内 chip、面板头 bp-kind 与正文 tool-chip 共用；放在 .kind/.tool-chip
-   之后，让带色类的元素覆盖角色与 call 的默认配色。 */
-.tint-read{color:var(--tool-read);background:var(--tool-read-bg)}
-.tint-edit{color:var(--tool-edit);background:var(--tool-edit-bg)}
-.tint-write{color:var(--tool-write);background:var(--tool-write-bg)}
-.tint-bash{color:var(--tool-bash);background:var(--tool-bash-bg)}
-.tint-skill{color:var(--tool-skill);background:var(--tool-skill-bg)}
-.tint-agent{color:var(--tool-agent);background:var(--tool-agent-bg)}
-.tint-other{color:var(--tool-other);background:var(--tool-other-bg)}
 .path-row[data-dim="true"] .path-flag{font:9px var(--ui);color:var(--accent);text-align:right;white-space:nowrap}
 .path-row.search-hit 
 
@@ -608,7 +576,6 @@ pre.raw{
 
 .comp-legend{display:grid;grid-template-columns:1fr auto auto;gap:3px 8px;font-size:10.5px}
 .comp-legend .name{display:flex;align-items:center;gap:6px;color:var(--text-2);min-width:0}
-.comp-legend .sw{width:7px;height:7px;border-radius:1.5px;flex:none}
 .comp-legend .name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .comp-legend .val{font:10.5px var(--mono);color:var(--text-2);text-align:right}
 .comp-legend .pct{font:10.5px var(--mono);color:var(--muted);text-align:right;width:34px}
@@ -619,8 +586,8 @@ pre.raw{
    全色边界；文字用主题墨色（16% 底上对比度实测 11–14:1）。窄块按尺寸依次隐藏
    数值与全部文字，被隐藏的信息由同页列表承担；类别身份另见图例与列表行点。 */
 .ctx-map{position:relative;margin:0 0 9px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface);aspect-ratio:2.4;min-height:160px;max-height:240px}
-.ctx-tile{position:absolute;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:2px;padding:7px 8px;border:1px solid color-mix(in srgb,var(--c) 30%,var(--surface));border-radius:4px;background:color-mix(in srgb,var(--c) 16%,var(--surface));color:var(--text);min-width:0}
-.ctx-tile:hover,.ctx-tile.ctx-hl{background:color-mix(in srgb,var(--c) 28%,var(--surface));border-color:var(--c)}
+.ctx-tile{position:absolute;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:2px;padding:7px 8px;border:1px solid color-mix(in srgb,var(--accent) 14%,var(--line));border-radius:4px;background:var(--c);color:var(--text);min-width:0}
+.ctx-tile:hover,.ctx-tile.ctx-hl{background:color-mix(in srgb,var(--accent) 24%,var(--surface));border-color:var(--accent)}
 .ctx-tile:focus-visible{outline-offset:-2px}
 .ctx-tname{font-size:10.5px;font-weight:550;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctx-tval{font:10px var(--mono);color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -630,7 +597,6 @@ pre.raw{
 .ctx-rows{display:flex;flex-direction:column;gap:1px;margin:0 0 6px}
 .ctx-row{display:flex;align-items:center;gap:7px;padding:2.5px 6px;border-radius:4px;font-size:11px}
 .ctx-row:hover,.ctx-row.ctx-hl{background:var(--hover)}
-.ctx-row .dot{width:8px;height:8px;border-radius:2.5px;flex:none}
 .ctx-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctx-row .nm b{font-weight:500}
 .ctx-row .xn{color:var(--muted);font-size:10px;white-space:nowrap}
@@ -682,10 +648,21 @@ pre.raw{
 /* 工具四页：概览/参数/结果/Schema 与返回按钮。 */
 .tool-page-head{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
 .tool-page-head .mono{font-size:11px;color:var(--text-2);overflow-wrap:anywhere}
-.tool-page-tabs{display:flex;gap:4px;margin:8px 0}
-.tool-page-tabs button{font-size:10.5px;padding:3px 9px;border-radius:4px;border:1px solid var(--line);color:var(--muted);background:var(--surface)}
-.tool-page-tabs button[aria-pressed="true"]{color:var(--accent);border-color:var(--accent);font-weight:550}
+.tool-page-head .cnt{margin-left:auto;font-size:10.5px;color:var(--muted);white-space:nowrap;flex:none}
+/* 子页签与筛选同套分段控件：inset 槽承载，选中段 surface 浮起。 */
+.tool-page-tabs{display:inline-flex;gap:2px;padding:2px;border-radius:7px;background:var(--inset);margin:8px 0}
+.tool-page-tabs button{font-size:10.5px;padding:3px 9px;border-radius:5px;border:0;color:var(--muted);background:transparent}
+.tool-page-tabs button[aria-pressed="true"]{color:var(--text);background:var(--surface);box-shadow:var(--shadow);font-weight:500}
 .tool-page-tabs button:hover{color:var(--text)}
+/* 汇总条目列表：行内调用序号加右侧 mono 弱化来源；窗口外的行整行弱一档。 */
+.tool-row .call{font:10.5px var(--mono);color:var(--text-2)}
+.tool-row .muted.mono{margin-left:auto;font-size:10px;color:var(--muted)}
+.tool-row.dim{opacity:.55}
+/* 配对页两段的角色标：粗体角色词加 mono 弱化来源；中间弱化连接语交代因果。 */
+.frole{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+.frole b{font-size:11px;font-weight:600;color:var(--text);flex:none}
+.frole span{font:10px var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.pair-arrow{font-size:10.5px;color:var(--muted);padding:2px 0 6px}
 button.tool-link{background:none;border:0;cursor:pointer}
 button.tool-link:hover{background:var(--hover);border-radius:4px}
 .schema-item{margin:8px 0}
@@ -745,7 +722,6 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
   /* 消息行在窄屏保留完整英文角色标签，去掉序号列，预览仍单行截断 */
   .msg-head{grid-template-columns:64px minmax(0,1fr);gap:6px}
   .msg-ord{display:none}
-  .msg-new{grid-column:2;justify-self:start}
   .conv-tools .mini-search{width:100%}
 }
 /* 主题切换会同时改变变量；background 过渡会把旧主题的颜色多留一帧，
@@ -762,7 +738,6 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 .ctx-d-head{display:flex;align-items:center;gap:9px;padding:10px 14px;border-bottom:1px solid var(--line);flex:none}
 .ctx-d-head .t{display:flex;align-items:center;gap:7px;font-size:12.5px;min-width:0}
 .ctx-d-head .t b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ctx-d-head .dot{width:9px;height:9px;border-radius:2.5px;flex:none}
 .ctx-d-head .v{font:11px var(--mono);color:var(--text-2);flex:none}
 .ctx-d-head .grow{flex:1}
 .ctx-d-head .x{border:0;background:none;font-size:16px;line-height:1;color:var(--muted);padding:2px 6px;border-radius:4px;cursor:pointer}

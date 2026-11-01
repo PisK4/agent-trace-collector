@@ -1,13 +1,14 @@
 import { expect, test } from 'bun:test';
 import {
   bodyNotice, renderCapabilities, renderMessageDetail, renderMessages, renderReply,
-  renderReplyDetail, renderTools, roleClass, roleTag, toolTint,
+  renderReplyDetail, renderTools, roleClass, roleTag,
 } from '../web/body-view.js';
 import {
   deltaOrdinals, displayRoleOf, messageCopyText, messageEntries, messagePairIndexOf, replyView, toolEntries,
   topSystemText,
 } from '../web/body-model.js';
-import { partColor, partLabel, renderAttemptChain } from '../web/rail-facts.js';
+import { partLabel, renderAttemptChain } from '../web/rail-facts.js';
+import { partShade } from '../web/parts.js';
 import { replyCompleteness } from '../web/row-summary.js';
 import { esc, mdToHtml } from '../web/html.js';
 import { summaryParts } from '../web/tool-summary.js';
@@ -355,8 +356,8 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
   expect(html).not.toContain('<details');
   expect(html).not.toContain('工具往返');
   expect(html).not.toContain('data-fold="round:');
-  // chip 带工具身份色类，颜色由 CSS 的 .tint-* 决定。
-  expect(html).toContain('tool-chip call tint-read');
+  // chip 中性化：不带任何身份色类，颜色由 CSS 基础规则决定。
+  expect(html).toContain('<span class="tool-chip call" title=');
   // 每次调用都提供右栏内配对入口，不跳转；未确认与无结果按「没有就不显示」不出状态。
   expect(html).toContain('配对两端');
   expect(html).not.toContain('data-result-owner');
@@ -659,23 +660,26 @@ test('缺时间时只显示说明，不补造间隔', () => {
   expect(html).not.toContain('间隔 ');
 });
 
-test('未知 part kind 保留名称并使用有效颜色', () => {
+test('未知 part kind 保留名称，颜色按份额落档', () => {
   expect(partLabel('synthetic_part')).toBe('synthetic_part');
-  expect(partColor('synthetic_part')).toBe('var(--p-unknown)');
   expect(partLabel('<img src=x>')).toBe('<img src=x>');
 });
 
-test('已知 part 槽位稳定：六类旧口径照常，skills 得第七槽', () => {
-  // 六类旧口径行（skills 未拆出前）各得既有槽位，不受第七槽加入影响。
-  expect(['system', 'tools', 'memory', 'files', 'results', 'chat'].map(partColor))
-    .toEqual(['var(--p1)', 'var(--p2)', 'var(--p3)', 'var(--p4)', 'var(--p5)', 'var(--p6)']);
-  // 七类新口径：magpie 10-24 拆出的 skills 落靛色第七槽。
-  expect(partColor('skills')).toBe('var(--p7)');
+test('partShade 按份额落四档：阈值边界钉住', () => {
+  // 份额阈值 .15/.07/.03 的边界：恰好落在档上归高档。
+  expect(partShade(15, 100)).toBe('var(--t1)');
+  expect(partShade(14.9, 100)).toBe('var(--t2)');
+  expect(partShade(7, 100)).toBe('var(--t2)');
+  expect(partShade(3, 100)).toBe('var(--t3)');
+  expect(partShade(2.9, 100)).toBe('var(--t4)');
+  // 总量为 0 不除零：全落最浅档。
+  expect(partShade(10, 0)).toBe('var(--t4)');
+  // 类别无关：同份额的已知与未知 kind 同档，颜色不再承载分类。
+  expect(partShade(50, 100)).toBe(partShade(50, 100));
   expect(partLabel('skills')).toBe('技能');
   // memory 标签统一显「记忆」：旧行里含未拆出的 skills，行上无标记可区分，不再显示「记忆与技能」。
   expect(partLabel('memory')).toBe('记忆');
   expect(partLabel('history')).toBe('history');
-  expect(partColor('history')).toBe('var(--p-unknown)');
 });
 
 test('链结果非 current 时不标记新增与 confirmed', () => {

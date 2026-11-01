@@ -63,23 +63,31 @@ test('折叠行：探针与旁路各自计数，展开与收起如实标注', ()
   expect(sessionsListFoldHtml([row(['probe']), row(['probe'])], true)).toContain('收起 2 条探针记录');
 });
 
-test('会话汇总配对列表的调用 chip 带工具身份色', () => {
+test('会话汇总配对列表行内是调用序号，页头带计数与失败数', () => {
   const list = {
     kind: 'pair', param: 'Bash', label: 'Bash 调用', loading: false, error: null,
     data: {
       items: [
         { req_id: 7, ord: 1, tool_name: 'Bash', state: 'resolved' },
-        { req_id: 8, ord: 2, tool_name: null, state: 'resolved' },
+        { req_id: 8, ord: 2, tool_name: null, state: 'pending' },
       ],
       truncated: false,
     },
   };
-  const html = railSummaryListHtml(list, id => `#${id}`);
-  // 与正文页、工具页共用同一个 toolTint 映射：颜色只承载工具身份。
-  expect(html).toContain('<span class="tool-chip call tint-bash" title="Bash">');
-  // 名字缺失时不冒充已知工具：中性色，文本照旧写 unknown。
-  expect(html).toContain('tool-chip call tint-other');
-  expect(html).toContain('unknown · 调用 #2');
+  const html = railSummaryListHtml(
+    list,
+    id => ({ text: `req 0${id}`, dim: id === 8 }),
+    { count: 2, errors: 1 },
+  );
+  // 逐行工具名 chip 删除：行内只有调用序号，来源在右侧 mono 弱化。
+  expect(html).toContain('调用 #1');
+  expect(html).not.toContain('tool-chip call"');
+  expect(html).toContain('req 07');
+  // 未配对的行带状态标；窗口外的行整行 dim。
+  expect(html).toContain('tool-chip miss');
+  expect(html).toContain('tool-row tool-link dim"');
+  // 页头右侧计数与失败数（失败红字由 .err 类之外的 cnt 承载，红字走 CSS）。
+  expect(html).toContain('class="cnt mono">2 次 · 1 次失败</span>');
 });
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {
@@ -228,8 +236,9 @@ test('delta=null 给关系说明不标新增，delta=[] 显示新增 0', () => {
   expect(unknown).toContain('不标记新增消息');
   expect(unknown).not.toContain('新增 0');
   expect(unknown).not.toContain('msg-new');
+  // delta 空集不再渲染「新增 0 条消息」横幅：没有新增就没有可说的。
   const empty = structureFoldHtml({ ...base, delta: new Set<number>(), relation: '' });
-  expect(empty).toContain('新增 0');
+  expect(empty).not.toContain('新增 0');
 });
 
 test('结构内点开消息详情可返回，消息总数不变', () => {
@@ -382,8 +391,14 @@ test('增量未完成给续读入口，失败给重试并保留未读位置', ()
   expect(failed).toContain('delta_gap');
   expect(failed).toContain('data-delta-more="1"');
   expect(failed).toContain('已消费 0 / 3');
-  // 无 deltaState 的旧调用形状保持原有数量说明。
-  expect(structureFoldHtml({ ...base, deltaState: null })).toContain('新增 3 条消息');
+  // 已全部消费后不再出横幅：数量说明由行级蓝缘与增量入口承担，纯计数行删除。
+  const done = structureFoldHtml({
+    ...base, deltaState: { next: 3, done: true, loading: false, error: null },
+  });
+  expect(done).not.toContain('data-delta-more');
+  expect(done).not.toContain('新增 3 条消息');
+  // 无 deltaState 的旧调用形状同样不再出纯计数行。
+  expect(structureFoldHtml({ ...base, deltaState: null })).not.toContain('新增 3 条消息');
 });
 
 test('工具概览显示配对与正文加载两种状态，时长归属说明保留', () => {
@@ -792,12 +807,11 @@ test('会话头双列：左右分组、副标题删除与身份行', () => {
     ...headBase, rows: [requestRow({ req_id: 2, in_tok: 10, out_tok: 5, ms: 2000, ttft_ms: 500 })] as never,
     summary: summaryFixture() as never, summaryStatus: 'ready',
   });
-  // 左右两列与七个分组各就各位。
+  // 左右两列各就各位；分组行不再带图标与标签。
   expect(html).toContain('cue-account');
   expect(html).toContain('cue-activity');
-  for (const label of ['资源', '结构', '性能', '工具', 'Skill', '写入尝试', '读取请求']) {
-    expect(html).toContain(`<strong>${label}</strong>`);
-  }
+  expect(html).not.toContain('<strong>');
+  expect(html).not.toContain('<svg');
   // 七处常驻副标题不再出现，也没有换成同类副标题。
   expect(html).not.toContain('<small');
   expect(html).not.toContain('会话合计');
@@ -815,7 +829,6 @@ test('空集合的分组整组隐藏，右列全空不留空列', () => {
     ...headBase, rows: [requestRow()] as never,
     summary: summaryFixture({ skills: [] }) as never, summaryStatus: 'ready',
   });
-  expect(noSkill).not.toContain('<strong>Skill</strong>');
   expect(noSkill).not.toContain('data-summary-skill');
   const rightEmpty = sessionHead({
     ...headBase, rows: [requestRow()] as never,
@@ -824,17 +837,18 @@ test('空集合的分组整组隐藏，右列全空不留空列', () => {
   });
   expect(rightEmpty).not.toContain('cue-activity');
   expect(rightEmpty).toContain('cue-board solo');
-  expect(rightEmpty).toContain('<strong>资源</strong>');
+  expect(rightEmpty).toContain('data-desc=');
 });
 
-test('工具组的失败入口与中断计数按非零出现', () => {
+test('工具 chip 的失败红字与中断计数按非零出现', () => {
   const withIssues = sessionHead({
     ...headBase, rows: [requestRow()] as never,
     summary: summaryFixture({ interrupts: { count: 2, requests: [], unknown: 1 } }) as never,
     summaryStatus: 'ready',
   });
-  expect(withIssues).toContain('data-summary-failures');
-  expect(withIssues).toContain('⚠ 1 失败');
+  // 组级失败入口删除：失败数在对应工具 chip 里作红字。
+  expect(withIssues).not.toContain('data-summary-failures');
+  expect(withIssues).toContain('class="err">1 失败</span>');
   expect(withIssues).toContain('已识别用户中断 <b>2</b>');
   expect(withIssues).toContain('1 笔请求的中断判定缺失');
   const clean = sessionHead({
@@ -927,7 +941,6 @@ test('无正文请求入口落在性能组，展开清单可定位', () => {
   expect(html).toContain('hidden-more');
   expect(html).toContain('data-fold="hidden:k"');
   expect(html).toContain('无正文 <b>2</b> 笔');
-  expect(html).toContain('<strong>性能</strong>');
   expect(html).toContain('data-summary-req="7"');
 });
 

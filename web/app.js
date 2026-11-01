@@ -11,7 +11,7 @@
 import {
   bodyNotice, renderCapabilities, renderMessageDetail, renderReply,
   renderReplyBlockDetail, renderReplyDetail, renderSystemDetail, renderUnknownBlockDetail,
-  roleTag, toolTint,
+  roleTag,
 } from './body-view.js';
 import {
   deltaOrdinals, messageCopyText, messagePairIndexOf, messagePathOf, replyView, toolEntries,
@@ -360,8 +360,9 @@ if (typeof document !== 'undefined') {
     const here = state.missingReqId !== null ? `Request ${state.missingReqId} 未找到`
       : state.offPageReqId !== null ? `Request ${state.offPageReqId} 未在当前窗口`
         : idx > 0 ? `Request ${String(idx).padStart(2, '0')}` : '';
-    // 会话标题由中栏 sticky h1 常驻可见，crumb 只承担请求定位。
-    el('crumb').innerHTML = here === '' ? '' : `<b>${esc(here)}</b>`;
+    // 面包屑带会话标题承接顶栏定位；中栏 sticky h1 仍是主标题。
+    el('crumb').innerHTML = row === null ? (here === '' ? '' : `<b>${esc(here)}</b>`)
+      : `${esc(row.title)}${here === '' ? '' : `<span class="sep">·</span><b>${esc(here)}</b>`}`;
     document.title = row ? `${here === '' ? row.title : `${here} · ${row.title}`} — Trace Collector`
       : 'Trace Collector';
   }
@@ -407,11 +408,11 @@ if (typeof document !== 'undefined') {
           : { color: 'var(--line-strong)', text: '', title: '' };
       return `<button class="sess" data-session="${esc(s.conv_key)}" aria-current="${s.conv_key === state.session}">
         <span class="sess-title">${esc(s.title || '（无标题）')}</span>
+        <span class="sess-count num">${s.request_count} 笔</span>
         <span class="sess-time num">${esc(clock(s.last_ms))}</span>
         <span class="sess-meta">
           <span class="dot" style="background:${flag.color}"${flag.title ? ` title="${flag.title}"` : ''}></span>
-          <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')}</span><span class="sep">·</span>
-          <span>${s.request_count} 笔</span>
+          <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')}</span>
           ${flag.text ? `<span class="sep">·</span><span style="color:${flag.color}">${flag.text}</span>` : ''}
         </span>
       </button>`;
@@ -1000,7 +1001,7 @@ if (typeof document !== 'undefined') {
         const warn = tool.state === 'ambiguous'
           ? '<span class="tool-chip miss"><span>多个候选</span></span>' : '';
         return `<button class="tool-row tool-link" data-tool-select="${tool.ord}">
-          <span class="tool-chip call ${toolTint(tool.name)}" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clipText(tool.inputText, 60))})</span></span>
+          <span class="tool-chip call" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clipText(tool.inputText, 60))})</span></span>
           ${warn}
         </button>`;
       });
@@ -1062,7 +1063,38 @@ if (typeof document !== 'undefined') {
 
   function railBody() {
     // 会话汇总条目列表：会话级阅读态，优先于轮次与请求态；点击条目后清掉。
-    if (summaryList !== null) return railSummaryListView(summaryList, requestLabel);
+    // 页头计数与失败数从首页汇总的分组计数取；工具名是列表筛选依据时不再逐行重复。
+    if (summaryList !== null) {
+      const list = summaryList;
+      const summary = store.peekSummary();
+      const data = summary.status === 'ready' && summary.data !== null ? summary.data : null;
+      // 页头计数与失败数按组取自首页汇总：工具组带失败数，Skill、路径与中断组只有次数。
+      let groupCount = null;
+      let groupErrors = 0;
+      if (data !== null) {
+        if (list.kind === 'tool') {
+          const group = data.tools.find(tool => tool.name === list.param) ?? null;
+          if (group !== null) { groupCount = group.count; groupErrors = group.errors; }
+        } else if (list.kind === 'skill') {
+          const group = data.skills.find(skill => skill.name === list.param) ?? null;
+          if (group !== null) groupCount = group.count;
+        } else if (list.kind === 'read' || list.kind === 'written') {
+          const group = data.paths[list.kind].find(path => path.path === list.param) ?? null;
+          if (group !== null) groupCount = group.count;
+        } else if (list.kind === 'interrupts') {
+          groupCount = data.interrupts.count;
+        }
+      }
+      const items = list.data !== null && 'items' in list.data ? list.data.items : null;
+      const meta = {
+        count: groupCount ?? (items !== null ? items.length : null),
+        errors: groupErrors,
+      };
+      return railSummaryListView(list, id => {
+        const text = requestLabel(id);
+        return { text, dim: text.includes('（未在窗口）') };
+      }, meta);
+    }
     // 轮次态：命令组与最终回复两个面板，两端默认展开；点轨迹任意行经选择转换回请求态。
     if (state.turn !== null) {
       const turn = turnOf(state.turn);
@@ -1501,7 +1533,12 @@ if (typeof document !== 'undefined') {
    * @param {string} label
    */
   async function openSummaryList(query, label) {
-    summaryList = { kind: query.kind, param: label, label, loading: true, error: null, data: null };
+    // param 是分组键本身（工具名、路径、Skill 名），页头计数靠它与首页汇总对组；label 才是展示文案。
+    summaryList = {
+      kind: query.kind,
+      param: 'name' in query ? query.name : 'path' in query ? query.path : '',
+      label, loading: true, error: null, data: null,
+    };
     openRail();
     renderRail();
     try {
@@ -1689,23 +1726,6 @@ if (typeof document !== 'undefined') {
     }
     // 会话 ID 复制钮在会话头 facts 行里，随重绘重建，走委托。
     if (t.closest('#copy-session')) { void copySessionId(); return; }
-    // 收起行里的失败数在 <summary> 内：先于 summary 早退处理，阻止折叠开合，
-    // 直接打开失败调用列表（集合随汇总首屏返回，不用再查）。
-    const failuresBtn = /** @type {HTMLElement | null} */ (t.closest('[data-summary-failures]'));
-    if (failuresBtn !== null) {
-      e.preventDefault();
-      const summary = store.peekSummary();
-      const failures = summary !== null && summary.status === 'ready' && summary.data !== null
-        ? summary.data.failures : [];
-      summaryList = {
-        kind: 'failures', param: '', label: `失败调用 · ${failures.length}`,
-        loading: false, error: null,
-        data: { items: failures.map(f => ({ ...f, state: 'resolved' })), truncated: false },
-      };
-      openRail();
-      renderRail();
-      return;
-    }
     if (t.closest('summary')) return;
     if (t.closest('#load-later')) { void loadLater(); return; }
     if (t.closest('#refresh-window')) { void refreshWindow(); return; }

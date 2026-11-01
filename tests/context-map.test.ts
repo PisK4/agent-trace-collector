@@ -343,5 +343,6 @@ test('六类旧口径照常渲染，未知类别保持原名', () => {
   });
   const inner = contextMapInnerHtml(unknown, 340, 160, 7);
   expect(inner).toContain('mystery');
-  expect(inner).toContain('--p-unknown');
+  // 单色化后未知类别与已知同口径：独占全图即最深档。
+  expect(inner).toContain('--c:var(--t1)');
 });

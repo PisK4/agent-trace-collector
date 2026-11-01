@@ -14,7 +14,7 @@
  */
 
 import { esc } from './html.js';
-import { baseNameOf, isPathKind, kk, partColor, partLabel, partRank } from './parts.js';
+import { baseNameOf, isPathKind, kk, partLabel, partRank, partShade } from './parts.js';
 
 /** px²：item 布局面积低于此值并入成员集合（≥2 块才并；并完一类无保留块时整类一块）。 */
 const MERGE_AREA = 950;
@@ -197,7 +197,7 @@ export function contextMapInnerHtml(p, W, H, reqId) {
       ? `${partLabel(t.kind)} · ${itemLabel(t.item)}`
       : t.name;
     const aria = `${label}，${fmt(t.tokens)} tokens，占提示总量 ${Math.round(t.tokens / sum * 100)}%，打开明细`;
-    return `<button type="button" class="ctx-tile${bare ? ' bare' : low ? ' low' : ''}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;--c:${partColor(t.kind)}" data-ctx-key="${esc(t.key)}" data-ctx-kind="${esc(t.kind)}" data-ctx-its="${esc(its)}" data-ctx-scope="${t.scope}" data-ctx-req="${reqId}" aria-label="${esc(aria)}">` +
+    return `<button type="button" class="ctx-tile${bare ? ' bare' : low ? ' low' : ''}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;--c:${partShade(t.tokens, sum)}" data-ctx-key="${esc(t.key)}" data-ctx-kind="${esc(t.kind)}" data-ctx-its="${esc(its)}" data-ctx-scope="${t.scope}" data-ctx-req="${reqId}" aria-label="${esc(aria)}">` +
       `<span class="ctx-tname">${esc(t.name)}</span>` +
       `<span class="ctx-tval">${kk(t.tokens)} · ${Math.round(t.tokens / sum * 100)}%</span>` +
       `</button>`;
@@ -254,11 +254,10 @@ export function contextRowsHtml(p, reqId) {
     const tg = tagText(it.tag);
     const title = `${partLabel(kind)} · ${itemLabel(it)} · ${kk(it.tokens)} tokens · ${Math.round(it.tokens / sum * 100)}%`;
     return `<button type="button" class="ctx-row" data-ctx-key="${esc(iidOf(kind, it))}" data-ctx-kind="${esc(kind)}" data-ctx-req="${reqId}" aria-label="${esc(title)}，打开明细" title="${esc(title)}">
-      <i class="dot" style="background:${partColor(kind)}"></i>
       <span class="nm"><b>${esc(base)}</b></span>
       ${xn !== '' ? `<span class="xn">${xn}</span>` : ''}
       ${tg !== '' ? `<span class="tg">${esc(tg)}</span>` : ''}
-      <span class="bar"><i style="width:${Math.max(2, it.tokens / most * 100).toFixed(1)}%;background:${partColor(kind)}"></i></span>
+      <span class="bar"><i style="width:${Math.max(2, it.tokens / most * 100).toFixed(1)}%;background:var(--t2)"></i></span>
       <span class="v">${kk(it.tokens)}</span>
     </button>`;
   };

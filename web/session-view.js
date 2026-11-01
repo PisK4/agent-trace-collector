@@ -8,7 +8,6 @@
  * @typedef {import('../src/queries/session-summary').SessionSummary} SessionSummary
  */
 
-import { toolTint } from './body-view.js';
 import { esc } from './html.js';
 import { kk } from './rail-facts.js';
 import { bodyStateText } from './row-summary.js';
@@ -73,33 +72,14 @@ function timingSummary(rows) {
   };
 }
 
-/** 分组图标：每组一枚 14px 线性图形，颜色随文字；名称承担含义，图标只帮助定位。 */
-const GROUP_ICONS = {
-  resource: '<ellipse cx="12" cy="5" rx="7" ry="3"/><path d="M5 5v6c0 4 14 4 14 0V5M5 11v6c0 4 14 4 14 0v-6"/>',
-  structure: '<path d="M6 4v16M6 8h9a3 3 0 0 1 3 3v9"/><circle cx="6" cy="4" r="2"/><circle cx="6" cy="20" r="2"/><circle cx="18" cy="20" r="2"/>',
-  performance: '<circle cx="12" cy="13" r="8"/><path d="M9 2h6M12 5V2M12 13l3-4"/>',
-  tools: '<path d="M14 5a6 6 0 0 0-7 8L3 17a3 3 0 0 0 4 4l5-5a6 6 0 0 0 7-8l-4 4-3-3 4-4Z"/>',
-  skills: '<path d="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z"/>',
-  write: '<path d="m4 16 11-11 4 4L8 20H4v-4ZM13 7l4 4"/>',
-  read: '<path d="M12 6C9 4 5 4 2 5v14c3-1 7-1 10 1 3-2 7-2 10-1V5c-3-1-7-1-10 1v14"/>',
-};
-
-/** @typedef {{kind: keyof typeof GROUP_ICONS, label: string, desc: string, data: string}} GroupCue */
+/** @typedef {{desc: string, data: string}} GroupCue */
 /**
- * 分组标题：图标加短标签。统计范围、口径与覆盖缺口放在 data-desc 里，
- * 悬停与键盘聚焦（tabindex）都能看到；常驻正文不写解释句。
- * @param {keyof typeof GROUP_ICONS} kind @param {string} label @param {string} desc
+ * 摘要行：一行数据，不再带图标与标签。统计范围、口径与覆盖缺口放在
+ * data-desc 里，悬停与键盘聚焦（tabindex）都能看到；常驻正文不写解释句。
+ * @param {string} desc @param {string} data @param {string} [extraClass]
  */
-function groupHead(kind, label, desc) {
-  return `<div class="cue" tabindex="0" data-desc="${esc(desc)}" aria-label="${esc(`${label}：${desc}`)}">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${GROUP_ICONS[kind]}</svg>
-    <strong>${esc(label)}</strong>
-  </div>`;
-}
-
-/** @param {keyof typeof GROUP_ICONS} kind @param {string} label @param {string} desc @param {string} data @param {string} [extraClass] */
-function cueRow(kind, label, desc, data, extraClass = '') {
-  return `<section class="cue-row">${groupHead(kind, label, desc)}<div class="cue-data${extraClass}">${data}</div></section>`;
+function cueRow(desc, data, extraClass = '') {
+  return `<section class="cue-row"><div class="cue-data${extraClass}" tabindex="0" data-desc="${esc(desc)}" aria-label="${esc(desc)}">${data}</div></section>`;
 }
 
 /**
@@ -124,7 +104,7 @@ function resourceGroup(s, status, rows) {
       t.cost !== null ? `费用 <b>$${t.cost.toFixed(4)}</b>` : '',
       t.cache_hit !== null ? `缓存 <b>${Math.round(t.cache_hit * 100)}%</b>` : '',
     ].filter(Boolean).join(' · ')}</span>`;
-    return { kind: 'resource', label: '资源', desc, data };
+    return { desc, data };
   }
   const hasUsage = rows.some(r => r.in_tok !== null || r.out_tok !== null);
   if (!hasUsage) return null;
@@ -142,7 +122,7 @@ function resourceGroup(s, status, rows) {
     `输出 <b>${kk(totalOut)}</b>`,
     `费用 <b>$${totalCost.toFixed(4)}</b>`,
   ].join(' · ')}</span><span class="scope-tag">已加载窗口</span>`;
-  return { kind: 'resource', label: '资源', desc, data };
+  return { desc, data };
 }
 
 /**
@@ -166,7 +146,7 @@ function structureGroup(s) {
     st.context_peak_pct !== null ? '上下文峰值＝max(prompt_tokens ÷ prompt_window)' : '上下文峰值没有可用分母，不给数',
     st.models.length > 1 ? `模型＝${st.models.map(m => `${m.name} ×${m.count}`).join(' · ')}` : null,
   ].filter(Boolean).join('；');
-  return { kind: 'structure', label: '结构', desc, data: `<span class="cue-line">${data}</span>` };
+  return { desc, data: `<span class="cue-line">${data}</span>` };
 }
 
 /** 性能组的计时读数；口径是当前已加载窗口，首字为 p50（说明进组标题）。 @param {RequestRow[]} rows */
@@ -180,9 +160,9 @@ function performanceData(rows) {
   return parts.length === 0 ? '' : `<span class="cue-line">${parts.join(' · ')}</span>`;
 }
 
-/** 工具组：chip 沿用身份色，按调用次数取前三直接可见，其余进 +N 展开；
- *  失败数只在非零时出现，0 次中断不占位。调用总数与覆盖情况（未配对、未判定、
- *  中断判定缺失）进标题的按需说明。
+/** 工具与 Skill 组：chip 同一款中性样式，按调用次数取前三直接可见，其余进 +N 展开；
+ *  Skill 并入同一行（显式调用限定，全量直出）。每个工具 chip 自带失败数红字，
+ *  不再设组级失败入口。调用总数与覆盖情况（未配对、未判定、中断判定缺失）进按需说明。
  *  @param {SessionSummary} s  * @returns {GroupCue | null}
  */
 function toolsGroup(s) {
@@ -194,41 +174,25 @@ function toolsGroup(s) {
       t.count - t.paired > 0 ? `${t.count - t.paired} 次未配对` : null,
       unknown > 0 ? `${unknown} 次结果未判定（不计入失败）` : null,
     ].filter(Boolean).join(' · ');
-    return `<button class="tool-chip ${toolTint(t.name)}" data-summary-tool="${esc(t.name)}" title="${esc(title)}"><span>${esc(t.name)}</span><span class="n">${t.count}</span>${warn}</button>`;
+    return `<button class="tool-chip" data-summary-tool="${esc(t.name)}" title="${esc(title)}"><span>${esc(t.name)}</span><span class="n">${t.count}</span>${warn}</button>`;
   };
+  const skillChip = (/** @type {{name: string, count: number}} */ k) =>
+    `<button class="tool-chip" data-summary-skill="${esc(k.name)}" title="点击定位该 Skill 的 ${k.count} 次调用"><span>${esc(k.name)}</span><span class="n">${k.count}</span></button>`;
   const head = s.tools.slice(0, 3).map(chip).join('');
   const rest = s.tools.slice(3);
   const more = rest.length > 0
     ? `<details class="path-more t"><summary title="工具共 ${s.tools.length} 把">+${rest.length}</summary><div class="more-body">${rest.map(chip).join('')}</div></details>`
     : '';
-  const failures = s.tools.reduce((a, t) => a + t.errors, 0);
   const data = [
     head + more,
-    failures > 0 ? `<button class="warn-n" data-summary-failures="1" title="点击定位这 ${failures} 次失败调用">⚠ ${failures} 失败</button>` : '',
+    s.skills.map(skillChip).join(''),
     s.interrupts.count > 0 ? `<span class="interrupt">已识别用户中断 <b>${s.interrupts.count}</b></span>` : '',
   ].filter(Boolean).join('');
   if (data === '') return null;
-  return { kind: 'tools', label: '工具', desc: `整个会话：${coverageHoverText(s)}`, data };
-}
-
-/** Skill 组：黄色系 chip，前三加二级展开；没有显式调用整组不渲染。
- *  @param {SessionSummary} s  * @returns {GroupCue | null}
- */
-function skillsGroup(s) {
-  if (s.skills.length === 0) return null;
-  const chip = (/** @type {{name: string, count: number}} */ k) =>
-    `<button class="tool-chip tint-skill" data-summary-skill="${esc(k.name)}" title="点击定位该 Skill 的 ${k.count} 次调用"><span>${esc(k.name)}</span><span class="n">${k.count}</span></button>`;
-  const head = s.skills.slice(0, 3).map(chip).join('');
-  const rest = s.skills.slice(3);
-  const more = rest.length > 0
-    ? `<details class="path-more s"><summary title="显式 Skill 调用共 ${s.skills.length} 个">+${rest.length}</summary>
-        <div class="more-body">${rest.map(chip).join('')}</div></details>`
+  const skillDesc = s.skills.length > 0
+    ? `；Skill 为显式调用限定，共 ${s.skills.length} 个显式 Skill 调用，技能经 system 声明进入上下文而未发生调用时不计`
     : '';
-  return {
-    kind: 'skills', label: 'Skill',
-    desc: `显式调用限定：共 ${s.skills.length} 个显式 Skill 调用；技能经 system 声明进入上下文而未发生 Skill 调用时不计`,
-    data: head + more,
-  };
+  return { desc: `整个会话：${coverageHoverText(s)}${skillDesc}`, data };
 }
 
 /** @param {string} path @param {string[]} all 同组全部路径：同名 basename 并列时补上一段。 */
@@ -260,7 +224,6 @@ function pathGroup(list, side) {
       <div class="more-body">${list.slice(3).map(chip).join('')}</div></details>`
     : '';
   return {
-    kind: side === 'w' ? 'write' : 'read', label,
     desc: `${label}共 ${list.length} 条路径；按调用参数的原始值分组，发出的调用不表示执行或产物成功`,
     data: head + more,
   };
@@ -308,27 +271,25 @@ function sessionBoard(s, status, rows, hidden, sessionKey, hiddenFoldOpen) {
   const left = [];
   const right = [];
   const resource = resourceGroup(s, status, rows);
-  if (resource !== null) left.push(cueRow(resource.kind, resource.label, resource.desc, resource.data));
+  if (resource !== null) left.push(cueRow(resource.desc, resource.data));
   if (s !== null) {
     const structure = structureGroup(s);
-    if (structure !== null) left.push(cueRow(structure.kind, structure.label, structure.desc, structure.data));
+    if (structure !== null) left.push(cueRow(structure.desc, structure.data));
   }
   const perf = performanceData(rows);
   const hiddenEntry = sessionHiddenFold(rows, hidden, sessionKey, hiddenFoldOpen);
   if (perf !== '' || hiddenEntry !== '') {
     // 重绘按 data-fold 恢复 open 属性时，展开类要在构建时带上，否则单行裁掉清单。
-    left.push(cueRow('performance', '性能', '只统计当前已加载窗口；首字为 p50，未加载页不进计时',
+    left.push(cueRow('只统计当前已加载窗口；首字为 p50，未加载页不进计时',
       perf + hiddenEntry, hiddenFoldOpen ? ' open-wrap' : ''));
   }
   if (s !== null) {
     const tools = toolsGroup(s);
-    if (tools !== null) right.push(cueRow(tools.kind, tools.label, tools.desc, tools.data));
-    const skills = skillsGroup(s);
-    if (skills !== null) right.push(cueRow(skills.kind, skills.label, skills.desc, skills.data));
+    if (tools !== null) right.push(cueRow(tools.desc, tools.data));
     const written = pathGroup(s.paths.written, 'w');
-    if (written !== null) right.push(cueRow(written.kind, written.label, written.desc, written.data));
+    if (written !== null) right.push(cueRow(written.desc, written.data));
     const read = pathGroup(s.paths.read, 'r');
-    if (read !== null) right.push(cueRow(read.kind, read.label, read.desc, read.data));
+    if (read !== null) right.push(cueRow(read.desc, read.data));
   }
   if (left.length === 0 && right.length === 0) return '';
   const solo = left.length === 0 || right.length === 0 ? ' solo' : '';
@@ -384,7 +345,15 @@ export function sessionHead(input) {
  *  @param {{kind: string, param: string, label: string, loading: boolean, error: string | null,
  *    data: import('../src/queries/session-summary').SummaryEntries | null} | null} list
  *  @param {(id: number) => string} labelOf 请求的窗口内序号标签 */
-export function railSummaryListHtml(list, labelOf) {
+/**
+ * 汇总条目列表：页题左侧返回钮与名称，右侧计数与失败数（mono，失败红字）；
+ * 行内是调用序号，工具名与参数摘要在配对页，不再逐行重复 chip。
+ * 窗口外的行整行弱一档。labelOf 返回 {text, dim}，dim 即窗口外。
+ * @param {{label: string, loading: boolean, error: string | null, data: import('../src/queries/session-summary').SummaryEntries | null, truncated?: boolean} | null} list
+ * @param {(id: number) => {text: string, dim: boolean}} labelOf
+ * @param {{count: number | null, errors: number}} [meta]
+ */
+export function railSummaryListHtml(list, labelOf, meta = { count: null, errors: 0 }) {
   if (list === null) return '';
   let body;
   if (list.loading) {
@@ -392,28 +361,34 @@ export function railSummaryListHtml(list, labelOf) {
   } else if (list.error !== null) {
     body = `<p class="note warn">读取失败：${esc(list.error)}。重新点击条目可重试。</p>`;
   } else if (list.data !== null && 'requests' in list.data) {
-    const rows = list.data.requests.map(item =>
-      `<button class="tool-row tool-link" data-summary-req="${item.req_id}">
-        <span>${esc(labelOf(item.req_id))}</span><span class="muted">· ${item.count} 次中断</span>
-      </button>`);
+    const rows = list.data.requests.map(item => {
+      const label = labelOf(item.req_id);
+      return `<button class="tool-row tool-link${label.dim ? ' dim' : ''}" data-summary-req="${item.req_id}">
+        <span>${esc(label.text)}</span><span class="muted mono">· ${item.count} 次中断</span>
+      </button>`;
+    });
     body = rows.length > 0 ? rows.join('') : '<p class="note">没有支撑记录。</p>';
   } else if (list.data !== null && 'items' in list.data) {
     const rows = list.data.items.map(item => {
       const warn = item.state !== 'resolved'
         ? `<span class="tool-chip miss"><span>${esc(pairStateText(item.state))}</span></span>` : '';
-      return `<button class="tool-row tool-link" data-summary-pair="1" data-owner="${item.req_id}" data-ord="${item.ord}">
-        <span class="tool-chip call ${toolTint(item.tool_name ?? '')}" title="${esc(item.tool_name ?? '')}"><span>${esc(item.tool_name ?? 'unknown')} · 调用 #${item.ord}</span></span>
-        <span class="muted">${esc(labelOf(item.req_id))}</span>${warn}
+      const label = labelOf(item.req_id);
+      return `<button class="tool-row tool-link${label.dim ? ' dim' : ''}" data-summary-pair="1" data-owner="${item.req_id}" data-ord="${item.ord}">
+        <span class="call">调用 #${item.ord}</span>
+        <span class="muted mono">${esc(label.text)}</span>${warn}
       </button>`;
     });
     body = rows.length > 0 ? rows.join('') : '<p class="note">没有支撑记录。</p>';
   } else {
     body = '<p class="note">没有支撑记录。</p>';
   }
+  const count = meta.count !== null ? `${meta.count} 次` : '';
+  const errors = meta.errors > 0 ? `${count === '' ? '' : ' · '}${meta.errors} 次失败` : '';
   return `<section class="rail-section">
     <div class="tool-page-head">
       <button class="chip-btn" data-summary-back="1">← 返回会话</button>
       <span class="mono">${esc(list.label)}</span>
+      ${count !== '' || errors !== '' ? `<span class="cnt mono">${esc(`${count}${errors}`)}</span>` : ''}
     </div>
     ${body}
     ${list.data !== null && 'items' in list.data && list.data.truncated
