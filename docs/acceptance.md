@@ -960,3 +960,28 @@ hook 合并会执行 `UPDATE request SET prev_req_id=? WHERE prev_req_id=?` 与 
 ### 尚未验收
 
 本轮没有实施索引、schema 迁移、调度、查询或前端修复，未跑源码测试套件、类型检查或性能修复后的真实流量验收。现有 64 MiB 块缓存确实在命中，但本轮不是缓存前后受控对照，不能据此关闭[重复解压提案](../.agents/notes/proposed/bug-fix/2026-10-26-derive-body-decompression-amplification.md)。尚缺完整 hook 合并分项、代表性 turns 与正文读取成本、长组追加吞吐、长时间 RSS/WAL 与严格首帧测量。后续按提案顺序补测；本轮读数不构成 5 rps、十倍数据或严格 400 ms 上限的容量通过结论。
+
+## 交互延迟第一轮交付（schema v8 索引与首屏拆分，2026-11-01）
+
+第一轮实现已合并（分支 `fix/collection-interactive-latency`，提交 `b35ce55`，合并 `4019951`），交付范围与决策依据见[交互延迟治理记录](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)。本节记录交付时的验收读数；真实流量复测与十分钟负载目标另行按轮记录，本节不关闭它们。
+
+### 合成回归
+
+`bun test` 全量 952 项通过、`tsc --noEmit` 通过。与本次行为直接绑定的回归：
+
+- store 迁移：空库建到 v8；v6 与 v7 库打开事务内升到 v8 且既有行不变；模拟中断后的半迁移状态（索引缺失、`user_version` 停在 7）重开即完成升级；更低版本仍报 `schema_rebuild_required`。
+- hook 合并：前驱引用与工具结果引用随合并改指存活请求，旧行删除。
+- 查询计划：两条反向 UPDATE 在合成库断言走 `SEARCH … i_req_prev` / `i_tool_result_req`，不再全表扫描。
+- 备份：v8 库 bundle 写 `schema: 8`；v7/v6 包恢复后首次打开原地升级到 v8；白名单外版本两侧都拒。
+
+### 真实库副本升级计时
+
+复制本机 3.1 GB 生产库副本（41,186 笔请求、28,755 条工具调用、12,804 条非空前驱、28,428 条非空结果引用），独立进程按生产同路径执行 v7→v8 原地升级：`BEGIN IMMEDIATE` 0.01 ms，两条 `CREATE INDEX` 本体 6,211.83 ms，提交 2.36 ms。库文件字节数不变（3,121,369,088），WAL 增长约 0.5 MB，`/tmp` 可用空间约 423 GB。耗时来自冷缓存扫描 `request` 全表——骨架 BLOB 使表页散布在大文件里；这是一次性成本。
+
+### 生产重启验收
+
+`bun run service restart` 实测 2 秒完成（等待接口可读的整段窗口），新 pid 73863。重启即触发真实库原地升级，只读连接确认：`user_version=8`，`i_req_prev` 与 `i_tool_result_req` 就位，`EXPLAIN QUERY PLAN` 反向更新走 `SEARCH request USING INDEX i_req_prev`。生产库页缓存热，未复现副本的 6.2 s 冷读。
+
+### 尚未验收
+
+浏览器首屏行为（列表到手即画、延迟窗口悬置时左栏可用、深链与竞态）、十分钟背景采集下的 sessions p95/p99 与 5 s 上限、按端点的分项计时增量均未跑；索引的长期写维护成本没有长期观察。第二轮候选（列表聚合范围、pending 批次、派生重复工作、队列清理、线程隔离）由剩余延迟决定，见治理记录的 Deferred。
