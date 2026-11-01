@@ -732,42 +732,212 @@ test('结构续读按钮：读取中禁用，失败时改重试并给出原因',
   expect(failed.note).toContain('结构读取失败：body_page_gap');
 });
 
+// 会话头双列分组的合成夹具：行、身份与一份覆盖各分组事实的汇总快照。
+const requestRow = (over: Record<string, unknown> = {}) => ({
+  req_id: 1, started_ms: 1, in_tok: null, out_tok: null, cache_read: null, cache_write: null,
+  cost: null, cost_state: 'absent', ms: null, ttft_ms: null, flow_ms: null, ...over,
+});
+const headBase = {
+  sessionKey: 'k',
+  row: { conv_key: 'k', title: 't', last_ms: 1, request_count: 2, agents: [], flags: [] },
+  refreshedAt: null, missingReqId: null, offPageReqId: null, windowError: null,
+  summary: null, windowAnchor: 'start' as const,
+};
+const summaryFixture = (over: Record<string, unknown> = {}) => ({
+  tools: [{ name: 'Bash', count: 3, paired: 3, error_known: 3, errors: 1 }],
+  paths: { written: [{ path: 'src/a.ts', count: 2 }], read: [{ path: 'docs/r.md', count: 1 }] },
+  skills: [{ name: 'ponytail', count: 2 }],
+  interrupts: { count: 0, requests: [], unknown: 0 },
+  totals: { in_tok: 100, out_tok: 50, cost: 0.5, cost_absent: 0, cache_hit: 0.5 },
+  structure: {
+    requests_total: 5, main: 4, bypass: 1, subagent_actors: 0, subagent_requests: 0,
+    retries: 0, context_peak_pct: 30, models: [{ name: 'm', count: 5 }],
+  },
+  coverage: { calls_total: 3, calls_paired: 3, calls_error_known: 3, calls_fact_known: 3 },
+  failures: [], failures_truncated: false, dirty: false,
+  ...over,
+});
+
 test('会话头输出速度只统计计时与输出都在的行', () => {
-  const requestRow = (over: Record<string, unknown> = {}) => ({
-    req_id: 1, started_ms: 1, in_tok: null, out_tok: null, cache_read: null, cache_write: null,
-    cost: null, cost_state: 'absent', ms: null, ttft_ms: null, flow_ms: null, ...over,
-  });
-  const base = {
-    sessionKey: 'k',
-    row: { conv_key: 'k', title: 't', last_ms: 1, request_count: 2, agents: [], flags: [] },
-    refreshedAt: null, missingReqId: null, offPageReqId: null, windowError: null,
-    summary: null, summaryFoldOpen: false, windowAnchor: 'start' as const,
-  };
   // 只有输出、没有任何计时：没有分母，不给速度。
   const untimed = requestRow({ req_id: 1, out_tok: 4 });
-  const noTiming = sessionHead({ ...base, rows: [untimed] as never });
+  const noTiming = sessionHead({ ...headBase, rows: [untimed] as never });
   expect(noTiming).not.toContain('tok/s');
   // 一行无计时、一行有计时：分母只算有计时的那行，分子也必须只算同一行。
   const timed = requestRow({ req_id: 2, out_tok: 100, ms: 2000, ttft_ms: 500, flow_ms: 1500 });
-  const mixed = sessionHead({ ...base, rows: [untimed, timed] as never });
-  expect(mixed).toContain('输出 67 tok/s');
+  const mixed = sessionHead({ ...headBase, rows: [untimed, timed] as never });
+  expect(mixed).toContain('输出 <b>67 tok/s</b>');
+  expect(mixed).toContain('首字 p50 <b>0.50 s</b>');
 });
 
-test('会话头汇总状态：读取中与不可用分开说', () => {
-  const base = {
-    sessionKey: 'k',
-    row: { conv_key: 'k', title: 't', last_ms: 1, request_count: 1, agents: [], flags: [] },
-    refreshedAt: null, missingReqId: null, offPageReqId: null, windowError: null,
-    summary: null, summaryFoldOpen: false, windowAnchor: 'start' as const,
-  };
-  const loading = sessionHead({ ...base, rows: [], summaryStatus: 'loading' });
+test('会话头汇总状态：资源回退可见标明已加载窗口，读取中与不可用分开说', () => {
+  const row = requestRow({ req_id: 1, out_tok: 3 });
+  const loading = sessionHead({ ...headBase, rows: [row] as never, summaryStatus: 'loading' });
+  // 回退口径可见标明，不只在悬停里换范围；读取中不冒充不可用。
+  expect(loading).toContain('scope-tag">已加载窗口</span>');
   expect(loading).toContain('汇总快照读取中');
-  const row = {
-    req_id: 1, started_ms: 1, in_tok: null, out_tok: 3, cache_read: null, cache_write: null,
-    cost: null, cost_state: 'absent', ms: null, ttft_ms: null, flow_ms: null,
-  };
-  const absent = sessionHead({ ...base, rows: [row] as never, summaryStatus: 'absent' });
-  expect(absent).toContain('已加载相加');
+  expect(loading).not.toContain('汇总快照不可用');
+  const absent = sessionHead({ ...headBase, rows: [row] as never, summaryStatus: 'absent' });
+  expect(absent).toContain('scope-tag">已加载窗口</span>');
   expect(absent).toContain('汇总快照不可用');
   expect(absent).not.toContain('汇总快照读取中');
+  // 窗口没有任何用量读数时资源组不渲染：不给 0，也不给替代文字。
+  const empty = sessionHead({ ...headBase, rows: [], summaryStatus: 'loading' });
+  expect(empty).not.toContain('已加载窗口');
+  expect(empty).not.toContain('cue-board');
+});
+
+test('会话头双列：左右分组、副标题删除与身份行', () => {
+  const html = sessionHead({
+    ...headBase, rows: [requestRow({ req_id: 2, in_tok: 10, out_tok: 5, ms: 2000, ttft_ms: 500 })] as never,
+    summary: summaryFixture() as never, summaryStatus: 'ready',
+  });
+  // 左右两列与七个分组各就各位。
+  expect(html).toContain('cue-account');
+  expect(html).toContain('cue-activity');
+  for (const label of ['资源', '结构', '性能', '工具', 'Skill', '写入尝试', '读取请求']) {
+    expect(html).toContain(`<strong>${label}</strong>`);
+  }
+  // 七处常驻副标题不再出现，也没有换成同类副标题。
+  expect(html).not.toContain('<small');
+  expect(html).not.toContain('会话合计');
+  expect(html).not.toContain('次工具');
+  // 统计范围与总数改为按需说明，键盘可达（tabindex + data-desc）。
+  expect(html).toContain('tabindex="0"');
+  expect(html).toContain('data-desc="整个会话：调用 3 次');
+  // 身份行保留已加载请求数；路径条目可定位。
+  expect(html).toContain('已加载 <b>1</b> 笔 Request');
+  expect(html).toContain('data-summary-path="src/a.ts"');
+});
+
+test('空集合的分组整组隐藏，右列全空不留空列', () => {
+  const noSkill = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({ skills: [] }) as never, summaryStatus: 'ready',
+  });
+  expect(noSkill).not.toContain('<strong>Skill</strong>');
+  expect(noSkill).not.toContain('data-summary-skill');
+  const rightEmpty = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({ tools: [], paths: { written: [], read: [] }, skills: [] }) as never,
+    summaryStatus: 'ready',
+  });
+  expect(rightEmpty).not.toContain('cue-activity');
+  expect(rightEmpty).toContain('cue-board solo');
+  expect(rightEmpty).toContain('<strong>资源</strong>');
+});
+
+test('工具组的失败入口与中断计数按非零出现', () => {
+  const withIssues = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({ interrupts: { count: 2, requests: [], unknown: 1 } }) as never,
+    summaryStatus: 'ready',
+  });
+  expect(withIssues).toContain('data-summary-failures');
+  expect(withIssues).toContain('⚠ 1 失败');
+  expect(withIssues).toContain('已识别用户中断 <b>2</b>');
+  expect(withIssues).toContain('1 笔请求的中断判定缺失');
+  const clean = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({
+      tools: [{ name: 'Bash', count: 3, paired: 3, error_known: 3, errors: 0 }],
+    }) as never,
+    summaryStatus: 'ready',
+  });
+  expect(clean).not.toContain('data-summary-failures');
+  expect(clean).not.toContain('已识别用户中断');
+  // 未判定的结果在 chip 悬停里如实说明，不冒充失败。
+  const unknownResult = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({
+      tools: [{ name: 'Bash', count: 3, paired: 3, error_known: 2, errors: 0 }],
+    }) as never,
+    summaryStatus: 'ready',
+  });
+  expect(unknownResult).not.toContain('data-summary-failures');
+  expect(unknownResult).toContain('1 次结果未判定（不计入失败）');
+});
+
+test('费用缺值不给 0，缺值笔数进按需说明', () => {
+  const html = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({
+      totals: { in_tok: 100, out_tok: 50, cost: null, cost_absent: 2, cache_hit: null },
+    }) as never,
+    summaryStatus: 'ready',
+  });
+  expect(html).toContain('提示 <b>');
+  expect(html).not.toContain('费用 <b>');
+  expect(html).not.toContain('$');
+  expect(html).toContain('2 笔未取得费用');
+  expect(html).toContain('本次没有可用分母，不给数');
+});
+
+test('结构组条件字段非零才出现', () => {
+  const html = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({
+      structure: {
+        requests_total: 5, main: 4, bypass: 1, subagent_actors: 2, subagent_requests: 5,
+        retries: 3, context_peak_pct: 41, models: [{ name: 'a', count: 3 }, { name: 'b', count: 2 }],
+      },
+    }) as never,
+    summaryStatus: 'ready',
+  });
+  expect(html).toContain('主链 <b>4</b> · 旁路 <b>1</b>');
+  expect(html).toContain('上下文峰值 <b>41%</b>');
+  expect(html).toContain('子代理 <b>2</b> 个 · <b>5</b> 笔');
+  expect(html).toContain('重试 <b>3</b> 笔');
+  expect(html).toContain('模型 <b>2</b>');
+  const quiet = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({
+      structure: {
+        requests_total: 5, main: 4, bypass: 1, subagent_actors: 0, subagent_requests: 0,
+        retries: 0, context_peak_pct: 41, models: [{ name: 'a', count: 5 }],
+      },
+    }) as never,
+    summaryStatus: 'ready',
+  });
+  // 「子代理」一词也出现在资源组的口径说明里；这里断言的是结构组的读数槽。
+  expect(quiet).not.toContain('子代理 <b>');
+  expect(quiet).not.toContain('重试 <b>');
+  expect(quiet).not.toContain('模型 <b>');
+});
+
+test('汇总过期出现可见警示，正常态不出现', () => {
+  const stale = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({ dirty: true }) as never, summaryStatus: 'ready',
+  });
+  expect(stale).toContain('派生还没追上输入');
+  const fresh = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture() as never, summaryStatus: 'ready',
+  });
+  expect(fresh).not.toContain('派生还没追上输入');
+});
+
+test('无正文请求入口落在性能组，展开清单可定位', () => {
+  const hidden = [{ req_id: 7, body_state: 'evicted' }, { req_id: 9, body_state: 'pending' }];
+  const html = sessionHead({
+    ...headBase, rows: [requestRow({ req_id: 1 })] as never, hiddenRows: hidden as never,
+    summary: null, summaryStatus: 'absent',
+  });
+  expect(html).toContain('hidden-more');
+  expect(html).toContain('data-fold="hidden:k"');
+  expect(html).toContain('无正文 <b>2</b> 笔');
+  expect(html).toContain('<strong>性能</strong>');
+  expect(html).toContain('data-summary-req="7"');
+});
+
+test('会话标题转义后进入头部', () => {
+  const html = sessionHead({
+    ...headBase,
+    row: { conv_key: 'k', title: '<img src=x onerror=alert(1)>', last_ms: 1, request_count: 1, agents: [], flags: [] },
+    rows: [requestRow()] as never,
+    summary: summaryFixture() as never, summaryStatus: 'ready',
+  });
+  expect(html).not.toContain('<img');
+  expect(html).toContain('&lt;img');
 });
