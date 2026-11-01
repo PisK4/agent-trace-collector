@@ -777,8 +777,8 @@ if (typeof document !== 'undefined') {
    *  头与带的实际高度同时写进 --head-h / --band-h，滚动定位的 scroll-margin 随之走。
    *  字体就绪、清单展开这类不经过重绘的高度变化由 ResizeObserver 覆盖；头部节点
    *  在内容变化时会被整体替换，观察对象跟随当前节点重挂。 */
-  let headResizeObserver = null;
-  let observedHead = null;
+  let headResizeObserver = /** @type {ResizeObserver | null} */ (null);
+  let observedHead = /** @type {Element | null} */ (null);
   function syncBandTop() {
     const band = document.getElementById('turn-band');
     const head = /** @type {HTMLElement | null} */ (document.querySelector('.session-head'));
