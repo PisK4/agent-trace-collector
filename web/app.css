@@ -303,35 +303,29 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .cue-account,.cue-activity{min-width:0;display:flex;flex-direction:column;gap:8px}
 .cue-account{padding-right:14px;border-right:1px solid var(--line)}
 .cue-board.solo .cue-account{border-right:0;padding-right:0}
-.cue-row{display:grid;grid-template-columns:87px minmax(0,1fr);gap:3px 8px;align-items:start}
-.cue-account .cue-row{grid-template-columns:minmax(0,1fr)}
+.cue-row{display:grid;grid-template-columns:minmax(0,1fr);gap:3px 8px;align-items:start}
 @container (max-width:650px){
   .cue-board{grid-template-columns:1fr;gap:12px}
   .cue-account{border-right:0;padding-right:0}
-  .cue-account .cue-row{grid-template-columns:87px minmax(0,1fr)}
 }
-/* 分组标题：图标加短标签；按需说明放 data-desc，悬停与键盘聚焦都可见。 */
-.cue{position:relative;display:inline-flex;align-items:center;gap:5px;min-height:19px;padding-top:2px;color:var(--text-2);cursor:default;min-width:0}
-.cue svg{flex:none;color:var(--muted)}
-.cue strong{font:550 10.5px/1.5 var(--ui);white-space:nowrap}
-.cue:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.cue::after{
+/* 摘要行不再带图标与标签，两列分工靠列间 1px 细线与间距；按需说明放 data-desc，
+   悬停与键盘聚焦都可见。 */
+.cue-data{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:3px 10px;min-width:0;overflow:hidden;font-size:11px;line-height:1.7;color:var(--muted);cursor:default}
+.cue-data.open-wrap{flex-wrap:wrap;overflow:visible}
+.cue-data>span{white-space:nowrap}
+.cue-data .cue-line{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cue-data:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cue-data::after{
   content:attr(data-desc);display:none;position:absolute;left:0;top:calc(100% + 4px);z-index:6;
   width:max-content;max-width:min(300px,100%);padding:5px 8px;border:1px solid var(--line);border-radius:4px;
   background:var(--surface);color:var(--text-2);font-size:10.5px;line-height:1.6;white-space:normal;text-align:left;
   box-shadow:0 4px 14px rgba(0,0,0,.08);pointer-events:none;
 }
-.cue:hover::after,.cue:focus-visible::after{display:block}
-/* 每组一行：放不下的不换行——统计行整段省略，chip 收缩省略，+N 与异常入口 flex:none 不被裁。 */
-.cue-data{display:flex;align-items:center;flex-wrap:nowrap;gap:3px 10px;min-width:0;overflow:hidden;font-size:11px;line-height:1.7;color:var(--muted)}
-.cue-data.open-wrap{flex-wrap:wrap;overflow:visible}
-.cue-data>span{white-space:nowrap}
-.cue-data .cue-line{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cue-data:hover::after,.cue-data:focus-visible::after{display:block}
 .cue-data b{color:var(--text);font-weight:550;font-variant-numeric:tabular-nums}
 .cue-data .tool-chip{cursor:pointer;max-width:220px;flex:0 1 auto;min-width:0}
 .cue-data .tool-chip .n{font-weight:550;color:var(--text)}
-.cue-data .tool-chip .err{color:var(--warn);font-weight:550;margin-left:2px}
-.cue-data .warn-n{color:var(--warn);font-weight:550;font-size:10.5px;background:none;border:0;padding:0;cursor:pointer;white-space:nowrap;flex:none}
+.cue-data .tool-chip .err{color:var(--bad);font-weight:550;margin-left:2px}
 .cue-data .interrupt{font-size:10px;white-space:nowrap;flex:none}
 /* 汇总未就绪时的资源回退标记：可见地更换统计口径，不只是悬停说明。 */
 .cue-data .scope-tag{font-size:10px;color:var(--warn);background:var(--warn-soft);border-radius:3px;padding:0 5px;flex:none}

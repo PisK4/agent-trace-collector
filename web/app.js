@@ -1690,23 +1690,6 @@ if (typeof document !== 'undefined') {
     }
     // 会话 ID 复制钮在会话头 facts 行里，随重绘重建，走委托。
     if (t.closest('#copy-session')) { void copySessionId(); return; }
-    // 收起行里的失败数在 <summary> 内：先于 summary 早退处理，阻止折叠开合，
-    // 直接打开失败调用列表（集合随汇总首屏返回，不用再查）。
-    const failuresBtn = /** @type {HTMLElement | null} */ (t.closest('[data-summary-failures]'));
-    if (failuresBtn !== null) {
-      e.preventDefault();
-      const summary = store.peekSummary();
-      const failures = summary !== null && summary.status === 'ready' && summary.data !== null
-        ? summary.data.failures : [];
-      summaryList = {
-        kind: 'failures', param: '', label: `失败调用 · ${failures.length}`,
-        loading: false, error: null,
-        data: { items: failures.map(f => ({ ...f, state: 'resolved' })), truncated: false },
-      };
-      openRail();
-      renderRail();
-      return;
-    }
     if (t.closest('summary')) return;
     if (t.closest('#load-later')) { void loadLater(); return; }
     if (t.closest('#refresh-window')) { void refreshWindow(); return; }
