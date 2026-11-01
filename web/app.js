@@ -20,6 +20,7 @@ import { backendStateHtml } from './backend-state.js';
 import { esc } from './html.js';
 import { partLabel } from './parts.js';
 import { createReaderStore } from './reader-store.js';
+import { createHttpReadTransport } from './read-http.js';
 import { initLayout, openRail } from './layout.js';
 import { fillContextMap, iidOf, itemLabel } from './context-map.js';
 import { createContextMenu, iidParse } from './context-detail.js';
@@ -58,7 +59,8 @@ export function restoreScroll(element, previous) {
 
 if (typeof document !== 'undefined') {
   // store 是唯一的读取缓存：页面同步渲染经 peek* 消费，副本不作第二份真相。
-  const store = createReaderStore((/** @type {string} */ url) => fetch(url),
+  // 读取经具名契约的 HTTP adapter 走 store 内部调度；store 是唯一可 Fetch 的读取方。
+  const store = createReaderStore(createHttpReadTransport({ fetcher: (/** @type {string} */ url) => fetch(url) }),
     // 记录快照异步变化（409 作废、自动重读换新或失败）按影响面响应；迟到响应不进来。
     (/** @type {number} */ id) => { onStoreChange(id); },
     // 轮次快照与会话汇总落地（出现/消失、折叠区就绪）同样重绘两栏。
@@ -87,10 +89,17 @@ if (typeof document !== 'undefined') {
    */
   const retainedTail = new Map();
   /**
-   * 上下文明细弹窗：tile、图例与列表行共用的选择动作。读取走注入的同一 fetcher，
-   * 代次捕获在模块内，晚到响应不进已切换的弹窗。
+   * 上下文明细弹窗：tile、图例与列表行共用的选择动作。读取经注入的具名操作
+   * facade 走 store 的统一调度，代次捕获在模块内，晚到响应不进已切换的弹窗，
+   * 关闭即取消在途读取。
    */
-  const contextMenu = createContextMenu({ fetcher: (/** @type {string} */ url) => fetch(url) });
+  const contextMenu = createContextMenu({
+    readDirectory: (selection, cursor, signal) => store.readContextItem(
+      selection.reqId,
+      { kind: selection.kind, name: selection.name, tag: selection.tag, cursor: cursor ?? null },
+      selection.token, signal),
+    readEntry: (target, signal) => store.readContextBody(target, signal),
+  });
   /** @type {{kind: string, param: string, label: string, loading: boolean, error: string | null, data: import('../src/queries/session-summary').SummaryEntries | null} | null} 会话汇总条目列表：点开条目后右栏的支撑记录清单。 */
   let summaryList = null;
   /** 中栏键控提交：节点身份、选择高亮与滚动锚点都在视图内维护，装配层只给模型。 */
@@ -1298,9 +1307,7 @@ if (typeof document !== 'undefined') {
   /** 启动、显式刷新与点按降级标签时各读一次；不做轮询，读取失败保留上一次显示。 */
   async function refreshBackendState() {
     try {
-      const response = await fetch('/api/stats');
-      if (!response.ok) return;
-      const stats = /** @type {{admission?: import('./backend-state.js').Admission | null}} */ (await response.json());
+      const stats = await store.loadStats();
       applyBackendState(stats.admission ?? null);
     } catch { /* 状态未知不冒充正常，也不清掉已知降级 */ }
   }
@@ -2029,7 +2036,23 @@ if (typeof document !== 'undefined') {
       kind: 'restore-url', session: p.get('session'),
       trace: traceIdFromParam(p.get('trace')), tab: railTabFromParam(p.get('tab')),
     });
-    if (state.session !== null) void selectSession(state.session, state.reqId);
+    if (state.session !== null) { void selectSession(state.session, state.reqId); return; }
+    // URL 无会话：离开当前会话——窗口与请求级读取全部取消并清空，页面回到无会话落点。
+    resetReading();
+    store.leaveSession();
+    folds.clear();
+    structureSelected.clear();
+    summaryList = null;
+    contextMenu.close();
+    mainView.reset();
+    renderAll();
+  });
+
+  // 统一退出生命周期：页面进入 bfcache 前取消全部读取并停掉调度；从 bfcache
+  // 恢复时 store 已失效，整页按 URL 重载恢复现场。
+  window.addEventListener('pagehide', () => { store.dispose(); });
+  window.addEventListener('pageshow', (/** @type {PageTransitionEvent} */ e) => {
+    if (e.persisted) location.reload();
   });
 
   initLayout();

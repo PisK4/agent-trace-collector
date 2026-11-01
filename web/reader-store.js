@@ -1,15 +1,18 @@
 // @ts-check
 import { deltaOrdinals, messageEntries } from './body-model.js';
+import { createReadScheduler } from './read-scheduler.js';
 
 /**
- * 生产阅读的读取协调：网络、区间缓存、inflight 去重、失效与异步代次都在这里，
- * 不进 DOM 闭包。正文与工具结果带阅读版本；409 整笔作废（详情、meta、消息、
- * 区间、结构、增量、工具与路由一起），作废是记录原地重置并保留作废态：原因经
- * 快照 status 同步可查，store 随即自动重读换新（同一笔有冷却窗口，防派生高频
- * 发布时打转）；手动「立即重读」随时可发起。token 变化的 validate 读取同样
- * 原地重置整笔快照。迟到响应必须同时匹配会话代次、当前记录归属、记录修订与
- * 捕获的 token 才可写入缓存；迟到响应与会话切换后的旧回调不作废、不通知，
- * 页面不按 reading_changed 错误自行清理。
+ * 生产阅读的读取协调：调度、区间缓存、inflight 去重、失效与异步代次都在这里，
+ * 不进 DOM 闭包。全部读取经 ReadTransport（Task 1 契约）走内部有界调度器，
+ * 分页级与会话级两个取消边界：切换或离开会话即取消该会话的全部在途与待发
+ * 读取，页面卸载取消全部。正文与工具结果带阅读版本；409 整笔作废（详情、
+ * meta、消息、区间、结构、增量、工具与路由一起），作废是记录原地重置并保留
+ * 作废态：原因经快照 status 同步可查，store 随即自动重读换新（同一笔有冷却
+ * 窗口，防派生高频发布时打转）；手动「立即重读」随时可发起。token 变化的
+ * validate 读取同样原地重置整笔快照。迟到响应必须同时匹配会话代次、当前
+ * 记录归属、记录修订与捕获的 token 才可写入缓存；迟到响应与会话切换后的旧
+ * 回调不作废、不通知，页面不按 reading_changed 错误自行清理。
  *
  * 缓存边界：只保留当前会话已加载窗口的请求，外加显式读取过的窗口外请求。
  */
@@ -34,12 +37,17 @@ import { deltaOrdinals, messageEntries } from './body-model.js';
  * @property {(cursor?: string) => Promise<void>} loadSessions
  * @property {(key: string, limit?: number, anchor?: 'start' | 'latest') => Promise<void>} selectSession
  * @property {() => Promise<void>} loadLater
+ * @property {() => void} leaveSession 离开当前会话：取消该会话的全部在途与待发读取，清窗口与请求级缓存；迟到的会话读取不能复活任何窗口内容。
+ * @property {() => void} dispose 页面卸载：取消全部读取并停止调度；之后的读取以 cancelled 拒绝。
+ * @property {() => Promise<import('../src/queries/stats').Stats>} loadStats 后端状态与统计；顶栏降级标签与调试图共用。
  * @property {(id: number, validate?: boolean) => Promise<RequestRead>} readRequest
  * @property {(id: number, from: number, to: number) => Promise<import('../src/protocols').BodyPage>} readRange
  * @property {(id: number) => Promise<RequestRead>} loadStructure
  * @property {(id: number, pages?: number) => Promise<RequestRead>} loadDelta
  * @property {(id: number, ord: number) => Promise<import('../src/reading').ToolResultReading>} readToolResult
  * @property {(id: number) => Promise<unknown>} readRoute
+ * @property {(id: number, query: import('../src/reading').ContextItemQuery, token: string, signal: AbortSignal) => Promise<import('../src/reading').ContextItemReading>} readContextItem 弹窗目录读取；signal 绑定弹窗生命周期，不进全局正文缓存。
+ * @property {(target: import('../src/read-contract').ContextBodyTarget, signal: AbortSignal) => Promise<import('../src/protocols').BodyPage | import('../src/reading').ToolResultReading>} readContextBody 弹窗片段正文读取；按 ContextBodyTarget 分流到正文区间与工具结果。
  * @property {(id: number) => RequestRead | null} peekRequest 同步读取当前快照，不发网络；记录存在即返回（含作废、失败与读取中的半成品），null 只表示本会话没有这笔记录。
  * @property {(id: number, ord: number) => import('../src/reading').ToolResultReading | null} peekToolResult 同步读取工具结果缓存，失败占位也算可用。
  * @property {(id: number) => {state: string, summary: unknown} | null} peekRoute 同步读取路由缓存；未读到或读取失败返回 null。
@@ -54,45 +62,52 @@ import { deltaOrdinals, messageEntries } from './body-model.js';
  */
 
 /**
- * 固定 N 并发的网络队列：失败在 finally 释放，不占住后续请求。
- * @param {number} limit
- * @param {(url: string) => Promise<Response>} fetcher
- */
-function createLanes(limit, fetcher) {
-  /** @type {{task: () => Promise<unknown>, resolve: (value: Response) => void, reject: (reason?: unknown) => void}[]} */
-  const queue = [];
-  let active = 0;
-  const pump = () => {
-    while (active < limit && queue.length > 0) {
-      const next = queue.shift();
-      if (next === undefined) break;
-      active += 1;
-      next.task().then(value => next.resolve(/** @type {Response} */ (value)), reason => next.reject(reason))
-        .finally(() => { active -= 1; pump(); });
-    }
-  };
-  /** @param {string} url @returns {Promise<Response>} */
-  const run = url => new Promise((resolve, reject) => {
-    queue.push({ task: () => fetcher(url), resolve, reject });
-    pump();
-  });
-  return run;
-}
-
-/**
- * @param {(url: string) => Promise<Response>} fetcher
+ * @param {import('../src/read-contract').ReadTransport} transport 具名读取的唯一执行通道；store 不拼 URL、不 Fetch。
  * @param {(id: number) => void} [onReadChanged] 记录快照异步变化（作废、自动重读
  *   换新或失败）时通知页面重绘；迟到响应与会话切换后的旧任务不通知。
- * @param {{ autoRereadCooldownMs?: number, onTurnsChanged?: () => void, onSummaryChanged?: () => void }} [options]
- *   自动重读的冷却窗口，默认 10 秒；轮次快照与会话汇总落地（ready 或 absent）时通知，测试可注入短窗。
+ * @param {{ autoRereadCooldownMs?: number, scheduler?: object, onTurnsChanged?: () => void, onSummaryChanged?: () => void }} [options]
+ *   自动重读的冷却窗口，默认 10 秒；scheduler 透传给内部有界调度器；轮次快照与会话
+ *   汇总落地（ready 或 absent）时通知，测试可注入短窗。
  * @returns {ReaderStore}
  */
-export function createReaderStore(fetcher, onReadChanged, options) {
+export function createReaderStore(transport, onReadChanged, options) {
   const autoRereadCooldownMs = options?.autoRereadCooldownMs ?? 10000;
   const onTurnsChanged = options?.onTurnsChanged ?? null;
   const onSummaryChanged = options?.onSummaryChanged ?? null;
-  const lane = createLanes(4, fetcher);
+  const scheduler = createReadScheduler(options?.scheduler);
+  /** 页面级读取（会话列表、统计）的取消边界；dispose 时一并取消。 */
+  let pageScope = {};
+  /** 会话级读取的取消边界：切换与离开会话即换新，旧会话的在途与待发一并取消。 */
+  let sessionScope = {};
   let epoch = 0;
+
+  /**
+   * 读取执行的唯一入口：transport.execute 连同响应解析在调度槽内完成。
+   * 操作与输入按调用点逐一对应；此处不还原每操作的输入形状，unknown 以
+   * never 收窄交给 transport 校验。
+   * @template T
+   * @param {object} scope @param {keyof import('../src/read-contract').ReadOperations} operation
+   * @param {unknown} input @param {AbortSignal} [signal]
+   * @returns {Promise<T>}
+   */
+  function execute(scope, operation, input, signal) {
+    return /** @type {Promise<T>} */ (
+      scheduler.run({ scope, priority: 'interactive', signal },
+        taskSignal => /** @type {Promise<unknown>} */ (
+          transport.execute(operation, /** @type {never} */ (input), { signal: taskSignal }))));
+  }
+
+  /** 弹窗读取的 scope：同一 AbortSignal（同一弹窗生命周期）复用一个 scope。 */
+  const dialogScopes = new WeakMap();
+  /** @param {AbortSignal} signal @returns {object} */
+  function dialogScopeOf(signal) {
+    let scope = dialogScopes.get(signal);
+    if (scope === undefined) {
+      scope = {};
+      dialogScopes.set(signal, scope);
+    }
+    return scope;
+  }
 
   /** @type {{items: import('../src/queries/sessions').SessionRow[], cursor: string | null, error: string | null}} */
   const sessions = { items: [], cursor: null, error: null };
@@ -143,7 +158,10 @@ export function createReaderStore(fetcher, onReadChanged, options) {
         /** 上次自动重读发起时间与在排的定时器。 */
         autoRereadAt: 0, autoTimer: null,
         meta: null,
-        pages: new Map(),
+        /** @type {Map<string, import('../src/protocols').BodyPage>} 区间完成值：命中即返回，不发网。 */
+        pageValues: new Map(),
+        /** @type {Map<string, Promise<import('../src/protocols').BodyPage>>} 区间在途登记：去重与失败清理由各任务自己做。 */
+        pageInflight: new Map(),
         messages: new Map(),
         structure: { back: 0, next: 0, total: null, ords: [], loading: false, error: null },
         delta: { next: 0, done: false, loading: false, error: null, unconfirmed: false },
@@ -156,6 +174,17 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return rec;
   }
 
+  /** 会话级缓存的统一清理：先撤自动重读定时器，再清各登记。 */
+  function clearReadsCache() {
+    for (const rec of reads.values()) {
+      if (rec.autoTimer !== null) { clearTimeout(rec.autoTimer); rec.autoTimer = null; }
+    }
+    reads.clear();
+    deltaInflight.clear();
+    routes.clear();
+    routeValues.clear();
+  }
+
   /** @param {any} rec */
   const sortedEntries = rec => [...rec.messages.values()].sort((/** @type {{ord: number}} */ a, /** @type {{ord: number}} */ b) => a.ord - b.ord);
 
@@ -166,6 +195,12 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     }
   }
 
+  /** @param {any} rec @param {string} key 缺口页移出缓存：完成值与在途登记一起删，重试重新走网络。 */
+  function dropPage(rec, key) {
+    rec.pageValues.delete(key);
+    rec.pageInflight.delete(key);
+  }
+
   /** @param {any} rec 清空正文缓存：作废与 validate 换版本共用的原地重置。 */
   function clearRecordContent(rec) {
     deltaInflight.delete(rec.id);
@@ -173,7 +208,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     rec.detail = null;
     rec.detailError = null;
     rec.meta = null;
-    rec.pages = new Map();
+    rec.pageValues = new Map();
+    rec.pageInflight = new Map();
     rec.messages = new Map();
     rec.structure = { back: 0, next: 0, total: null, ords: [], loading: false, error: null };
     rec.delta = { next: 0, done: false, loading: false, error: null, unconfirmed: false };
@@ -227,7 +263,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     if (sessionsLoading) return;
     sessionsLoading = true;
     try {
-      const page = await getJson(`/api/sessions?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+      const page = await execute(pageScope, 'sessions', { limit: 20, cursor: cursor ?? null });
       // 同 tick 的两次点击已经由上面的闸门挡住；分页边界仍可能把同一会话
       // 返回两次（末条时间相同），按 conv_key 去重，保留先出现的一条。
       /** @type {Map<string, import('../src/queries/sessions').SessionRow>} */
@@ -245,20 +281,10 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     }
   }
 
-  /** @param {string} url */
-  async function getJson(url) {
-    const response = await lane(url);
-    if (response.status === 409) {
-      const error = /** @type {Error & {code?: string}} */ (new Error('reading_changed'));
-      error.code = 'reading_changed';
-      throw error;
-    }
-    if (!response.ok) {
-      const error = /** @type {Error & {code?: string}} */ (new Error(`http_${response.status}`));
-      error.code = response.status === 503 ? 'unavailable' : `http_${response.status}`;
-      throw error;
-    }
-    return response.json();
+  /** 后端状态与统计：顶栏降级标签与调试图共用一次读取，不做轮询。 */
+  function loadStats() {
+    return /** @type {Promise<import('../src/queries/stats').Stats>} */ (
+      execute(pageScope, 'stats', {}));
   }
 
   /**
@@ -281,12 +307,13 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     const task = (async () => {
       turns = { status: 'loading', items: turns.items };
       try {
-        const page = /** @type {import('../src/queries/turns').TurnsPage} */ (
-          await getJson(`/api/sessions/${encodeURIComponent(key)}/turns?from=${from}`));
+        const page = await execute(sessionScope, 'turns', { key, from });
         if (myEpoch !== epoch) return;
         turns = { status: 'ready', items: page.items };
-      } catch {
+      } catch (error) {
         if (myEpoch !== epoch) return;
+        // 取消不落 absent：页面卸载与会话切换都走这里，状态留给新的生命周期。
+        if (/** @type {Error & {code?: string}} */ (error).code === 'cancelled') return;
         turns = { status: 'absent', items: [] };
       } finally {
         if (myEpoch === epoch) onTurnsChanged?.();
@@ -309,12 +336,12 @@ export function createReaderStore(fetcher, onReadChanged, options) {
       return;
     }
     try {
-      const items = /** @type {import('../src/queries/bg-jobs').BgJobRow[]} */ (
-        await getJson(`/api/sessions/${encodeURIComponent(key)}/bg-jobs`));
+      const items = await execute(sessionScope, 'bgJobs', { key });
       if (myEpoch !== epoch) return;
       bgJobs = { status: 'ready', items };
-    } catch {
+    } catch (error) {
       if (myEpoch !== epoch) return;
+      if (/** @type {Error & {code?: string}} */ (error).code === 'cancelled') return;
       bgJobs = { status: 'absent', items: [] };
     }
   }
@@ -330,12 +357,12 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     summary = { status: 'loading', data: null };
     onSummaryChanged?.();
     try {
-      const data = /** @type {import('../src/queries/session-summary').SessionSummary} */ (
-        await getJson(`/api/sessions/${encodeURIComponent(key)}/summary`));
+      const data = await execute(sessionScope, 'summary', { key });
       if (myEpoch !== epoch) return;
       summary = { status: 'ready', data };
-    } catch {
+    } catch (error) {
       if (myEpoch !== epoch) return;
+      if (/** @type {Error & {code?: string}} */ (error).code === 'cancelled') return;
       summary = { status: 'absent', data: null };
     } finally {
       if (myEpoch === epoch) onSummaryChanged?.();
@@ -344,11 +371,37 @@ export function createReaderStore(fetcher, onReadChanged, options) {
 
   /** @param {import('../src/queries/session-summary').SummaryEntriesQuery} query */
   async function loadSummaryEntries(query) {
-    const params = new URLSearchParams({ kind: query.kind });
-    if (query.kind === 'tool' || query.kind === 'skill') params.set('name', query.name);
-    if (query.kind === 'written' || query.kind === 'read') params.set('path', query.path);
-    const data = await getJson(`/api/sessions/${encodeURIComponent(String(sessionKey))}/summary/entries?${params.toString()}`);
-    return /** @type {import('../src/queries/session-summary').SummaryEntries} */ (data);
+    return execute(sessionScope, 'summaryEntries',
+      { key: String(sessionKey), query });
+  }
+
+  /**
+   * 离开当前会话：先推进代次，再取消会话级读取并清窗口与全部请求级缓存。
+   * 迟到的会话读取即便忽略取消返回，也不能复活任何窗口内容——缓存已清空，
+   * 回写守卫的代次校验拒绝写入。
+   */
+  function leaveSession() {
+    epoch += 1;
+    scheduler.cancelScope(sessionScope);
+    sessionScope = {};
+    sessionKey = null;
+    windowRows = [];
+    newerCursor = null;
+    windowLoading = false;
+    windowError = null;
+    turns = { status: 'idle', items: [] };
+    bgJobs = { status: 'idle', items: [] };
+    summary = { status: 'idle', data: null };
+    clearReadsCache();
+  }
+
+  /** 页面卸载：取消全部读取并停止调度；之后的读取以 cancelled 拒绝。 */
+  function dispose() {
+    epoch += 1;
+    scheduler.cancelScope(pageScope);
+    scheduler.cancelScope(sessionScope);
+    clearReadsCache();
+    scheduler.dispose();
   }
 
   /**
@@ -359,18 +412,18 @@ export function createReaderStore(fetcher, onReadChanged, options) {
    */
   async function selectSession(key, limit = 30, anchor = 'start') {
     const myEpoch = ++epoch;
+    scheduler.cancelScope(sessionScope);
+    sessionScope = {};
+    clearReadsCache();
     sessionKey = key;
     windowLoading = true;
     windowError = null;
     turns = { status: 'idle', items: [] };
     bgJobs = { status: 'idle', items: [] };
     summary = { status: 'idle', data: null };
-    reads.clear();
-    deltaInflight.clear();
-    routes.clear();
-    routeValues.clear();
     try {
-      const page = await getJson(`/api/sessions/${encodeURIComponent(key)}/requests?direction=${anchor === 'latest' ? 'older' : 'forward'}&limit=${limit}`);
+      const page = await execute(sessionScope, 'requests',
+        { key, limit, cursor: null, direction: anchor === 'latest' ? 'older' : 'forward' });
       if (myEpoch !== epoch) return;
       windowRows = page.items;
       newerCursor = page.next_cursor;
@@ -397,7 +450,8 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     try {
       // 服务端窗口分页上限 200（queries.checkLimit）：翻倍请求越过上限后
       // 每次都会 400，窗口停在 400 行以内；clamp 到上限继续按页加载。
-      const page = await getJson(`/api/sessions/${encodeURIComponent(String(sessionKey))}/requests?direction=forward&limit=${Math.min(windowRows.length > 0 ? windowRows.length : 30, 200)}&cursor=${encodeURIComponent(newerCursor)}`);
+      const page = await execute(sessionScope, 'requests',
+        { key: String(sessionKey), limit: Math.min(windowRows.length > 0 ? windowRows.length : 30, 200), cursor: newerCursor, direction: 'forward' });
       if (myEpoch !== epoch) return;
       // append + 去重：forward 页按 (started_ms, req_id) 升序返回，接在尾部即全窗正序；
       // 既有行不重编号，轮次下界不动、无需重取。
@@ -450,7 +504,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     const myRev = rec.rev;
     /** @type {Promise<void>} */
     const task = (async () => {
-      const detail = await getJson(`/api/requests/${rec.id}`);
+      const detail = await execute(sessionScope, 'detail', { id: rec.id });
       // 迟到响应：会话已切换、记录已作废重置或被取代。
       if (myEpoch !== epoch || reads.get(rec.id) !== rec || rec.rev !== myRev) throwReadingChanged();
       if (validate && rec.token !== null && detail.reading_token !== rec.token) {
@@ -513,34 +567,46 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     return assemble(rec);
   }
 
-  /** @param {number} id @param {number} from @param {number} to @returns {Promise<import('../src/protocols').BodyPage>} */
+  /**
+   * 区间读取：完成值与在途登记分开缓存。命中完成值直接返回；命中在途共享
+   * 同一任务；任务结束从在途登记移除、成功值落完成值——失败与缺口页不留缓存，
+   * 重试重新走网络。旧任务只清属于自己的登记，不删除其他代次的新任务。
+   * @param {number} id @param {number} from @param {number} to @returns {Promise<import('../src/protocols').BodyPage>}
+   */
   async function readRange(id, from, to) {
     const rec = recordOf(id);
     if (rec.detail === null) await fetchDetail(rec, false);
     if (rec.detail === null) throw rec.detailError ?? new Error('detail_unavailable');
     const key = JSON.stringify([id, rec.token, from, to]);
-    let pending = rec.pages.get(key);
-    if (pending === undefined) {
-      const myEpoch = epoch;
-      const myToken = rec.token;
-      pending = (async () => {
-        try {
-          const page = await getJson(`/api/requests/${id}/body?from=${from}&to=${to}&if_reading=${myToken}`);
-          // 迟到响应：会话已切换、记录已作废重建，或版本已换（validate 原地重置）。
-          if (myEpoch !== epoch || reads.get(id) !== rec || rec.token !== myToken) throwReadingChanged();
-          mergeMessages(rec, page);
-          if (from === 0 && to === 0 && rec.meta === null) rec.meta = page;
-          return page;
-        } catch (error) {
-          if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
-            invalidateIfCurrent(rec, id, myEpoch, myToken);
-          }
-          throw error;
+    const done = rec.pageValues.get(key);
+    if (done !== undefined) return done;
+    const inflight = rec.pageInflight.get(key);
+    if (inflight !== undefined) return inflight;
+    const myEpoch = epoch;
+    const myToken = rec.token;
+    const pending = (async () => {
+      const page = await execute(sessionScope, 'body', { id, token: myToken, from, to });
+      // 迟到响应：会话已切换、记录已作废重建，或版本已换（validate 原地重置）。
+      if (myEpoch !== epoch || reads.get(id) !== rec || rec.token !== myToken) throwReadingChanged();
+      mergeMessages(rec, page);
+      if (from === 0 && to === 0 && rec.meta === null) rec.meta = page;
+      return page;
+    })().catch(error => {
+      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
+        invalidateIfCurrent(rec, id, myEpoch, myToken);
+      }
+      throw error;
+    });
+    rec.pageInflight.set(key, pending);
+    void pending.then(
+      page => {
+        if (rec.pageInflight.get(key) === pending) {
+          rec.pageInflight.delete(key);
+          rec.pageValues.set(key, page);
         }
-      })();
-      rec.pages.set(key, pending);
-      pending.catch(() => { rec.pages.delete(key); });
-    }
+      },
+      () => { if (rec.pageInflight.get(key) === pending) rec.pageInflight.delete(key); },
+    );
     return pending;
   }
 
@@ -574,7 +640,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
       }
     }
     if (gap) {
-      rec.pages.delete(JSON.stringify([id, rec.token, from, to]));
+      dropPage(rec, JSON.stringify([id, rec.token, from, to]));
       state.error = entries.length === 0 ? 'body_page_empty' : 'body_page_gap';
       return;
     }
@@ -684,7 +750,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
         for (let o = start; o < pieceEnd; o += 1) {
           if (!gotOrds.has(o)) {
             // 缺口页不留在缓存：重试必须重新走网络，不能永远命中同一片坏页。
-            rec.pages.delete(JSON.stringify([id, rec.token, start, pieceEnd]));
+            dropPage(rec, JSON.stringify([id, rec.token, start, pieceEnd]));
             const error = /** @type {Error & {code?: string}} */ (new Error('delta_gap'));
             error.code = 'delta_gap';
             throw error;
@@ -719,7 +785,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
       const myToken = rec.token;
       pending = (async () => {
         try {
-          const reading = /** @type {import('../src/reading').ToolResultReading} */ (await getJson(`/api/requests/${id}/tools/${ord}/result?if_reading=${myToken}`));
+          const reading = await execute(sessionScope, 'toolResult', { id, ord, token: myToken });
           // 迟到响应：会话已切换、记录已作废重建，或版本已换（validate 原地重置）。
           if (myEpoch !== epoch || reads.get(id) !== rec || rec.token !== myToken) throwReadingChanged();
           rec.toolValues.set(key, reading);
@@ -750,7 +816,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     if (pending === undefined) {
       const myEpoch = epoch;
       pending = (async () => {
-        const route = await getJson(`/api/requests/${id}/route`);
+        const route = await execute(sessionScope, 'route', { id });
         // 迟到响应：会话已切换，或本任务已作废被新读取取代；成功路径同样核对身份。
         if (myEpoch !== epoch || routes.get(id) !== pending) throwReadingChanged();
         routeValues.set(id, /** @type {{state: string, summary: unknown}} */ (route));
@@ -760,6 +826,29 @@ export function createReaderStore(fetcher, onReadChanged, options) {
       pending.catch(() => { if (routes.get(id) === pending) routes.delete(id); });
     }
     return pending;
+  }
+
+  /**
+   * 弹窗目录读取：signal 绑定弹窗生命周期（关闭即取消），同一 signal 复用一个
+   * dialog scope；经同一调度器执行，弹窗不直接调 transport，也不进全局正文缓存。
+   * @param {number} id @param {import('../src/reading').ContextItemQuery} query
+   * @param {string} token @param {AbortSignal} signal
+   * @returns {Promise<import('../src/reading').ContextItemReading>}
+   */
+  function readContextItem(id, query, token, signal) {
+    return execute(dialogScopeOf(signal), 'contextItem', { id, token, query }, signal);
+  }
+
+  /**
+   * 弹窗片段正文读取：按 ContextBodyTarget 分流到正文区间与工具结果两个具名
+   * 操作；signal 与 dialog scope 同目录读取。
+   * @param {import('../src/read-contract').ContextBodyTarget} target @param {AbortSignal} signal
+   * @returns {Promise<import('../src/protocols').BodyPage | import('../src/reading').ToolResultReading>}
+   */
+  function readContextBody(target, signal) {
+    const operation = target.operation === 'toolResult' ? 'toolResult' : 'body';
+    return /** @type {Promise<import('../src/protocols').BodyPage | import('../src/reading').ToolResultReading>} */ (
+      execute(dialogScopeOf(signal), operation, target.input, signal));
   }
 
   /** @param {number} id @returns {RequestRead | null} 记录存在即返回快照（含作废、失败与读取中）；null 只表示本会话没有这笔记录。 */
@@ -810,12 +899,17 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     loadSessions,
     selectSession,
     loadLater,
+    leaveSession,
+    dispose,
+    loadStats,
     readRequest,
     readRange,
     loadStructure,
     loadDelta,
     readToolResult,
     readRoute,
+    readContextItem,
+    readContextBody,
     peekRequest,
     peekToolResult,
     peekRoute,

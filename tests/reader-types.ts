@@ -1,10 +1,26 @@
 // 仅供 bun run typecheck 编译；不在运行时执行网络请求。
 // 网络读取的契约从 app.js 的 createReader 迁到 reader-store；本文件随之改锚。
 import { createReaderStore } from '../web/reader-store.js';
+import { createHttpReadTransport } from '../web/read-http.js';
 import { projectSteps, renderTraceRows, toolSummary } from '../web/trace-view.js';
 import type { RequestRow } from '../src/queries/projection';
 
-const store = createReaderStore(fetch);
+const store = createReaderStore(createHttpReadTransport({ fetcher: (url: string, init?: { signal?: AbortSignal }) => fetch(url, init) }));
+
+store.leaveSession();
+store.dispose();
+const stats = await store.loadStats();
+const admission: unknown = stats.admission;
+void admission;
+const signal = new AbortController().signal;
+const dir = await store.readContextItem(
+  1, { kind: 'results', name: null, tag: null, cursor: null }, 'r1-t', signal);
+const dirState: string = dir.state;
+void dirState;
+const page = await store.readContextBody(
+  { operation: 'body', input: { id: 1, token: 'r1-t', from: 0, to: 40 } }, signal);
+const pageFrom: number = (page as import('../src/protocols').BodyPage).from;
+void pageFrom;
 
 await store.loadSessions();
 await store.loadSessions('cursor');

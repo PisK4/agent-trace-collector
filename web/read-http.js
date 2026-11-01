@@ -13,7 +13,7 @@
 
 /**
  * @param {{
- *   fetcher: typeof fetch,
+ *   fetcher: (url: string, init?: { signal?: AbortSignal }) => Promise<Response>,
  *   baseUrl?: string,
  *   headers?: () => Record<string, string>,
  * }} options
