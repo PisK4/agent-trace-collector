@@ -11,7 +11,7 @@ import {
 import {
   railTabFromParam, railTabParam, resolveTraceTarget, routeReadTarget,
 } from '../web/url-route.js';
-import { agentLabel, railSummaryListHtml, sessionHead, sessionHiddenFold, sessionsListBypassHtml } from '../web/session-view.js';
+import { agentLabel, railSummaryListHtml, sessionHead, sessionHiddenFold, sessionsListFoldHtml } from '../web/session-view.js';
 
 test('后端降级只出两种标签，正常与未知模式不占顶栏', () => {
   expect(backendStateText(null)).toBeNull();
@@ -52,14 +52,15 @@ test('请求记录入口只列被省略的请求，按窗口序号定位', () =>
   expect(html).not.toContain('data-summary-req="4"');
 });
 
-test('旁路折叠行：有旁路条目才渲染，展开与收起各自如实计数', () => {
+test('折叠行：探针与旁路各自计数，展开与收起如实标注', () => {
   const row = (flags: string[]) => ({
     conv_key: 'k', title: 't', last_ms: 1, request_count: 1, agents: [], flags,
   });
-  expect(sessionsListBypassHtml([row([]), row([])], false)).toBe('');
-  expect(sessionsListBypassHtml([row(['bypass']), row(['bypass']), row([])], false))
-    .toContain('已折叠 2 条旁路会话');
-  expect(sessionsListBypassHtml([row(['bypass'])], true)).toContain('收起 1 条旁路会话');
+  expect(sessionsListFoldHtml([row([]), row([])], false)).toBe('');
+  expect(sessionsListFoldHtml([row(['probe']), row(['probe']), row(['bypass']), row([])], false))
+    .toContain('已折叠 2 条探针记录 · 1 条旁路会话（已加载页）');
+  expect(sessionsListFoldHtml([row(['bypass'])], false)).toContain('已折叠 1 条旁路会话（已加载页）');
+  expect(sessionsListFoldHtml([row(['probe']), row(['probe'])], true)).toContain('收起 2 条探针记录');
 });
 
 test('会话汇总配对列表的调用 chip 带工具身份色', () => {

@@ -34,7 +34,7 @@ import {
   agentLabel, clock, dayTime,
   railSummaryListHtml as railSummaryListView,
   sessionHead as sessionHeadView,
-  sessionsListBypassHtml,
+  sessionsListFoldHtml,
 } from './session-view.js';
 import { applyIntent } from './selection.js';
 import { createMainView } from './trace-dom.js';
@@ -119,8 +119,8 @@ if (typeof document !== 'undefined') {
     toolOwner: /** @type {number | null} */ (null),
     /** 工具详情四页的当前页：overview / params / pair / schema。 */
     toolPage: 'pair',
-    /** 旁路会话折叠的展开开关：折叠是默认态，展开只影响渲染不改任何派生。 */
-    showBypass: false,
+    /** 探针记录与旁路会话折叠的展开开关：折叠是默认态，展开只影响渲染不改任何派生。 */
+    showFolded: false,
     railTab: railTabFromParam(qp.get('tab')),
     query: '',
     agent: 'all',
@@ -389,14 +389,16 @@ if (typeof document !== 'undefined') {
   }
 
   function renderSessions() {
-    const all = /** @type {SessionRow[]} */ (store.getSessions().items.filter(sessionMatches));
-    // 旁路会话（全请求 exclude）默认折叠：渲染层过滤，分页仍按全量，折叠计数
-    // 只覆盖已加载页。任一笔参与链请求都不折叠。
-    const list = state.showBypass ? all : all.filter(s => !s.flags.includes('bypass'));
+    const items = store.getSessions().items;
+    const all = /** @type {SessionRow[]} */ (items.filter(sessionMatches));
+    // 探针记录与旁路会话默认折叠：渲染层过滤，分页仍按全量，折叠计数只覆盖
+    // 已加载页。选中的行临时留下，否则 URL 打开后既高亮不了也找不到它。
+    const folded = (/** @type {SessionRow} */ s) => s.flags.includes('probe') || s.flags.includes('bypass');
+    const list = state.showFolded ? all : all.filter(s => !folded(s) || s.conv_key === state.session);
+    const foldable = all.filter(s => folded(s) && s.conv_key !== state.session);
     el('load-more-sessions').hidden = store.getSessions().cursor === null;
-    // 列表被搜索或筛选收窄时才计数；与已加载数一致时数字不承载信息。
-    el('sess-count').textContent = list.length === store.getSessions().items.length
-      ? '' : `${list.length} / ${store.getSessions().items.length}`;
+    // 列表被搜索或筛选收窄时才计数；折叠不算收窄，折叠行自己给条数。
+    el('sess-count').textContent = all.length === items.length ? '' : `${all.length} / ${items.length}`;
     const item = (/** @type {SessionRow} */ s) => {
       // 左栏只保留具体事实标记；失败由红点承载，字眼进悬停；缺正文的点刻意低
       // 对比，与正常点的差别不可辨，文字仍是唯一载体，保留。
@@ -414,7 +416,7 @@ if (typeof document !== 'undefined') {
         </span>
       </button>`;
     };
-    const foldHtml = sessionsListBypassHtml(all, state.showBypass);
+    const foldHtml = sessionsListFoldHtml(foldable, state.showFolded);
     el('sessions-list').innerHTML = list.length
       ? list.map(item).join('') + foldHtml
       : (foldHtml !== ''
@@ -1846,8 +1848,8 @@ if (typeof document !== 'undefined') {
     }
     const sess = /** @type {HTMLElement | null} */ (t.closest('[data-session]'));
     if (sess) { void selectSession(sess.dataset.session ?? ''); return; }
-    if (t.closest('[data-bypass-toggle]')) {
-      state.showBypass = !state.showBypass;
+    if (t.closest('[data-fold-toggle]')) {
+      state.showFolded = !state.showFolded;
       renderSessions();
       return;
     }
@@ -2021,7 +2023,9 @@ if (typeof document !== 'undefined') {
       return;
     }
     if (state.session === null) {
-      const first = /** @type {SessionRow | undefined} */ (store.getSessions().items[0]);
+      // 默认落点跳过折叠行：打开页面就进一个列表里看不到的探针组，等于没折叠。
+      const first = /** @type {SessionRow | undefined} */ (store.getSessions().items
+        .find(s => !s.flags.includes('probe') && !s.flags.includes('bypass')));
       if (first) dispatch({ kind: 'open-session', sessionKey: first.conv_key, wantedTrace: null });
     }
     if (state.session !== null) await selectSession(state.session, traceIdFromParam(qp.get('trace')));

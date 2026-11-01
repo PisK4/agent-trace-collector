@@ -753,6 +753,42 @@ test('全员 exclude 的会话标 bypass，混入一笔参与链就不标', () =
   }
 });
 
+test('无正文、零用量、无归属的探针组标 probe，任一条件不满足都不标', () => {
+  const f = fixture();
+  try {
+    const probeKey = JSON.stringify(['request', 'probe-only']);
+    const usageKey = JSON.stringify(['request', 'probe-usage']);
+    const costKey = JSON.stringify(['request', 'probe-cost']);
+    const bodyKey = JSON.stringify(['request', 'probe-body']);
+    const actorKey = JSON.stringify(['request', 'probe-actor']);
+    const mixedKey = JSON.stringify(['request', 'probe-mixed']);
+    const visionKey = JSON.stringify(['request', 'vision-only']);
+    f.store.write(db => {
+      const insert = db.prepare(`INSERT INTO request(req_id,conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,req_kind,in_tok,out_tok,cost)
+        VALUES (?,?,'request',?,'magpie','known',?,'2026-11-01','through',?,1,?,1,1,?,?,?,?)`);
+      insert.run(21, probeKey, null, 1000, 'pending', 2, 'source:model_list', 0, 0, null);
+      insert.run(22, usageKey, null, 2000, 'pending', 2, 'source:provider_test', 5, 0, null);
+      insert.run(23, costKey, null, 3000, 'pending', 2, 'source:model_list', 0, 0, 0.0001);
+      insert.run(24, bodyKey, null, 4000, 'available', 7, 'source:api_detect', 0, 0, null);
+      insert.run(25, actorKey, 'actor-b', 5000, 'pending', 2, 'source:model_list', 0, 0, null);
+      insert.run(26, mixedKey, null, 6000, 'pending', 2, 'source:model_list', 0, 0, null);
+      insert.run(27, mixedKey, null, 7000, 'pending', 2, 'chat', 0, 0, null);
+      insert.run(28, visionKey, null, 8000, 'pending', 2, 'source:vision', 0, 0, null);
+    });
+    const items = listSessions(f.store, 10, null).items;
+    const flags = (key: string) => items.find(row => row.conv_key === key)?.flags;
+    expect(flags(probeKey)).toEqual(['missing_body', 'probe']);
+    expect(flags(usageKey)).toEqual(['missing_body']);
+    expect(flags(costKey)).toEqual(['missing_body']);
+    expect(flags(bodyKey)).toEqual([]);
+    expect(flags(actorKey)).toEqual(['missing_body']);
+    expect(flags(mixedKey)).toEqual(['missing_body']);
+    expect(flags(visionKey)).toEqual(['missing_body']);
+  } finally {
+    f.close();
+  }
+});
+
 /** Task 1 红测种子：发布代结果与同步旧列刻意不同值，锁住整套选源。 */
 function seedPublishedReading(f: ReturnType<typeof fixture>) {
   const id = seedPurposeRequest(f.store, {
