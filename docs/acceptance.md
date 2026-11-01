@@ -783,3 +783,28 @@ worktree 的 `prototypes/serve-local.ts`（端口 8768）转发本机采集器�
 - 真实流量只覆盖一个会话的窗口，没有覆盖「窗口内全部请求都无可读正文」的边界；该分支只有合成用例覆盖。
 - 默认锚点在准备完成后从空组挪到有内容的一笔，只在合成会话上观察过；生产窗口的首笔有内容，未触发。
 - 本轮没有重启生产采集器、没有写生产库，也没有把请求正文读进日志或提交。
+
+## 无正文探针记录默认折叠（合成 + 生产页面只读，2026-11-01）
+
+前提：worktree `atc-probe-fold` 的 `feat/probe-records-default-fold` 分支（基于 master `b7f71de`）。判定与实现边界见[无正文探针记录默认折叠](../.agents/notes/implemented/feature/2026-11-01-probe-records-default-fold.md)。
+
+### 合成覆盖
+
+`tests/queries.test.ts` 与 `tests/web.test.ts` 共 77 项通过，`bun run typecheck` 通过。锁定的判据：全组探针 kind、无正文、零用量、无 actor 同时成立才带 `probe`；带 token、带费用、带正文、带 actor、混组与 `source:vision` 都不带。折叠行按探针与旁路两类计数，展开文案如实。
+
+### 生产库只读与页面
+
+生产库只读聚合：708 组里命中 258 组，等于探针 kind 组数，差集为 0。服务按 `bun run service restart` 重启后跑页面。
+
+| 验收项 | 结果 |
+| --- | --- |
+| `/api/sessions?limit=50` | 50 行里 21 行带 `probe`，首行是真实会话 |
+| 左栏默认列表 | 默认加载 20 个会话行，7 行可见，末尾「已折叠 13 条探针记录（已加载页）」，没有「（无标题）」探针行 |
+| 默认选中 | 落在「无正文 trace 的前端隐藏」，不是探针组 |
+| `sess-count` | 无搜索时为空白，折叠不再计入分数 |
+
+### 未执行与边界
+
+- 折叠行的展开与收起只在合成测试与代码路径上覆盖，页面只验证了默认折叠态。
+- 探针记录、用量与错误文本没有改动；本轮只改读模型与渲染。
+- `/api/stats.requests` 仍含探针，统计口径未对齐 magpie。

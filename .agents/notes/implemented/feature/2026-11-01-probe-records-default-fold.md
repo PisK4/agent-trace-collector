@@ -85,3 +85,4 @@ Status: implemented
 - `bun test tests/queries.test.ts tests/web.test.ts`：77 通过。覆盖全量探针命中、带 token、带费用、带正文、带 actor、混组与 `source:vision` 七种形状，以及折叠行的两类计数与展开文案。
 - `bun run typecheck` 通过。
 - 生产库只读（2026-11-01）：按判定聚合出 258 组，等于库内探针 kind 组数，差集为 0；总组数 708。
+- 服务重启后 `/api/sessions?limit=50`：50 行里 21 行带 `probe`，首行是真实会话。页面只读：默认加载的 20 个会话行里 13 个被折叠，左栏末尾显示「已折叠 13 条探针记录（已加载页）」，默认选中落在真实会话。折叠行的展开与收起只在合成测试里走过。
