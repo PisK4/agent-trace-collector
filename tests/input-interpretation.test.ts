@@ -225,3 +225,72 @@ test('丢弃量从归档块提取，千分位逗号剥掉，没写就是 null', 
   ] })).toBe(null);
   expect(ompDroppedCharsOf({ role: 'user', content: '别的消息' })).toBe(null);
 });
+
+// ---------------------------------------------------------------------------
+// Hermes 技能加载包装：按头部行 + 指令锚点的完整结构识别
+// ---------------------------------------------------------------------------
+
+const SKILL_HEADER = '[IMPORTANT: The user has invoked the "video-shotcraft" skill, '
+  + 'indicating they want you to follow its instructions. The full skill content is loaded below.]';
+const INSTRUCTION_ANCHOR = 'The user has provided the following instruction alongside the skill invocation: ';
+
+function skillLoadText(instruction: string | null): string {
+  return [
+    SKILL_HEADER, '', '---', '', '# 技能正文', '步骤一。', '',
+    ...(instruction === null ? [] : [`${INSTRUCTION_ANCHOR}${instruction}`]),
+  ].join('\n');
+}
+
+test('技能包装剥出用户指令，技能正文不进标题', () => {
+  const view = interpretUserText(
+    `${skillLoadText('评估这个 Skill 的适配度')}\n--- Context Warnings ---`,
+    'hermes',
+  );
+  expect(view.state).toBe('text');
+  expect(view.kind).toBe('wrapped');
+  expect(view.text.startsWith('评估这个 Skill 的适配度')).toBe(true);
+  expect(view.text).toContain('--- Context Warnings ---');
+  expect(view.text).not.toContain('技能正文');
+  expect(view.original).toContain(SKILL_HEADER);
+  expect(view.removed).toEqual(expect.arrayContaining([
+    'hermes-skill-header', 'hermes-skill-content', 'hermes-instruction-anchor',
+  ]));
+  // 共享规则不做 agent 门控：其他标签、未知与空标签同样生效。
+  for (const agent of ['claude', 'omp', null]) {
+    const shared = interpretUserText(skillLoadText('换标签的行为一致'), agent);
+    expect(shared.state).toBe('text');
+    expect(shared.text).toBe('换标签的行为一致');
+  }
+});
+
+test('cron 调度文本本身是嵌套包装，整段按注入处理', () => {
+  const view = interpretUserText(
+    `${skillLoadText('[IMPORTANT: You are running as a scheduled cron job. Deliver analysis.]')}`
+    + '\n\n## Script Output\n```json\n{}\n```\n\n运行个人技术雷达',
+    'hermes',
+  );
+  expect(view.state).toBe('injected');
+  expect(view.kind).toBe('skill_injection');
+  expect(view.text).toBe('');
+  expect(view.original).toContain('运行个人技术雷达');
+});
+
+test('有头部无锚点、指令缺失或用户引用都不清空正文', () => {
+  // 结构不完整：头部行之后没有锚点，整段原样保留。
+  const headerOnly = interpretUserText(skillLoadText(null), 'hermes');
+  expect(headerOnly.state).toBe('text');
+  expect(headerOnly.kind).toBe('plain');
+  expect(headerOnly.text).toBe(skillLoadText(null).trim());
+  // 锚点行之后没有指令。
+  const emptyInstruction = interpretUserText(`${SKILL_HEADER}\n${INSTRUCTION_ANCHOR}`, 'hermes');
+  expect(emptyInstruction.state).toBe('injected');
+  expect(emptyInstruction.kind).toBe('skill_injection');
+  // 用户引用 [IMPORTANT: 前缀：头部行语法不完整或不在开头，原样保留。
+  const quoted = interpretUserText(
+    '请解释 [IMPORTANT: The user has invoked the "x" skill 这类提示的作用',
+    null,
+  );
+  expect(quoted.state).toBe('text');
+  expect(quoted.kind).toBe('plain');
+  expect(quoted.text).toBe('请解释 [IMPORTANT: The user has invoked the "x" skill 这类提示的作用');
+});

@@ -16,6 +16,7 @@ function view(over: Partial<PurposeView> = {}): PurposeView {
     replyText: '<block>no',
     userBlockHeads: [],
     tailUserBlockHeads: [],
+    userImageBlocks: 0,
     source: { state: 'missing', value: null },
     stored: {
       version: null, status: 'missing', rule: null, signals: [],

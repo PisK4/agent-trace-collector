@@ -689,9 +689,9 @@ test('摘要阶段与同步路径给出同一套标题与摘录，随后发布',
       join(slice.dir, 'trace.db')).status).toBe('published');
     const known = getSessionSummary(slice.store, SEED_GROUP.convKey).coverage.calls_fact_known;
     expect(known).toBeGreaterThan(0);
-    slice.store.write(db => db.run('UPDATE derive_tool_result SET algorithm_version=9 WHERE generation=?', [generation]));
+    slice.store.write(db => db.run('UPDATE derive_tool_result SET algorithm_version=10 WHERE generation=?', [generation]));
     expect(getSessionSummary(slice.store, SEED_GROUP.convKey).coverage.calls_fact_known).toBe(known);
-    slice.store.write(db => db.run('UPDATE derive_tool_result SET algorithm_version=8 WHERE generation=?', [generation]));
+    slice.store.write(db => db.run('UPDATE derive_tool_result SET algorithm_version=9 WHERE generation=?', [generation]));
     expect(getSessionSummary(slice.store, SEED_GROUP.convKey).coverage.calls_fact_known).toBe(0);
     expect(slice.store.read.query('SELECT * FROM derive_queue').get())
       .toMatchObject({ state: 'clean', published_generation: generation });
