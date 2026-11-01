@@ -1145,6 +1145,8 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 列表接口不返回骨架。会话内 1,825 笔的列表，每笔骨架 9.5 KB，全取就是 17 MB，列表只返回 `req_id`、时间、状态、模型、四个读数、标题、`have`、`body_state`、`via`。
 
+会话列表分两阶段在同一个只读事务里读：先沿 `i_req_session_time` 覆盖索引取会话键与真实最近请求时间，排序取 `limit + 1` 个候选，游标条件应用在分组之后；再以页内会话键的 `IN` 列表复用标题、计数、agents 与 flags 聚合，多取的一条只判断续页。页外会话不参与宽字段计算，列表读取不触碰正文。来由见[会话列表按页聚合与首屏剩余延迟](../.agents/notes/implemented/bug-fix/2026-11-01-session-list-query.md)。
+
 列表与详情都带 `derived_state`，并只在该值为 `current` 时把关系、增量与折叠行摘要放在顶层。详情另带 `historical`（旧派生结论连同状态）、摘要的算法三列与 `tool_results` 反向配对；列表不携带这几项。`tool_results` 是本请求承载的结果块指向的已发布调用（调用方请求加既有工具行）：与 `tool_calls` 同源同闸门，发布代表先、非空不回退，同步回退用同组请求（conv_key/actor）的 IN 子查询驱动 `(req_id, ord)` 主键，候选规模是组内请求数，不全局扫描，也不外露跨组脏行；非 current 为空数组。判定的具体规则见[读模型里的派生状态](#读模型里的派生状态)。
 
 两个时长读数是独立事实，不受派生状态影响，但都要守卫。`reasoning_span_ms` 是首个文本减首 token，只有末次尝试报告 `firstReasoning` 时才说明首个内容是推理：列表与详情共用 `route_summary.tries_json` 的同一段 SQL，先用 `json_valid` 短路再取 `$[#-1]`，摘要缺行、非法 JSON 与非数组都读成 null，差值为零或负同样留空。`tool_calls` 的 `exec_ms` 是结果请求开始时刻减调用请求结束时刻（`started_ms + ms`），两笔时长都在且窗口非负才算；非 current 时它与配对位置一起收起，旧读数不外露。

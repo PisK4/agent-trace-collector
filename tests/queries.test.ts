@@ -961,3 +961,207 @@ test('执行段取结果请求开始减调用请求结束，负值与未结算�
     expect(stale.tool_calls.map(c => c.exec_ms)).toEqual([null]);
   } finally { f.close(); }
 });
+
+/** 会话列表第二轮：两阶段同快照查询的范围、计划与等价性。 */
+
+import type { Database } from 'bun:sqlite';
+
+import { LEGACY_LIST_WIDE, legacyListSessions } from './session-list-oracle';
+
+/** 按指定基数插入请求，供同毫秒、迟到旧请求等场景控制时间分布。 */
+function insertRequestsAt(store: ReturnType<typeof fixture>['store'], convKey: string, count: number, baseMs: number): void {
+  store.write(db => {
+    const insert = db.prepare(
+      `INSERT INTO request(conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,status,cost_state,ms,ttft_ms,flow_ms)
+       VALUES (?,?,?,?,?,?,?,?,?,?,1,1,1,?,200,'absent',?,?,?)`,
+    );
+    for (let i = 0; i < count; i++) {
+      insert.run(
+        convKey, 'session', 'actor-a', 'claude', 'known',
+        baseMs + i, '2026-10-20', 'through', 'pending', 0,
+        `t-${i}`, 1000 + i, 100 + i, 900 + i,
+      );
+    }
+  });
+}
+
+function captureReadQueries(store: ReturnType<typeof fixture>['store']): {
+  captured: { sql: string; params: unknown[] }[];
+  restore(): void;
+} {
+  const original = store.read.query;
+  const captured: { sql: string; params: unknown[] }[] = [];
+  const patched = (sql: string, ...rest: unknown[]) => {
+    captured.push({ sql, params: rest });
+    return (original as unknown as (...args: unknown[]) => unknown).apply(store.read, [sql, ...rest]);
+  };
+  (store.read as unknown as { query: unknown }).query = patched;
+  return {
+    captured,
+    restore: () => {
+      (store.read as unknown as { query: unknown }).query = original;
+    },
+  };
+}
+
+function explainPlan(read: Database, sql: string, params: unknown[]): string {
+  return (read.query(`EXPLAIN QUERY PLAN ${sql}`).all(...(params as never[])) as { detail: string }[])
+    .map(row => row.detail).join(' | ');
+}
+
+test('新旧会话列表实现逐页等价：翻页全序、标题、迟到旧请求与NULL键', () => {
+  const f = fixture();
+  try {
+    seedPurposeRequest(f.store, {
+      convKey: 'oracle-title', purposePending: 0, purposeChain: 'exclude',
+      reqKind: 'title', modelTitle: '正式标题', title: 'x',
+      titleSource: 'model_title', purposeStatus: 'recognized', purposeVersion: 2,
+      startedMs: 1_700_000_020_000, cleanGroup: true,
+    });
+    insertRequestsAt(f.store, JSON.stringify(['session', 'oracle-a']), 4, 1_700_000_000_000);
+    insertRequestsAt(f.store, JSON.stringify(['session', 'oracle-b']), 2, 1_699_999_999_000);
+    insertRequestsAt(f.store, JSON.stringify(['session', 'oracle-c']), 3, 1_700_000_010_000);
+    // 迟到旧请求：last_ms 取组内最大值，计数包含它。
+    insertRequestsAt(f.store, JSON.stringify(['session', 'oracle-c']), 1, 1_699_000_000_000);
+    insertRequestsAt(f.store, JSON.stringify(['session', 'oracle-d']), 30, 1_698_000_000_000);
+    // 无会话键的行不进任何会话，也不影响排序。
+    f.store.write(db => {
+      const insert = db.prepare(
+        `INSERT INTO request(conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
+         VALUES ('session','actor-a','known',1700000030000,'2026-10-20','hook','pending',0,1,1,1)`,
+      );
+      insert.run();
+      insert.run();
+    });
+
+    // 旧实现排序：title > c > a > b > d。两个实现各走一遍翻页全序，逐页比较完整返回值。
+    const walk = (run: (limit: number, cursor: string | null) => ReturnType<typeof listSessions>) => {
+      const pages: ReturnType<typeof listSessions>[] = [];
+      for (const limit of [3, 2]) {
+        let cursor: string | null = null;
+        do {
+          const page = run(limit, cursor);
+          pages.push(page);
+          cursor = page.next_cursor;
+        } while (cursor !== null);
+      }
+      return pages;
+    };
+    const legacyPages = walk((limit, cursor) => legacyListSessions(f.store, limit, cursor) as ReturnType<typeof listSessions>);
+    const freshPages = walk((limit, cursor) => listSessions(f.store, limit, cursor));
+    expect(freshPages).toEqual(legacyPages);
+    expect(legacyPages.length).toBe(5);
+    const flat = legacyPages.flatMap(page => page.items);
+    // 两个 limit 档各走完整翻页序：3+2 与 2+2+1，同一全序出现两遍。
+    expect(flat.map(row => row.conv_key)).toEqual([
+      'oracle-title',
+      JSON.stringify(['session', 'oracle-c']),
+      JSON.stringify(['session', 'oracle-a']),
+      JSON.stringify(['session', 'oracle-b']),
+      JSON.stringify(['session', 'oracle-d']),
+      'oracle-title',
+      JSON.stringify(['session', 'oracle-c']),
+      JSON.stringify(['session', 'oracle-a']),
+      JSON.stringify(['session', 'oracle-b']),
+      JSON.stringify(['session', 'oracle-d']),
+    ]);
+    expect(flat.length).toBe(10);
+    // 页内宽聚合覆盖组内全部历史：迟到旧请求计入计数，正式标题来自标题子查询。
+    expect(flat[0]!.title).toBe('正式标题');
+    expect(flat[1]!.request_count).toBe(4);
+  } finally { f.close(); }
+});
+
+test('两阶段查询计划：候选走覆盖索引，宽聚合只搜索页内键，旧查询全表扫描', () => {
+  const f = fixture();
+  try {
+    insertRequestsAt(f.store, JSON.stringify(['session', 'plan-a']), 3, 1_700_000_000_000);
+    insertRequestsAt(f.store, JSON.stringify(['session', 'plan-b']), 2, 1_700_000_000_100);
+    const hook = captureReadQueries(f.store);
+    try {
+      listSessions(f.store, 2, null);
+      // plan-b 比 plan-a 新：游标从 plan-b 之后走，下一候选 plan-a 非空，宽聚合才执行。
+      const legacyCursor = Buffer.from(
+        JSON.stringify([1_700_000_000_102, JSON.stringify(['session', 'plan-b'])]), 'utf8',
+      ).toString('base64url');
+      listSessions(f.store, 2, legacyCursor);
+    } finally {
+      hook.restore();
+    }
+    const firstPhase = hook.captured.filter(c => c.sql.includes('MAX(started_ms)') && !c.sql.includes('COUNT(*)'));
+    expect(firstPhase.length).toBe(2);
+    for (const { sql, params } of firstPhase) {
+      // 首页是覆盖索引全扫，游标页是索引区间搜索：两者都必须留在覆盖索引上，不回表。
+      expect(explainPlan(f.store.read, sql, params)).toContain('COVERING INDEX i_req_session_time');
+    }
+    const secondPhase = hook.captured.filter(c => c.sql.includes('COUNT(*)') && c.sql.includes('IN ('));
+    expect(secondPhase.length).toBe(2);
+    for (const { sql, params } of secondPhase) {
+      const detail = explainPlan(f.store.read, sql, params);
+      // 外层逐键等值搜索；标题子查询自己的 conv_key=? 不参与区分，只看首行。
+      const outer = detail.split(' | ')[0]!;
+      expect(outer).toContain('SEARCH request');
+      expect(outer).toContain('(conv_key=?)');
+      expect(outer).not.toContain('(conv_key>?)');
+    }
+    // 同库旧查询的外层对全部会话键做区间扫描：范围断言能失败，新实现的通过才有意义。
+    const legacyDetail = explainPlan(f.store.read, `${LEGACY_LIST_WIDE} ORDER BY last_ms DESC, conv_key DESC LIMIT ?`, [3]);
+    expect(legacyDetail.split(' | ')[0]).toContain('(conv_key>?)');
+  } finally { f.close(); }
+});
+
+test('两阶段之间提交的会话不进入当前页，下一次调用可见', () => {
+  const f = fixture();
+  try {
+    insertRequestsAt(f.store, JSON.stringify(['session', 'first']), 2, 1_700_000_000_000);
+    const original = f.store.read.query;
+    let calls = 0;
+    (f.store.read as unknown as { query: unknown }).query = (sql: string, ...rest: unknown[]) => {
+      calls += 1;
+      // 第二条语句准备前插入：阶段一已执行、WAL 快照已固定，宽聚合必须仍读旧快照。
+      if (calls === 2) insertRequestsAt(f.store, JSON.stringify(['session', 'late']), 1, 1_700_000_040_000);
+      return (original as unknown as (...args: unknown[]) => unknown).apply(f.store.read, [sql, ...rest]);
+    };
+    let page: ReturnType<typeof listSessions>;
+    try {
+      page = listSessions(f.store, 10, null);
+    } finally {
+      (f.store.read as unknown as { query: unknown }).query = original;
+    }
+    expect(page.items.map(row => row.conv_key)).toEqual([JSON.stringify(['session', 'first'])]);
+    const next = listSessions(f.store, 10, null);
+    expect(next.items.map(row => row.conv_key)).toEqual([
+      JSON.stringify(['session', 'late']),
+      JSON.stringify(['session', 'first']),
+    ]);
+  } finally { f.close(); }
+});
+
+test('空库、无会话键与同毫秒并列的翻页边界', () => {
+  const f = fixture();
+  try {
+    expect(listSessions(f.store, 10)).toEqual({ items: [], next_cursor: null });
+    f.store.write(db => {
+      const insert = db.prepare(
+        `INSERT INTO request(conv_source,actor,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
+         VALUES ('session','actor-a','known',1700000000000,'2026-10-20','hook','pending',0,1,1,1)`,
+      );
+      insert.run();
+    });
+    expect(listSessions(f.store, 10)).toEqual({ items: [], next_cursor: null });
+
+    // 同毫秒的两个会话按键倒序；游标页从 (ms, key) 之后继续，不漏不重。
+    insertRequestsAt(f.store, JSON.stringify(['session', 'zzz']), 1, 1_700_000_000_000);
+    insertRequestsAt(f.store, JSON.stringify(['session', 'aaa']), 1, 1_700_000_000_000);
+    insertRequestsAt(f.store, JSON.stringify(['session', 'mmm']), 1, 1_700_000_000_000);
+    const first = listSessions(f.store, 2, null);
+    expect(first.items.map(row => row.conv_key)).toEqual([
+      JSON.stringify(['session', 'zzz']),
+      JSON.stringify(['session', 'mmm']),
+    ]);
+    expect(first.next_cursor).not.toBeNull();
+    const second = listSessions(f.store, 2, first.next_cursor!);
+    expect(second.items.map(row => row.conv_key)).toEqual([JSON.stringify(['session', 'aaa'])]);
+    expect(second.next_cursor).toBeNull();
+  } finally { f.close(); }
+});
