@@ -1155,7 +1155,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 正文按消息序号区间取，一次 40 条，块解码在单次请求内复用缓存。实测取 40 条 0.13 ms，最重的一笔 526 块全取 13.7 ms。正文已回收时返回 `evicted` 与回收原因，不返回空。
 
-上下文明细的条目目录走 `GET /api/requests/:id/context-item`：按 `prompt.parts` 出现的类别（results、files、tools、system、chat、memory、skills）返回已保存正文里的条目位置，响应带解释规则版本 `CTX_EXPLAIN_VERSION`。results 与 files 用 `tool_call` 配对表列定位（结果请求、结果序号与内容块路径），不解压消息块；files 再按调用参数路径与条目名对齐，有对齐行只列对齐行，没有对齐行降级列出全部结果块并说明。tools 读骨架顶层的 `tools`/`functions` 字段；system 合并顶层 `system`/`instructions` 与 role=2 块；chat、memory 与 skills 给承载块并说明片段未分离。同名工具的多个配对结果全部保留；派生只确认一个结果位置的调用，其余结果不进目录，这是配对表的覆盖边界而非全集。类别白名单先于正文状态：未知 kind 返回 `unsupported` 与原因；正文 pending、evicted、summary 与协议不支持按事实返回，不用空数组冒充完整。骨架只解压一次取协议与顶层字段；每响应最多 80 条，keyset 游标绑定请求与类别，跨请求或跨类别复用一律拒绝。`if_reading` 必填，阅读依据变化 409，与正文、工具结果接口同一套语义；条目的正文按落点分流到正文分页与工具结果端点，目录本身不返回正文。alias 解析、身份与目录在同一只读事务内完成。
+上下文明细的条目目录走 `GET /api/requests/:id/context-item`：按 `prompt.parts` 出现的类别（results、files、tools、system、chat、memory、skills）返回已保存正文里的条目位置，响应带解释规则版本 `CTX_EXPLAIN_VERSION`。results 与 files 用 `tool_call` 配对表列定位（结果请求、结果序号与内容块路径），不解压消息块；results 在 chat 与 Responses 上把配对未确认的 role=3 消息按承载块补进目录，与配对行按消息序号合并分页，配对已确认的序号不重复列出，Anthropic 的结果块藏在 user 消息 content 数组里、消息级分不出来，不出承载行并说明该边界；files 再按调用参数路径与条目名对齐，有对齐行只列对齐行，没有对齐行降级列出全部结果块并说明。tools 读骨架顶层的 `tools`/`functions` 字段；system 合并顶层 `system`/`instructions` 与 role=2 块；chat、memory 与 skills 给承载块并说明片段未分离。同名工具的多个配对结果全部保留；派生只确认一个结果位置的调用，其余结果不进目录，这是配对表的覆盖边界而非全集。类别白名单先于正文状态：未知 kind 返回 `unsupported` 与原因；正文 pending、evicted、summary 与协议不支持按事实返回，不用空数组冒充完整。骨架只解压一次取协议与顶层字段；每响应最多 80 条，keyset 游标绑定请求与类别，跨请求或跨类别复用一律拒绝。`if_reading` 必填，阅读依据变化 409，与正文、工具结果接口同一套语义；条目的正文按落点分流到正文分页与工具结果端点，目录本身不返回正文。alias 解析、身份与目录在同一只读事务内完成。
 
 过期状态要能被调用方区分。原始路由过期但摘要还在时，路由接口照常返回；摘要也没有时返回明确的过期标记，不返回空对象。
 

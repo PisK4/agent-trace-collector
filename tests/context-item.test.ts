@@ -59,13 +59,42 @@ function seedToolGroup(f: F): { owner: number; target: number } {
   return { owner, target };
 };
 
+/**
+ * chat 协议种子：owner 发起一次 Bash 调用，target 携带 n 条历史 role=tool
+ * 消息，其中 pairedOrd 那条由配对行确认。chat 的工具结果是整条消息。
+ */
+function seedChatToolGroup(f: F, n: number, pairedOrd: number): { owner: number; target: number } {
+  const common = { protocol: 'chat', convKey: DERIVE_GROUP, actor: DERIVE_ACTOR, cleanGroup: true,
+    purposePending: 0, summaryState: 'recomputed', summaryAlgorithm: 1 } as const;
+  const owner = seedPurposeRequest(f.store, {
+    ...common, startedMs: 100,
+    messages: [{ role: 'user', content: 'synthetic question' }],
+  });
+  const target = seedPurposeRequest(f.store, {
+    ...common, startedMs: 200,
+    messages: [
+      { role: 'user', content: 'next turn' },
+      ...Array.from({ length: n }, (_, i) => ({
+        role: 'tool', content: `synthetic result ${i}`, tool_call_id: `call_hist_${i}`,
+      })),
+    ],
+  });
+  f.store.write(db => db.run(
+    `INSERT INTO tool_call(call_id,req_id,ord,tool_name,arg_path,
+        result_req,result_ord,result_path,is_error,state,derive_version)
+      VALUES (?,?,?,?,?,?,?,?,0,'resolved',1)`,
+    ['call_chat_1', owner, 0, 'Bash', null, target, pairedOrd, `request.messages[${pairedOrd}]`],
+  ));
+  return { owner, target };
+}
+
 test('results 目录来自反向配对表列：同名工具多行全保留，位置可续读', () => {
   const f = fixture();
   try {
     const { owner, target } = seedToolGroup(f);
     const reading = ctxQuery(f, target, 'results');
     expect(reading.state).toBe('available');
-    expect(reading.explain_version).toBe(1);
+    expect(reading.explain_version).toBe(2);
     // 四次调用各自配对：按结果消息序号升序，同名 Bash 两行都在。
     expect(reading.entries.map(entry => entry.tool_name)).toEqual(
       ['Read', 'Bash', 'Read', 'Bash']);
@@ -246,8 +275,76 @@ test('端点参数校验：缺阅读版本与缺类别都 400，正常查询带�
     const ok = await call(`/api/requests/${id}/context-item?kind=tools&if_reading=${token}`);
     expect(ok.status).toBe(200);
     const body = await ok.json() as { entries: { path: string }[]; explain_version: number };
-    expect(body.explain_version).toBe(1);
+    expect(body.explain_version).toBe(2);
     expect(body.entries.map(entry => entry.path)).toEqual(['request.tools[0]']);
     expect((await call(`/api/requests/99999/context-item?kind=tools&if_reading=${token}`)).status).toBe(404);
+  } finally { f.close(); }
+});
+
+test('results 目录补承载行：chat 的历史 role=tool 消息按承载块列出', () => {
+  const f = fixture();
+  try {
+    const { owner, target } = seedChatToolGroup(f, 2, 1);
+    const reading = ctxQuery(f, target, 'results');
+    expect(reading.state).toBe('available');
+    // 配对行与承载行按消息序号合并：ord1 配对确认，ord2 是未确认的历史副本。
+    expect(reading.entries.map(entry => [entry.ord, entry.precision])).toEqual([
+      [1, 'located'], [2, 'carrier'],
+    ]);
+    expect(reading.entries[0]).toMatchObject({
+      tool_name: 'Bash', call_ord: 0, owner_req: owner, path: 'request.messages[1]', role: 'tool',
+    });
+    expect(reading.entries[1]).toMatchObject({
+      tool_name: null, call_ord: null, owner_req: null, path: 'request.messages[2]', role: 'tool',
+    });
+    expect(reading.notes.some(note => note.includes('未经配对确认'))).toBe(true);
+  } finally { f.close(); }
+});
+
+test('results 承载行协议边界：anthropic 不出承载行并说明', () => {
+  const f = fixture();
+  try {
+    const { target } = seedToolGroup(f);
+    const reading = ctxQuery(f, target, 'results');
+    expect(reading.entries.every(entry => entry.precision === 'located')).toBe(true);
+    expect(reading.notes.some(note => note.includes('不列承载块'))).toBe(true);
+  } finally { f.close(); }
+});
+
+test('results 名称过滤：有配对行只列配对行，无配对行降级列承载块', () => {
+  const f = fixture();
+  try {
+    const { target } = seedChatToolGroup(f, 2, 1);
+    const bash = ctxQuery(f, target, 'results', { name: 'Bash', tag: 'result' });
+    expect(bash.entries.length).toBe(1);
+    expect(bash.entries[0]!.precision).toBe('located');
+    expect(bash.notes.some(note => note.includes('承载块'))).toBe(false);
+    const grep = ctxQuery(f, target, 'results', { name: 'Grep' });
+    expect(grep.entries.map(entry => entry.ord)).toEqual([2]);
+    expect(grep.entries[0]!.precision).toBe('carrier');
+    expect(grep.notes.some(note => note.includes('未找到该名称的配对结果'))).toBe(true);
+  } finally { f.close(); }
+});
+
+test('results 混合分页：配对行与承载行合并推进游标，配对序号不重复', () => {
+  const f = fixture();
+  try {
+    const { owner, target } = seedChatToolGroup(f, 85, 40);
+    const first = ctxQuery(f, target, 'results');
+    expect(first.entries.length).toBe(80);
+    expect(first.next_cursor).not.toBeNull();
+    expect(first.entries[79]!.ord).toBe(80);
+    const second = ctxQuery(f, target, 'results', { cursor: first.next_cursor });
+    expect(second.entries.length).toBe(5);
+    expect(second.next_cursor).toBeNull();
+    expect(second.entries.every(entry => entry.precision === 'carrier')).toBe(true);
+    // 两页合计不重不漏：85 条 = 1 配对 + 84 承载，配对的 ord 40 只出现一次。
+    const ords = [...first.entries, ...second.entries].map(entry => entry.ord);
+    expect(new Set(ords).size).toBe(ords.length);
+    expect(ords[0]).toBe(1);
+    const paired = [...first.entries, ...second.entries]
+      .filter(entry => entry.precision === 'located');
+    expect(paired.length).toBe(1);
+    expect(paired[0]).toMatchObject({ ord: 40, call_ord: 0, owner_req: owner });
   } finally { f.close(); }
 });
