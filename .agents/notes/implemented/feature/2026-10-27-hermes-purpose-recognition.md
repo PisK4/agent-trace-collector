@@ -33,6 +33,8 @@ Status: implemented
 
 本次只交付用途识别。hook 投递诊断见[hook 投递分层诊断](2026-10-27-hook-delivery-diagnostics.md)，空 session 修复与身份迁移见[空 session 不是会话身份](../bug-fix/2026-10-27-empty-session-identity-migration.md)。工具名称、参数与失败语义的额外适配未做；协议兼容不等于工具展示已覆盖。
 
+视觉辅助调用与技能包装标题的补充提案见[Hermes 视觉辅助调用误列会话与技能包装标题修复](../../proposed/bug-fix/2026-11-01-hermes-auxiliary-session-noise.md)。该提案保留本记录持有的两条用途规则，不将视觉识别视为已经交付。
+
 ## Alternatives considered
 
 **为 Hermes 建 Profile 或动态插件接口。** 两条指纹已有静态登记入口，额外框架不能解决会话身份或投递缺失，增加的接口没有当前消费者。
