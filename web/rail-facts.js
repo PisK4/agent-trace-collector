@@ -13,7 +13,7 @@ import {
   renderMessageDetail, renderMessages,
 } from './body-view.js';
 import { esc } from './html.js';
-import { isFixedKind, kk, partColor, partLabel } from './parts.js';
+import { isFixedKind, kk, partLabel, partShade } from './parts.js';
 import { contextMapShellHtml, contextRowsHtml } from './context-map.js';
 import { messagePathOf, replyView, topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
@@ -21,7 +21,7 @@ import { bodyLabelText, bodyStateText } from './row-summary.js';
 import { secs, secsValue, tierOf, TIER_LIMITS } from './duration.js';
 
 // 类别口径与 token 缩写的定义在 parts.js（与 context-map 共用），这里转发既有消费者。
-export { kk, partColor, partLabel };
+export { kk, partLabel };
 
 /**
  * 尝试链。每一行只用服务端白名单字段；未知 fail 原样转义。
@@ -159,13 +159,15 @@ export function structureFoldHtml(input) {
     body = `<p class="note">${structure.loading ? '正在读取消息结构…' : '尚未读取消息正文；展开后从末尾读取最近 40 条。'}</p>`;
   } else {
     const consumed = deltaState === null ? delta?.size ?? 0 : Math.min(deltaState.next, delta?.size ?? 0);
+    // 新增的标识交给列表内蓝缘（msg-new 行）；全部消费完的纯计数行不再占一行，
+    // 未消费完与失败态保留——它们带交互与错误语义。
     const deltaNote = delta === null
       ? relation ? `<p class="note">${esc(relation)}：不标记新增消息，按原顺序列出。</p>` : ''
       : deltaState !== null && deltaState.error !== null
         ? `<p class="note warn">新增读取失败（${esc(deltaState.error)}）：已消费 ${consumed} / ${delta.size}，未读位置保留，不吞掉剩余输入。<button class="chip-btn" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''}>重试续读</button></p>`
         : deltaState !== null && !deltaState.done
           ? `<p class="note">新增 ${delta.size} 条消息 · 已消费 ${consumed} / ${delta.size}。<button class="chip-btn" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''}>继续读取</button></p>`
-          : `<p class="note">新增 ${delta.size} 条消息。</p>`;
+          : '';
     // 已缓存消息的有序并集；相邻序号的空洞是未读区间，不用连续游标删掉缓存尾部。
     const listEntries = [...entries].sort((a, b) => a.ord - b.ord);
     /** @type {{from: number, to: number}[]} */
@@ -588,7 +590,7 @@ export function usageFoldHtml(r, detail, meta = null) {
     const mapHtml = positive.length > 0 ? contextMapShellHtml(p, r.req_id) : '';
     const rowsHtml = positive.length > 0 ? contextRowsHtml(p, r.req_id) : '';
     const legend = positive.length > 0
-      ? `<div class="comp-legend">${[...positive].sort((a, b) => b.tokens - a.tokens).map(x => `<button type="button" class="name" data-ctx-kind="${esc(String(x.kind))}" data-ctx-req="${r.req_id}" aria-label="${esc(partLabel(String(x.kind)))}，打开明细"><i class="sw" style="background:${partColor(String(x.kind))}"></i><span>${esc(partLabel(String(x.kind)))}</span></button>
+      ? `<div class="comp-legend">${[...positive].sort((a, b) => b.tokens - a.tokens).map(x => `<button type="button" class="name" data-ctx-kind="${esc(String(x.kind))}" data-ctx-req="${r.req_id}" aria-label="${esc(partLabel(String(x.kind)))}，打开明细"><span>${esc(partLabel(String(x.kind)))}</span></button>
         <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>`
       : '';
     comp += `${mapHtml}${legend}${rowsHtml}`;

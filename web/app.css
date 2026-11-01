@@ -14,11 +14,9 @@
   --k-system:#52525B; --k-user:#0066CC; --k-assistant:#8E44AD; --k-tool:#B45309;
   --k-system-bg:rgba(161,161,170,.16); --k-user-bg:rgba(0,102,204,.10); --k-assistant-bg:rgba(142,68,173,.12);
   --k-tool-bg:rgba(180,83,9,.10);
-  /* 上下文类别槽位：固定不按大小重排，skills 落第七槽；类别按 parts 数据动态渲染，未知 kind 落 --p-unknown。
-     七槽按浅色表面方案校验（dataviz validate_palette）：亮 #6250d6 / 暗 #9085e9 的 skills 紫过亮度带与对比度，
-     旧值 #30287e/#3d3480 按白字高饱和填充设计，在浅色表面方案下越带或近不可见。--p-unknown 保持灰色是有意例外。 */
-  --p1:#2a78d6; --p2:#eb6834; --p3:#1baf7a; --p4:#eda100; --p5:#e87ba4; --p6:#008300;
-  --p7:#6250d6; --p-unknown:#7a8794;
+  /* 构成面积四档单色（方向 A 第 6 步）：份额越大越实，不再用颜色分类；
+     档位判定在 parts.js partShade。alpha 是示意值，真实会话验证深色区分度后可调。 */
+  --t1:rgba(0,122,255,.16); --t2:rgba(0,122,255,.12); --t3:rgba(0,122,255,.08); --t4:rgba(0,122,255,.05);
   --shadow:0 1px 2px rgba(0,0,0,.06);
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -35,8 +33,7 @@
     --k-system:#A1A1AA; --k-user:#409CFF; --k-assistant:#C77FEA; --k-tool:#FFB340;
     --k-system-bg:rgba(161,161,170,.14); --k-user-bg:rgba(64,156,255,.13); --k-assistant-bg:rgba(199,127,234,.13);
     --k-tool-bg:rgba(255,179,64,.12);
-    --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
-    --p7:#9085e9; --p-unknown:#93a5b3;
+    --t1:rgba(10,132,255,.18); --t2:rgba(10,132,255,.13); --t3:rgba(10,132,255,.08); --t4:rgba(10,132,255,.04);
     --shadow:0 1px 2px rgba(0,0,0,.35);
   }
 }
@@ -51,8 +48,7 @@
   --k-system:#A1A1AA; --k-user:#409CFF; --k-assistant:#C77FEA; --k-tool:#FFB340;
   --k-system-bg:rgba(161,161,170,.14); --k-user-bg:rgba(64,156,255,.13); --k-assistant-bg:rgba(199,127,234,.13);
   --k-tool-bg:rgba(255,179,64,.12);
-  --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
-  --p7:#9085e9; --p-unknown:#93a5b3;
+  --t1:rgba(10,132,255,.18); --t2:rgba(10,132,255,.13); --t3:rgba(10,132,255,.08); --t4:rgba(10,132,255,.04);
   --shadow:0 1px 2px rgba(0,0,0,.35);
 }
 
@@ -381,7 +377,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .msg[aria-current="true"] .msg-head{background:var(--accent-soft);border-left-color:var(--accent)}
 .msg-ord{font:10px var(--mono);color:var(--muted);text-align:right}
 .msg-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
-.msg-new{font:9px var(--ui);color:var(--accent);white-space:nowrap}
+/* 新增消息：行左缘 2px accent（方向 A 第 6 步），无底色——选中态才有浅蓝底，两态可区分。 */
+.msg.msg-new .msg-head{border-left-color:var(--accent)}
 .msg-more{padding:8px 10px;text-align:center;border-top:1px solid var(--line)}
 /* 未读区间：已缓存序号之间的空洞，原样说明，不冒充已读。 */
 .msg-gap{padding:5px 10px;font-size:10.5px;color:var(--muted);border-bottom:1px dashed var(--line);list-style:none}
@@ -579,7 +576,6 @@ pre.raw{
 
 .comp-legend{display:grid;grid-template-columns:1fr auto auto;gap:3px 8px;font-size:10.5px}
 .comp-legend .name{display:flex;align-items:center;gap:6px;color:var(--text-2);min-width:0}
-.comp-legend .sw{width:7px;height:7px;border-radius:1.5px;flex:none}
 .comp-legend .name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .comp-legend .val{font:10.5px var(--mono);color:var(--text-2);text-align:right}
 .comp-legend .pct{font:10.5px var(--mono);color:var(--muted);text-align:right;width:34px}
@@ -590,8 +586,8 @@ pre.raw{
    全色边界；文字用主题墨色（16% 底上对比度实测 11–14:1）。窄块按尺寸依次隐藏
    数值与全部文字，被隐藏的信息由同页列表承担；类别身份另见图例与列表行点。 */
 .ctx-map{position:relative;margin:0 0 9px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface);aspect-ratio:2.4;min-height:160px;max-height:240px}
-.ctx-tile{position:absolute;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:2px;padding:7px 8px;border:1px solid color-mix(in srgb,var(--c) 30%,var(--surface));border-radius:4px;background:color-mix(in srgb,var(--c) 16%,var(--surface));color:var(--text);min-width:0}
-.ctx-tile:hover,.ctx-tile.ctx-hl{background:color-mix(in srgb,var(--c) 28%,var(--surface));border-color:var(--c)}
+.ctx-tile{position:absolute;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:2px;padding:7px 8px;border:1px solid color-mix(in srgb,var(--accent) 14%,var(--line));border-radius:4px;background:var(--c);color:var(--text);min-width:0}
+.ctx-tile:hover,.ctx-tile.ctx-hl{background:color-mix(in srgb,var(--accent) 24%,var(--surface));border-color:var(--accent)}
 .ctx-tile:focus-visible{outline-offset:-2px}
 .ctx-tname{font-size:10.5px;font-weight:550;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctx-tval{font:10px var(--mono);color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -601,7 +597,6 @@ pre.raw{
 .ctx-rows{display:flex;flex-direction:column;gap:1px;margin:0 0 6px}
 .ctx-row{display:flex;align-items:center;gap:7px;padding:2.5px 6px;border-radius:4px;font-size:11px}
 .ctx-row:hover,.ctx-row.ctx-hl{background:var(--hover)}
-.ctx-row .dot{width:8px;height:8px;border-radius:2.5px;flex:none}
 .ctx-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctx-row .nm b{font-weight:500}
 .ctx-row .xn{color:var(--muted);font-size:10px;white-space:nowrap}
@@ -727,7 +722,6 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
   /* 消息行在窄屏保留完整英文角色标签，去掉序号列，预览仍单行截断 */
   .msg-head{grid-template-columns:64px minmax(0,1fr);gap:6px}
   .msg-ord{display:none}
-  .msg-new{grid-column:2;justify-self:start}
   .conv-tools .mini-search{width:100%}
 }
 /* 主题切换会同时改变变量；background 过渡会把旧主题的颜色多留一帧，
@@ -744,7 +738,6 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 .ctx-d-head{display:flex;align-items:center;gap:9px;padding:10px 14px;border-bottom:1px solid var(--line);flex:none}
 .ctx-d-head .t{display:flex;align-items:center;gap:7px;font-size:12.5px;min-width:0}
 .ctx-d-head .t b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ctx-d-head .dot{width:9px;height:9px;border-radius:2.5px;flex:none}
 .ctx-d-head .v{font:11px var(--mono);color:var(--text-2);flex:none}
 .ctx-d-head .grow{flex:1}
 .ctx-d-head .x{border:0;background:none;font-size:16px;line-height:1;color:var(--muted);padding:2px 6px;border-radius:4px;cursor:pointer}

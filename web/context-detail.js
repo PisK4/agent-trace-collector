@@ -16,7 +16,7 @@
  */
 
 import { esc } from './html.js';
-import { baseNameOf, isPathKind, kk, partColor, partLabel } from './parts.js';
+import { baseNameOf, isPathKind, kk, partLabel } from './parts.js';
 
 /** iid → {kind, tag, name}；iid 由 kind\01tag\01name 拼成，名字段允许含分隔符。
  *  @param {string} iid */
@@ -114,7 +114,7 @@ export function directoryStatusHtml(data) {
 }
 
 /**
- * 弹窗内部 HTML：头部是所选范围（类别色点 + 名称 + token），主体是状态说明
+ * 弹窗内部 HTML：头部是所选范围（名称 + token），主体是状态说明
  * 与目录条目列表。条目默认收起（单项选择默认展开），展开时才读正文。
  * 路径类名字只显示 basename，完整名字在 title 里。
  * @param {ContextSelection} s
@@ -124,7 +124,7 @@ export function contextDetailHtml(s, dir) {
   const shown = s.name !== null && isPathKind(s.kind) ? baseNameOf(s.name) : s.label;
   const nameTitle = shown === s.label ? '' : ` title="${esc(s.label)}"`;
   const head = `<header class="ctx-d-head">
-    <span class="t"><i class="dot" style="background:${partColor(s.kind)}"></i><b${nameTitle}>${esc(shown)}</b></span>
+    <span class="t"><b${nameTitle}>${esc(shown)}</b></span>
     <span class="v">${s.tokens === null ? '' : `${kk(s.tokens)} tokens`}</span>
     <span class="grow"></span>
     <button type="button" class="x" data-ctx-close aria-label="关闭明细">×</button>

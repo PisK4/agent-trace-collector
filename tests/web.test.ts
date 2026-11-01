@@ -236,8 +236,9 @@ test('delta=null 给关系说明不标新增，delta=[] 显示新增 0', () => {
   expect(unknown).toContain('不标记新增消息');
   expect(unknown).not.toContain('新增 0');
   expect(unknown).not.toContain('msg-new');
+  // delta 空集不再渲染「新增 0 条消息」横幅：没有新增就没有可说的。
   const empty = structureFoldHtml({ ...base, delta: new Set<number>(), relation: '' });
-  expect(empty).toContain('新增 0');
+  expect(empty).not.toContain('新增 0');
 });
 
 test('结构内点开消息详情可返回，消息总数不变', () => {
@@ -390,8 +391,14 @@ test('增量未完成给续读入口，失败给重试并保留未读位置', ()
   expect(failed).toContain('delta_gap');
   expect(failed).toContain('data-delta-more="1"');
   expect(failed).toContain('已消费 0 / 3');
-  // 无 deltaState 的旧调用形状保持原有数量说明。
-  expect(structureFoldHtml({ ...base, deltaState: null })).toContain('新增 3 条消息');
+  // 已全部消费后不再出横幅：数量说明由行级蓝缘与增量入口承担，纯计数行删除。
+  const done = structureFoldHtml({
+    ...base, deltaState: { next: 3, done: true, loading: false, error: null },
+  });
+  expect(done).not.toContain('data-delta-more');
+  expect(done).not.toContain('新增 3 条消息');
+  // 无 deltaState 的旧调用形状同样不再出纯计数行。
+  expect(structureFoldHtml({ ...base, deltaState: null })).not.toContain('新增 3 条消息');
 });
 
 test('工具概览显示配对与正文加载两种状态，时长归属说明保留', () => {
