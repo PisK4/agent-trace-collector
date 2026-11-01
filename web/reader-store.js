@@ -49,6 +49,7 @@ import { deltaOrdinals, messageEntries } from './body-model.js';
  * @property {() => Promise<void>} loadBgJobs 按当前会话取 bg_job 结算行；选会话与刷新时重取。
  * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} peekSummary 同步读取会话汇总快照；absent 覆盖 404、读取失败与无会话三种不可呈现态。
  * @property {(key: string) => Promise<void>} loadSummary 打开会话即拉一次汇总，不懒加载；换会话代次变更后迟到响应不写入。
+ * @property {(v: boolean) => void} setDemoSilent 拍摄静默开关：开着时作废不排自动重读。
  * @property {(query: import('../src/queries/session-summary').SummaryEntriesQuery) => Promise<import('../src/queries/session-summary').SummaryEntries>} loadSummaryEntries 汇总条目点击后的按组查询；无缓存，每次点击现查。
  * @property {(id: number) => void} invalidate 原地清空一笔记录的缓存并落作废态；不通知、不排自动重读，测试与强制失效用。
  */
@@ -89,6 +90,8 @@ function createLanes(limit, fetcher) {
  */
 export function createReaderStore(fetcher, onReadChanged, options) {
   const autoRereadCooldownMs = options?.autoRereadCooldownMs ?? 10000;
+  /** 拍摄静默：作废不排自动重读，页面保持静止；手动重读与显式刷新不受限。 */
+  let demoSilent = false;
   const onTurnsChanged = options?.onTurnsChanged ?? null;
   const onSummaryChanged = options?.onSummaryChanged ?? null;
   const lane = createLanes(4, fetcher);
@@ -202,7 +205,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
    * @param {any} rec
    */
   function scheduleAutoReread(rec) {
-    if (rec.autoTimer !== null) return;
+    if (demoSilent || rec.autoTimer !== null) return;
     const wait = Math.max(0, rec.autoRereadAt + autoRereadCooldownMs - Date.now());
     rec.autoTimer = setTimeout(() => {
       rec.autoTimer = null;
@@ -825,6 +828,7 @@ export function createReaderStore(fetcher, onReadChanged, options) {
     loadBgJobs,
     peekSummary,
     loadSummary,
+    setDemoSilent: (/** @type {boolean} */ v) => { demoSilent = v; },
     loadSummaryEntries,
     invalidate,
   };

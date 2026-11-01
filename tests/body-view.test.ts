@@ -8,6 +8,7 @@ import {
   topSystemText,
 } from '../web/body-model.js';
 import { partLabel, renderAttemptChain } from '../web/rail-facts.js';
+import { partRank } from '../web/parts.js';
 import { partShade } from '../web/parts.js';
 import { replyCompleteness } from '../web/row-summary.js';
 import { esc, mdToHtml } from '../web/html.js';
@@ -663,6 +664,12 @@ test('缺时间时只显示说明，不补造间隔', () => {
 test('未知 part kind 保留名称，颜色按份额落档', () => {
   expect(partLabel('synthetic_part')).toBe('synthetic_part');
   expect(partLabel('<img src=x>')).toBe('<img src=x>');
+});
+
+test('harness 是登记类别：有标签、次序在 skills 之后，份额照常落档', () => {
+  expect(partLabel('harness')).toBe('Harness');
+  expect(partRank('harness')).toBeGreaterThan(partRank('skills'));
+  expect(partShade(9, 100)).toBe('var(--t2)');
 });
 
 test('partShade 按份额落四档：阈值边界钉住', () => {
