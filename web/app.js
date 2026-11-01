@@ -360,8 +360,9 @@ if (typeof document !== 'undefined') {
     const here = state.missingReqId !== null ? `Request ${state.missingReqId} 未找到`
       : state.offPageReqId !== null ? `Request ${state.offPageReqId} 未在当前窗口`
         : idx > 0 ? `Request ${String(idx).padStart(2, '0')}` : '';
-    // 会话标题由中栏 sticky h1 常驻可见，crumb 只承担请求定位。
-    el('crumb').innerHTML = here === '' ? '' : `<b>${esc(here)}</b>`;
+    // 面包屑带会话标题承接顶栏定位；中栏 sticky h1 仍是主标题。
+    el('crumb').innerHTML = row === null ? (here === '' ? '' : `<b>${esc(here)}</b>`)
+      : `${esc(row.title)}${here === '' ? '' : `<span class="sep">·</span><b>${esc(here)}</b>`}`;
     document.title = row ? `${here === '' ? row.title : `${here} · ${row.title}`} — Trace Collector`
       : 'Trace Collector';
   }
@@ -407,11 +408,11 @@ if (typeof document !== 'undefined') {
           : { color: 'var(--line-strong)', text: '', title: '' };
       return `<button class="sess" data-session="${esc(s.conv_key)}" aria-current="${s.conv_key === state.session}">
         <span class="sess-title">${esc(s.title || '（无标题）')}</span>
+        <span class="sess-count num">${s.request_count} 笔</span>
         <span class="sess-time num">${esc(clock(s.last_ms))}</span>
         <span class="sess-meta">
           <span class="dot" style="background:${flag.color}"${flag.title ? ` title="${flag.title}"` : ''}></span>
-          <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')}</span><span class="sep">·</span>
-          <span>${s.request_count} 笔</span>
+          <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')}</span>
           ${flag.text ? `<span class="sep">·</span><span style="color:${flag.color}">${flag.text}</span>` : ''}
         </span>
       </button>`;
