@@ -40,8 +40,9 @@ import {
 import { applyIntent } from './selection.js';
 import { createMainView } from './trace-dom.js';
 import { createTracePreparation } from './trace-preparation.js';
+import { createTraceModel } from './trace-model.js';
 import { renderTracePair } from './trace-pair.js';
-import { isEmptyGroup, projectSteps, projectTailReply, renderTraceRow, tailEligibleIds as tailIds } from './trace-view.js';
+import { isEmptyGroup, projectSteps, projectTailReply, renderTraceRow } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
 import { railTabFromParam, railTabParam, resolveTraceTarget, traceIdFromParam } from './url-route.js';
 
@@ -77,17 +78,17 @@ if (typeof document !== 'undefined') {
    */
   let structureReveal = null;
   /**
-   * 最近一次完整投影：详情在手时更新；作废或读取失败期间退回它显示，由组上的
-   * 旧版本标记声明归属。它是显示缓存，不参与证据判定，换会话与刷新即清。
-   * @type {Map<number, import('./trace-view.js').TraceStep[]>}
+   * 依赖感知显示模型：组与尾组投影按内容修订与依赖边重算，读取无变化时
+   * 重用上一次的对象；三态（当前/保留/占位）与末尾组资格都在 model 内。
+   * changedReads 收集本轮 contentRevision 变化的组，渲染时一次喂给 model。
    */
-  const retainedSteps = new Map();
-  /**
-   * 末尾回复投影的缓存：与组投影分开存，版本作废时随组一起退回或隐藏，
-   * 不把旧回复冒充当前。换会话与刷新即清。
-   * @type {Map<number, {steps: import('./trace-view.js').TraceStep[], eligible: boolean}>}
-   */
-  const retainedTail = new Map();
+  const changedReads = new Set();
+  const traceModel = createTraceModel({
+    project: (r, read) => projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
+      store.peekBgJobs().items, prevInfoOf),
+    projectTail: (r, read) => projectTailReply(r, read),
+    preparing: preparingStep,
+  });
   /**
    * 上下文明细弹窗：tile、图例与列表行共用的选择动作。读取经注入的具名操作
    * facade 走 store 的统一调度，代次捕获在模块内，晚到响应不进已切换的弹窗，
@@ -146,7 +147,8 @@ if (typeof document !== 'undefined') {
     for (const id of ids) {
       if (state.selectedStep === `${id}:preparing`) dispatch({ kind: 'clear-step' });
     }
-    renderMain();
+    // 一准备块一次重绘：批量落地的组在下一个微任务合并提交。
+    scheduleRenderMain();
     if (dependencies.some(affectsRail) || ids.some(affectsRail)) renderRail();
   });
 
@@ -327,8 +329,8 @@ if (typeof document !== 'undefined') {
   /** 换会话与显式刷新清空准备结论、保留投影与末尾回复缓存。 */
   function resetReading() {
     preparation.reset();
-    retainedSteps.clear();
-    retainedTail.clear();
+    traceModel.reset();
+    changedReads.clear();
   }
 
   /**
@@ -353,14 +355,28 @@ if (typeof document !== 'undefined') {
    * 组回到保留投影；自动重读把详情换新后在窗口内接着备齐，已提交的组不自动扩量。
    * @param {number} id
    */
+  /** 读落地的刷新合并：同一 tick 内多笔读取只排一次微任务重绘；锚点捕获
+   *  与补偿仍在一次同步 commit 内完成，不跨帧。选择走 dispatch 的同步路径。 */
+  let renderQueued = false;
+  function scheduleRenderMain() {
+    if (renderQueued) return;
+    renderQueued = true;
+    queueMicrotask(() => {
+      renderQueued = false;
+      renderMain();
+    });
+  }
+
+  /** @param {number} id */
   function onStoreChange(id) {
     const read = store.peekRequest(id);
+    changedReads.add(id);
     if (read !== null && read.detail !== null) {
       if (!preparation.has(id) && inWindow(id)) void preparation.prepare(id);
     } else {
       preparation.forget(id);
     }
-    renderMain();
+    scheduleRenderMain();
     if (affectsRail(id)) renderRail();
   }
 
@@ -578,80 +594,24 @@ if (typeof document !== 'undefined') {
   }
 
   /**
-   * 一笔请求的步骤投影。准备完成的组用当前读取投影并更新保留投影；未备齐时
-   * 退回最近一次完整投影，旧结果由 stale 声明归属；两者都没有才显示准备行。
+   * 一笔请求的步骤投影：三态（当前/保留/占位）与重投影判据都在显示模型内，
+   * 这里只取最近一次显示版本。
    * @param {RequestRow} r
    * @returns {{steps: import('./trace-view.js').TraceStep[], stale: 'reading' | 'failed' | null,
    *   placeholder: boolean}}
    */
   function stepsOf(r) {
-    const read = store.peekRequest(r.req_id);
-    const project = () => projectSteps(r, read, systemContextOf(r, id => store.peekRequest(id)),
-      store.peekBgJobs().items, prevInfoOf);
-    if (preparation.has(r.req_id) && read !== null && read.detail !== null) {
-      const steps = project();
-      retainedSteps.set(r.req_id, steps);
-      return { steps, stale: null, placeholder: false };
-    }
-    const retained = retainedSteps.get(r.req_id);
-    if (retained !== undefined) {
-      return {
-        steps: retained, placeholder: false,
-        stale: read !== null && read.status === 'failed' ? 'failed' : 'reading',
-      };
-    }
-    if (read !== null && (read.status === 'failed' || read.status === 'invalidated')) {
-      // 失败与作废没有可显示的新投影：缺口行如实给原因与重试入口，不当成读取中。
-      // 作废项归 store 自动重读，本组在恢复前一直停在这一行。
-      return { steps: project(), stale: null, placeholder: false };
-    }
-    return { steps: [preparingStep(r)], stale: null, placeholder: true };
+    return traceModel.get(r.req_id)
+      ?? { steps: [preparingStep(r)], stale: null, placeholder: true };
   }
 
   /**
-   * 末尾回复组：没有后继承载的链末回复单独成组。只在会话完整加载时计算；
-   * 历史加载不改已显示行的归属与顺序。读取未备齐时退回缓存并标 stale，
-   * 缓存也没有就不成组，不把旧回复冒充当前。
+   * 末尾回复组：没有后继承载的链末回复单独成组。归属与缓存由显示模型持有。
    * @param {RequestRow} r
    * @returns {{steps: import('./trace-view.js').TraceStep[], stale: 'reading' | 'failed' | null} | null}
    */
   function tailOf(r) {
-    const read = store.peekRequest(r.req_id);
-    if (preparation.has(r.req_id) && read !== null && read.detail !== null) {
-      const tail = projectTailReply(r, read);
-      retainedTail.set(r.req_id, tail);
-      return tail.eligible ? { steps: tail.steps, stale: null } : null;
-    }
-    const retained = retainedTail.get(r.req_id);
-    if (retained !== undefined && retained.eligible) {
-      return {
-        steps: retained.steps,
-        stale: read !== null && read.status === 'failed' ? 'failed' : 'reading',
-      };
-    }
-    return null;
-  }
-
-  /**
-   * 末尾组的请求集合：会话已完整加载、请求不是辅助、没有已加载的非辅助请求把它
-   * 当作已确认前驱（后继承载），且它之后没有前驱未知的请求。判定本身是纯函数，
-   * 这里只把窗口行整理成它要的形状：前驱未定包含详情未准备与关系不是 confirmed/first。
-   * @returns {Set<number>}
-   */
-  function tailEligibleIds() {
-    const window = store.getWindow();
-    const rows = currentRows().filter(row => row.purpose_chain !== 'exclude' && row.chain_role !== 'aux');
-    const entries = rows.map(row => {
-      const read = preparation.has(row.req_id) ? store.peekRequest(row.req_id) : null;
-      const detail = read?.detail ?? null;
-      const confirmed = detail !== null && detail.prev_relation === 'confirmed';
-      return {
-        id: row.req_id,
-        prevId: confirmed && typeof detail.prev_req_id === 'number' ? detail.prev_req_id : null,
-        undetermined: detail === null || (detail.prev_relation !== 'confirmed' && detail.prev_relation !== 'first'),
-      };
-    });
-    return tailIds(entries, window.newerCursor === null && !window.loading);
+    return traceModel.get(r.req_id)?.tail ?? null;
   }
 
   /**
@@ -661,37 +621,66 @@ if (typeof document !== 'undefined') {
    * 组按行顺序输出「承载组、末尾组、承载组、末尾组……」；末尾组与承载组同号相邻。
    * @returns {import('./trace-dom.js').MainModel}
    */
+  /**
+   * 结果行的调用方摘要：同组调用行优先（结果与调用同在承载 delta 里），其次
+   * 回退产出请求缓存；两处都没有时降级为只工具名。保留投影不回退：旧结果行
+   * 不能借用依赖换版后的新调用表，否则会把新调用的名字与参数配到旧结果上。
+   * @param {import('./trace-view.js').TraceStep[]} steps
+   * @param {boolean} fallback 本组是否使用当前读取投影
+   */
+  const callOfFor = (steps, fallback) => (/** @type {number} */ ownerReq, /** @type {number} */ callOrd) => {
+    const same = steps.find(step => step.kind === 'tool' && step.callOwner !== undefined
+      && step.callOwner !== null && step.callOwner.reqId === ownerReq && step.callOwner.callOrd === callOrd);
+    if (same !== undefined) return { name: same.toolName ?? '', inputText: same.toolInput ?? '' };
+    if (!fallback) return null;
+    const ownerRead = store.peekRequest(ownerReq);
+    if (ownerRead === null || ownerRead.meta === null) return null;
+    const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
+    return call === null ? null : { name: call.name, inputText: call.inputText };
+  };
+
+  /** 行 HTML 缓存：显示模型重用未变的 steps 数组时按引用复用，不逐帧重生成。
+   *  键是步骤数组引用，序号与投影资格（callOf 的回退语义）变化才重建；
+   *  selectedStep 不进键——选择由提交后单独写回高亮。行对象引用只在窗口
+   *  重建时更换，而重建必先清模型与缓存。 */
+  const rowHtmlCache = new WeakMap();
+  /** @param {RequestRow} r @param {import('./trace-view.js').TraceStep[]} steps
+   *  @param {number} ordinal @param {boolean} fallback @returns {string[]} */
+  function rowHtmls(r, steps, ordinal, fallback) {
+    const cached = rowHtmlCache.get(steps);
+    if (cached !== undefined && cached.ordinal === ordinal && cached.fallback === fallback) return cached.htmls;
+    const callOf = callOfFor(steps, fallback);
+    const htmls = steps.map(step => renderTraceRow(r, step, ordinal, callOf));
+    rowHtmlCache.set(steps, { ordinal, fallback, htmls });
+    return htmls;
+  }
+
   function mainModel() {
     const window = store.getWindow();
     const rows = currentRows();
+    // 显示更新一次喂齐：读取快照、提交资格与失效集，model 决定哪些组重投影。
+    const reads = new Map();
+    for (const row of rows) reads.set(row.req_id, store.peekRequest(row.req_id));
+    const ready = new Set();
+    for (const row of rows) if (preparation.has(row.req_id)) ready.add(row.req_id);
+    traceModel.update({
+      rows, reads, ready,
+      bgJobs: store.peekBgJobs().items,
+      complete: window.newerCursor === null && !window.loading,
+      changedIds: [...changedReads],
+    });
+    changedReads.clear();
     const band = turnBandHtml();
     // 序号槽宽的位数取窗口最大序号：初始加载受 windowLimit 限制，加载后续
     // 记录后 rows.length 累计，重绘时重算，不按首次加载上限截断。
     const ordDigits = Math.max(1, String(rows.length).length);
-    /**
-     * 结果行的调用方摘要：同组调用行优先（结果与调用同在承载 delta 里），其次
-     * 回退产出请求缓存；两处都没有时降级为只工具名。保留投影不回退：旧结果行
-     * 不能借用依赖换版后的新调用表，否则会把新调用的名字与参数配到旧结果上。
-     * @param {import('./trace-view.js').TraceStep[]} steps
-     * @param {boolean} fallback 本组是否使用当前读取投影
-     */
-    const callOfFor = (steps, fallback) => (/** @type {number} */ ownerReq, /** @type {number} */ callOrd) => {
-      const same = steps.find(step => step.kind === 'tool' && step.callOwner !== undefined
-        && step.callOwner !== null && step.callOwner.reqId === ownerReq && step.callOwner.callOrd === callOrd);
-      if (same !== undefined) return { name: same.toolName ?? '', inputText: same.toolInput ?? '' };
-      if (!fallback) return null;
-      const ownerRead = store.peekRequest(ownerReq);
-      if (ownerRead === null || ownerRead.meta === null) return null;
-      const call = replyView(ownerRead.meta).calls.find(item => item.ord === callOrd) ?? null;
-      return call === null ? null : { name: call.name, inputText: call.inputText };
-    };
     // 后续入口在列表尾部，只在有更晚记录或正在读取时出现；序号口径在数字本身的悬停说明里。
     const loaderHtml = window.loading
       ? '<div class="history-loader"><span class="history-start">正在读取后续记录…</span></div>'
       : window.newerCursor !== null
         ? '<div class="history-loader"><button id="load-later" class="history-button">↓ 加载后续记录</button></div>'
         : '';
-    const tails = tailEligibleIds();
+    const tails = traceModel.tailEligibleIds();
     // 轮次带点得到被省略的起点时，中栏也要有这一行：选中态之外再放行轮次起点。
     const turnStart = state.turn === null ? null : turnOf(state.turn)?.start_req ?? null;
     /** 没有可读正文的请求：请求记录入口在会话头，选中时这一组临时显示也不移出列表。
@@ -712,8 +701,9 @@ if (typeof document !== 'undefined') {
       /** @type {import('./trace-dom.js').CommitItem[]} */
       const items = [];
       if (!hidden) {
-        for (const step of steps) {
-          items.push({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) });
+        const htmls = rowHtmls(r, steps, ordinal, stale === null);
+        for (let index = 0; index < steps.length; index += 1) {
+          items.push({ key: steps[index].key, html: htmls[index] });
         }
         groups.push({
           key: `req:${r.req_id}`,
@@ -728,6 +718,7 @@ if (typeof document !== 'undefined') {
       // 末尾组不挂请求级 aria-current：它是同一请求的回复，不是第二笔请求。
       const tail = tails.has(r.req_id) ? tailOf(r) : null;
       if (tail === null) continue;
+      const tailHtmls = rowHtmls(r, tail.steps, ordinal, stale === null);
       groups.push({
         key: `tail:${r.req_id}`,
         reqId: r.req_id,
@@ -735,7 +726,7 @@ if (typeof document !== 'undefined') {
         current: false,
         stale: tail.stale,
         placeholder: false,
-        rows: tail.steps.map(step => ({ key: step.key, html: renderTraceRow(r, step, ordinal, callOf) })),
+        rows: tail.steps.map((step, index) => ({ key: step.key, html: tailHtmls[index] })),
       });
     }
     return {
@@ -832,9 +823,13 @@ if (typeof document !== 'undefined') {
     // 首载窗口准备完成前以选中组为锚，其余组提交不把它挤出视口；准备完成后
     // 改锚首条可见步骤，阅读位置不再被选中组牵走。
     const preferred = state.revealed ? null : state.reqId;
-    mainView.commit(mainModel(), scroller(), preferred);
-    restoreFolds(main);
-    syncBandTop();
+    const verdict = mainView.commit(mainModel(), scroller(), preferred);
+    // 结构提交才需要折叠恢复与带定位；clean/selection 跳过这两项布局读取。
+    // 选中块回视野自带视野判断，保留在快路径里给轮次点选即时反馈。
+    if (verdict === 'structural') {
+      restoreFolds(main);
+      syncBandTop();
+    }
     revealSelectedChip();
   }
 

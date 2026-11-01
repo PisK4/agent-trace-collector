@@ -28,6 +28,7 @@ import { createReadScheduler } from './read-scheduler.js';
  * @property {{back: number, next: number, total: number | null, ords: number[], loading: boolean, error: string | null}} structure 已读结构窗口：`[back, next)` 连续，首读尾片。
  * @property {{next: number, done: boolean, loading: boolean, error: string | null, unconfirmed: boolean}} delta
  * @property {string | null} token
+ * @property {number} contentRevision 已加载显示内容的修订：detail/meta/消息/结构/增量/失败态任一真实变化自增，只读快照不推进；显示模型据此决定重投影。
  */
 
 /**
@@ -162,6 +163,8 @@ export function createReaderStore(transport, onReadChanged, options) {
         status: 'reading',
         /** 记录修订：作废时自增，迟到详情响应凭它不得写入已重置的记录。 */
         rev: 0,
+        /** 已加载显示内容的修订：detail/meta/消息/结构/增量/失败态任一真实变化自增，peek 不推进。 */
+        contentRevision: 0,
         /** 上次自动重读发起时间与在排的定时器。 */
         autoRereadAt: 0, autoTimer: null,
         meta: null,
@@ -198,9 +201,11 @@ export function createReaderStore(transport, onReadChanged, options) {
 
   /** @param {any} rec @param {import('../src/protocols').BodyPage} page */
   function mergeMessages(rec, page) {
+    let added = false;
     for (const entry of messageEntries(page)) {
-      if (!rec.messages.has(entry.ord)) rec.messages.set(entry.ord, entry);
+      if (!rec.messages.has(entry.ord)) { rec.messages.set(entry.ord, entry); added = true; }
     }
+    if (added) rec.contentRevision += 1;
   }
 
   /** @param {any} rec @param {string} key 缺口页移出缓存：完成值与在途登记一起删，重试重新走网络。 */
@@ -225,6 +230,7 @@ export function createReaderStore(transport, onReadChanged, options) {
     rec.toolValues = new Map();
     routes.delete(rec.id);
     routeValues.delete(rec.id);
+    rec.contentRevision += 1;
   }
 
   /**
@@ -533,6 +539,7 @@ export function createReaderStore(transport, onReadChanged, options) {
       rec.token = detail.reading_token;
       rec.detailError = null;
       rec.status = 'fresh';
+      rec.contentRevision += 1;
     })();
     rec.detailInflight = task;
     try {
@@ -549,6 +556,7 @@ export function createReaderStore(transport, onReadChanged, options) {
       }
       rec.detailError = error instanceof Error ? error.message : 'detail_failed';
       rec.status = 'failed';
+      rec.contentRevision += 1;
       throw error;
     } finally {
       if (rec.detailInflight === task) rec.detailInflight = undefined;
@@ -567,6 +575,7 @@ export function createReaderStore(transport, onReadChanged, options) {
       structure: rec.structure,
       delta: rec.delta,
       token: rec.token,
+      contentRevision: rec.contentRevision,
     };
   }
 
@@ -593,6 +602,7 @@ export function createReaderStore(transport, onReadChanged, options) {
     rec.detailError = null;
     rec.status = 'fresh';
     if (rec.meta === null) rec.meta = meta;
+    rec.contentRevision += 1;
     return true;
   }
 
@@ -637,6 +647,7 @@ export function createReaderStore(transport, onReadChanged, options) {
       if (rec !== undefined && rec.status === 'reading') {
         rec.detailError = typeof code === 'string' ? code : 'batch_failed';
         rec.status = 'failed';
+        rec.contentRevision += 1;
       }
       pending.get(id)?.reject(error);
       pending.delete(id);
@@ -916,6 +927,7 @@ export function createReaderStore(transport, onReadChanged, options) {
     state.back = from;
     // 向前读更早的片不移动窗口上界；只有尾片把它推到新的末尾。
     state.next = Math.max(state.next, end);
+    rec.contentRevision += 1;
   }
 
   /**
@@ -1076,9 +1088,11 @@ export function createReaderStore(transport, onReadChanged, options) {
           }
           if (gap) {
             plan.rec.delta.error = 'delta_gap';
+            plan.rec.contentRevision += 1;
           } else if (reached > 0) {
             plan.rec.delta.next += reached;
             if (plan.rec.delta.next >= plan.trusted.size) plan.rec.delta.done = true;
+            plan.rec.contentRevision += 1;
           }
         }
       } catch (error) {
@@ -1088,6 +1102,7 @@ export function createReaderStore(transport, onReadChanged, options) {
         if (/** @type {Error & {code?: string}} */ (error).code !== 'cancelled') {
           for (const [, plan] of plans) {
             plan.rec.delta.error = error instanceof Error ? error.message : 'delta_failed';
+            plan.rec.contentRevision += 1;
           }
         }
       } finally {
