@@ -155,8 +155,8 @@ export function getSessionSummary(store: Store, key: string): SessionSummary {
       if (row.arg_skill !== null) skills.set(row.arg_skill, (skills.get(row.arg_skill) ?? 0) + 1);
       // 末尾命令判定的升版不影响工具参数提取；前一算法的工具事实仍可用。
       if (row.source === 1
-        ? row.algo === DERIVE_ALGORITHM || row.algo === 9
-        : row.algo === GROUP_ALGORITHM || row.algo === 5) factKnown += 1;
+        ? row.algo === DERIVE_ALGORITHM || row.algo === 10
+        : row.algo === GROUP_ALGORITHM || row.algo === 6) factKnown += 1;
     }
 
     const interruptsCol = derivedColSql('q', 'd', 'r', 'interrupt_count');

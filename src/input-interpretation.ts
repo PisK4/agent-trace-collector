@@ -61,6 +61,13 @@ const STEPPED_AWAY = /^The user stepped away and is coming back\b/i;
 export const OMP_ARCHIVE_PREFIX = 'Resume prior conversation. Earlier turns archived under HISTORY';
 /** 归档正文里的预算丢弃量；数字带千分位逗号，展示时注明是字符数不是 token。 */
 const OMP_DROPPED_CHARS = /About ([\d,]+) characters of older middle history dropped/;
+/**
+ * Hermes 技能加载消息的头部行与指令锚点：两行都是 harness 写入的位置锚，
+ * 头部行自述技能正文在下方，锚点行自述调用技能时的用户指令在冒号之后。
+ * 只按完整结构识别，`[IMPORTANT:` 前缀本身不构成删除依据。
+ */
+const HERMES_SKILL_HEADER = /^\[IMPORTANT: The user has invoked the "[^"]+" skill, indicating they want you to follow its instructions\. The full skill content is loaded below\.\]$/;
+const HERMES_INSTRUCTION_ANCHOR = 'The user has provided the following instruction alongside the skill invocation:';
 
 type StripResult = { text: string; tag: string | null; malformed: boolean };
 
@@ -157,6 +164,34 @@ export function messageText(message: unknown): string | null {
   return parts.length === 0 ? null : parts.join('\n');
 }
 
+type HermesSkillLoad = { instruction: string | null; removed: string[] };
+
+/**
+ * 按 harness 自述的结构拆一段 Hermes 技能加载消息。
+ *
+ * 头部行到锚点行之间是技能正文（头部行写明 full skill content is loaded
+ * below），锚点行冒号之后是调用技能时的用户指令；锚点之后的段落（上下文
+ * 警告、脚本输出）没有可证明的归属，随指令一起保留。指令缺失或本身又是
+ * `[IMPORTANT:` 包装（定时任务的调度文本）时返回 null 指令：哪段是任务没有
+ * 可证明的边界，不截取技能正文或调度文本冒充用户任务。结构不完整（有头部
+ * 行无锚点）返回 null，整段原样保留。
+ */
+function stripHermesSkillLoad(text: string): HermesSkillLoad | null {
+  const lines = text.split('\n');
+  if (!HERMES_SKILL_HEADER.test(lines[0] ?? '')) return null;
+  const anchorIndex = lines.findIndex((line, index) =>
+    index > 0 && line.startsWith(HERMES_INSTRUCTION_ANCHOR));
+  if (anchorIndex < 0) return null;
+  const removed = ['hermes-skill-header', 'hermes-skill-content', 'hermes-instruction-anchor'];
+  // 指令紧跟在冒号后；整段入口已 trim，锚点行结尾的空格可能已被削掉。
+  const instruction = lines[anchorIndex]!.slice(HERMES_INSTRUCTION_ANCHOR.length).trim();
+  if (instruction.length === 0 || instruction.startsWith('[IMPORTANT')) {
+    return { instruction: null, removed };
+  }
+  const rest = lines.slice(anchorIndex + 1).join('\n').trim();
+  return { instruction: rest.length > 0 ? `${instruction}\n${rest}` : instruction, removed };
+}
+
 /**
  * 拼接后的整段规则：先剥开头包装与插话前缀，再判断整段是否只剩注入内容。
  *
@@ -198,6 +233,15 @@ function finalize(
     if (CWD_PREFIX.test(current)) {
       current = current.replace(CWD_PREFIX, '');
       removed.push('cwd-prefix');
+      changed = true;
+    }
+    const skillLoad = stripHermesSkillLoad(current);
+    if (skillLoad !== null) {
+      removed.push(...skillLoad.removed);
+      if (skillLoad.instruction === null) {
+        return { ...base, state: 'injected', kind: 'skill_injection', text: '', removed };
+      }
+      current = skillLoad.instruction;
       changed = true;
     }
     current = current.trim();

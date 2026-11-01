@@ -159,6 +159,7 @@ function emptyView(identity: PurposeIdentity, parse: PurposeParse, reply: unknow
       ? null : (replyTextsOf(reply).join('\n') || null),
     userBlockHeads: [],
     tailUserBlockHeads: [],
+    userImageBlocks: 0,
     source: identity.source,
     stored: identity.stored,
   };
@@ -183,18 +184,18 @@ function userTextBlocks(message: unknown): string[] {
 }
 
 /**
- * user 文本块的块首：前若干条 user 消息、逐块取开头一小段。
+ * 前 5 条 user 消息的块首与图片块计数。
  *
- * 旁路强指纹（skill 描述压缩）写在 user 块首，普通 User 块此前不解压是取数
- * 成本考虑；这里按条数与块首长度双限额，成本不随正文体积增长。块首判定与
- * `input-interpretation` 的逐块剥壳一致：归档类消息的块 0 是包装，正文在
- * 后面的块，按消息首行写匹配器一笔都命中不了。
+ * 旁路强指纹（skill 描述压缩、视觉辅助模板）写在 user 块首，普通 User 块此前
+ * 不解压是取数成本考虑；这里按条数与块首长度双限额，成本不随正文体积增长。
+ * 块首判定与 `input-interpretation` 的逐块剥壳一致：归档类消息的块 0 是包装，
+ * 正文在后面的块，按消息首行写匹配器一笔都命中不了。
  */
-function purposeUserBlockHeadsTx(db: Database, reqId: number): string[] {
+function purposeUserBlockFactsTx(db: Database, reqId: number): UserBlockFacts {
   const rows = db.query<{ z: Uint8Array }, [number, number]>(`
     SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord LIMIT ?`).all(reqId, PURPOSE_USER_MESSAGES);
-  return blockHeadsOf(rows);
+  return userBlockFactsOf(rows);
 }
 
 /**
@@ -207,12 +208,18 @@ function purposeTailUserBlockHeadsTx(db: Database, reqId: number): string[] {
     SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
     WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord DESC LIMIT ?`)
     .all(reqId, PURPOSE_TAIL_MESSAGES);
-  return blockHeadsOf(rows.reverse());
+  return userBlockFactsOf(rows.reverse()).heads;
 }
 
-/** 已取出的 user 消息块解压成块首；解压失败的消息跳过，不猜内容。 */
-function blockHeadsOf(rows: readonly { z: Uint8Array }[]): string[] {
+/**
+ * 已取出的 user 消息块解压成块首与图片块计数；解压失败的消息跳过，不猜内容。
+ *
+ * 图片计数只认已知协议的图片内容块类型，不含图片字节；文本与图片在同一批
+ * 解压里一次取齐，不为形状事实重读正文。
+ */
+function userBlockFactsOf(rows: readonly { z: Uint8Array }[]): UserBlockFacts {
   const heads: string[] = [];
+  let imageBlocks = 0;
   for (const row of rows) {
     let message: unknown;
     try {
@@ -223,8 +230,28 @@ function blockHeadsOf(rows: readonly { z: Uint8Array }[]): string[] {
     for (const text of userTextBlocks(message)) {
       heads.push(text.trimStart().slice(0, PURPOSE_HEAD_CHARS));
     }
+    imageBlocks += imageBlocksOf(message);
   }
-  return heads;
+  return { heads, imageBlocks };
+}
+
+type UserBlockFacts = { heads: string[]; imageBlocks: number };
+
+/** 已知协议的图片内容块类型：chat 的 image_url、anthropic 的 image、responses 的 input_image。 */
+const IMAGE_BLOCK_TYPES = new Set(['image', 'image_url', 'input_image']);
+
+/** 一条消息里图片内容块的个数；content 不是数组（纯文本或工具结果）时为 0。 */
+function imageBlocksOf(message: unknown): number {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return 0;
+  const content = (message as Record<string, unknown>).content;
+  if (!Array.isArray(content)) return 0;
+  let count = 0;
+  for (const block of content) {
+    if (block === null || typeof block !== 'object' || Array.isArray(block)) continue;
+    const type = (block as Record<string, unknown>).type;
+    if (typeof type === 'string' && IMAGE_BLOCK_TYPES.has(type)) count += 1;
+  }
+  return count;
 }
 
 /**
@@ -264,6 +291,7 @@ export function readPurposeViewTx(db: Database, identity: PurposeIdentity): Purp
   const parse: PurposeParse = parsed.parse_state === 'ok' ? 'ok'
     : parsed.parse_state === 'unsupported' ? 'unsupported' : 'invalid';
   if (parse !== 'ok') return emptyView(identity, parse, body.reply);
+  const userFacts = purposeUserBlockFactsTx(db, identity.reqId);
   return {
     parse,
     agent: identity.agent,
@@ -272,7 +300,8 @@ export function readPurposeViewTx(db: Database, identity: PurposeIdentity): Purp
     messageCount: body.messageCount,
     toolCount: toolCountOf(body.request),
     replyText: replyTextsOf(body.reply).join('\n') || null,
-    userBlockHeads: purposeUserBlockHeadsTx(db, identity.reqId),
+    userBlockHeads: userFacts.heads,
+    userImageBlocks: userFacts.imageBlocks,
     tailUserBlockHeads: purposeTailUserBlockHeadsTx(db, identity.reqId),
     source: identity.source,
     stored: identity.stored,

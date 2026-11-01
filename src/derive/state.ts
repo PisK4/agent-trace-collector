@@ -4,14 +4,16 @@ import type { Database } from 'bun:sqlite';
 /**
  * 组派生算法版本；与请求修订一起决定一次完成是否还能复用。
  * v6：末尾消息块不可读时停止命令形状判定，旧结论不冒充新结论。
+ * v7：共享输入解释按完整结构剥 Hermes 技能加载包装，用户指令成为标题与摘要来源。
  */
-export const GROUP_ALGORITHM = 6;
+export const GROUP_ALGORITHM = 7;
 
 /**
  * 切片派生的算法号。与同步组的 `GROUP_ALGORITHM` 分开：两者算出的结果不能互相复用。
  * v10：与同步路径同一次末尾坏块判定变更。
+ * v11：与同步路径同一次 Hermes 技能包装解释变更。
  */
-export const DERIVE_ALGORITHM = 10;
+export const DERIVE_ALGORITHM = 11;
 
 /**
  * 队列待办判定的 SQL 片段。待办查询一律用它拼条件，不再各处手写；
