@@ -28,7 +28,8 @@ export function iidParse(iid) {
   return { kind: iid.slice(0, first), tag: tag === '' ? null : tag, name: iid.slice(second + 1) };
 }
 
-/** 正文文本抽取：字符串与文本块拼接；图片与密封推理按事实标注，不生成正文。
+/** 正文文本抽取：字符串、文本块与消息对象（递归抽 content）拼接；图片与
+ *  密封推理按事实标注，不生成正文。
  *  @param {unknown} value */
 export function contentTextOf(value) {
   if (typeof value === 'string') return value;
@@ -49,6 +50,8 @@ export function contentTextOf(value) {
     const v = /** @type {Record<string, unknown>} */ (value);
     if (typeof v.text === 'string') return v.text;
     if (typeof v.output === 'string') return v.output;
+    // 消息对象：递归抽 content；tool_calls 参数不进文本，与中栏投影同口径。
+    if (typeof v.role === 'string' && v.content !== undefined) return contentTextOf(v.content);
   }
   return null;
 }
@@ -166,16 +169,37 @@ export function contextDetailHtml(s, dir) {
   return `${head}${body}`;
 }
 
+/** 顶层字段条目的 path：`request.<field>` 或 `request.<field>[<index>]`。 */
+const TOP_FIELD_RE = /^request\.([a-z_]+)(?:\[(\d+)\])?$/;
+
 /**
  * 单个条目的正文：展开即内容，只渲染一层——抽得出文本给文本，抽不出给
- * 缩进 JSON。工具结果读 data.content；正文页读 messages[0].value；不可读
- * 状态原样说明。
+ * 缩进 JSON。工具结果读 data.content；顶层字段条目（工具定义、system 等）
+ * 按 path 从 request_fields 解引用，渲染该字段本身——正文根读取里混着的
+ * messages 不再兜底，避免渲染出与条目无关的消息；正文页读 messages[0].value；
+ * 不可读状态原样说明。
  * @param {{ord: number | null, path: string, precision: string}} entry
  * @param {any} data
  */
 export function entryContentHtml(entry, data) {
   if (data?.state !== undefined && data.state !== 'available' && data.state !== 'partial') {
     return `<p class="ctx-d-status">${esc(data.reason ?? data.state)}</p>`;
+  }
+  if (entry.ord === null) {
+    const match = TOP_FIELD_RE.exec(entry.path);
+    const fields = data?.request_fields;
+    const hasFields = fields !== null && fields !== undefined && typeof fields === 'object'
+      && !Array.isArray(fields);
+    const list = match !== null && hasFields ? fields[match[1]] : undefined;
+    const value = match !== null && match[2] !== undefined && Array.isArray(list)
+      ? list[Number(match[2])]
+      : list;
+    if (value === undefined || value === null) {
+      const why = match === null ? '条目路径无法定位正文' : '该字段不在这笔已保存正文里';
+      return `<p class="ctx-d-status">${esc(why)}</p>`;
+    }
+    const text = contentTextOf(value);
+    return `<pre class="ctx-d-text">${esc(text === null ? JSON.stringify(value, null, 1) : text)}</pre>`;
   }
   const value = data?.content !== undefined && data?.content !== null
     ? data.content
@@ -187,10 +211,34 @@ export function entryContentHtml(entry, data) {
 }
 
 /**
+ * 条目正文的弹窗内读取：同一 URL 只发一次请求。已就绪直接复用；进行中共用
+ * 同一 promise——多个工具定义行展开时共享一次根读取；失败不缓存，下次展开
+ * 重试。
+ * @param {Map<string, {phase: string, data?: any, promise?: Promise<{data: any} | {error: unknown}>}>} contents
+ * @param {string} url
+ * @param {() => Promise<any>} doFetch
+ * @returns {Promise<{data: any} | {error: unknown}>}
+ */
+export function sharedEntryRead(contents, url, doFetch) {
+  const cached = contents.get(url);
+  if (cached?.phase === 'ready') return Promise.resolve({ data: cached.data });
+  if (cached?.promise !== undefined) return cached.promise;
+  const promise = doFetch().then(
+    data => ({ data }),
+    error => {
+      contents.delete(url);
+      return { error };
+    },
+  );
+  contents.set(url, { phase: 'loading', promise });
+  return promise;
+}
+
+/**
  * @param {{ fetcher: (url: string) => Promise<Response> }} io
  */
 export function createContextMenu({ fetcher }) {
-  /** @type {{s: ContextSelection, dir: {phase: string, data?: any, error?: string | null}, contents: Map<number, {phase: string, data?: any, error?: string | null}>, trigger: Element | null} | null} */
+  /** @type {{s: ContextSelection, dir: {phase: string, data?: any, error?: string | null}, contents: Map<string, {phase: string, data?: any, promise?: Promise<{data: any} | {error: unknown}>}>, trigger: Element | null} | null} */
   let open = null;
   let generation = 0;
   /** @type {HTMLElement | null} */
@@ -274,23 +322,24 @@ export function createContextMenu({ fetcher }) {
     const entry = s.dir.data?.entries?.[index];
     const slot = root?.querySelector(`[data-ctx-content="${index}"]`) ?? null;
     if (entry === undefined || slot === null) return;
-    if (s.contents.get(index)?.phase === 'ready') return;
-    s.contents.set(index, { phase: 'loading' });
-    slot.innerHTML = '<p class="ctx-d-note">读取正文…</p>';
     const gen = generation;
     const url = entryBodyUrl({ reqId: s.s.reqId, token: s.s.token }, entry);
-    try {
-      const data = await jsonOf(url);
-      if (open === null || generation !== gen) return;
-      s.contents.set(index, { phase: 'ready', data });
-      slot.innerHTML = entryContentHtml(entry, data);
-    } catch (error) {
-      if (open === null || generation !== gen) return;
-      s.contents.set(index, { phase: 'error' });
-      slot.innerHTML = `<p class="ctx-d-status">${
-        error instanceof Error && error.message === 'reading_changed'
-          ? '阅读依据已变化' : '正文读取失败'}</p>`;
+    // 缓存按 URL 而不是条目序号：两个工具定义行展开共享同一次根读取。
+    const ready = s.contents.get(url);
+    if (ready?.phase === 'ready') {
+      slot.innerHTML = entryContentHtml(entry, ready.data);
+      return;
     }
+    slot.innerHTML = '<p class="ctx-d-note">读取正文…</p>';
+    const result = await sharedEntryRead(s.contents, url, () => jsonOf(url));
+    if (open === null || generation !== gen) return;
+    if ('error' in result) {
+      slot.innerHTML = `<p class="ctx-d-status">${
+        result.error instanceof Error && result.error.message === 'reading_changed'
+          ? '阅读依据已变化' : '正文读取失败'}</p>`;
+      return;
+    }
+    slot.innerHTML = entryContentHtml(entry, result.data);
   }
 
   /**

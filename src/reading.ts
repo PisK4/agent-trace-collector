@@ -229,7 +229,7 @@ export function getToolResultReading(
  * 正文对应解释的版本。轮次承载、类别目录与名称核对规则变化时升版；
  * 消费方按版本判断结果的覆盖语义，不跨版本混读目录。
  */
-export const CTX_EXPLAIN_VERSION = 1;
+export const CTX_EXPLAIN_VERSION = 2;
 
 /** 一次响应最多返回的目录条目；余下用游标续扫，不在单个 HTTP 请求里铺完。 */
 const CONTEXT_ENTRY_MAX = 80;
@@ -423,21 +423,53 @@ function buildContextDir(
     }
     case 'results': {
       // 反向配对表列直接给出结果块位置；零消息块解压。同名工具多行全部保留。
-      const rows = detail.tool_results
-        .filter(call => call.result_ord !== null
-          && (query.name === null || call.tool_name === query.name)
-          && call.result_ord > after)
+      const paired = detail.tool_results.filter(call => call.result_ord !== null);
+      const pairedOrds = new Set(paired.map(call => call.result_ord!));
+      const named = paired
+        .filter(call => query.name === null || call.tool_name === query.name)
+        .filter(call => call.result_ord! > after)
         .sort(resultOrder);
+      // 消息级承载块只对 chat/Responses 成立：工具结果是独立消息，role=3 一次
+      // 索引查询可列；Anthropic 的结果块藏在 user 消息 content 数组里，消息级
+      // 分不出来。配对已确认的序号不重复出条目，承载行只声明消息身份。
+      const carrierProtocol = meta.protocol === 'chat' || meta.protocol === 'responses';
+      const nameHasPair = query.name !== null && detail.tool_results
+        .some(call => call.tool_name === query.name && call.result_ord !== null);
+      const carrierOrds = !carrierProtocol || nameHasPair ? [] : store.read
+        .query<{ ord: number }, [number, number]>(
+          'SELECT ord FROM request_block WHERE req_id=? AND role=3 AND ord>? ORDER BY ord')
+        .all(id, after)
+        .map(row => row.ord)
+        .filter(ord => !pairedOrds.has(ord));
+      // 承载行与配对行按消息序号合并后统一分页：乱序追加会让游标推进到承载
+      // 行的序号，下一页把高序号的配对行重列一遍。
+      const rows = [
+        ...named.map(call => ({ ord: call.result_ord!, block: blockIndexOf(call.result_path), call })),
+        ...carrierOrds.map(ord => ({ ord, block: 0, call: null })),
+      ].sort((a, b) => a.ord - b.ord || a.block - b.block);
       const more = rows.length > CONTEXT_ENTRY_MAX;
       const page = more ? rows.slice(0, CONTEXT_ENTRY_MAX) : rows;
-      const entries = page.map(call => ({
-        req_id: id, ord: call.result_ord, path: call.result_path ?? `request.messages[${call.result_ord}]`,
-        precision: 'located' as const, tool_name: call.tool_name, call_ord: call.ord,
-        owner_req: call.owner_req, role: 'tool',
-      }));
+      const entries: ContextItemEntry[] = page.map(row => row.call === null
+        ? {
+          req_id: id, ord: row.ord, path: `request.messages[${row.ord}]`,
+          precision: 'carrier' as const, tool_name: null, call_ord: null, owner_req: null, role: 'tool',
+        }
+        : {
+          req_id: id, ord: row.call.result_ord,
+          path: row.call.result_path ?? `request.messages[${row.call.result_ord}]`,
+          precision: 'located' as const, tool_name: row.call.tool_name, call_ord: row.call.ord,
+          owner_req: row.call.owner_req, role: 'tool',
+        });
+      if (carrierOrds.length > 0) {
+        notes.push('历史结果副本未经配对确认，按消息级承载块列出');
+        if (query.name !== null) notes.push('未找到该名称的配对结果，下列为全部承载块');
+      }
+      if (!carrierProtocol) {
+        notes.push('该协议的工具结果块承载在 user 消息内，消息级分不出来，不列承载块');
+      }
       return {
         entries,
-        after: more ? page[page.length - 1]!.result_ord! : null,
+        after: more ? page[page.length - 1]!.ord : null,
         notes: more ? [...notes, '目录未扫完，用继续位置取余下条目'] : notes,
       };
     }
@@ -474,7 +506,7 @@ function buildContextDir(
     }
     case 'chat': {
       const dir = blockDir(store, id, [0, 1], after, notes);
-      dir.notes.push('上游上下文轮次与消息块的成员对应未建立（解释规则 v1），下列为全部对话承载块');
+      dir.notes.push('上游上下文轮次与消息块的成员对应未建立，下列为全部对话承载块');
       return dir;
     }
     case 'memory': {

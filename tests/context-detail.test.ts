@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
-  contentTextOf, contextDetailHtml, directoryStatusHtml, entryBodyUrl, entryContentHtml, iidParse,
+  contentTextOf, contextDetailHtml, directoryStatusHtml, entryBodyUrl, entryContentHtml,
+  iidParse, sharedEntryRead,
 } from '../web/context-detail.js';
 
 test('iid 解析：tag 可空、名字段允许含分隔符、无分隔非法', () => {
@@ -20,6 +21,21 @@ test('正文文本抽取：文本块拼接，图片与密封推理按事实标�
   expect(contentTextOf({ output: 'tool output' })).toBe('tool output');
   expect(contentTextOf({ type: 'tool_result', content: 42 })).toBeNull();
   expect(contentTextOf(null)).toBeNull();
+});
+
+test('正文文本抽取：消息对象递归拆 content，tool_calls 不进文本', () => {
+  expect(contentTextOf({ role: 'user', content: 'hi' })).toBe('hi');
+  expect(contentTextOf({ role: 'assistant', content: [{ type: 'text', text: 'a1' }] })).toBe('a1');
+  // 工具调用参数不出现在回复文本里，与中栏投影同口径。
+  expect(contentTextOf({ role: 'assistant', content: [
+    { type: 'text', text: 'part' },
+    { type: 'tool_use', id: 't', name: 'Bash', input: { command: 'ls' } },
+  ] })).toBe('part');
+  // 占位标注在消息对象内同样生效。
+  expect(contentTextOf({ role: 'user', content: [{ type: 'image', source: {} }] }))
+    .toBe('[图片块：不以文本呈现]');
+  expect(contentTextOf({ role: 'assistant', content: null, tool_calls: [] })).toBeNull();
+  expect(contentTextOf({ role: 'user' })).toBeNull();
 });
 
 test('目录状态行：可读无行，缺口带原因，notes 原文呈现', () => {
@@ -115,13 +131,17 @@ test('条目正文：展开即内容，抽不出文本直出 JSON，不再挂原
   expect(entryContentHtml(entry, { content: 'file body', is_error: false }))
     .toBe('<pre class="ctx-d-text">file body</pre>');
   expect(entryContentHtml(entry, { content: 'boom', is_error: true })).toContain('is_error');
-  // 正文页形状：messages[0].value 是整条消息对象，抽不出文本，直接给 JSON 而不是空白。
+  // 正文页形状：messages[0].value 是整条消息对象，拆包后直出 content 文本。
   const message = entryContentHtml({ ord: 0, path: 'request.messages[0]', precision: 'carrier' },
     { state: 'available', messages: [{ ord: 0, value: { role: 'user', content: 'hi' } }] });
-  expect(message).toContain('&quot;role&quot;: &quot;user&quot;');
-  expect(message).toMatch(/<pre class="ctx-d-text">\{\n/);
-  expect(message).not.toContain('原始对象');
-  expect(message).not.toContain('<details');
+  expect(message).toBe('<pre class="ctx-d-text">hi</pre>');
+  // 拆不出文本的非消息形状仍直出 JSON，而不是空白。
+  const raw = entryContentHtml({ ord: 0, path: 'request.messages[0]', precision: 'carrier' },
+    { state: 'available', messages: [{ ord: 0, value: { anything: 'raw' } }] });
+  expect(raw).toContain('&quot;anything&quot;: &quot;raw&quot;');
+  expect(raw).toMatch(/<pre class="ctx-d-text">\{\n/);
+  expect(raw).not.toContain('原始对象');
+  expect(raw).not.toContain('<details');
   // 抽得出文本的条目只渲染一份内容。
   const text = entryContentHtml(entry, { content: [{ type: 'text', text: 'hi' }] });
   expect(text.match(/<pre class="ctx-d-text">/g)?.length).toBe(1);
@@ -140,4 +160,56 @@ test('正文 URL：顶层字段条目没有消息序号，按正文根读取', (
     .toBe('/api/requests/7/body?from=3&to=4&if_reading=r1-x');
   expect(entryBodyUrl(session, { ord: 5, call_ord: 1, owner_req: 9 }))
     .toBe('/api/requests/9/tools/1/result?if_reading=r1-x');
+});
+
+test('顶层字段条目按 path 解引用：工具定义给 Schema，不再渲染首条消息', () => {
+  const data = {
+    state: 'available',
+    request_fields: {
+      system: 'system prompt text',
+      tools: [{ name: 'Bash', description: 'd', input_schema: { type: 'object' } }],
+    },
+    messages: [{ ord: 0, value: { role: 'user', content: 'first message' } }],
+  };
+  // 工具定义取对应数组元素，结构化定义按既有兜底口径给缩进 JSON。
+  const tool = entryContentHtml({ ord: null, path: 'request.tools[0]', precision: 'located' }, data);
+  expect(tool).toContain('&quot;name&quot;: &quot;Bash&quot;');
+  expect(tool).not.toContain('first message');
+  // 顶层 system 字段显示系统提示本身，不是 messages[0]。
+  const system = entryContentHtml({ ord: null, path: 'request.system', precision: 'carrier' }, data);
+  expect(system).toBe('<pre class="ctx-d-text">system prompt text</pre>');
+  // 字段不在已保存正文里给状态说明，不落回消息内容。
+  const missing = entryContentHtml({ ord: null, path: 'request.functions[0]', precision: 'located' }, data);
+  expect(missing).toContain('该字段不在这笔已保存正文里');
+  expect(missing).not.toContain('first message');
+  const odd = entryContentHtml({ ord: null, path: 'request.weird', precision: 'carrier' }, data);
+  expect(odd).toContain('ctx-d-status');
+  expect(odd).not.toContain('first message');
+});
+
+test('条目正文读取按 URL 去重：并发共用一次请求，就绪复用，失败重试', async () => {
+  const contents = new Map();
+  let calls = 0;
+  const fetchOnce = () => {
+    calls += 1;
+    return Promise.resolve({ n: calls });
+  };
+  // 并发展开两个同 URL 条目只发一次请求。
+  const [a, b] = await Promise.all([
+    sharedEntryRead(contents, '/body', fetchOnce),
+    sharedEntryRead(contents, '/body', fetchOnce),
+  ]);
+  expect(calls).toBe(1);
+  expect(a).toEqual({ data: { n: 1 } });
+  expect(b).toEqual(a);
+  // 就绪后复用缓存，不再发请求。
+  const again = await sharedEntryRead(contents, '/body', fetchOnce);
+  expect(calls).toBe(1);
+  expect(again).toEqual(a);
+  // 失败不缓存：下次展开重新请求。
+  const failing = () => Promise.reject(new Error('HTTP 500'));
+  const bad = await sharedEntryRead(contents, '/body-x', failing);
+  expect('error' in bad && bad.error instanceof Error && bad.error.message).toBe('HTTP 500');
+  const retried = await sharedEntryRead(contents, '/body-x', () => Promise.resolve({ ok: 1 }));
+  expect(retried).toEqual({ data: { ok: 1 } });
 });
