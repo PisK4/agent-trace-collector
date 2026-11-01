@@ -1,18 +1,19 @@
 /* ------------------------------------------------------------------
    Token：证据仪表盘。深色与浅色是两套成对表面，不是反色。
    accent 只表示选中与当前路径，不表示成功；状态色只用于状态。
+   色值来源：方向 A 细节样张 token 映射（Geist 中性 + Apple 校准，2026-11-02）。
    ------------------------------------------------------------------ */
 :root{
   color-scheme:light;
-  --page:#f2f6f8; --canvas:#edf2f5; --surface:#ffffff;
-  --inset:#f4f7f9; --hover:#e8eff3; --line:#d9e2e9; --line-strong:#b7c6d1;
-  --text:#15232d; --text-2:#4d6372; --muted:#6d7d88;
-  --accent:#007f83; --accent-strong:#005d61; --accent-soft:rgba(0,127,131,.10);
-  --good:#167a4f; --warn:#99600a; --bad:#b32e37; --missing:#667580;
+  --page:#F7F7F6; --canvas:#FAFAFA; --surface:#FFFFFF;
+  --inset:#F5F5F4; --hover:#EFEFEE; --line:#ECECEA; --line-strong:#DEDEDB;
+  --text:#171717; --text-2:#52525B; --muted:#A1A1AA;
+  --accent:#007AFF; --accent-soft:rgba(0,122,255,.07);
+  --good:#167a4f; --warn:#99600a; --bad:#b32e37; --missing:#A1A1AA;
   --good-soft:rgba(22,122,79,.10); --warn-soft:rgba(153,96,10,.12); --bad-soft:rgba(179,46,55,.10);
-  --k-system:#6b4fbb; --k-user:#1c7a4f; --k-assistant:#9a6206; --k-tool:#0f6f78; --k-field:#5c6c7a;
-  --k-system-bg:rgba(107,79,187,.10); --k-user-bg:rgba(28,122,79,.10); --k-assistant-bg:rgba(154,98,6,.12);
-  --k-tool-bg:rgba(15,111,120,.10); --k-field-bg:rgba(92,108,122,.10);
+  --k-system:#52525B; --k-user:#0066CC; --k-assistant:#8E44AD; --k-tool:#B45309; --k-field:#52525B;
+  --k-system-bg:rgba(161,161,170,.16); --k-user-bg:rgba(0,102,204,.10); --k-assistant-bg:rgba(142,68,173,.12);
+  --k-tool-bg:rgba(180,83,9,.10); --k-field-bg:rgba(161,161,170,.16);
   /* 工具身份强调色：Read 蓝、Edit 橙、Write 紫、Bash 玫红（红留给失败语义）、
      Skill 黄、Agent 绿、其余中性青灰。与 --p1..p6 上下文槽位是两套语义，不共用变量。 */
   --tool-read:#2569c4; --tool-read-bg:rgba(37,105,196,.11);
@@ -27,22 +28,22 @@
      旧值 #30287e/#3d3480 按白字高饱和填充设计，在浅色表面方案下越带或近不可见。--p-unknown 保持灰色是有意例外。 */
   --p1:#2a78d6; --p2:#eb6834; --p3:#1baf7a; --p4:#eda100; --p5:#e87ba4; --p6:#008300;
   --p7:#6250d6; --p-unknown:#7a8794;
-  --shadow:0 1px 2px rgba(16,32,48,.06);
+  --shadow:0 1px 2px rgba(0,0,0,.06);
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     color-scheme:dark;
-    --page:#0b1118; --canvas:#101923; --surface:#151f2a;
-    --inset:#0a0f15; --hover:#202f3d; --line:#263645; --line-strong:#3b4d5f;
-    --text:#e9f1f7; --text-2:#a7b8c6; --muted:#738595;
-    --accent:#64dad7; --accent-strong:#9cf0ec; --accent-soft:rgba(100,218,215,.12);
-    --good:#59d88d; --warn:#f1c46b; --bad:#f27a7a; --missing:#8797a5;
+    --page:#0F0F0F; --canvas:#0A0A0A; --surface:#111111;
+    --inset:#181818; --hover:#1D1D1D; --line:#232323; --line-strong:#2F2F2F;
+    --text:#EDEDED; --text-2:#A1A1AA; --muted:#6B6B74;
+    --accent:#0A84FF; --accent-soft:rgba(10,132,255,.10);
+    --good:#59d88d; --warn:#f1c46b; --bad:#f27a7a; --missing:#6B6B74;
     --good-soft:rgba(89,216,141,.12); --warn-soft:rgba(241,196,107,.12); --bad-soft:rgba(242,122,122,.12);
-    --k-system:#b6a3f0; --k-user:#8fd8ae; --k-assistant:#e6c07a; --k-tool:#7fd4d9; --k-field:#93a5b3;
-    --k-system-bg:rgba(182,163,240,.13); --k-user-bg:rgba(143,216,174,.12); --k-assistant-bg:rgba(230,192,122,.13);
-    --k-tool-bg:rgba(127,212,217,.12); --k-field-bg:rgba(147,165,179,.12);
+    --k-system:#A1A1AA; --k-user:#409CFF; --k-assistant:#C77FEA; --k-tool:#FFB340; --k-field:#A1A1AA;
+    --k-system-bg:rgba(161,161,170,.14); --k-user-bg:rgba(64,156,255,.13); --k-assistant-bg:rgba(199,127,234,.13);
+    --k-tool-bg:rgba(255,179,64,.12); --k-field-bg:rgba(161,161,170,.14);
     --tool-read:#6fa9ee; --tool-read-bg:rgba(111,169,238,.14);
     --tool-edit:#ef8a55; --tool-edit-bg:rgba(239,138,85,.14);
     --tool-write:#b49af0; --tool-write-bg:rgba(180,154,240,.14);
@@ -57,15 +58,15 @@
 }
 :root[data-theme="dark"]{
   color-scheme:dark;
-  --page:#0b1118; --canvas:#101923; --surface:#151f2a;
-  --inset:#0a0f15; --hover:#202f3d; --line:#263645; --line-strong:#3b4d5f;
-  --text:#e9f1f7; --text-2:#a7b8c6; --muted:#738595;
-  --accent:#64dad7; --accent-strong:#9cf0ec; --accent-soft:rgba(100,218,215,.12);
-  --good:#59d88d; --warn:#f1c46b; --bad:#f27a7a; --missing:#8797a5;
+  --page:#0F0F0F; --canvas:#0A0A0A; --surface:#111111;
+  --inset:#181818; --hover:#1D1D1D; --line:#232323; --line-strong:#2F2F2F;
+  --text:#EDEDED; --text-2:#A1A1AA; --muted:#6B6B74;
+  --accent:#0A84FF; --accent-soft:rgba(10,132,255,.10);
+  --good:#59d88d; --warn:#f1c46b; --bad:#f27a7a; --missing:#6B6B74;
   --good-soft:rgba(89,216,141,.12); --warn-soft:rgba(241,196,107,.12); --bad-soft:rgba(242,122,122,.12);
-  --k-system:#b6a3f0; --k-user:#8fd8ae; --k-assistant:#e6c07a; --k-tool:#7fd4d9; --k-field:#93a5b3;
-  --k-system-bg:rgba(182,163,240,.13); --k-user-bg:rgba(143,216,174,.12); --k-assistant-bg:rgba(230,192,122,.13);
-  --k-tool-bg:rgba(127,212,217,.12); --k-field-bg:rgba(147,165,179,.12);
+  --k-system:#A1A1AA; --k-user:#409CFF; --k-assistant:#C77FEA; --k-tool:#FFB340; --k-field:#A1A1AA;
+  --k-system-bg:rgba(161,161,170,.14); --k-user-bg:rgba(64,156,255,.13); --k-assistant-bg:rgba(199,127,234,.13);
+  --k-tool-bg:rgba(255,179,64,.12); --k-field-bg:rgba(161,161,170,.14);
   --p1:#3987e5; --p2:#d95926; --p3:#199e70; --p4:#c98500; --p5:#d55181; --p6:#008300;
   --p7:#9085e9; --p-unknown:#93a5b3;
   --shadow:0 1px 2px rgba(0,0,0,.35);
