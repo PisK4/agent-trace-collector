@@ -50,6 +50,7 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/rail-facts.js': { file: 'rail-facts.js', type: 'text/javascript; charset=utf-8' },
   '/reader-store.js': { file: 'reader-store.js', type: 'text/javascript; charset=utf-8' },
   '/read-http.js': { file: 'read-http.js', type: 'text/javascript; charset=utf-8' },
+  '/read-scheduler.js': { file: 'read-scheduler.js', type: 'text/javascript; charset=utf-8' },
   '/row-summary.js': { file: 'row-summary.js', type: 'text/javascript; charset=utf-8' },
   '/selection.js': { file: 'selection.js', type: 'text/javascript; charset=utf-8' },
   '/trace-commit.js': { file: 'trace-commit.js', type: 'text/javascript; charset=utf-8' },
