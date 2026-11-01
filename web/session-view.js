@@ -97,9 +97,9 @@ function groupHead(kind, label, desc) {
   </div>`;
 }
 
-/** @param {keyof typeof GROUP_ICONS} kind @param {string} label @param {string} desc @param {string} data */
-function cueRow(kind, label, desc, data) {
-  return `<section class="cue-row">${groupHead(kind, label, desc)}<div class="cue-data">${data}</div></section>`;
+/** @param {keyof typeof GROUP_ICONS} kind @param {string} label @param {string} desc @param {string} data @param {string} [extraClass] */
+function cueRow(kind, label, desc, data, extraClass = '') {
+  return `<section class="cue-row">${groupHead(kind, label, desc)}<div class="cue-data${extraClass}">${data}</div></section>`;
 }
 
 /**
@@ -118,12 +118,12 @@ function resourceGroup(s, status, rows) {
       '缓存命中＝Σcache_read ÷ Σ(in_tok + cache_read)，只计两个读数都在的请求',
       t.cache_hit === null ? '本次没有可用分母，不给数' : null,
     ].filter(Boolean).join('；');
-    const data = [
-      t.in_tok !== null ? `<span>提示 <b>${kk(t.in_tok)}</b></span>` : '',
-      t.out_tok !== null ? `<span>输出 <b>${kk(t.out_tok)}</b></span>` : '',
-      t.cost !== null ? `<span>费用 <b>$${t.cost.toFixed(4)}</b></span>` : '',
-      t.cache_hit !== null ? `<span>缓存命中 <b>${Math.round(t.cache_hit * 100)}%</b></span>` : '',
-    ].filter(Boolean).join('');
+    const data = `<span class="cue-line">${[
+      t.in_tok !== null ? `提示 <b>${kk(t.in_tok)}</b>` : '',
+      t.out_tok !== null ? `输出 <b>${kk(t.out_tok)}</b>` : '',
+      t.cost !== null ? `费用 <b>$${t.cost.toFixed(4)}</b>` : '',
+      t.cache_hit !== null ? `缓存 <b>${Math.round(t.cache_hit * 100)}%</b>` : '',
+    ].filter(Boolean).join(' · ')}</span>`;
     return { kind: 'resource', label: '资源', desc, data };
   }
   const hasUsage = rows.some(r => r.in_tok !== null || r.out_tok !== null);
@@ -137,12 +137,11 @@ function resourceGroup(s, status, rows) {
     '这是已加载窗口的相加，不是会话口径',
     priced.length < rows.length ? `${rows.length - priced.length} 笔未取得费用` : null,
   ].filter(Boolean).join('；');
-  const data = [
-    `<span>提示 <b>${kk(totalIn)}</b></span>`,
-    `<span>输出 <b>${kk(totalOut)}</b></span>`,
-    `<span>费用 <b>$${totalCost.toFixed(4)}</b></span>`,
-    '<span class="scope-tag">已加载窗口</span>',
-  ].join('');
+  const data = `<span class="cue-line">${[
+    `提示 <b>${kk(totalIn)}</b>`,
+    `输出 <b>${kk(totalOut)}</b>`,
+    `费用 <b>$${totalCost.toFixed(4)}</b>`,
+  ].join(' · ')}</span><span class="scope-tag">已加载窗口</span>`;
   return { kind: 'resource', label: '资源', desc, data };
 }
 
@@ -154,12 +153,12 @@ function resourceGroup(s, status, rows) {
 function structureGroup(s) {
   const st = s.structure;
   const data = [
-    st.main !== null ? `<span>主链 <b>${st.main}</b> · 旁路 <b>${st.bypass}</b></span>` : '',
-    st.context_peak_pct !== null ? `<span>上下文峰值 <b>${st.context_peak_pct}%</b></span>` : '',
-    st.subagent_actors > 0 ? `<span>子代理 <b>${st.subagent_actors}</b> 个 · <b>${st.subagent_requests}</b> 笔</span>` : '',
-    st.retries !== null && st.retries > 0 ? `<span>重试 <b>${st.retries}</b> 笔</span>` : '',
-    st.models.length > 1 ? `<span>模型 <b>${st.models.length}</b></span>` : '',
-  ].filter(Boolean).join('');
+    st.main !== null ? `主链 <b>${st.main}</b> · 旁路 <b>${st.bypass}</b>` : '',
+    st.context_peak_pct !== null ? `峰值 <b>${st.context_peak_pct}%</b>` : '',
+    st.subagent_actors > 0 ? `子代理 <b>${st.subagent_actors}</b> 个 · <b>${st.subagent_requests}</b> 笔` : '',
+    st.retries !== null && st.retries > 0 ? `重试 <b>${st.retries}</b> 笔` : '',
+    st.models.length > 1 ? `模型 <b>${st.models.length}</b>` : '',
+  ].filter(Boolean).join(' · ');
   if (data === '') return null;
   const desc = [
     '整个会话',
@@ -167,25 +166,27 @@ function structureGroup(s) {
     st.context_peak_pct !== null ? '上下文峰值＝max(prompt_tokens ÷ prompt_window)' : '上下文峰值没有可用分母，不给数',
     st.models.length > 1 ? `模型＝${st.models.map(m => `${m.name} ×${m.count}`).join(' · ')}` : null,
   ].filter(Boolean).join('；');
-  return { kind: 'structure', label: '结构', desc, data };
+  return { kind: 'structure', label: '结构', desc, data: `<span class="cue-line">${data}</span>` };
 }
 
-/** 性能组的计时读数；口径是当前已加载窗口。 @param {RequestRow[]} rows */
+/** 性能组的计时读数；口径是当前已加载窗口，首字为 p50（说明进组标题）。 @param {RequestRow[]} rows */
 function performanceData(rows) {
   const timing = timingSummary(rows);
-  return [
-    timing.median !== null ? `<span>首字 p50 <b>${secs(timing.median)}</b></span>` : '',
-    timing.average !== null ? `<span>平均时长 <b>${secs(timing.average)}</b></span>` : '',
-    timing.speed !== null ? `<span>输出 <b>${timing.speed} tok/s</b></span>` : '',
-  ].filter(Boolean).join('');
+  const parts = [
+    timing.median !== null ? `首字 <b>${secs(timing.median)}</b>` : '',
+    timing.average !== null ? `平均 <b>${secs(timing.average)}</b>` : '',
+    timing.speed !== null ? `<b>${timing.speed}</b> tok/s` : '',
+  ].filter(Boolean);
+  return parts.length === 0 ? '' : `<span class="cue-line">${parts.join(' · ')}</span>`;
 }
 
-/** 工具组：各工具 chip 沿用身份色，失败数只在非零时出现，0 次中断不占位。
- *  调用总数与覆盖情况（未配对、未判定、中断判定缺失）进标题的按需说明。
+/** 工具组：chip 沿用身份色，按调用次数取前三直接可见，其余进 +N 展开；
+ *  失败数只在非零时出现，0 次中断不占位。调用总数与覆盖情况（未配对、未判定、
+ *  中断判定缺失）进标题的按需说明。
  *  @param {SessionSummary} s  * @returns {GroupCue | null}
  */
 function toolsGroup(s) {
-  const chips = s.tools.map(t => {
+  const chip = (/** @type {{name: string, count: number, errors: number, paired: number, error_known: number}} */ t) => {
     const warn = t.errors > 0 ? `<span class="err">${t.errors} 失败</span>` : '';
     const unknown = t.count - t.error_known;
     const title = [
@@ -194,10 +195,15 @@ function toolsGroup(s) {
       unknown > 0 ? `${unknown} 次结果未判定（不计入失败）` : null,
     ].filter(Boolean).join(' · ');
     return `<button class="tool-chip ${toolTint(t.name)}" data-summary-tool="${esc(t.name)}" title="${esc(title)}"><span>${esc(t.name)}</span><span class="n">${t.count}</span>${warn}</button>`;
-  }).join('');
+  };
+  const head = s.tools.slice(0, 3).map(chip).join('');
+  const rest = s.tools.slice(3);
+  const more = rest.length > 0
+    ? `<details class="path-more t"><summary title="工具共 ${s.tools.length} 把">+${rest.length}</summary><div class="more-body">${rest.map(chip).join('')}</div></details>`
+    : '';
   const failures = s.tools.reduce((a, t) => a + t.errors, 0);
   const data = [
-    chips,
+    head + more,
     failures > 0 ? `<button class="warn-n" data-summary-failures="1" title="点击定位这 ${failures} 次失败调用">⚠ ${failures} 失败</button>` : '',
     s.interrupts.count > 0 ? `<span class="interrupt">已识别用户中断 <b>${s.interrupts.count}</b></span>` : '',
   ].filter(Boolean).join('');
@@ -310,7 +316,9 @@ function sessionBoard(s, status, rows, hidden, sessionKey, hiddenFoldOpen) {
   const perf = performanceData(rows);
   const hiddenEntry = sessionHiddenFold(rows, hidden, sessionKey, hiddenFoldOpen);
   if (perf !== '' || hiddenEntry !== '') {
-    left.push(cueRow('performance', '性能', '只统计当前已加载窗口，未加载页不进计时', perf + hiddenEntry));
+    // 重绘按 data-fold 恢复 open 属性时，展开类要在构建时带上，否则单行裁掉清单。
+    left.push(cueRow('performance', '性能', '只统计当前已加载窗口；首字为 p50，未加载页不进计时',
+      perf + hiddenEntry, hiddenFoldOpen ? ' open-wrap' : ''));
   }
   if (s !== null) {
     const tools = toolsGroup(s);

@@ -1910,6 +1910,9 @@ if (typeof document !== 'undefined') {
     if (!(t instanceof HTMLDetailsElement)) return;
     const key = t.dataset.fold;
     if (key !== undefined) folds.set(key, t.open);
+    // 单行分组板：清单开合时该行临时恢复换行，收起即回单行。
+    const cueData = t.closest('.cue-data');
+    if (cueData !== null) cueData.classList.toggle('open-wrap', t.open);
     // 会话头里的清单开合改变头部高度：轮次带吸顶位置与滚动让位随后同步。
     if (t.closest('.session-head') !== null) syncBandTop();
     if (!t.open) return;
