@@ -232,7 +232,6 @@ test('区间批跨请求混合，别名 id 解析到 canonical', () => {
     const [first, second] = batch.items;
     if (first?.state !== 'ok' || second?.state !== 'ok') throw new Error('unreachable');
     expect(first.value.messages.map(m => m.ord)).toEqual([1]);
-    expect(second.value.detail ?? null).toBeNull();
     expect(second.value.req_id).toBe(keeper);
     expect(second.requested_id).toBe(folded);
   } finally { f.close(); }

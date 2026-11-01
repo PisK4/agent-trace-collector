@@ -23,6 +23,8 @@
  */
 export function createHttpReadTransport({ fetcher, baseUrl = '', headers }) {
   const enc = encodeURIComponent;
+  /** 与服务端批读一致的上限：编码后超限未发 Fetch 即拒绝，客户端据此折半。 */
+  const MAX_READ_URL_BYTES = 16 * 1024;
 
   /**
    * 显式操作编码表：调用者不能提供任意 URL。null 参数不进查询串，
@@ -196,6 +198,7 @@ export function createHttpReadTransport({ fetcher, baseUrl = '', headers }) {
      */
     async execute(operation, input, { signal }) {
       const url = baseUrl + encode(operation, input);
+      if (new TextEncoder().encode(url).length > MAX_READ_URL_BYTES) throw fail('batch_too_large');
       let response;
       try {
         response = await fetcher(url, { method: 'GET', headers: headers?.(), signal });
@@ -211,6 +214,7 @@ export function createHttpReadTransport({ fetcher, baseUrl = '', headers }) {
           : status === 400 ? 'invalid_input'
           : status === 401 ? 'unauthorized'
           : status === 403 ? 'forbidden'
+          : status === 414 ? 'batch_too_large'
           : 'unavailable';
         throw fail(code, status);
       }

@@ -367,6 +367,29 @@ export function deltaOrdinals(detail) {
   return new Set(detail.delta_ordinals);
 }
 
+/**
+ * 可信 delta 的读取片构造：连续序号合成跨度 <40 的片（与服务端 PAGE_MAX 一致），
+ * 最多 maxPieces 片。`consumed` 是该片覆盖到输入数组的哪个位置，调用方核对
+ * ord 到齐后才推进各自计数。单项增量与窗口批量共用这一份规则。
+ * @param {number[]} ords 升序的可信序号（已按消费位置切片）
+ * @param {number} maxPieces
+ * @returns {{pieces: {from: number, to: number, consumed: number}[], consumed: number}}
+ */
+export function deltaPieces(ords, maxPieces) {
+  /** @type {{from: number, to: number, consumed: number}[]} */
+  const pieces = [];
+  let consumed = 0;
+  for (let piece = 0; piece < maxPieces && consumed < ords.length;) {
+    const from = ords[consumed] ?? 0;
+    let end = consumed;
+    while (end < ords.length && (ords[end] ?? 0) < from + 40) end += 1;
+    pieces.push({ from, to: (ords[end - 1] ?? from) + 1, consumed: end });
+    consumed = end;
+    piece += 1;
+  }
+  return { pieces, consumed };
+}
+
 /** @param {unknown} value */
 function textOrNull(value) {
   return typeof value === 'string' && value.length > 0 ? value : null;

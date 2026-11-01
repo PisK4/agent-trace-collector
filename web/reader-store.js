@@ -1,5 +1,5 @@
 // @ts-check
-import { deltaOrdinals, messageEntries } from './body-model.js';
+import { deltaOrdinals, deltaPieces, messageEntries } from './body-model.js';
 import { createReadScheduler } from './read-scheduler.js';
 
 /**
@@ -41,9 +41,11 @@ import { createReadScheduler } from './read-scheduler.js';
  * @property {() => void} dispose 页面卸载：取消全部读取并停止调度；之后的读取以 cancelled 拒绝。
  * @property {() => Promise<import('../src/queries/stats').Stats>} loadStats 后端状态与统计；顶栏降级标签与调试图共用。
  * @property {(id: number, validate?: boolean) => Promise<RequestRead>} readRequest
+ * @property {(ids: number[]) => Promise<RequestRead[]>} readRequests 批量读取：readings 批次逐项合入，重复 id 去重，结果按调用顺序返回；批级传输失败拒绝整个调用，逐项失败写各自状态并保留成功项。
  * @property {(id: number, from: number, to: number) => Promise<import('../src/protocols').BodyPage>} readRange
  * @property {(id: number) => Promise<RequestRead>} loadStructure
  * @property {(id: number, pages?: number) => Promise<RequestRead>} loadDelta
+ * @property {(ids: number[], pages?: number) => Promise<void>} loadDeltas 批量增量准备：跨请求打包 bodyRanges 批，逐请求核对后推进各自计数；在跑的 id 不重复推进。
  * @property {(id: number, ord: number) => Promise<import('../src/reading').ToolResultReading>} readToolResult
  * @property {(id: number) => Promise<unknown>} readRoute
  * @property {(id: number, query: import('../src/reading').ContextItemQuery, token: string, signal: AbortSignal) => Promise<import('../src/reading').ContextItemReading>} readContextItem 弹窗目录读取；signal 绑定弹窗生命周期，不进全局正文缓存。
@@ -59,6 +61,7 @@ import { createReadScheduler } from './read-scheduler.js';
  * @property {(key: string) => Promise<void>} loadSummary 打开会话即拉一次汇总，不懒加载；换会话代次变更后迟到响应不写入。
  * @property {(query: import('../src/queries/session-summary').SummaryEntriesQuery) => Promise<import('../src/queries/session-summary').SummaryEntries>} loadSummaryEntries 汇总条目点击后的按组查询；无缓存，每次点击现查。
  * @property {(id: number) => void} invalidate 原地清空一笔记录的缓存并落作废态；不通知、不排自动重读，测试与强制失效用。
+ * @property {() => number} batchFallbackCount 批响应 oversized 项回退单项路径的累计次数，验收观察用。
  */
 
 /**
@@ -141,8 +144,12 @@ export function createReaderStore(transport, onReadChanged, options) {
   const routes = new Map();
   /** @type {Map<number, {state: string, summary: unknown}>} 路由完成值，供同步读取。 */
   const routeValues = new Map();
-  /** @type {Map<number, Promise<RequestRead>>} 增量消费者的在跑任务：同一记录同一时刻只推进一条序列。 */
+  /** @type {Map<number, Promise<unknown>>} 增量消费者的在跑任务：同一记录同一时刻只推进一条序列。 */
   const deltaInflight = new Map();
+  /** @type {Map<number, Promise<RequestRead>>} readings 批覆盖中的记录：单项消费者等待该批视图，不另发 detail。 */
+  const batchInflight = new Map();
+  /** 批响应 oversized 项回退单项路径的累计次数：验收观察回退是否极少触发。 */
+  let batchFallbackCount = 0;
 
   /** @param {number} id */
   function recordOf(id) {
@@ -181,6 +188,7 @@ export function createReaderStore(transport, onReadChanged, options) {
     }
     reads.clear();
     deltaInflight.clear();
+    batchInflight.clear();
     routes.clear();
     routeValues.clear();
   }
@@ -492,6 +500,15 @@ export function createReaderStore(transport, onReadChanged, options) {
   /** @param {any} rec @param {boolean} validate */
   async function fetchDetail(rec, validate) {
     if (rec.detail !== null && !validate) return;
+    // 批量读取在跑：等待该批对本记录的视图，落地即复用；失败后重新走单项。
+    if (!validate && rec.detail === null) {
+      const batchView = batchInflight.get(rec.id);
+      if (batchView !== undefined) {
+        await batchView.catch(() => {});
+        if (rec.detail !== null) return;
+        if (reads.get(rec.id) !== rec) throwReadingChanged();
+      }
+    }
     // 普通读取合并进在跑的详情读取；validate 必须等它结束再拉一次，不把旧读取当成验证完成。
     while (rec.detailInflight !== undefined) {
       const pending = rec.detailInflight;
@@ -553,6 +570,179 @@ export function createReaderStore(transport, onReadChanged, options) {
     };
   }
 
+  /** @param {string} code @returns {Error & {code: string}} */
+  function codeErrorOf(code) {
+    const error = /** @type {Error & {code?: string}} */ (new Error(code));
+    error.code = code;
+    return /** @type {Error & {code: string}} */ (error);
+  }
+
+  /**
+   * 批项合入：资格（代次、记录归属、修订）仍相等才写 detail/meta/token，
+   * token 变化按 validate 语义先重置正文缓存再写。批次成功不递增修订——
+   * 批读取与单项读取是同一种证据刷新。
+   * @param {any} rec @param {number} id @param {number} myEpoch @param {number} myRev
+   * @param {import('../src/reading').ReadingDetail} detail @param {import('../src/protocols').BodyPage} meta
+   * @returns {boolean}
+   */
+  function applyBundle(rec, id, myEpoch, myRev, detail, meta) {
+    if (myEpoch !== epoch || reads.get(id) !== rec || rec.rev !== myRev) return false;
+    if (rec.token !== null && detail.reading_token !== rec.token) clearRecordContent(rec);
+    rec.detail = detail;
+    rec.token = detail.reading_token;
+    rec.detailError = null;
+    rec.status = 'fresh';
+    if (rec.meta === null) rec.meta = meta;
+    return true;
+  }
+
+  /**
+   * 批量读取：readings 批次逐项取详情+元信息。条数分块（服务端一次 ≤32）与
+   * batch_too_large 折半在这里；URL 编码与 16 KiB 上限在 adapter。响应先验证
+   * 整批 index 与 requested_id（重复或缺失报 invalid_response 整批不写入），
+   * 再逐项合入；逐项错误写各自记录状态并保留成功项；批级传输失败整调用拒绝。
+   * oversized 项回退单项路径（单项无批预算）。next_index 循环推进剩余输入，
+   * 每轮重新捕获资格。
+   * @param {number[]} ids
+   * @returns {Promise<RequestRead[]>} 按调用顺序；重复 id 重复出现。
+   */
+  async function readRequests(ids) {
+    if (sessionKey === null) throw codeErrorOf('no_session');
+    const key = String(sessionKey);
+    const unique = [...new Set(ids)];
+    /** @type {Map<number, {resolve: (r: RequestRead) => void, reject: (e: unknown) => void, promise: Promise<RequestRead>}>} 未 settle 的视图。 */
+    const pending = new Map();
+    /** @type {Map<number, Promise<RequestRead>>} 全部视图，供调用顺序映射。 */
+    const viewPromises = new Map();
+    for (const id of unique) {
+      let resolve = /** @type {(r: RequestRead) => void} */ (() => {});
+      let reject = /** @type {(e: unknown) => void} */ (() => {});
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+      // 批级失败会 reject 视图并同步 throw；默认吞掉 rejection，
+      // 调用方按需观察（await、rejects 或结尾的 allSettled）。
+      promise.catch(() => {});
+      pending.set(id, { resolve, reject, promise });
+      viewPromises.set(id, promise);
+    }
+    for (const [id, view] of pending) batchInflight.set(id, view.promise);
+    /** oversized 回退与全部异步收尾，返回前等待。@type {Promise<void>[]} */
+    const tail = [];
+    const settle = (/** @type {number} */ id, /** @type {RequestRead} */ value) => {
+      pending.get(id)?.resolve(value);
+      pending.delete(id);
+    };
+    const failOne = (/** @type {number} */ id, /** @type {unknown} */ error) => {
+      const rec = reads.get(id);
+      const code = /** @type {Error & {code?: string}} */ (error).code;
+      if (rec !== undefined && rec.status === 'reading') {
+        rec.detailError = typeof code === 'string' ? code : 'batch_failed';
+        rec.status = 'failed';
+      }
+      pending.get(id)?.reject(error);
+      pending.delete(id);
+    };
+    const failAll = (/** @type {unknown} */ error) => {
+      for (const id of [...pending.keys()]) failOne(id, error);
+    };
+    try {
+      let remaining = unique;
+      // 每轮批次上限：batch_too_large 时折半后保持，不自动放大服务器上限。
+      let limit = 32;
+      while (remaining.length > 0 && pending.size > 0) {
+        const chunk = remaining.slice(0, limit);
+        const rest = remaining.slice(limit);
+        const caps = chunk.map(id => {
+          const rec = recordOf(id);
+          return { id, rec, myEpoch: epoch, myRev: rec.rev, myToken: rec.token };
+        });
+        /** @type {any} */
+        let page;
+        try {
+          page = await execute(sessionScope, 'readings', { key, ids: chunk });
+        } catch (error) {
+          if (/** @type {Error & {code?: string}} */ (error).code === 'batch_too_large' && chunk.length > 1) {
+            // 折半重试，下一轮重新捕获资格；单项批超限走批级失败，不无限二分。
+            limit = Math.max(1, Math.floor(chunk.length / 2));
+            continue;
+          }
+          failAll(error);
+          throw error;
+        }
+        // 整批形状验证：index 唯一在界、requested_id 对应、成功项覆盖 [0, settled)。
+        const settled = page.next_index === null ? chunk.length : page.next_index;
+        const byIndex = new Map();
+        let valid = Number.isSafeInteger(settled) && settled > 0 && settled <= chunk.length;
+        if (valid) {
+          for (const item of page.items) {
+            if (!Number.isSafeInteger(item.index) || item.index < 0 || item.index >= settled
+              || byIndex.has(item.index) || item.requested_id !== chunk[item.index]) {
+              valid = false;
+              break;
+            }
+            byIndex.set(item.index, item);
+          }
+          if (byIndex.size !== settled) valid = false;
+        }
+        if (!valid) {
+          failAll(codeErrorOf('invalid_response'));
+          throw codeErrorOf('invalid_response');
+        }
+        /** @type {number[]} */
+        const oversized = [];
+        for (let i = 0; i < settled; i += 1) {
+          const cap = caps[i];
+          const item = byIndex.get(i);
+          if (item.state === 'ok') {
+            if (applyBundle(cap.rec, cap.id, cap.myEpoch, cap.myRev, item.value.detail, item.value.meta)) {
+              onReadChanged?.(cap.id);
+              settle(cap.id, assemble(cap.rec));
+            } else {
+              failOne(cap.id, codeErrorOf('reading_changed'));
+            }
+          } else if (item.state === 'reading_changed') {
+            invalidateIfCurrent(cap.rec, cap.id, cap.myEpoch, cap.myToken);
+            failOne(cap.id, codeErrorOf('reading_changed'));
+          } else if (item.state === 'oversized') {
+            // 单项路径没有批预算，仍能取到完整详情；先撤登记与视图，单项的批等待不等自己的视图。
+            batchFallbackCount += 1;
+            const view = pending.get(cap.id);
+            pending.delete(cap.id);
+            if (batchInflight.get(cap.id) === viewPromises.get(cap.id)) batchInflight.delete(cap.id);
+            tail.push((async () => {
+              try {
+                if (cap.rec.detail === null) await fetchDetail(cap.rec, false);
+                if (reads.get(cap.id) !== cap.rec) throw codeErrorOf('reading_changed');
+                if (cap.rec.detail !== null && cap.rec.meta === null) {
+                  const meta = await readRange(cap.id, 0, 0);
+                  if (reads.get(cap.id) !== cap.rec) throw codeErrorOf('reading_changed');
+                  if (meta !== null) cap.rec.meta = meta;
+                }
+                view?.resolve(assemble(cap.rec));
+              } catch (error) {
+                view?.reject(error);
+                onReadChanged?.(cap.id);
+              }
+            })());
+          } else {
+            failOne(cap.id, codeErrorOf(String(item.reason)));
+          }
+        }
+        remaining = [...chunk.slice(settled), ...rest];
+      }
+    } finally {
+      // 只清属于自己的登记：新批或单项任务对同一 id 的新登记不受影响。
+      for (const id of viewPromises.keys()) {
+        const view = viewPromises.get(id);
+        if (view !== undefined && batchInflight.get(id) === view) batchInflight.delete(id);
+      }
+    }
+    if (tail.length > 0) await Promise.all(tail);
+    // 逐项失败（资格失效、冲突、not_found）不拒绝整个调用：快照状态如实返回，
+    // 只有批级传输失败在循环内 throw。
+    await Promise.all(unique.map(id => viewPromises.get(id)?.catch(() => {}) ?? Promise.resolve()));
+    return ids.map(id => assemble(recordOf(id)));
+  }
+
   /** @param {number} id @param {boolean} validate @returns {Promise<RequestRead>} */
   async function readRequest(id, validate = false) {
     const rec = recordOf(id);
@@ -568,10 +758,25 @@ export function createReaderStore(transport, onReadChanged, options) {
   }
 
   /**
+   * 区间页合入（单项 readRange 与批量 readRanges 共用）：资格仍相等才合入
+   * 消息与元信息。返回 false 表示资格已失效，调用方按迟到处理。
+   * @param {{id: number, rec: any, myEpoch: number, myToken: string | null}} cap
+   * @param {import('../src/protocols').BodyPage} page
+   * @returns {boolean}
+   */
+  function applyRangePage(cap, page) {
+    if (cap.myEpoch !== epoch || reads.get(cap.id) !== cap.rec || cap.rec.token !== cap.myToken) return false;
+    mergeMessages(cap.rec, page);
+    if (page.from === 0 && page.to === 0 && cap.rec.meta === null) cap.rec.meta = page;
+    return true;
+  }
+
+  /**
    * 区间读取：完成值与在途登记分开缓存。命中完成值直接返回；命中在途共享
    * 同一任务；任务结束从在途登记移除、成功值落完成值——失败与缺口页不留缓存，
    * 重试重新走网络。旧任务只清属于自己的登记，不删除其他代次的新任务。
-   * @param {number} id @param {number} from @param {number} to @returns {Promise<import('../src/protocols').BodyPage>}
+   * @param {number} id @param {number} from @param {number} to
+   * @returns {Promise<import('../src/protocols').BodyPage>}
    */
   async function readRange(id, from, to) {
     const rec = recordOf(id);
@@ -587,9 +792,7 @@ export function createReaderStore(transport, onReadChanged, options) {
     const pending = (async () => {
       const page = await execute(sessionScope, 'body', { id, token: myToken, from, to });
       // 迟到响应：会话已切换、记录已作废重建，或版本已换（validate 原地重置）。
-      if (myEpoch !== epoch || reads.get(id) !== rec || rec.token !== myToken) throwReadingChanged();
-      mergeMessages(rec, page);
-      if (from === 0 && to === 0 && rec.meta === null) rec.meta = page;
+      if (!applyRangePage({ id, rec, myEpoch, myToken }, page)) throwReadingChanged();
       return page;
     })().catch(error => {
       if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') {
@@ -608,6 +811,72 @@ export function createReaderStore(transport, onReadChanged, options) {
       () => { if (rec.pageInflight.get(key) === pending) rec.pageInflight.delete(key); },
     );
     return pending;
+  }
+
+  /**
+   * 批量区间读取：bodyRanges 批次逐项取页并合入。折半与 64 项上限同
+   * readRequests；逐项错误（not_found、reading_changed、oversized）留缺口
+   * 返回 null，不进缓存、不推进调用方计数；批级传输失败拒绝整个调用。
+   * @param {{id: number, from: number, to: number}[]} wants
+   * @returns {Promise<(import('../src/protocols').BodyPage | null)[]>} 与 wants 对齐；缺口为 null。
+   */
+  async function readRanges(wants) {
+    if (sessionKey === null) throw codeErrorOf('no_session');
+    const key = String(sessionKey);
+    /** @type {{id: number, from: number, to: number, rec: any, myEpoch: number, myToken: string | null, slot: number}[]} */
+    const queue = [];
+    wants.forEach((want, slot) => {
+      const rec = reads.get(want.id);
+      // 没有阅读身份的记录读不了区间：留缺口，由调用方决定补读详情。
+      if (rec === undefined || rec.token === null) return;
+      queue.push({ ...want, rec, myEpoch: epoch, myToken: rec.token, slot });
+    });
+    /** @type {(import('../src/protocols').BodyPage | null)[]} */
+    const pages = wants.map(() => null);
+    let remaining = queue;
+    let limit = 64;
+    while (remaining.length > 0) {
+      const chunk = remaining.slice(0, limit);
+      const rest = remaining.slice(limit);
+      /** @type {any} */
+      let page;
+      try {
+        page = await execute(sessionScope, 'bodyRanges',
+          { key, ranges: chunk.map(cap => ({ id: cap.id, token: cap.myToken, from: cap.from, to: cap.to })) });
+      } catch (error) {
+        if (/** @type {Error & {code?: string}} */ (error).code === 'batch_too_large' && chunk.length > 1) {
+          limit = Math.max(1, Math.floor(chunk.length / 2));
+          continue;
+        }
+        throw error;
+      }
+      const settled = page.next_index === null ? chunk.length : page.next_index;
+      const byIndex = new Map();
+      let valid = Number.isSafeInteger(settled) && settled >= 0 && settled <= chunk.length;
+      if (valid) {
+        for (const item of page.items) {
+          if (!Number.isSafeInteger(item.index) || item.index < 0 || item.index >= settled
+            || byIndex.has(item.index) || item.requested_id !== chunk[item.index].id) {
+            valid = false;
+            break;
+          }
+          byIndex.set(item.index, item);
+        }
+        if (byIndex.size !== settled) valid = false;
+      }
+      if (!valid) throw codeErrorOf('invalid_response');
+      for (let i = 0; i < settled; i += 1) {
+        const cap = chunk[i];
+        const item = byIndex.get(i);
+        if (item.state === 'ok') {
+          if (applyRangePage(cap, item.value)) pages[cap.slot] = item.value;
+        } else if (item.state === 'reading_changed') {
+          invalidateIfCurrent(cap.rec, cap.id, cap.myEpoch, cap.myToken);
+        }
+      }
+      remaining = [...chunk.slice(settled), ...rest];
+    }
+    return pages;
   }
 
   /**
@@ -695,14 +964,21 @@ export function createReaderStore(transport, onReadChanged, options) {
   }
 
   /**
-   * 增量续读在跑时合并：并发调用共享同一任务与同一份 pages 预算，不各自推进
-   * 消费位置。任务结束后释放，下一次调用继续从新位置消费。
+   * 增量续读在跑时合并：并发调用共享同一任务，不各自推进消费位置。任务结束
+   * 后释放，下一次调用继续从新位置消费。批量版本（loadDeltas）对每个覆盖的
+   * id 同样登记，单项消费者等待批任务、不并发推进。
    * @param {number} id @param {number} [pages] @returns {Promise<RequestRead>}
    */
   function loadDelta(id, pages = 2) {
     const pending = deltaInflight.get(id);
-    if (pending !== undefined) return pending;
-    const task = runDelta(id, pages);
+    if (pending !== undefined) return /** @type {Promise<RequestRead>} */ (pending);
+    const rec = recordOf(id);
+    const myToken = rec.token;
+    const task = runDeltas([id], pages).then(() => {
+      // 记录被取代（会话切换）或版本已换（validate）：旧任务不得返回新快照。
+      if (reads.get(id) !== rec || rec.token !== myToken) throwReadingChanged();
+      return assemble(rec);
+    });
     deltaInflight.set(id, task);
     void task.then(
       () => { if (deltaInflight.get(id) === task) deltaInflight.delete(id); },
@@ -711,66 +987,115 @@ export function createReaderStore(transport, onReadChanged, options) {
     return task;
   }
 
-  /** @param {number} id @param {number} pages @returns {Promise<RequestRead>} */
-  async function runDelta(id, pages) {
-    const rec = recordOf(id);
-    const state = rec.delta;
-    if (rec.detail === null) return assemble(rec);
-    const trusted = deltaOrdinals(rec.detail);
-    if (trusted === null) {
-      if (state.done) return assemble(rec);
-      state.unconfirmed = true;
-      // 元信息尚未读到时先保留重试机会，不能提前标记完成。
-      if (rec.detail.actor_state === 'unknown' && rec.meta === null) return assemble(rec);
-      state.done = true;
-      // 未知归属没有可派生的组；按请求自身读取一片，不把正文当作新增。
-      if (rec.detail.actor_state === 'unknown' && rec.meta !== null
-        && rec.meta.total !== null && rec.meta.total > 0
-        && (rec.meta.state === 'available' || rec.meta.state === 'partial')) {
-        return loadStructure(id);
-      }
-      return assemble(rec);
+  /**
+   * 批量增量准备：按每请求的可信 delta 构造最多 pages 片，跨请求打包进
+   * bodyRanges 批，逐请求核对所需 ord 全到齐后才推进各自的消费计数。
+   * 在跑的 id 不重复登记（两个消费者不各推进一次）。
+   * @param {number[]} ids @param {number} [pages] @returns {Promise<void>}
+   */
+  function loadDeltas(ids, pages = 2) {
+    const todo = [...new Set(ids)].filter(id => !deltaInflight.has(id));
+    if (todo.length === 0) return Promise.resolve();
+    const task = runDeltas(todo, pages);
+    for (const id of todo) {
+      deltaInflight.set(id, task);
+      void task.then(
+        () => { if (deltaInflight.get(id) === task) deltaInflight.delete(id); },
+        () => { if (deltaInflight.get(id) === task) deltaInflight.delete(id); },
+      );
     }
-    if (state.loading || state.done) return assemble(rec);
-    const ords = [...trusted].sort((a, b) => a - b).slice(state.next);
-    if (ords.length === 0) { state.done = true; return assemble(rec); }
-    state.loading = true;
-    state.error = null;
-    try {
-      let consumed = 0;
-      // 每片跨度小于 40 的连续可信 delta 合成一片，每轮最多 pages 片。
-      for (let piece = 0; piece < pages && consumed < ords.length;) {
-        const start = ords[consumed] ?? 0;
-        let end = consumed;
-        while (end < ords.length && (ords[end] ?? 0) < start + 40) end += 1;
-        const pieceEnd = (ords[end - 1] ?? start) + 1;
-        const page = await readRange(id, start, pieceEnd);
-        // 每片返回后验证所需 ord 都实际拿到：缺口不推进消费位置，不吞掉剩余输入。
-        const gotOrds = new Set((page.messages ?? []).map((/** @type {{ord: number}} */ m) => m.ord));
-        for (let o = start; o < pieceEnd; o += 1) {
-          if (!gotOrds.has(o)) {
-            // 缺口页不留在缓存：重试必须重新走网络，不能永远命中同一片坏页。
-            dropPage(rec, JSON.stringify([id, rec.token, start, pieceEnd]));
-            const error = /** @type {Error & {code?: string}} */ (new Error('delta_gap'));
-            error.code = 'delta_gap';
-            throw error;
+    return task;
+  }
+
+  /**
+   * 增量任务的主体：构造片、批量读取、逐请求核对与推进。unknown 归属等
+   * 无法派生组的请求走单项结构读取，语义与原单项增量一致。
+   * @param {number[]} ids @param {number} pages
+   * @returns {Promise<void>}
+   */
+  async function runDeltas(ids, pages) {
+    /** @type {{id: number, from: number, to: number}[]} */
+    const wants = [];
+    /** @type {Map<number, {rec: any, trusted: Set<number>, pieces: {from: number, to: number, consumed: number}[]}>} */
+    const plans = new Map();
+    /** @type {Promise<RequestRead>[]} 需要单项结构读取的 unknown 归属请求。 */
+    const structural = [];
+    for (const id of ids) {
+      const rec = recordOf(id);
+      const state = rec.delta;
+      if (rec.detail === null || state.loading || state.done) continue;
+      const trusted = deltaOrdinals(rec.detail);
+      if (trusted === null) {
+        if (state.done) continue;
+        state.unconfirmed = true;
+        // 元信息尚未读到时先保留重试机会，不能提前标记完成。
+        if (rec.detail.actor_state === 'unknown' && rec.meta === null) continue;
+        state.done = true;
+        // 未知归属没有可派生的组；按请求自身读取一片，不把正文当作新增。
+        if (rec.detail.actor_state === 'unknown' && rec.meta !== null
+          && rec.meta.total !== null && rec.meta.total > 0
+          && (rec.meta.state === 'available' || rec.meta.state === 'partial')) {
+          structural.push(loadStructure(id));
+        }
+        continue;
+      }
+      const ords = [...trusted].sort((a, b) => a - b).slice(state.next);
+      if (ords.length === 0) { state.done = true; continue; }
+      const { pieces } = deltaPieces(ords, pages);
+      if (pieces.length === 0) continue;
+      plans.set(id, { rec, trusted, pieces });
+      for (const piece of pieces) wants.push({ id, from: piece.from, to: piece.to });
+    }
+    if (wants.length > 0) {
+      for (const [, plan] of plans) {
+        plan.rec.delta.loading = true;
+        plan.rec.delta.error = null;
+      }
+      try {
+        const got = await readRanges(wants);
+        let cursor = 0;
+        for (const [id, plan] of plans) {
+          let reached = 0;
+          let gap = false;
+          for (const piece of plan.pieces) {
+            const page = got[cursor] ?? null;
+            cursor += 1;
+            if (page === null) { gap = true; break; }
+            // 每片核对所需 ord 都实际拿到：缺口不推进消费位置，不吞掉剩余输入。
+            const gotOrds = new Set((page.messages ?? []).map((/** @type {{ord: number}} */ m) => m.ord));
+            for (let o = piece.from; o < piece.to; o += 1) {
+              if (!gotOrds.has(o)) {
+                // 缺口页不留在缓存：重试必须重新走网络，不能永远命中同一片坏页。
+                dropPage(plan.rec, JSON.stringify([id, plan.rec.token, piece.from, piece.to]));
+                gap = true;
+                break;
+              }
+            }
+            if (gap) break;
+            reached = piece.consumed;
+          }
+          if (gap) {
+            plan.rec.delta.error = 'delta_gap';
+          } else if (reached > 0) {
+            plan.rec.delta.next += reached;
+            if (plan.rec.delta.next >= plan.trusted.size) plan.rec.delta.done = true;
           }
         }
-        // 只消费 delta 集合内的消息；额外读到的历史不推进消费。
-        consumed = end;
-        piece += 1;
+      } catch (error) {
+        // 整笔已作废（409 路径）交给调用方统一处理；批级失败如实落在各请求上，
+        // 不拒绝整个准备，可再续读。
+        if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') throw error;
+        if (/** @type {Error & {code?: string}} */ (error).code !== 'cancelled') {
+          for (const [, plan] of plans) {
+            plan.rec.delta.error = error instanceof Error ? error.message : 'delta_failed';
+          }
+        }
+      } finally {
+        for (const [, plan] of plans) plan.rec.delta.loading = false;
       }
-      state.next += consumed;
-      if (state.next >= trusted.size) state.done = true;
-    } catch (error) {
-      // 整笔已作废（409 路径）：增量失败不落在孤立记录上，交给调用方统一处理。
-      if (/** @type {Error & {code?: string}} */ (error).code === 'reading_changed') throw error;
-      state.error = /** @type {Error & {code?: string}} */ (error).code === 'delta_gap' ? 'delta_gap'
-        : error instanceof Error ? error.message : 'delta_failed';
-    } finally {
-      state.loading = false;
     }
-    return assemble(rec);
+    // 无法派生组的请求按自身读结构，不把正文当新增；等待完成与原单项增量一致。
+    if (structural.length > 0) await Promise.all(structural);
   }
 
   /** @param {number} id @param {number} ord @returns {Promise<import('../src/reading').ToolResultReading>} */
@@ -903,9 +1228,11 @@ export function createReaderStore(transport, onReadChanged, options) {
     dispose,
     loadStats,
     readRequest,
+    readRequests,
     readRange,
     loadStructure,
     loadDelta,
+    loadDeltas,
     readToolResult,
     readRoute,
     readContextItem,
@@ -921,5 +1248,7 @@ export function createReaderStore(transport, onReadChanged, options) {
     loadSummary,
     loadSummaryEntries,
     invalidate,
+    /** oversized 项回退单项路径的累计次数，验收观察用。 */
+    batchFallbackCount: () => batchFallbackCount,
   };
 }

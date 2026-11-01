@@ -142,10 +142,12 @@ if (typeof document !== 'undefined') {
   /** 导航代次与用户选择代次分别守卫异步导航的收尾。 */
   let navEpoch = 0;
   let selectionEpoch = 0;
-  const preparation = createTracePreparation(store, (id, dependencies) => {
-    if (state.selectedStep === `${id}:preparing`) dispatch({ kind: 'clear-step' });
+  const preparation = createTracePreparation(store, (ids, dependencies) => {
+    for (const id of ids) {
+      if (state.selectedStep === `${id}:preparing`) dispatch({ kind: 'clear-step' });
+    }
     renderMain();
-    if (dependencies.some(affectsRail) || affectsRail(id)) renderRail();
+    if (dependencies.some(affectsRail) || ids.some(affectsRail)) renderRail();
   });
 
   /* ---------------- 选择状态：唯一写者与效果执行器 ---------------- */

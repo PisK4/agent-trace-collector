@@ -61,6 +61,35 @@ function detail(id: number, extra: Record<string, unknown> = {}) {
   } as unknown as import('../src/reading').ReadingDetail;
 }
 
+
+function readingBundle(id: number, token: string = TOKEN, total = 5) {
+  return {
+    detail: detail(id, { reading_token: token }),
+    meta: { ...bodyPage(0, 0, total), req_id: id, reading_token: token },
+  };
+}
+
+function batchOf(input: { ids: number[] }, build: (id: number, index: number) => Record<string, unknown>) {
+  return {
+    items: input.ids.map((id, index) => ({ index, requested_id: id, ...build(id, index) })),
+    next_index: null,
+  };
+}
+
+/** 区间批的成功响应：ranges 逐项成页，可带覆盖消息。 */
+function okRanges(input: { ranges: { id: number; token: string; from: number; to: number }[] }, total: number | null, messages?: unknown[]) {
+  return {
+    items: input.ranges.map((r: { id: number; token: string; from: number; to: number }, index: number) => ({
+      index, requested_id: r.id, state: 'ok',
+      value: {
+        ...bodyPage(r.from, r.to, total, messages === undefined ? {} : { messages }),
+        req_id: r.id, reading_token: r.token,
+      },
+    })),
+    next_index: null,
+  };
+}
+
 test('loadLater 翻倍越过服务端 200 上限后 clamp，窗口继续增长', async () => {
   const fx = createFixtureReadTransport();
   fx.respond('requests', input => {
@@ -416,10 +445,11 @@ test('81 条可信增量分两片后可显式续读剩余', async () => {
   fx.respond('requests', () => ({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null }));
   fx.respond('detail', () => detail(1, { delta_ordinals: Array.from({ length: 81 }, (_, i) => i) }));
   fx.respond('body', input => bodyPage(input.from, input.to, 81));
+  fx.respond('bodyRanges', input => okRanges(input, 81));
   const store = createReaderStore(fx.transport);
   await store.selectSession('k', 30);
   await store.readRequest(1);
-  // 首轮两片：0–39、40–79；done 仍为 false，剩余 1 条。
+  // 首轮两片合成一次区间批：0–39、40–79；done 仍为 false，剩余 1 条。
   const first = await store.loadDelta(1, 2);
   expect(first.delta.next).toBe(80);
   expect(first.delta.done).toBe(false);
@@ -427,8 +457,8 @@ test('81 条可信增量分两片后可显式续读剩余', async () => {
   const second = await store.loadDelta(1, 2);
   expect(second.delta.next).toBe(81);
   expect(second.delta.done).toBe(true);
-  expect(fx.count('body', i => i.from === 80 && i.to === 81)).toBe(1);
-  expect(fx.count('body', i => i.from === 0 && i.to === 40)).toBe(1);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { from: number; to: number }) => r.from === 80 && r.to === 81))).toBe(1);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { from: number; to: number }) => r.from === 0 && r.to === 40))).toBe(1);
 });
 
 test('增量片缺口：空页成功响应不推进消费位置，重试重新走网络', async () => {
@@ -436,10 +466,16 @@ test('增量片缺口：空页成功响应不推进消费位置，重试重新�
   const fx = createFixtureReadTransport();
   fx.respond('requests', () => ({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null }));
   fx.respond('detail', () => detail(1, { delta_ordinals: [0, 1] }));
-  fx.respond('body', input => {
-    if (emptyPieces) return { ...bodyPage(input.from, input.to, 2), messages: [] };
-    return bodyPage(input.from, input.to, 2);
-  });
+  fx.respond('body', input => bodyPage(input.from, input.to, 2));
+  fx.respond('bodyRanges', input => emptyPieces
+    ? {
+      items: input.ranges.map((r: { id: number; token: string; from: number; to: number }, index: number) => ({
+        index, requested_id: r.id, state: 'ok',
+        value: { ...bodyPage(r.from, r.to, 2, { messages: [] }), req_id: r.id, reading_token: r.token },
+      })),
+      next_index: null,
+    }
+    : okRanges(input, 2));
   const store = createReaderStore(fx.transport);
   await store.selectSession('k', 30);
   await store.readRequest(1);
@@ -448,13 +484,13 @@ test('增量片缺口：空页成功响应不推进消费位置，重试重新�
   expect(failed.delta.error).toBe('delta_gap');
   expect(failed.delta.done).toBe(false);
   expect(failed.delta.next).toBe(0);
-  const failedCount = fx.count('body', i => i.from === 0 && i.to === 2);
+  const failedCount = fx.count('bodyRanges', i => i.ranges.some((r: { from: number; to: number }) => r.from === 0 && r.to === 2));
   // 重试成功：缺口页不留在缓存，两条均可见并完成。
   emptyPieces = false;
   const ok = await store.loadDelta(1, 2);
   expect(ok.delta.done).toBe(true);
   expect(ok.delta.next).toBe(2);
-  expect(fx.count('body', i => i.from === 0 && i.to === 2)).toBe(failedCount + 1);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { from: number; to: number }) => r.from === 0 && r.to === 2))).toBe(failedCount + 1);
 });
 
 test('delta 分片消费与未确认关系不读消息', async () => {
@@ -468,22 +504,25 @@ test('delta 分片消费与未确认关系不读消息', async () => {
     if (input.id === 2) return detail(2, { delta_ordinals: [] });
     return detail(3, { delta_ordinals: null, prev_relation: 'unknown' });
   });
-  fx.respond('body', input => {
-    if (input.from === 0 && input.to === 0) {
-      return bodyPage(0, 0, input.id === 1 ? 82 : 3);
-    }
-    if (input.from === 0 && input.to === 3) return bodyPage(0, 3, 82);
-    if (input.from === 80 && input.to === 82) return bodyPage(80, 82, 82);
-    throw readError('not_found');
-  });
+  fx.respond('body', input => bodyPage(0, 0, input.id === 1 ? 82 : 3));
+  fx.respond('bodyRanges', input => ({
+    items: input.ranges.map((r: { id: number; token: string; from: number; to: number }, index: number) => {
+      const page = r.from === 0 && r.to === 3 ? bodyPage(0, 3, 82)
+        : r.from === 80 && r.to === 82 ? bodyPage(80, 82, 82) : null;
+      return page === null
+        ? { index, requested_id: r.id, state: 'not_found', reason: 'not_found' }
+        : { index, requested_id: r.id, state: 'ok', value: { ...page, req_id: r.id, reading_token: r.token } };
+    }),
+    next_index: null,
+  }));
   const store = createReaderStore(fx.transport);
   await store.selectSession('k', 30);
   await store.readRequest(1);
   const read = await store.loadDelta(1, 2);
   expect(read.delta.next).toBe(5);
   expect(read.delta.done).toBe(true);
-  expect(fx.count('body', i => i.from === 0 && i.to === 3)).toBe(1);
-  expect(fx.count('body', i => i.from === 80 && i.to === 82)).toBe(1);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { from: number; to: number }) => r.from === 0 && r.to === 3))).toBe(1);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { from: number; to: number }) => r.from === 80 && r.to === 82))).toBe(1);
   // delta = []：立即完成，不读消息。
   await store.selectSession('k2', 30);
   await store.readRequest(2);
@@ -491,13 +530,14 @@ test('delta 分片消费与未确认关系不读消息', async () => {
   expect(read2.delta.done).toBe(true);
   expect(read2.delta.unconfirmed).toBeFalsy();
   expect(fx.count('body', i => i.id === 2)).toBe(1);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { id: number }) => r.id === 2))).toBe(0);
   // delta = null：未确认，不读消息。
   await store.selectSession('k3', 30);
   await store.readRequest(3);
   const read3 = await store.loadDelta(3);
   expect(read3.delta.unconfirmed).toBe(true);
   expect(read3.delta.done).toBe(true);
-  expect(fx.count('body', i => i.id === 3 && !(i.from === 0 && i.to === 0))).toBe(0);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { id: number }) => r.id === 3))).toBe(0);
 });
 
 test('并发增量消费合并为一条任务：不各自推进消费位置', async () => {
@@ -506,11 +546,8 @@ test('并发增量消费合并为一条任务：不各自推进消费位置', as
   const fx = createFixtureReadTransport();
   fx.respond('requests', () => ({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null }));
   fx.respond('detail', () => detail(1, { delta_ordinals: [0, 1, 2, 3] }));
-  fx.respond('body', input => {
-    if (input.from === 0 && input.to === 0) return bodyPage(0, 0, 4);
-    if (input.from === 0 && input.to === 4) return gated.then(() => bodyPage(0, 4, 4));
-    throw readError('not_found');
-  });
+  fx.respond('body', input => bodyPage(0, 0, 4));
+  fx.respond('bodyRanges', input => gated.then(() => okRanges(input, 4)));
   const store = createReaderStore(fx.transport);
   await store.selectSession('k', 30);
   await store.readRequest(1);
@@ -518,17 +555,17 @@ test('并发增量消费合并为一条任务：不各自推进消费位置', as
   const first = store.loadDelta(1, 2);
   const second = store.loadDelta(1, 2);
   await delay(5);
-  expect(fx.count('body', i => i.from === 0 && i.to === 4)).toBe(1);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { from: number; to: number }) => r.from === 0 && r.to === 4))).toBe(1);
   release!();
   const [a, b] = await Promise.all([first, second]);
   expect(a.delta.next).toBe(4);
   expect(a.delta.done).toBe(true);
   expect(b.delta.next).toBe(4);
-  expect(fx.count('body', i => i.from === 0 && i.to === 4)).toBe(1);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { from: number; to: number }) => r.from === 0 && r.to === 4))).toBe(1);
   // 任务结束后释放：下一次调用仍从已推进的位置消费，可直接完成。
   const third = await store.loadDelta(1, 2);
   expect(third.delta.done).toBe(true);
-  expect(fx.count('body', i => i.from === 0 && i.to === 4)).toBe(1);
+  expect(fx.count('bodyRanges', i => i.ranges.some((r: { from: number; to: number }) => r.from === 0 && r.to === 4))).toBe(1);
 });
 
 test('切换会话后同 id 的增量不等待旧任务', async () => {
@@ -540,11 +577,12 @@ test('切换会话后同 id 的增量不等待旧任务', async () => {
   const fx = createFixtureReadTransport();
   fx.respond('requests', () => ({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null }));
   fx.respond('detail', () => detail(1, { conv_key: session, delta_ordinals: [0], reading_token: session === 'old' ? TOKEN : TOKEN2 }));
-  fx.respond('body', input => {
-    if (input.from === 0 && input.to === 0) return bodyPage(0, 0, 1);
-    if (input.from === 0 && input.to === 1) {
-      if (session === 'old') { started(); return gated.then(() => bodyPage(0, 1, 1)); }
-      return bodyPage(0, 1, 1, { messages: [{ ord: 0, value: { role: 'user', content: 'fresh' } }] });
+  fx.respond('body', input => bodyPage(0, 0, 1));
+  fx.respond('bodyRanges', input => {
+    const r = input.ranges[0]!;
+    if (r.from === 0 && r.to === 1) {
+      if (session === 'old') { started(); return gated.then(() => okRanges(input, 1)); }
+      return okRanges(input, 1, [{ ord: 0, value: { role: 'user', content: 'fresh' } }]);
     }
     throw readError('not_found');
   });
@@ -572,16 +610,19 @@ test('验证换版本后增量不等待旧版本任务', async () => {
   let started: () => void = () => {};
   const firstStarted = new Promise<void>(resolve => { started = resolve; });
   const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null }));
   fx.respond('detail', () => detail(1, { delta_ordinals: [0], reading_token: token }));
-  fx.respond('body', input => {
-    if (input.from === 0 && input.to === 0) return bodyPage(0, 0, 1);
-    if (input.from === 0 && input.to === 1) {
-      if (input.token === TOKEN) { started(); return gated.then(() => bodyPage(0, 1, 1)); }
-      return bodyPage(0, 1, 1, { messages: [{ ord: 0, value: { role: 'user', content: 'new version' } }] });
+  fx.respond('body', input => bodyPage(0, 0, 1));
+  fx.respond('bodyRanges', input => {
+    const r = input.ranges[0]!;
+    if (r.from === 0 && r.to === 1) {
+      if (r.token === TOKEN) { started(); return gated.then(() => okRanges(input, 1)); }
+      return okRanges(input, 1, [{ ord: 0, value: { role: 'user', content: 'new version' } }]);
     }
     throw readError('not_found');
   });
   const store = createReaderStore(fx.transport);
+  await store.selectSession('k', 30);
   await store.readRequest(1);
   const oldResult = store.loadDelta(1).catch(error => error);
   await firstStarted;
@@ -1220,4 +1261,189 @@ test('弹窗读取走 dialog scope：关闭即取消，不进全局正文缓存'
   await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
   // 弹窗读取不进全局正文缓存，也不发全局读取。
   expect(store.peekRequest(1)).toBeNull();
+});
+
+test('readRequests 走 readings 批次，成功项落地且不发单项 detail', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [1, 2].map(id => ({ req_id: id, started_ms: id })), next_cursor: null }));
+  fx.respond('readings', input => batchOf(input, id => ({ state: 'ok', value: readingBundle(id) })));
+  const store = createReaderStore(fx.transport);
+  await store.selectSession('k');
+  const reads = await store.readRequests([1, 2]);
+  expect(fx.calls.filter(call => call.operation === 'readings')).toHaveLength(1);
+  expect(fx.calls.filter(call => call.operation === 'detail')).toHaveLength(0);
+  expect(store.peekRequest(1)?.token).toMatch(/^r1-[0-9a-f]{64}$/);
+  expect(store.peekRequest(1)?.meta).not.toBeNull();
+  expect(store.peekRequest(1)?.status).toBe('fresh');
+  expect(reads).toHaveLength(2);
+  expect(reads.map(read => read.detail?.req_id)).toEqual([1, 2]);
+});
+
+test('同批成功、not_found 与 reading_changed 逐项结算，冲突仅当前失效', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [1, 2, 3].map(id => ({ req_id: id, started_ms: id })), next_cursor: null }));
+  fx.respond('readings', input => ({
+    items: [
+      { index: 0, requested_id: input.ids[0], state: 'ok', value: readingBundle(1) },
+      { index: 1, requested_id: input.ids[1], state: 'not_found', reason: 'not_found' },
+      { index: 2, requested_id: input.ids[2], state: 'reading_changed', reason: 'reading_changed' },
+    ],
+    next_index: null,
+  }));
+  fx.respond('detail', () => detail(3, { reading_token: TOKEN2 }));
+  fx.respond('body', () => bodyPage(0, 0, 0));
+  const store = createReaderStore(fx.transport, undefined, { autoRereadCooldownMs: 1 });
+  await store.selectSession('k');
+  const reads = await store.readRequests([1, 2, 3]);
+  expect(reads[0]?.status).toBe('fresh');
+  expect(reads[1]?.status).toBe('failed');
+  expect(reads[1]?.detailError).toBe('not_found');
+  // 冲突项整笔作废（当前记录），自动重读随后换新。
+  expect(reads[2]?.status).toBe('invalidated');
+  await delay(20);
+  expect(store.peekRequest(3)?.status).toBe('fresh');
+});
+
+test('旧批迟到响应资格不符不写入，新单项结果保留', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null }));
+  fx.hold('readings');
+  fx.respond('readings', input => batchOf(input, id => ({ state: 'ok', value: readingBundle(id, TOKEN2) })));
+  fx.respond('detail', () => detail(1, { reading_token: TOKEN }));
+  fx.respond('body', () => bodyPage(0, 0, 0));
+  const store = createReaderStore(fx.transport);
+  await store.selectSession('k');
+  const batch = store.readRequests([1]);
+  await fx.started('readings');
+  // 批在途期间强制失效并单项重读：单项等批视图让路，批因资格不符拒绝写入，
+  // 随后单项读取完成换新。
+  store.invalidate(1);
+  const single = store.readRequest(1);
+  fx.release('readings');
+  await single;
+  await batch;
+  expect(store.peekRequest(1)?.token).toBe(TOKEN);
+  expect(store.peekRequest(1)?.status).toBe('fresh');
+});
+
+test('手动点击与批量同 id 等待同一批任务，不发单项 detail', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null }));
+  fx.hold('readings');
+  fx.respond('readings', input => batchOf(input, id => ({ state: 'ok', value: readingBundle(id) })));
+  fx.respond('body', () => bodyPage(0, 0, 0));
+  const store = createReaderStore(fx.transport);
+  await store.selectSession('k');
+  const batch = store.readRequests([1]);
+  await fx.started('readings');
+  const single = store.readRequest(1);
+  fx.release('readings');
+  await Promise.all([batch, single]);
+  expect(fx.calls.filter(call => call.operation === 'detail')).toHaveLength(0);
+  expect(store.peekRequest(1)?.status).toBe('fresh');
+});
+
+test('重复 id 去重发送，结果映射回调用顺序', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [1, 2].map(id => ({ req_id: id, started_ms: id })), next_cursor: null }));
+  fx.respond('readings', input => batchOf(input, id => ({ state: 'ok', value: readingBundle(id) })));
+  const store = createReaderStore(fx.transport);
+  await store.selectSession('k');
+  const reads = await store.readRequests([1, 1, 2]);
+  const batchCall = fx.calls.find(call => call.operation === 'readings');
+  expect((batchCall?.input as { ids: number[] }).ids).toEqual([1, 2]);
+  expect(reads.map(read => read.detail?.req_id)).toEqual([1, 1, 2]);
+});
+
+test('next_index 后缀循环补读剩余项，每轮重新捕获资格', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [1, 2, 3].map(id => ({ req_id: id, started_ms: id })), next_cursor: null }));
+  let round = 0;
+  fx.respond('readings', input => {
+    round += 1;
+    if (round === 1) {
+      return {
+        items: [{ index: 0, requested_id: input.ids[0], state: 'ok', value: readingBundle(1) }],
+        next_index: 1,
+      };
+    }
+    return batchOf(input, id => ({ state: 'ok', value: readingBundle(id) }));
+  });
+  const store = createReaderStore(fx.transport);
+  await store.selectSession('k');
+  const reads = await store.readRequests([1, 2, 3]);
+  expect(fx.calls.filter(call => call.operation === 'readings')).toHaveLength(2);
+  const second = fx.calls.filter(call => call.operation === 'readings')[1];
+  expect((second?.input as { ids: number[] }).ids).toEqual([2, 3]);
+  expect(reads.every(read => read.detail !== null)).toBe(true);
+});
+
+test('batch_too_large 折半重试，单项仍超限不无限二分', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [1, 2, 3, 4].map(id => ({ req_id: id, started_ms: id })), next_cursor: null }));
+  fx.respond('readings', input => {
+    if (input.ids.length > 2) throw readError('batch_too_large');
+    return batchOf(input, id => ({ state: 'ok', value: readingBundle(id) }));
+  });
+  const store = createReaderStore(fx.transport);
+  await store.selectSession('k');
+  const reads = await store.readRequests([1, 2, 3, 4]);
+  // 整批失败一次，两个半批各成功一次。
+  expect(fx.calls.filter(call => call.operation === 'readings')).toHaveLength(3);
+  expect(reads).toHaveLength(4);
+  expect(reads.every(read => read.detail !== null)).toBe(true);
+
+  // 单项批仍超限：不无限二分。
+  fx.respond('readings', () => { throw readError('batch_too_large'); });
+  await expect(store.readRequests([5])).rejects.toMatchObject({ code: 'batch_too_large' });
+  const singles = fx.calls.filter(call =>
+    call.operation === 'readings' && (call.input as { ids: number[] }).ids.length === 1);
+  expect(singles).toHaveLength(1);
+});
+
+test('批级传输失败整调用拒绝，未落地记录落 failed', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null }));
+  fx.respond('readings', () => { throw readError('unavailable'); });
+  const store = createReaderStore(fx.transport);
+  await store.selectSession('k');
+  await expect(store.readRequests([1])).rejects.toMatchObject({ code: 'unavailable' });
+  expect(store.peekRequest(1)?.status).toBe('failed');
+  expect(store.peekRequest(1)?.detail).toBeNull();
+});
+
+test('响应 index 重复或 requested_id 不符报 invalid_response，整批不写入', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [1, 2].map(id => ({ req_id: id, started_ms: id })), next_cursor: null }));
+  fx.respond('readings', () => ({
+    items: [
+      { index: 0, requested_id: 1, state: 'ok', value: readingBundle(1) },
+      { index: 0, requested_id: 1, state: 'ok', value: readingBundle(1) },
+    ],
+    next_index: null,
+  }));
+  const store = createReaderStore(fx.transport);
+  await store.selectSession('k');
+  await expect(store.readRequests([1, 2])).rejects.toMatchObject({ code: 'invalid_response' });
+  expect(store.peekRequest(1)?.detail).toBeNull();
+  expect(store.peekRequest(2)).not.toBeNull();
+  expect(store.peekRequest(2)?.detail).toBeNull();
+});
+
+test('oversized 项回退单项路径读取并计数', async () => {
+  const fx = createFixtureReadTransport();
+  fx.respond('requests', () => ({ items: [{ req_id: 1, started_ms: 1 }], next_cursor: null }));
+  fx.respond('readings', input => ({
+    items: [{ index: 0, requested_id: input.ids[0], state: 'oversized', reason: 'item_too_large' }],
+    next_index: null,
+  }));
+  fx.respond('detail', () => detail(1));
+  fx.respond('body', () => bodyPage(0, 0, 0));
+  const store = createReaderStore(fx.transport);
+  await store.selectSession('k');
+  const reads = await store.readRequests([1]);
+  expect(fx.calls.filter(call => call.operation === 'detail')).toHaveLength(1);
+  expect(fx.calls.filter(call => call.operation === 'body')).toHaveLength(1);
+  expect(reads[0]?.status).toBe('fresh');
+  expect(store.batchFallbackCount()).toBe(1);
 });
