@@ -23,11 +23,17 @@ function arg(name: string, fallback: number): number {
   return Math.trunc(value);
 }
 
+function stringArg(name: string): string | null {
+  const index = process.argv.indexOf(`--${name}`);
+  return index === -1 || index + 1 >= process.argv.length ? null : process.argv[index + 1]!;
+}
+
 const requests = arg('requests', 40_000);
 const sessions = arg('sessions', 400);
 const page = arg('page', 20);
 const reps = arg('reps', 5);
-if (requests < sessions) throw new Error('requests must be >= sessions');
+const existingDb = stringArg('db');
+if (existingDb === null && requests < sessions) throw new Error('requests must be >= sessions');
 
 /** 确定性伪随机：同一参数重复运行得到同一分布，测量差异只来自查询本身。 */
 let seedState = 0x2545f491;
@@ -37,9 +43,16 @@ const nextRandom = (mod: number): number => {
 };
 
 const dir = mkdtempSync(join(tmpdir(), 'atc-perf-session-list-'));
-const store = openStore(join(dir, 'perf.db'));
+const store = openStore(existingDb ?? join(dir, 'perf.db'));
 try {
   const seedStarted = performance.now();
+  if (existingDb !== null) {
+    const counts = store.read.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM request').get() as { n: number };
+    const keys = store.read.query<{ n: number }, []>(
+      'SELECT COUNT(*) AS n FROM (SELECT conv_key FROM request WHERE conv_key IS NOT NULL GROUP BY conv_key)',
+    ).get() as { n: number };
+    console.log(`existing db: ${counts.n} requests, ${keys.n} sessions`);
+  } else {
   store.write(db => {
     const insert = db.prepare(
       `INSERT INTO request(conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,status,cost_state,ms,ttft_ms,flow_ms)
@@ -75,6 +88,8 @@ try {
     'SELECT COUNT(*) AS c FROM request GROUP BY conv_key ORDER BY c DESC LIMIT 1',
   ).get() as { c: number };
   console.log(`seed: ${counts.n} requests, ${sessions} sessions, max per session ${perKey.c}, sessions>=100 requests: ${distribution}, ${Math.round(performance.now() - seedStarted)} ms`);
+  }
+  void seedStarted;
 
   const timed = (run: () => unknown): number => {
     const started = performance.now();
