@@ -482,7 +482,6 @@ if (typeof document !== 'undefined') {
       windowError: store.getWindow().error,
       summary: summary?.status === 'ready' ? summary.data : null,
       summaryStatus: summary?.status ?? 'idle',
-      summaryFoldOpen: folds.get(`summary:${state.session ?? ''}`) === true,
       hiddenRows,
       hiddenFoldOpen: folds.get(`hidden:${state.session ?? ''}`) === true,
       windowAnchor: state.windowAnchor,
@@ -774,12 +773,17 @@ if (typeof document !== 'undefined') {
     return renderTurnBand(turns.items, state.turn, currentRows());
   }
 
-  /** 轮次带吸顶位置贴 session-head 下沿：头部高度由内容决定，重绘与视口变化后同步。 */
+  /** 轮次带吸顶位置贴 session-head 下沿：头部高度由内容决定，重绘与视口变化后同步。
+   *  头与带的实际高度同时写进 --head-h / --band-h，滚动定位的 scroll-margin 随之走。 */
   function syncBandTop() {
     const band = document.getElementById('turn-band');
     const head = /** @type {HTMLElement | null} */ (document.querySelector('.session-head'));
+    if (head !== null) {
+      document.documentElement.style.setProperty('--head-h', `${head.offsetHeight}px`);
+    }
     if (band === null || head === null) return;
     band.style.top = `${head.offsetHeight}px`;
+    document.documentElement.style.setProperty('--band-h', `${band.offsetHeight}px`);
   }
 
   /**
@@ -1896,6 +1900,8 @@ if (typeof document !== 'undefined') {
     if (!(t instanceof HTMLDetailsElement)) return;
     const key = t.dataset.fold;
     if (key !== undefined) folds.set(key, t.open);
+    // 会话头里的清单开合改变头部高度：轮次带吸顶位置与滚动让位随后同步。
+    if (t.closest('.session-head') !== null) syncBandTop();
     if (!t.open) return;
     if (t.dataset.structureFold !== undefined) {
       const id = Number(t.dataset.structureFold);

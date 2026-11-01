@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * 会话头与汇总折叠区的纯展示：会话行、窗口、汇总快照、展开状态与定位提示
+ * 会话头与双列分组的纯展示：会话行、窗口、汇总快照、分组显隐与定位提示
  * 都是显式入参，不读 store、不发网络请求；汇总条目列表的网络与状态更新在
  * 控制器，这里只画。
  * @typedef {import('../src/queries/projection').RequestRow} RequestRow
@@ -73,32 +73,156 @@ function timingSummary(rows) {
   };
 }
 
-/** 会话合计行：token、费用与缓存命中是会话口径；覆盖缺口进悬停。 @param {SessionSummary} s */
-export function sessionTotalsHtml(s) {
-  const t = s.totals;
-  if (t.in_tok === null && t.out_tok === null && t.cost === null) return '';
-  const parts = [`会话合计 <span class="num">${kk(t.in_tok)}</span> 提示 · <span class="num">${kk(t.out_tok)}</span> 输出`];
-  if (t.cost !== null) parts.push(`$<span class="num">${t.cost.toFixed(4)}</span>`);
-  if (t.cache_hit !== null) parts.push(`缓存命中 <span class="num">${Math.round(t.cache_hit * 100)}%</span>`);
-  const title = [
-    t.cost_absent > 0 ? `${t.cost_absent} 笔未取得费用` : null,
-    '缓存命中＝Σcache_read ÷ Σ(in_tok + cache_read)，只计两个读数都在的请求',
-    t.cache_hit === null ? '本次没有可用分母，不给数' : null,
-  ].filter(Boolean).join('；');
-  return `<span class="sum" title="${esc(title)}">${parts.join(' · ')}</span>`;
+/** 分组图标：每组一枚 14px 线性图形，颜色随文字；名称承担含义，图标只帮助定位。 */
+const GROUP_ICONS = {
+  resource: '<ellipse cx="12" cy="5" rx="7" ry="3"/><path d="M5 5v6c0 4 14 4 14 0V5M5 11v6c0 4 14 4 14 0v-6"/>',
+  structure: '<path d="M6 4v16M6 8h9a3 3 0 0 1 3 3v9"/><circle cx="6" cy="4" r="2"/><circle cx="6" cy="20" r="2"/><circle cx="18" cy="20" r="2"/>',
+  performance: '<circle cx="12" cy="13" r="8"/><path d="M9 2h6M12 5V2M12 13l3-4"/>',
+  tools: '<path d="M14 5a6 6 0 0 0-7 8L3 17a3 3 0 0 0 4 4l5-5a6 6 0 0 0 7-8l-4 4-3-3 4-4Z"/>',
+  skills: '<path d="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z"/>',
+  write: '<path d="m4 16 11-11 4 4L8 20H4v-4ZM13 7l4 4"/>',
+  read: '<path d="M12 6C9 4 5 4 2 5v14c3-1 7-1 10 1 3-2 7-2 10-1V5c-3-1-7-1-10 1v14"/>',
+};
+
+/** @typedef {{kind: keyof typeof GROUP_ICONS, label: string, desc: string, data: string}} GroupCue */
+/**
+ * 分组标题：图标加短标签。统计范围、口径与覆盖缺口放在 data-desc 里，
+ * 悬停与键盘聚焦（tabindex）都能看到；常驻正文不写解释句。
+ * @param {keyof typeof GROUP_ICONS} kind @param {string} label @param {string} desc
+ */
+function groupHead(kind, label, desc) {
+  return `<div class="cue" tabindex="0" data-desc="${esc(desc)}" aria-label="${esc(`${label}：${desc}`)}">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${GROUP_ICONS[kind]}</svg>
+    <strong>${esc(label)}</strong>
+  </div>`;
 }
 
-/** 折叠区收起行的覆盖度悬停：缺口如实列出，不计入失败。 @param {SessionSummary} s */
-export function coverageHoverText(s) {
-  const c = s.coverage;
-  const parts = [`调用 ${c.calls_total} 次：已配对 ${c.calls_paired}，失败位已知 ${c.calls_error_known}，参数事实已知 ${c.calls_fact_known}`];
-  if (c.calls_total - c.calls_fact_known > 0) {
-    parts.push(`${c.calls_total - c.calls_fact_known} 次调用的参数与失败位从未提取（正文已回收或派生先于本列），路径与 Skill 明细不含它们`);
+/** @param {keyof typeof GROUP_ICONS} kind @param {string} label @param {string} desc @param {string} data */
+function cueRow(kind, label, desc, data) {
+  return `<section class="cue-row">${groupHead(kind, label, desc)}<div class="cue-data">${data}</div></section>`;
+}
+
+/**
+ * 资源组：就绪快照给会话口径；未就绪回退已加载窗口相加并可见标明范围，
+ * 不能只在悬停里更换统计口径。没有可用读数时整组不渲染。
+ * @param {SessionSummary | null} s @param {'idle' | 'loading' | 'ready' | 'absent'} status @param {RequestRow[]} rows
+  * @returns {GroupCue | null}
+ */
+function resourceGroup(s, status, rows) {
+  if (s !== null) {
+    const t = s.totals;
+    if (t.in_tok === null && t.out_tok === null && t.cost === null) return null;
+    const desc = [
+      '整个会话的读数，含旁路与子代理',
+      t.cost_absent !== null && t.cost_absent > 0 ? `${t.cost_absent} 笔未取得费用` : null,
+      '缓存命中＝Σcache_read ÷ Σ(in_tok + cache_read)，只计两个读数都在的请求',
+      t.cache_hit === null ? '本次没有可用分母，不给数' : null,
+    ].filter(Boolean).join('；');
+    const data = [
+      t.in_tok !== null ? `<span>提示 <b>${kk(t.in_tok)}</b></span>` : '',
+      t.out_tok !== null ? `<span>输出 <b>${kk(t.out_tok)}</b></span>` : '',
+      t.cost !== null ? `<span>费用 <b>$${t.cost.toFixed(4)}</b></span>` : '',
+      t.cache_hit !== null ? `<span>缓存命中 <b>${Math.round(t.cache_hit * 100)}%</b></span>` : '',
+    ].filter(Boolean).join('');
+    return { kind: 'resource', label: '资源', desc, data };
   }
-  if (s.interrupts.unknown > 0) {
-    parts.push(`${s.interrupts.unknown} 笔请求的中断判定缺失`);
-  }
-  return parts.join('；');
+  const hasUsage = rows.some(r => r.in_tok !== null || r.out_tok !== null);
+  if (!hasUsage) return null;
+  const totalIn = rows.reduce((a, r) => a + (r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0), 0);
+  const totalOut = rows.reduce((a, r) => a + (r.out_tok ?? 0), 0);
+  const priced = rows.filter(r => r.cost_state === 'priced' || r.cost_state === 'zero');
+  const totalCost = priced.reduce((a, r) => a + (r.cost ?? 0), 0);
+  const desc = [
+    status === 'absent' ? '汇总快照不可用（端点缺失或读取失败）' : '汇总快照读取中',
+    '这是已加载窗口的相加，不是会话口径',
+    priced.length < rows.length ? `${rows.length - priced.length} 笔未取得费用` : null,
+  ].filter(Boolean).join('；');
+  const data = [
+    `<span>提示 <b>${kk(totalIn)}</b></span>`,
+    `<span>输出 <b>${kk(totalOut)}</b></span>`,
+    `<span>费用 <b>$${totalCost.toFixed(4)}</b></span>`,
+    '<span class="scope-tag">已加载窗口</span>',
+  ].join('');
+  return { kind: 'resource', label: '资源', desc, data };
+}
+
+/**
+ * 结构组：主链/旁路与峰值常驻，子代理、重试与多模型足迹非零才出现。
+ * @param {SessionSummary} s
+  * @returns {GroupCue | null}
+ */
+function structureGroup(s) {
+  const st = s.structure;
+  const data = [
+    st.main !== null ? `<span>主链 <b>${st.main}</b> · 旁路 <b>${st.bypass}</b></span>` : '',
+    st.context_peak_pct !== null ? `<span>上下文峰值 <b>${st.context_peak_pct}%</b></span>` : '',
+    st.subagent_actors > 0 ? `<span>子代理 <b>${st.subagent_actors}</b> 个 · <b>${st.subagent_requests}</b> 笔</span>` : '',
+    st.retries !== null && st.retries > 0 ? `<span>重试 <b>${st.retries}</b> 笔</span>` : '',
+    st.models.length > 1 ? `<span>模型 <b>${st.models.length}</b></span>` : '',
+  ].filter(Boolean).join('');
+  if (data === '') return null;
+  const desc = [
+    '整个会话',
+    '旁路＝分类器与标题生成等排除请求',
+    st.context_peak_pct !== null ? '上下文峰值＝max(prompt_tokens ÷ prompt_window)' : '上下文峰值没有可用分母，不给数',
+    st.models.length > 1 ? `模型＝${st.models.map(m => `${m.name} ×${m.count}`).join(' · ')}` : null,
+  ].filter(Boolean).join('；');
+  return { kind: 'structure', label: '结构', desc, data };
+}
+
+/** 性能组的计时读数；口径是当前已加载窗口。 @param {RequestRow[]} rows */
+function performanceData(rows) {
+  const timing = timingSummary(rows);
+  return [
+    timing.median !== null ? `<span>首字 p50 <b>${secs(timing.median)}</b></span>` : '',
+    timing.average !== null ? `<span>平均时长 <b>${secs(timing.average)}</b></span>` : '',
+    timing.speed !== null ? `<span>输出 <b>${timing.speed} tok/s</b></span>` : '',
+  ].filter(Boolean).join('');
+}
+
+/** 工具组：各工具 chip 沿用身份色，失败数只在非零时出现，0 次中断不占位。
+ *  调用总数与覆盖情况（未配对、未判定、中断判定缺失）进标题的按需说明。
+ *  @param {SessionSummary} s  * @returns {GroupCue | null}
+ */
+function toolsGroup(s) {
+  const chips = s.tools.map(t => {
+    const warn = t.errors > 0 ? `<span class="err">${t.errors} 失败</span>` : '';
+    const unknown = t.count - t.error_known;
+    const title = [
+      `点击定位 ${t.name} 的 ${t.count} 次调用`,
+      t.count - t.paired > 0 ? `${t.count - t.paired} 次未配对` : null,
+      unknown > 0 ? `${unknown} 次结果未判定（不计入失败）` : null,
+    ].filter(Boolean).join(' · ');
+    return `<button class="tool-chip ${toolTint(t.name)}" data-summary-tool="${esc(t.name)}" title="${esc(title)}"><span>${esc(t.name)}</span><span class="n">${t.count}</span>${warn}</button>`;
+  }).join('');
+  const failures = s.tools.reduce((a, t) => a + t.errors, 0);
+  const data = [
+    chips,
+    failures > 0 ? `<button class="warn-n" data-summary-failures="1" title="点击定位这 ${failures} 次失败调用">⚠ ${failures} 失败</button>` : '',
+    s.interrupts.count > 0 ? `<span class="interrupt">已识别用户中断 <b>${s.interrupts.count}</b></span>` : '',
+  ].filter(Boolean).join('');
+  if (data === '') return null;
+  return { kind: 'tools', label: '工具', desc: `整个会话：${coverageHoverText(s)}`, data };
+}
+
+/** Skill 组：黄色系 chip，前三加二级展开；没有显式调用整组不渲染。
+ *  @param {SessionSummary} s  * @returns {GroupCue | null}
+ */
+function skillsGroup(s) {
+  if (s.skills.length === 0) return null;
+  const chip = (/** @type {{name: string, count: number}} */ k) =>
+    `<button class="tool-chip tint-skill" data-summary-skill="${esc(k.name)}" title="点击定位该 Skill 的 ${k.count} 次调用"><span>${esc(k.name)}</span><span class="n">${k.count}</span></button>`;
+  const head = s.skills.slice(0, 3).map(chip).join('');
+  const rest = s.skills.slice(3);
+  const more = rest.length > 0
+    ? `<details class="path-more s"><summary title="显式 Skill 调用共 ${s.skills.length} 个">+${rest.length}</summary>
+        <div class="more-body">${rest.map(chip).join('')}</div></details>`
+    : '';
+  return {
+    kind: 'skills', label: 'Skill',
+    desc: `显式调用限定：共 ${s.skills.length} 个显式 Skill 调用；技能经 system 声明进入上下文而未发生 Skill 调用时不计`,
+    data: head + more,
+  };
 }
 
 /** @param {string} path @param {string[]} all 同组全部路径：同名 basename 并列时补上一段。 */
@@ -111,98 +235,45 @@ export function pathLabel(path, all) {
   return base;
 }
 
-/** 工具 chip 行：失败数只在非零时出现；未判定与覆盖缺口进悬停。 @param {SessionSummary} s */
-export function summaryToolChips(s) {
-  if (s.tools.length === 0) return '';
-  const chips = s.tools.map(t => {
-    const warn = t.errors > 0 ? `<span class="err">${t.errors} 失败</span>` : '';
-    const unknown = t.count - t.error_known;
-    const title = [
-      `点击定位 ${t.name} 的 ${t.count} 次调用`,
-      t.count - t.paired > 0 ? `${t.count - t.paired} 次未配对` : null,
-      unknown > 0 ? `${unknown} 次结果未判定（不计入失败）` : null,
-    ].filter(Boolean).join(' · ');
-    return `<button class="tool-chip ${toolTint(t.name)}" data-summary-tool="${esc(t.name)}" title="${esc(title)}"><span>${esc(t.name)}</span><span class="n">${t.count}</span>${warn}</button>`;
-  }).join('');
-  return `<div class="tool-row">${chips}</div>`;
-}
-
-/** 涉及路径：单行流式双色 chip，写入=橙、读取=蓝，各前三加同色 +N 展开。 @param {SessionSummary} s */
-export function summaryPathFlow(s) {
-  const written = s.paths.written;
-  const read = s.paths.read;
-  if (written.length === 0 && read.length === 0) return '';
-  const writtenNames = written.map(p => p.path);
-  const readNames = read.map(p => p.path);
-  const chip = (/** @type {{path: string, count: number}} */ p, /** @type {'w' | 'r'} */ side) => {
-    const label = side === 'w' ? '写入尝试' : '读取请求';
-    const names = side === 'w' ? writtenNames : readNames;
-    return `<button class="path-chip ${side}" data-summary-path="${esc(p.path)}" data-summary-side="${side}"
+/**
+ * 写入尝试 / 读取请求组：完整原值进悬停与定位，前三加 +N 展开；
+ * 计数是发出的调用，不表示执行或产物成功。
+ * @param {{path: string, count: number}[]} list @param {'w' | 'r'} side
+  * @returns {GroupCue | null}
+ */
+function pathGroup(list, side) {
+  if (list.length === 0) return null;
+  const label = side === 'w' ? '写入尝试' : '读取请求';
+  const names = list.map(p => p.path);
+  const chip = (/** @type {{path: string, count: number}} */ p) =>
+    `<button class="path-chip ${side}" data-summary-path="${esc(p.path)}" data-summary-side="${side}"
       title="${esc(p.path)} · ${label} ${p.count} 次"><span>${esc(pathLabel(p.path, names))}</span><span class="c">${p.count}</span></button>`;
-  };
-  const group = (/** @type {{path: string, count: number}[]} */ list, /** @type {'w' | 'r'} */ side) => {
-    const head = list.slice(0, 3).map(p => chip(p, side)).join('');
-    if (list.length <= 3) return head;
-    const label = side === 'w' ? '写入尝试' : '读取请求';
-    return `${head}<details class="path-more ${side}"><summary title="${label}共 ${list.length} 条路径">+${list.length - 3}</summary>
-      <div class="more-body">${list.slice(3).map(p => chip(p, side)).join('')}</div></details>`;
-  };
-  const sep = written.length > 0 && read.length > 0 ? '<i class="flow-sep"></i>' : '';
-  return `<div class="path-flow">${group(written, 'w')}${sep}${group(read, 'r')}</div>`;
-}
-
-/** 显式 Skill 调用：黄色系 chip，前三加二级展开；没有调用整区不渲染。 @param {SessionSummary} s */
-export function summarySkills(s) {
-  if (s.skills.length === 0) return '';
-  const chip = (/** @type {{name: string, count: number}} */ k) =>
-    `<button class="tool-chip tint-skill" data-summary-skill="${esc(k.name)}" title="点击定位该 Skill 的 ${k.count} 次调用"><span>${esc(k.name)}</span><span class="n">${k.count}</span></button>`;
-  const head = s.skills.slice(0, 3).map(chip).join('');
-  const rest = s.skills.slice(3);
-  const more = rest.length > 0
-    ? `<details class="path-more s"><summary title="显式 Skill 调用共 ${s.skills.length} 个">+${rest.length}</summary>
-        <div class="more-body">${rest.map(chip).join('')}</div></details>`
+  const head = list.slice(0, 3).map(chip).join('');
+  const more = list.length > 3
+    ? `<details class="path-more ${side}"><summary title="${label}共 ${list.length} 条路径">+${list.length - 3}</summary>
+      <div class="more-body">${list.slice(3).map(chip).join('')}</div></details>`
     : '';
-  return `<div class="sum-skills">${head}${more}</div>`;
+  return {
+    kind: side === 'w' ? 'write' : 'read', label,
+    desc: `${label}共 ${list.length} 条路径；按调用参数的原始值分组，发出的调用不表示执行或产物成功`,
+    data: head + more,
+  };
 }
 
-/** 结构行：主链/旁路与峰值常驻，子代理、重试与多模型足迹非零才出现。 @param {SessionSummary} s */
-export function summaryStructure(s) {
-  const st = s.structure;
-  const parts = [`主链 <b>${st.main}</b>`, `旁路 <b>${st.bypass}</b>`];
-  if (st.context_peak_pct !== null) parts.push(`上下文峰值 <b>${st.context_peak_pct}%</b>`);
-  if (st.subagent_actors > 0) parts.push(`子代理 <b>${st.subagent_actors}</b> 个 · <b>${st.subagent_requests}</b> 笔`);
-  if (st.retries > 0) parts.push(`重试 <b>${st.retries}</b> 笔`);
-  if (st.models.length > 1) parts.push(`模型 <b>${st.models.length}</b>`);
-  const title = [
-    '旁路＝分类器与标题生成等排除请求',
-    st.context_peak_pct !== null ? '上下文峰值＝max(prompt_tokens ÷ prompt_window)' : '上下文峰值没有可用分母，不给数',
-    st.models.length > 1 ? `模型＝${st.models.map(m => `${m.name} ×${m.count}`).join(' · ')}` : null,
-  ].filter(Boolean).join('；');
-  return `<div class="sum-structure" title="${esc(title)}">${parts.join(' · ')}</div>`;
+/** 覆盖度按需说明：缺口如实列出，不计入失败。 @param {SessionSummary} s */
+export function coverageHoverText(s) {
+  const c = s.coverage;
+  const parts = [`调用 ${c.calls_total} 次：已配对 ${c.calls_paired}，失败位已知 ${c.calls_error_known}，参数事实已知 ${c.calls_fact_known}`];
+  if (c.calls_total - c.calls_fact_known > 0) {
+    parts.push(`${c.calls_total - c.calls_fact_known} 次调用的参数与失败位从未提取（正文已回收或派生先于本列），路径与 Skill 明细不含它们`);
+  }
+  if (s.interrupts.unknown > 0) {
+    parts.push(`${s.interrupts.unknown} 笔请求的中断判定缺失`);
+  }
+  return parts.join('；');
 }
 
-/** session-head 内的汇总折叠区：收起一行核心数，展开四个分区。
- *  @param {SessionSummary | null} s @param {string | null} sessionKey @param {boolean} open 折叠区当前开合（folds 表按 `summary:<key>` 记） */
-export function sessionSummaryFold(s, sessionKey, open) {
-  if (s === null) return '';
-  const failures = s.tools.reduce((a, t) => a + t.errors, 0);
-  const writtenPaths = s.paths.written.length;
-  const readPaths = s.paths.read.length;
-  if (s.coverage.calls_total === 0 && s.interrupts.count === 0
-    && writtenPaths === 0 && readPaths === 0) return '';
-  const key = `summary:${sessionKey ?? ''}`;
-  return `<details class="rail-fold session-fold" data-fold="${esc(key)}"${open ? ' open' : ''}>
-    <summary><span class="sum-line" title="${esc(coverageHoverText(s))}"><b>${s.coverage.calls_total}</b> 次工具
-      ${failures > 0 ? `· <button class="warn-n" data-summary-failures="1" title="点击定位这 ${failures} 次失败调用">${failures} 失败</button> ` : ''}· <b>${s.interrupts.count}</b> 次中断
-      · 写入尝试 <b>${writtenPaths}</b> / 读取请求 <b>${readPaths}</b> 条路径</span></summary>
-    <div class="fold-body">
-      ${s.dirty ? '<p class="note warn">部分组的派生还没追上输入：这里是上一次完成的结果。</p>' : ''}
-      ${summaryToolChips(s)}${summaryPathFlow(s)}${summarySkills(s)}${summaryStructure(s)}
-    </div>
-  </details>`;
-}
-
-/** 默认对话时间线省略的请求：只在有省略时出现，点条目走现有的请求定位。
+/** 默认对话时间线省略的请求：入口在性能组，展开清单按需打开，点条目走请求定位。
  *  这是请求记录的入口，不是第二套导航：序号与正文状态足以认出是哪一笔。
  *  @param {RequestRow[]} rows 当前窗口全部请求 @param {RequestRow[]} hidden 被省略的请求
  *  @param {string | null} sessionKey @param {boolean} open */
@@ -214,17 +285,56 @@ export function sessionHiddenFold(rows, hidden, sessionKey, open) {
       <span class="mono">${String(ordinal).padStart(2, '0')}</span><span class="muted">· ${esc(bodyStateText(item))}</span>
     </button>`;
   });
-  return `<details class="rail-fold session-fold" data-fold="hidden:${esc(sessionKey ?? '')}"${open ? ' open' : ''}>
-    <summary><span class="sum-line"><b>${hidden.length}</b> 笔请求没有可读正文，默认不占对话时间线</span></summary>
-    <div class="fold-body">${items.join('')}</div>
+  return `<details class="hidden-more" data-fold="hidden:${esc(sessionKey ?? '')}"${open ? ' open' : ''}>
+    <summary>无正文 <b>${hidden.length}</b> 笔</summary>
+    <div class="more-body">${items.join('')}</div>
   </details>`;
 }
 
-/** 会话头：标题、身份行、窗口合计与汇总折叠区、视图操作行与定位提示。
+/**
+ * 会话头双列分组板：左资源、结构、性能，右工具、Skill、写入尝试、读取请求。
+ * 分组只在有可展示事实时出现；整列都空时不保留空列与列间分隔线。
+ * @param {SessionSummary | null} s @param {'idle' | 'loading' | 'ready' | 'absent'} status
+ * @param {RequestRow[]} rows @param {RequestRow[]} hidden
+ * @param {string | null} sessionKey @param {boolean} hiddenFoldOpen
+ */
+function sessionBoard(s, status, rows, hidden, sessionKey, hiddenFoldOpen) {
+  const left = [];
+  const right = [];
+  const resource = resourceGroup(s, status, rows);
+  if (resource !== null) left.push(cueRow(resource.kind, resource.label, resource.desc, resource.data));
+  if (s !== null) {
+    const structure = structureGroup(s);
+    if (structure !== null) left.push(cueRow(structure.kind, structure.label, structure.desc, structure.data));
+  }
+  const perf = performanceData(rows);
+  const hiddenEntry = sessionHiddenFold(rows, hidden, sessionKey, hiddenFoldOpen);
+  if (perf !== '' || hiddenEntry !== '') {
+    left.push(cueRow('performance', '性能', '只统计当前已加载窗口，未加载页不进计时', perf + hiddenEntry));
+  }
+  if (s !== null) {
+    const tools = toolsGroup(s);
+    if (tools !== null) right.push(cueRow(tools.kind, tools.label, tools.desc, tools.data));
+    const skills = skillsGroup(s);
+    if (skills !== null) right.push(cueRow(skills.kind, skills.label, skills.desc, skills.data));
+    const written = pathGroup(s.paths.written, 'w');
+    if (written !== null) right.push(cueRow(written.kind, written.label, written.desc, written.data));
+    const read = pathGroup(s.paths.read, 'r');
+    if (read !== null) right.push(cueRow(read.kind, read.label, read.desc, read.data));
+  }
+  if (left.length === 0 && right.length === 0) return '';
+  const solo = left.length === 0 || right.length === 0 ? ' solo' : '';
+  return `<div class="cue-board${solo}">
+    ${left.length > 0 ? `<div class="cue-account">${left.join('')}</div>` : ''}
+    ${right.length > 0 ? `<div class="cue-activity">${right.join('')}</div>` : ''}
+  </div>`;
+}
+
+/** 会话头：标题行、身份行、双列分组板与定位提示。
  *  @param {{sessionKey: string | null, row: SessionRow | null, rows: RequestRow[], refreshedAt: number | null,
  *    missingReqId: number | null, offPageReqId: number | null, windowError: string | null,
  *    summary: SessionSummary | null, summaryStatus?: 'idle' | 'loading' | 'ready' | 'absent',
- *    summaryFoldOpen: boolean, hiddenRows?: RequestRow[], hiddenFoldOpen?: boolean,
+ *    hiddenRows?: RequestRow[], hiddenFoldOpen?: boolean,
  *    windowAnchor: 'start' | 'latest'}} input */
 export function sessionHead(input) {
   const {
@@ -235,44 +345,26 @@ export function sessionHead(input) {
   const unknown = sessionKey !== null && row === null;
   const first = rows[0] ?? null;
   const latest = rows[rows.length - 1] ?? null;
-  // 窗口口径合计只在汇总快照未就绪时兜底：ready 后由会话合计顶替。
-  const totalIn = rows.reduce((a, r) => a + (r.in_tok ?? 0) + (r.cache_read ?? 0) + (r.cache_write ?? 0), 0);
-  const totalOut = rows.reduce((a, r) => a + (r.out_tok ?? 0), 0);
-  const priced = rows.filter(r => r.cost_state === 'priced' || r.cost_state === 'zero');
-  const totalCost = priced.reduce((a, r) => a + (r.cost ?? 0), 0);
-  const hasUsage = rows.some(r => r.in_tok !== null || r.out_tok !== null);
-  const timing = timingSummary(rows);
-  const timingParts = [
-    timing.median !== null ? `首字 p50 ${secs(timing.median)}` : null,
-    timing.average !== null ? `平均时长 ${secs(timing.average)}` : null,
-    timing.speed !== null ? `输出 ${timing.speed} tok/s` : null,
-  ].filter(Boolean);
   return `<header class="session-head">
-    <h1>${esc(row ? row.title || '（无标题）' : unknown ? '这个会话不在已加载列表里' : '未选择会话')}</h1>
+    <div class="head-top">
+      <h1>${esc(row ? row.title || '（无标题）' : unknown ? '这个会话不在已加载列表里' : '未选择会话')}</h1>
+      <div class="head-actions">
+        ${refreshedAt !== null ? `<span class="muted">刷新于 ${esc(clock(refreshedAt))}</span>` : ''}
+        <button class="chip-btn" id="refresh-window" title="重新读取当前窗口；输入变化会换发阅读版本">刷新</button>
+        ${windowAnchor === 'latest'
+          ? '<button class="chip-btn" id="jump-opposite" title="重建为会话最早一页，从头阅读">回到开头 ↑</button>'
+          : '<button class="chip-btn" id="jump-opposite" title="重建为会话最新一页，选中最新一笔">回到最新 ↓</button>'}
+      </div>
+    </div>
     <div class="session-facts">
       ${row && row.agents.length > 0 ? row.agents.map((/** @type {string} */ a) => `<span><b title="${esc(a)}">${esc(agentLabel(a))}</b></span>`).join('') : '<span class="muted">归属未知</span>'}
       <span class="mono" title="${esc(sessionKey ?? '')}">${esc(sessionKey === null ? '' : sessionKeyLabel(sessionKey))}</span>
       ${sessionKey !== null ? '<button class="fact-copy" id="copy-session" aria-label="复制当前会话 ID" title="复制当前会话 ID">⧉</button>' : ''}
       <span>已加载 <b>${rows.length}</b> 笔 Request</span>
       ${first && latest ? `<span>${esc(dayTime(first.started_ms))}–${esc(clock(latest.started_ms))}</span>` : ''}
-      ${timingParts.length > 0 ? `<span class="sum">${timingParts.join(' · ')}</span>` : ''}
-      ${summary !== null ? sessionTotalsHtml(summary)
-      : summaryStatus === 'loading'
-        ? '<span class="sum muted">汇总快照读取中…</span>'
-        : hasUsage
-          ? `<span class="sum" title="汇总快照不可用；这是已加载窗口的相加，不是会话口径">已加载相加：${kk(totalIn)} 提示 · ${kk(totalOut)} 输出 · $${totalCost.toFixed(4)}${priced.length < rows.length ? ` · ${rows.length - priced.length} 笔未取得费用` : ''}</span>`
-          : '<span class="sum muted">这批记录没有报告的用量，合计为空</span>'}
     </div>
-    ${sessionSummaryFold(summary, sessionKey, input.summaryFoldOpen)}
-    ${sessionHiddenFold(rows, hidden, sessionKey, input.hiddenFoldOpen === true)}
-    <div class="view-row">
-      <span class="grow"></span>
-      ${refreshedAt !== null ? `<span class="muted" style="font-size:10.5px">刷新于 ${esc(clock(refreshedAt))}</span>` : ''}
-      <button class="chip-btn" id="refresh-window" title="重新读取当前窗口；输入变化会换发阅读版本">刷新</button>
-      ${windowAnchor === 'latest'
-        ? '<button class="chip-btn" id="jump-opposite" title="重建为会话最早一页，从头阅读">回到开头 ↑</button>'
-        : '<button class="chip-btn" id="jump-opposite" title="重建为会话最新一页，选中最新一笔">回到最新 ↓</button>'}
-    </div>
+    ${summary !== null && summary.dirty ? '<div class="session-note warn"><span>部分组的派生还没追上输入：这里是上一次完成的结果。</span></div>' : ''}
+    ${sessionBoard(summary, summaryStatus, rows, hidden, sessionKey, input.hiddenFoldOpen === true)}
     ${unknown ? `<div class="session-note warn"><span>↳</span><span>链接里的会话 key 不在已加载的会话里：可能是已淘汰、从未记录，或者还在后面的会话页。下面没有用别的会话顶替。</span></div>` : ''}
     ${missingReqId !== null ? `<div class="session-note warn"><span>↳</span><span>链接里的 Request ${missingReqId} 在当前库里不存在，也没有别名指向它。下面显示的是本会话的请求，不是那一笔。</span></div>` : ''}
     ${offPageReqId !== null ? `<div class="session-note"><span>↳</span><span>链接里的 Request ${offPageReqId} 存在，但不在当前载入窗口，右栏已显示它的详情。不自动扫描全部历史。<button class="chip-btn" id="switch-window">${windowAnchor === 'latest' ? '回到开头窗口' : '切到最新窗口'}</button></span></div>` : ''}
