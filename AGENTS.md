@@ -24,6 +24,7 @@ bun run verify:notes   # 提交前
 ## 常备约定
 
 - **非平凡变更必须在同一提交里带至少一篇 Agent Note**，判据见 [Agent Note 规则](.agents/notes/README.md)；纯机械或局部编辑豁免，bug-fix note 可以写短。
+- **落地实现代码先加载 `ponytail` Skill**：写、修、重构代码的任务动笔前先加载，按最小完整改动解决问题；纯文档改动不在此列。
 - **落地方案走 worktree 分支。** 跨文件或需多步验证的实现，在 `../../.codex-worktrees/atc-<topic>` 建 `feat/`|`fix/` 分支，提交只落分支，`master` 只以 `--no-ff` 合并前进，合并后移除 worktree 目录、分支名保留；文档与单文件修正留在主检出。见[实现走 worktree](.agents/notes/implemented/process/2026-10-28-implementation-worktree.md)。
 - **报告忠实**：不把重试、跳过、未执行描述为通过；合成数据验收与真实流量验收分开写。
 - 测试只用合成数据；真实请求正文、账号、令牌与用户配置不进 fixture、日志或提交。
