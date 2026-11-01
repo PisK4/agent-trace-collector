@@ -653,10 +653,21 @@ pre.raw{
 /* 工具四页：概览/参数/结果/Schema 与返回按钮。 */
 .tool-page-head{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
 .tool-page-head .mono{font-size:11px;color:var(--text-2);overflow-wrap:anywhere}
-.tool-page-tabs{display:flex;gap:4px;margin:8px 0}
-.tool-page-tabs button{font-size:10.5px;padding:3px 9px;border-radius:4px;border:1px solid var(--line);color:var(--muted);background:var(--surface)}
-.tool-page-tabs button[aria-pressed="true"]{color:var(--accent);border-color:var(--accent);font-weight:550}
+.tool-page-head .cnt{margin-left:auto;font-size:10.5px;color:var(--muted);white-space:nowrap;flex:none}
+/* 子页签与筛选同套分段控件：inset 槽承载，选中段 surface 浮起。 */
+.tool-page-tabs{display:inline-flex;gap:2px;padding:2px;border-radius:7px;background:var(--inset);margin:8px 0}
+.tool-page-tabs button{font-size:10.5px;padding:3px 9px;border-radius:5px;border:0;color:var(--muted);background:transparent}
+.tool-page-tabs button[aria-pressed="true"]{color:var(--text);background:var(--surface);box-shadow:var(--shadow);font-weight:500}
 .tool-page-tabs button:hover{color:var(--text)}
+/* 汇总条目列表：行内调用序号加右侧 mono 弱化来源；窗口外的行整行弱一档。 */
+.tool-row .call{font:10.5px var(--mono);color:var(--text-2)}
+.tool-row .muted.mono{margin-left:auto;font-size:10px;color:var(--muted)}
+.tool-row.dim{opacity:.55}
+/* 配对页两段的角色标：粗体角色词加 mono 弱化来源；中间弱化连接语交代因果。 */
+.frole{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+.frole b{font-size:11px;font-weight:600;color:var(--text);flex:none}
+.frole span{font:10px var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.pair-arrow{font-size:10.5px;color:var(--muted);padding:2px 0 6px}
 button.tool-link{background:none;border:0;cursor:pointer}
 button.tool-link:hover{background:var(--hover);border-radius:4px}
 .schema-item{margin:8px 0}

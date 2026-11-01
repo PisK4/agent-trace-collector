@@ -116,16 +116,12 @@ export function renderTracePair(input) {
     loadAbnormal ? `正文加载 ${esc(loadStateText(loadState, reading?.reason ?? null))}` : '',
   ].filter(Boolean).join(' · ');
   const status = statusBits === '' ? '' : `<div class="bp-meta">${statusBits}</div>`;
-  const callName = input.call.name || '未命名工具';
   const compare = editCompareHtml(input.call.name, input.call.inputText, `edit:${input.owner}:${input.call.ord}`);
   const callBody = compare !== null ? compare
     : `<pre class="raw" tabindex="0">${esc(prettyJson(input.call.inputText))}</pre>`;
+  // 工具名只在页头出现一次：两段头部是角色标加来源（mono 弱化），不再重复名字。
   const callPanel = `<div class="body-panel">
-    <div class="bp-head">
-      <span class="kind tool bp-kind">${esc(callName)}</span>
-      <span class="bp-path">${esc(input.call.path ?? 'reply')}</span>
-    </div>
-    <div class="bp-meta"><span>请求 ${esc(input.ownerLabel)} · 调用 #${input.call.ord}</span></div>
+    <div class="frole"><b>调用</b><span>${esc(input.call.path ?? 'reply')} · 请求 ${esc(input.ownerLabel)} · 调用 #${input.call.ord}</span></div>
     ${callBody}
   </div>`;
   /** @type {string} */
@@ -172,12 +168,10 @@ export function renderTracePair(input) {
   const errorTint = reading !== null && reading.state === 'available' && reading.is_error === true
     ? ' pair-error' : '';
   const resultPanel = `<div class="body-panel${errorTint}">
-    <div class="bp-head">
-      <span class="kind tool bp-kind">${esc(resolved ? callName : 'Tool result')}</span>
-      <span class="bp-path">${esc(resultPath ?? '未定位')}</span>
-    </div>
-    ${metaBits !== '' ? `<div class="bp-meta">${metaBits}</div>` : ''}
+    <div class="frole"><b>结果</b><span>${esc(resultPath ?? '未定位')}${metaBits !== '' ? ` · ${metaBits}` : ''}</span></div>
     ${resultBody}
   </div>`;
-  return `${status}${callPanel}${resultPanel}`;
+  // 弱化连接语只交代已确认配对的因果；未配对与待定的状态由顶部 status 行说明。
+  const arrow = resolved && carrier !== null ? '<div class="pair-arrow">下一条请求带回结果</div>' : '';
+  return `${status}${callPanel}${arrow}${resultPanel}`;
 }

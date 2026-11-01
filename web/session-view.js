@@ -345,7 +345,15 @@ export function sessionHead(input) {
  *  @param {{kind: string, param: string, label: string, loading: boolean, error: string | null,
  *    data: import('../src/queries/session-summary').SummaryEntries | null} | null} list
  *  @param {(id: number) => string} labelOf 请求的窗口内序号标签 */
-export function railSummaryListHtml(list, labelOf) {
+/**
+ * 汇总条目列表：页题左侧返回钮与名称，右侧计数与失败数（mono，失败红字）；
+ * 行内是调用序号，工具名与参数摘要在配对页，不再逐行重复 chip。
+ * 窗口外的行整行弱一档。labelOf 返回 {text, dim}，dim 即窗口外。
+ * @param {{label: string, loading: boolean, error: string | null, data: import('../src/queries/session-summary').SummaryEntries | null, truncated?: boolean} | null} list
+ * @param {(id: number) => {text: string, dim: boolean}} labelOf
+ * @param {{count: number | null, errors: number}} [meta]
+ */
+export function railSummaryListHtml(list, labelOf, meta = { count: null, errors: 0 }) {
   if (list === null) return '';
   let body;
   if (list.loading) {
@@ -353,28 +361,34 @@ export function railSummaryListHtml(list, labelOf) {
   } else if (list.error !== null) {
     body = `<p class="note warn">读取失败：${esc(list.error)}。重新点击条目可重试。</p>`;
   } else if (list.data !== null && 'requests' in list.data) {
-    const rows = list.data.requests.map(item =>
-      `<button class="tool-row tool-link" data-summary-req="${item.req_id}">
-        <span>${esc(labelOf(item.req_id))}</span><span class="muted">· ${item.count} 次中断</span>
-      </button>`);
+    const rows = list.data.requests.map(item => {
+      const label = labelOf(item.req_id);
+      return `<button class="tool-row tool-link${label.dim ? ' dim' : ''}" data-summary-req="${item.req_id}">
+        <span>${esc(label.text)}</span><span class="muted mono">· ${item.count} 次中断</span>
+      </button>`;
+    });
     body = rows.length > 0 ? rows.join('') : '<p class="note">没有支撑记录。</p>';
   } else if (list.data !== null && 'items' in list.data) {
     const rows = list.data.items.map(item => {
       const warn = item.state !== 'resolved'
         ? `<span class="tool-chip miss"><span>${esc(pairStateText(item.state))}</span></span>` : '';
-      return `<button class="tool-row tool-link" data-summary-pair="1" data-owner="${item.req_id}" data-ord="${item.ord}">
-        <span class="tool-chip call" title="${esc(item.tool_name ?? '')}"><span>${esc(item.tool_name ?? 'unknown')} · 调用 #${item.ord}</span></span>
-        <span class="muted">${esc(labelOf(item.req_id))}</span>${warn}
+      const label = labelOf(item.req_id);
+      return `<button class="tool-row tool-link${label.dim ? ' dim' : ''}" data-summary-pair="1" data-owner="${item.req_id}" data-ord="${item.ord}">
+        <span class="call">调用 #${item.ord}</span>
+        <span class="muted mono">${esc(label.text)}</span>${warn}
       </button>`;
     });
     body = rows.length > 0 ? rows.join('') : '<p class="note">没有支撑记录。</p>';
   } else {
     body = '<p class="note">没有支撑记录。</p>';
   }
+  const count = meta.count !== null ? `${meta.count} 次` : '';
+  const errors = meta.errors > 0 ? `${count === '' ? '' : ' · '}${meta.errors} 次失败` : '';
   return `<section class="rail-section">
     <div class="tool-page-head">
       <button class="chip-btn" data-summary-back="1">← 返回会话</button>
       <span class="mono">${esc(list.label)}</span>
+      ${count !== '' || errors !== '' ? `<span class="cnt mono">${esc(`${count}${errors}`)}</span>` : ''}
     </div>
     ${body}
     ${list.data !== null && 'items' in list.data && list.data.truncated

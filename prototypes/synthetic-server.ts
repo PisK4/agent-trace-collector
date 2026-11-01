@@ -15,7 +15,7 @@ import type { TurnPairRow } from '../src/queries/turns';
 import type { ReadingDetail } from '../src/reading';
 import { WEB_HEADERS, serveWeb } from './static-web';
 
-const port = 8771;
+const port = 8770;
 const convKey = 'conv-synthetic-reading';
 const convWindow = 'conv-synthetic-window';
 const convHook = 'conv-synthetic-hook';
@@ -903,6 +903,39 @@ Bun.serve({
       // 与生产同形：未知会话 404，前端回退已加载窗口相加。
       if (!data) return json({error:'not_found'}, 404);
       return json(data);
+    }
+    const entries = /^\/api\/sessions\/([^/]+)\/summary\/entries$/.exec(url.pathname);
+    if (entries) {
+      const key = decodeURIComponent(entries[1]!);
+      const kind = url.searchParams.get('kind');
+      const name = url.searchParams.get('name');
+      const path = url.searchParams.get('path');
+      if (!SESSION_SUMMARIES.has(key)) return json({error:'not_found'}, 404);
+      if (kind === 'tool') {
+        // tool 列表从池内真实调用派生：点进配对页时 ord 与 detail 一致。
+        const pool = POOLS.find(p => p.key === key);
+        const items = (pool?.rows ?? []).flatMap(r =>
+          r.toolCalls.filter(c => c.tool_name === name).map(c => ({
+            req_id: r.id, ord: c.ord, tool_name: c.tool_name, state: c.state,
+          })));
+        return json({items, truncated: false});
+      }
+      if (kind === 'interrupts') {
+        const data = SESSION_SUMMARIES.get(key) as {interrupts: {requests: number[]}} | undefined;
+        return json({requests: (data?.interrupts.requests ?? []).map(id => ({req_id: id, count: 1}))});
+      }
+      // written/read/skill 的调用序号是手写示数：点进配对页若无对应调用会兜底回列表。
+      const STATIC_ENTRIES: Record<string, {req_id: number, ord: number, tool_name: string | null, state: string}[]> = {
+        [convKey]: [
+          {req_id: 101, ord: 1, tool_name: 'Edit', state: 'resolved'},
+          {req_id: 101, ord: 0, tool_name: 'Skill', state: 'resolved'},
+          {req_id: 104, ord: 0, tool_name: 'Skill', state: 'resolved'},
+        ],
+      };
+      if (kind === 'written' || kind === 'read' || kind === 'skill') {
+        return json({items: STATIC_ENTRIES[key] ?? [], truncated: false});
+      }
+      return json({error:'invalid_entries_query'}, 400);
     }
     const body = /^\/api\/requests\/(\d+)\/body$/.exec(url.pathname);
     if (body) {

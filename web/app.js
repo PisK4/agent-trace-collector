@@ -1063,7 +1063,38 @@ if (typeof document !== 'undefined') {
 
   function railBody() {
     // 会话汇总条目列表：会话级阅读态，优先于轮次与请求态；点击条目后清掉。
-    if (summaryList !== null) return railSummaryListView(summaryList, requestLabel);
+    // 页头计数与失败数从首页汇总的分组计数取；工具名是列表筛选依据时不再逐行重复。
+    if (summaryList !== null) {
+      const list = summaryList;
+      const summary = store.peekSummary();
+      const data = summary.status === 'ready' && summary.data !== null ? summary.data : null;
+      // 页头计数与失败数按组取自首页汇总：工具组带失败数，Skill、路径与中断组只有次数。
+      let groupCount = null;
+      let groupErrors = 0;
+      if (data !== null) {
+        if (list.kind === 'tool') {
+          const group = data.tools.find(tool => tool.name === list.param) ?? null;
+          if (group !== null) { groupCount = group.count; groupErrors = group.errors; }
+        } else if (list.kind === 'skill') {
+          const group = data.skills.find(skill => skill.name === list.param) ?? null;
+          if (group !== null) groupCount = group.count;
+        } else if (list.kind === 'read' || list.kind === 'written') {
+          const group = data.paths[list.kind].find(path => path.path === list.param) ?? null;
+          if (group !== null) groupCount = group.count;
+        } else if (list.kind === 'interrupts') {
+          groupCount = data.interrupts.count;
+        }
+      }
+      const items = list.data !== null && 'items' in list.data ? list.data.items : null;
+      const meta = {
+        count: groupCount ?? (items !== null ? items.length : null),
+        errors: groupErrors,
+      };
+      return railSummaryListView(list, id => {
+        const text = requestLabel(id);
+        return { text, dim: text.includes('（未在窗口）') };
+      }, meta);
+    }
     // 轮次态：命令组与最终回复两个面板，两端默认展开；点轨迹任意行经选择转换回请求态。
     if (state.turn !== null) {
       const turn = turnOf(state.turn);
@@ -1502,7 +1533,12 @@ if (typeof document !== 'undefined') {
    * @param {string} label
    */
   async function openSummaryList(query, label) {
-    summaryList = { kind: query.kind, param: label, label, loading: true, error: null, data: null };
+    // param 是分组键本身（工具名、路径、Skill 名），页头计数靠它与首页汇总对组；label 才是展示文案。
+    summaryList = {
+      kind: query.kind,
+      param: 'name' in query ? query.name : 'path' in query ? query.path : '',
+      label, loading: true, error: null, data: null,
+    };
     openRail();
     renderRail();
     try {
