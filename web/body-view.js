@@ -2,8 +2,7 @@
 /**
  * 正文视图：把读取模型（body-model）的归一化结果渲染成 HTML 片段。
  *
- * 这里只做字符串拼接，不碰 DOM，测试可以直接断言输出；正文一律经 html.js
- * 转义，工具身份色相（toolTint）是跨轨迹、配对页与汇总共用的展示规则。
+ * 这里只做字符串拼接，不碰 DOM，测试可以直接断言输出；正文一律经 html.js 转义。
  *
  * @typedef {import('../src/protocols').BodyPage} BodyPage
  * @typedef {import('./body-model.js').Role} Role
@@ -196,7 +195,7 @@ export function renderTools(tools) {
     const parts = summaryParts(tool.name, tool.inputText);
     const text = parts.args === '' ? parts.label : `${parts.label} · ${parts.args}`;
     return `<div class="tool-row">
-      <span class="tool-chip call ${toolTint(tool.name)}" title="${esc(clipChars(tool.inputText))}"><span>${esc(text)}</span></span>
+      <span class="tool-chip call" title="${esc(clipChars(tool.inputText))}"><span>${esc(text)}</span></span>
       ${open}${warn}
     </div>`;
   }).join('');
@@ -262,30 +261,6 @@ export function renderReplyDetail(view, tools = [], foldKey = '') {
     ${renderReply(view, tools, foldKey)}
     <p class="rail-note">工具结果不在本回复里，按 call id 指向后续请求的消息。</p>
   </div>`;
-}
-
-// —— 工具身份强调色：六个核心工具各一色相，其余统一中性 ——
-
-/**
- * 工具名 → 色类。行内 chip、面板头 bp-kind 与正文 tool-chip 共用这一套类名，
- * 颜色只承载工具身份一个语义；新工具（含 MCP）落中性色，无需改代码。
- * 小写别名是 OMP（oh-my-pi）的同族工具：read/write/edit/bash 与大写各归同色。
- * @param {string} name
- */
-export function toolTint(name) {
-  switch (name) {
-    case 'Read':
-    case 'read': return 'tint-read';
-    case 'Edit':
-    case 'edit': return 'tint-edit';
-    case 'Write':
-    case 'write': return 'tint-write';
-    case 'Bash':
-    case 'bash': return 'tint-bash';
-    case 'Skill': return 'tint-skill';
-    case 'Agent': return 'tint-agent';
-    default: return 'tint-other';
-  }
 }
 
 // —— 请求能力：工具清单与技能清单 ——

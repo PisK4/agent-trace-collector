@@ -1,6 +1,5 @@
 // @ts-check
 import { messagesKeyOfPath } from './body-model.js';
-import { toolTint } from './body-view.js';
 import { esc } from './html.js';
 
 /**
@@ -123,7 +122,7 @@ export function renderTracePair(input) {
     : `<pre class="raw" tabindex="0">${esc(prettyJson(input.call.inputText))}</pre>`;
   const callPanel = `<div class="body-panel">
     <div class="bp-head">
-      <span class="kind bp-kind ${toolTint(input.call.name)}">${esc(callName)}</span>
+      <span class="kind tool bp-kind">${esc(callName)}</span>
       <span class="bp-path">${esc(input.call.path ?? 'reply')}</span>
     </div>
     <div class="bp-meta"><span>请求 ${esc(input.ownerLabel)} · 调用 #${input.call.ord}</span></div>
@@ -168,13 +167,13 @@ export function renderTracePair(input) {
     carrier !== null ? `请求 ${esc(carrier)}` : '',
     pair !== null && pair.result_ord !== null ? `${resultKey}[${pair.result_ord}]` : '',
   ].filter(Boolean).join('<span>·</span>');
-  // 配对确认后面板头沿用 call 的工具色类；未确认保持中性。is_error=true 给整块 warn 软色。
+  // 面板头统一 tool 角色色。is_error=true 给整块 warn 软色。
   const resolved = pairState === 'resolved';
   const errorTint = reading !== null && reading.state === 'available' && reading.is_error === true
     ? ' pair-error' : '';
   const resultPanel = `<div class="body-panel${errorTint}">
     <div class="bp-head">
-      <span class="kind bp-kind ${resolved ? toolTint(input.call.name) : 'tint-other'}">${esc(resolved ? callName : 'Tool result')}</span>
+      <span class="kind tool bp-kind">${esc(resolved ? callName : 'Tool result')}</span>
       <span class="bp-path">${esc(resultPath ?? '未定位')}</span>
     </div>
     ${metaBits !== '' ? `<div class="bp-meta">${metaBits}</div>` : ''}

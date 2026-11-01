@@ -75,10 +75,10 @@ test('会话汇总配对列表的调用 chip 带工具身份色', () => {
     },
   };
   const html = railSummaryListHtml(list, id => `#${id}`);
-  // 与正文页、工具页共用同一个 toolTint 映射：颜色只承载工具身份。
-  expect(html).toContain('<span class="tool-chip call tint-bash" title="Bash">');
-  // 名字缺失时不冒充已知工具：中性色，文本照旧写 unknown。
-  expect(html).toContain('tool-chip call tint-other');
+  // 调用 chip 中性化：不再携带工具身份色类。
+  expect(html).toContain('<span class="tool-chip call" title="Bash">');
+  // 名字缺失时不冒充已知工具：文本照旧写 unknown。
+  expect(html).toContain('tool-chip call" title="">');
   expect(html).toContain('unknown · 调用 #2');
 });
 

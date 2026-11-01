@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   bodyNotice, renderCapabilities, renderMessageDetail, renderMessages, renderReply,
-  renderReplyDetail, renderTools, roleClass, roleTag, toolTint,
+  renderReplyDetail, renderTools, roleClass, roleTag,
 } from '../web/body-view.js';
 import {
   deltaOrdinals, displayRoleOf, messageCopyText, messageEntries, messagePairIndexOf, replyView, toolEntries,
@@ -355,8 +355,8 @@ test('工具卡遍历全部调用并按 ord 对齐服务端配对', () => {
   expect(html).not.toContain('<details');
   expect(html).not.toContain('工具往返');
   expect(html).not.toContain('data-fold="round:');
-  // chip 带工具身份色类，颜色由 CSS 的 .tint-* 决定。
-  expect(html).toContain('tool-chip call tint-read');
+  // chip 中性化：不带任何身份色类，颜色由 CSS 基础规则决定。
+  expect(html).toContain('<span class="tool-chip call" title=');
   // 每次调用都提供右栏内配对入口，不跳转；未确认与无结果按「没有就不显示」不出状态。
   expect(html).toContain('配对两端');
   expect(html).not.toContain('data-result-owner');

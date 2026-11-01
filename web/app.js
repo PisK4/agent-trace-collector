@@ -11,7 +11,7 @@
 import {
   bodyNotice, renderCapabilities, renderMessageDetail, renderReply,
   renderReplyBlockDetail, renderReplyDetail, renderSystemDetail, renderUnknownBlockDetail,
-  roleTag, toolTint,
+  roleTag,
 } from './body-view.js';
 import {
   deltaOrdinals, messageCopyText, messagePairIndexOf, messagePathOf, replyView, toolEntries,
@@ -1000,7 +1000,7 @@ if (typeof document !== 'undefined') {
         const warn = tool.state === 'ambiguous'
           ? '<span class="tool-chip miss"><span>多个候选</span></span>' : '';
         return `<button class="tool-row tool-link" data-tool-select="${tool.ord}">
-          <span class="tool-chip call ${toolTint(tool.name)}" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clipText(tool.inputText, 60))})</span></span>
+          <span class="tool-chip call" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clipText(tool.inputText, 60))})</span></span>
           ${warn}
         </button>`;
       });

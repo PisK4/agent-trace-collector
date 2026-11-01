@@ -1,6 +1,5 @@
 // @ts-check
 import { deltaOrdinals, messagePathOf, replyView, systemPathOf, toolCallOfBlock } from './body-model.js';
-import { toolTint } from './body-view.js';
 import { compact, secs, tierOf, TIER_LIMITS, toolCategory } from './duration.js';
 import { esc } from './html.js';
 import { bodyStateText } from './row-summary.js';
@@ -553,18 +552,18 @@ function toolRowParts(step, callOf) {
   if (step.kind === 'tool') {
     const name = step.toolName ?? '';
     const label = name !== '' ? name : '未命名工具';
-    return { chip: `<span class="row-tint ${toolTint(name)}">${esc(label)}</span>`, args: step.toolArgs ?? '', arrow: false };
+    return { chip: `<span class="row-tint">${esc(label)}</span>`, args: step.toolArgs ?? '', arrow: false };
   }
   if (step.kind === 'tool_result') {
     const owner = step.pairOwner;
     const call = owner !== null && callOf !== null ? callOf(owner.reqId, owner.callOrd) : null;
     if (call === null && (step.toolName ?? '') === '') {
-      return { chip: '<span class="row-tint tint-other">Tool result</span>', args: '', arrow: false };
+      return { chip: '<span class="row-tint">Tool result</span>', args: '', arrow: false };
     }
     const name = call !== null ? call.name : /** @type {string} */ (step.toolName);
     const label = name !== '' ? name : '未命名工具';
     const args = call !== null ? summaryParts(call.name, call.inputText).args : '';
-    return { chip: `<span class="row-tint ${toolTint(name)}">${esc(label)}</span>`, args, arrow: true };
+    return { chip: `<span class="row-tint">${esc(label)}</span>`, args, arrow: true };
   }
   return { chip: '', args: '', arrow: false };
 }

@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test';
-import { toolTint } from '../web/body-view.js';
 import { evidenceFoldHtml, resolveSelectedSource } from '../web/rail-facts.js';
 import { isEmptyGroup, projectSteps, projectTailReply, renderTraceRows, tailEligibleIds, toolSummary } from '../web/trace-view.js';
 
@@ -327,10 +326,10 @@ test('工具行上屏：chip 承载工具身份，未配对结果保持中性 To
   expect(html).toContain('>Assistant<');
   expect(html).toContain('>Tool<');
   // 调用行：工具名 chip 带色类，参数段不再重复工具名。
-  expect(html).toContain('row-tint tint-bash">Bash</span>');
+  expect(html).toContain('row-tint">Bash</span>');
   expect(html).toContain('<code>列目录</code>');
   // 未配对结果行：中性 chip 沿用现状文案。
-  expect(html).toContain('row-tint tint-other">Tool result</span>');
+  expect(html).toContain('row-tint">Tool result</span>');
   expect(html).not.toContain('row-kind');
   expect(html).not.toContain('Tool call');
   expect(html).not.toContain('用户');
@@ -355,19 +354,19 @@ test('结果行前缀三级：缓存内同款摘要、缓存外只工具名、�
   };
   const cached = renderTraceRows(row(), steps, 1, null, callOf);
   // 一级：chip 只包工具名，参数摘要以普通文本跟随，muted 箭头后接结果正文。
-  expect(cached).toContain('row-tint tint-read">Read</span>');
+  expect(cached).toContain('row-tint">Read</span>');
   expect(cached).toContain('<code>src/q.ts · 1400–1530 行</code><span class="row-arrow" aria-hidden="true">→</span><code>文件正文</code>');
   // 二级：装配层查不到调用方（返回 null）时只显示工具名，箭头后直接接结果正文。
   const outside = renderTraceRows(row(), steps, 1, null,
     () => null);
-  expect(outside).toContain('row-tint tint-read">Read</span>');
+  expect(outside).toContain('row-tint">Read</span>');
   expect(outside).not.toContain('<code>src/q.ts');
   expect(outside).toContain('<span class="row-arrow" aria-hidden="true">→</span><code>文件正文</code>');
   // 三级：未配对（pairOwner 为 null）中性 chip，不猜归属，也没有调用侧箭头。
   const unpairedSteps = projectSteps(row(), read(detail({ delta_ordinals: [2] }), [carrier],
     { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
   const unpaired = renderTraceRows(row(), unpairedSteps, 1, null, callOf);
-  expect(unpaired).toContain('row-tint tint-other">Tool result</span>');
+  expect(unpaired).toContain('row-tint">Tool result</span>');
   expect(unpaired).not.toContain('row-arrow');
   // 结果行悬停给调用摘要与完整结果正文。
   expect(cached).toContain('title="src/q.ts · 1400–1530 行 → 文件正文"');
@@ -689,23 +688,6 @@ test('工具摘要回退：非 JSON 参数原文、未知工具回退链、超�
   expect([...long].length).toBeGreaterThan(300);
 });
 
-test('工具身份色类：六个核心工具各一色，其余统一中性', () => {
-  expect(toolTint('Read')).toBe('tint-read');
-  expect(toolTint('Edit')).toBe('tint-edit');
-  expect(toolTint('Write')).toBe('tint-write');
-  expect(toolTint('Bash')).toBe('tint-bash');
-  expect(toolTint('bash')).toBe('tint-bash');
-  expect(toolTint('Skill')).toBe('tint-skill');
-  expect(toolTint('Agent')).toBe('tint-agent');
-  expect(toolTint('SendMessage')).toBe('tint-other');
-  expect(toolTint('mcp__server__method')).toBe('tint-other');
-  expect(toolTint('')).toBe('tint-other');
-  // OMP 小写同族工具与大写各归同色，不扩新色类。
-  expect(toolTint('read')).toBe('tint-read');
-  expect(toolTint('edit')).toBe('tint-edit');
-  expect(toolTint('write')).toBe('tint-write');
-  expect(toolTint('grep')).toBe('tint-other');
-});
 
 test('多 choice 回复保留原始对象并说明限制', () => {
   const reply = { choices: [

@@ -8,7 +8,6 @@
  * @typedef {import('../src/queries/session-summary').SessionSummary} SessionSummary
  */
 
-import { toolTint } from './body-view.js';
 import { esc } from './html.js';
 import { kk } from './rail-facts.js';
 import { bodyStateText } from './row-summary.js';
@@ -194,7 +193,7 @@ function toolsGroup(s) {
       t.count - t.paired > 0 ? `${t.count - t.paired} 次未配对` : null,
       unknown > 0 ? `${unknown} 次结果未判定（不计入失败）` : null,
     ].filter(Boolean).join(' · ');
-    return `<button class="tool-chip ${toolTint(t.name)}" data-summary-tool="${esc(t.name)}" title="${esc(title)}"><span>${esc(t.name)}</span><span class="n">${t.count}</span>${warn}</button>`;
+    return `<button class="tool-chip" data-summary-tool="${esc(t.name)}" title="${esc(title)}"><span>${esc(t.name)}</span><span class="n">${t.count}</span>${warn}</button>`;
   };
   const head = s.tools.slice(0, 3).map(chip).join('');
   const rest = s.tools.slice(3);
@@ -217,7 +216,7 @@ function toolsGroup(s) {
 function skillsGroup(s) {
   if (s.skills.length === 0) return null;
   const chip = (/** @type {{name: string, count: number}} */ k) =>
-    `<button class="tool-chip tint-skill" data-summary-skill="${esc(k.name)}" title="点击定位该 Skill 的 ${k.count} 次调用"><span>${esc(k.name)}</span><span class="n">${k.count}</span></button>`;
+    `<button class="tool-chip" data-summary-skill="${esc(k.name)}" title="点击定位该 Skill 的 ${k.count} 次调用"><span>${esc(k.name)}</span><span class="n">${k.count}</span></button>`;
   const head = s.skills.slice(0, 3).map(chip).join('');
   const rest = s.skills.slice(3);
   const more = rest.length > 0
@@ -402,7 +401,7 @@ export function railSummaryListHtml(list, labelOf) {
       const warn = item.state !== 'resolved'
         ? `<span class="tool-chip miss"><span>${esc(pairStateText(item.state))}</span></span>` : '';
       return `<button class="tool-row tool-link" data-summary-pair="1" data-owner="${item.req_id}" data-ord="${item.ord}">
-        <span class="tool-chip call ${toolTint(item.tool_name ?? '')}" title="${esc(item.tool_name ?? '')}"><span>${esc(item.tool_name ?? 'unknown')} · 调用 #${item.ord}</span></span>
+        <span class="tool-chip call" title="${esc(item.tool_name ?? '')}"><span>${esc(item.tool_name ?? 'unknown')} · 调用 #${item.ord}</span></span>
         <span class="muted">${esc(labelOf(item.req_id))}</span>${warn}
       </button>`;
     });

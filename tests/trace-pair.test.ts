@@ -32,10 +32,10 @@ test('配对页两端同屏：Call 在上、Result 在下，身份是文本不�
     }),
     carrierLabel: '09',
   });
-  // 两端面板头都是工具名 chip：配对 result 沿用 call 的色类。
-  const callChip = html.indexOf('bp-kind tint-other">read_file</span>');
+  // 两端面板头都是工具名 chip：统一 tool 角色色。
+  const callChip = html.indexOf('tool bp-kind">read_file</span>');
   expect(callChip).toBeGreaterThanOrEqual(0);
-  expect(html.match(/bp-kind tint-other">read_file</g)?.length).toBe(2);
+  expect(html.match(/tool bp-kind">read_file</g)?.length).toBe(2);
   expect(html.indexOf('first result')).toBeGreaterThan(callChip);
   // 两端同一套 pre.raw 缩进样式；调用参数按格式化 JSON 显示。
   expect(html).toContain('&quot;path&quot;: &quot;a.txt&quot;');
@@ -48,20 +48,20 @@ test('配对页两端同屏：Call 在上、Result 在下，身份是文本不�
   expect(html).not.toContain('data-locate');
 });
 
-test('面板头色类映射：核心工具各自色类，未确认配对保持中性 Tool result', () => {
+test('面板头统一 tool 角色色，未确认配对同样不给别的色', () => {
   const read = renderTracePair({
     owner: 7, ownerLabel: '07', call: callOf({ name: 'Read', inputText: '{"file_path":"a.txt"}' }),
     pair: pairOf('resolved', { result_req: 9, result_ord: 2 }),
     reading: readingOf('available', { content: 'x' }), carrierLabel: '09',
   });
-  expect(read.match(/bp-kind tint-read">Read</g)?.length).toBe(2);
-  // 未确认（pending/ambiguous/unpaired）不给结果正文也不借用 call 颜色。
+  expect(read.match(/tool bp-kind">Read</g)?.length).toBe(2);
+  // 未确认（pending/ambiguous/unpaired）不给结果正文，面板头同样 tool 色。
   const pending = renderTracePair({
     owner: 7, ownerLabel: '07', call: callOf({ name: 'Read', inputText: '{"file_path":"a.txt"}' }),
     pair: pairOf('pending'), reading: null, carrierLabel: null,
   });
-  expect(pending).toContain('bp-kind tint-other">Tool result</span>');
-  expect(pending).toContain('bp-kind tint-read">Read</span>');
+  expect(pending).toContain('tool bp-kind">Tool result</span>');
+  expect(pending).toContain('tool bp-kind">Read</span>');
 });
 
 test('未读取给待读取与读取入口；终态不给重试；未确认不给正文与读取入口', () => {
