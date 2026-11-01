@@ -16,6 +16,9 @@ type SessionDbRow = {
   all_probe_kind: number; has_readable_body: number; has_usage: number; has_actor: number;
 };
 
+/** 阶段一候选行：覆盖索引上每个会话只取键与真实最近请求时间。 */
+type SessionCandidateRow = { conv_key: string; last_ms: number };
+
 /**
  * 会话状态只从确定事实聚合，五个标志固定按失败、待确认、缺正文、旁路、探针的
  * 顺序输出。失败看 HTTP 状态；待确认看身份未知或前驱关系未知；缺正文看正文
@@ -100,65 +103,76 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
       if (typeof lastMs !== 'number' || !Number.isFinite(lastMs) || typeof convKey !== 'string') return null;
       return { lastMs, convKey };
     });
-  const rows = (bound === null
-    ? store.read.query<SessionDbRow, [number]>(`
-        SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
-               -- 会话标题取正式标题；没有才退回用户首句。MAX(title) 是字典序最大值，
-               -- 会把 group/... 之类的模型名排在前面，会话就被命名成和内容无关的字符串。
-               ${SESSION_TITLE_SQL} AS title,
-               -- agents 取 magpie 的客户端标签（claude / omp 等）；actor 是会话/子代理身份，
-               -- 拿 actor 当 agents 会把 UUID 当成客户端名展示。
-               GROUP_CONCAT(DISTINCT agent) AS agents,
-               ${SESSION_FLAG_COLUMNS}
-        FROM request
-        WHERE conv_key IS NOT NULL
-        GROUP BY conv_key
-        ORDER BY last_ms DESC, conv_key DESC
-        LIMIT ?`)
-      .all(size + 1)
-    : store.read.query<SessionDbRow, [number, string, number]>(`
-        SELECT conv_key, last_ms, request_count, title, agents, has_failed, has_unknown, has_missing, has_participate,
-               all_probe_kind, has_readable_body, has_usage, has_actor FROM (
-          SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
-                 ${SESSION_TITLE_SQL} AS title,
-                 -- 同首查：agents 是 magpie 的客户端标签，不是 actor 身份。
-                 GROUP_CONCAT(DISTINCT agent) AS agents,
-                 ${SESSION_FLAG_COLUMNS}
+  // 两个阶段在同一个只读事务里完成：阶段一沿 `i_req_session_time` 覆盖索引只取
+  // 会话键与真实最近请求时间，排序取 `limit + 1` 个候选，多取的一条只用于判断
+  // next_cursor；游标条件应用在分组之后，首页因此不带 HAVING。阶段二只对页内
+  // 会话做标题、计数与标志的宽聚合，页外会话不参与任何宽字段计算，列表读取
+  // 不触碰正文。WAL 快照由阶段一首读固定：采集在两阶段之间提交，本页的排序
+  // 依据与内容仍来自同一旧快照，下一次调用才可见新会话。
+  const { candidates, detail } = store.read.transaction(() => {
+    const rows = (bound === null
+      ? store.read.query<SessionCandidateRow, [number]>(`
+          SELECT conv_key, MAX(started_ms) AS last_ms
           FROM request
           WHERE conv_key IS NOT NULL
           GROUP BY conv_key
-        ) GROUPED
-        WHERE (last_ms, conv_key) < (?, ?)
-        ORDER BY last_ms DESC, conv_key DESC
-        LIMIT ?`)
-      .all(bound.lastMs, bound.convKey, size + 1)) as SessionDbRow[];
+          ORDER BY last_ms DESC, conv_key DESC
+          LIMIT ?`).all(size + 1)
+      : store.read.query<SessionCandidateRow, [number, string, number]>(`
+          SELECT conv_key, MAX(started_ms) AS last_ms
+          FROM request
+          WHERE conv_key IS NOT NULL
+          GROUP BY conv_key
+          HAVING (MAX(started_ms), conv_key) < (?, ?)
+          ORDER BY last_ms DESC, conv_key DESC
+          LIMIT ?`).all(bound.lastMs, bound.convKey, size + 1)) as SessionCandidateRow[];
+    if (rows.length === 0) return { candidates: rows, detail: [] as SessionDbRow[] };
+    const pageKeys = rows.slice(0, size).map(row => row.conv_key);
+    const detail = store.read.query<SessionDbRow, string[]>(`
+        SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
+               ${SESSION_TITLE_SQL} AS title,
+               -- 同旧查询：agents 是 magpie 的客户端标签，不是 actor 身份。
+               GROUP_CONCAT(DISTINCT agent) AS agents,
+               ${SESSION_FLAG_COLUMNS}
+        FROM request
+        WHERE conv_key IN (${pageKeys.map(() => '?').join(',')})
+        GROUP BY conv_key`).all(...pageKeys) as SessionDbRow[];
+    return { candidates: rows, detail };
+  }).deferred();
 
-  const page = rows.slice(0, size);
-  const items: SessionRow[] = page.map(row => {
-    const flags: string[] = [];
-    if (row.has_failed === 1) flags.push('failed');
-    if (row.has_unknown === 1) flags.push('unknown');
-    if (row.has_missing === 1) flags.push('missing_body');
-    // 全员 exclude 的会话是旁路（标题生成、skill 描述压缩）：列表默认折叠由
-    // 渲染层做，这里只给事实标志。任一笔参与链请求都不折叠，错藏真会话的
-    // 代价远高于多显示一条噪音。
-    if (row.has_participate === 0) flags.push('bypass');
-    // 探针组是 magpie 自己的探测请求，不是对话：没有正文可读，没有用量，也没有
-    // 会话归属。四个条件全满足才折叠，判定依据留在读模型里，渲染层只认标志。
-    if (row.all_probe_kind === 1 && row.has_readable_body === 0
-      && row.has_usage === 0 && row.has_actor === 0) flags.push('probe');
-    return {
-      conv_key: row.conv_key,
-      title: row.title ?? '',
-      last_ms: row.last_ms,
-      request_count: row.request_count,
-      agents: row.agents === null ? [] : row.agents.split(',').filter(value => value.length > 0),
-      flags,
-    };
+  const page = candidates.slice(0, size);
+  const byKey = new Map(detail.map(row => [row.conv_key, row]));
+  const items: SessionRow[] = page.map(candidate => {
+    const row = byKey.get(candidate.conv_key);
+    if (row === undefined) throw new Error('session_page_row_missing');
+    return toSessionRow(row);
   });
   const last = page[page.length - 1];
-  const nextCursor = rows.length > size && last !== undefined
+  const nextCursor = candidates.length > size && last !== undefined
     ? encodeCursor([last.last_ms, last.conv_key])
     : null;
   return { items, next_cursor: nextCursor };
+}
+
+function toSessionRow(row: SessionDbRow): SessionRow {
+  const flags: string[] = [];
+  if (row.has_failed === 1) flags.push('failed');
+  if (row.has_unknown === 1) flags.push('unknown');
+  if (row.has_missing === 1) flags.push('missing_body');
+  // 全员 exclude 的会话是旁路（标题生成、skill 描述压缩）：列表默认折叠由
+  // 渲染层做，这里只给事实标志。任一笔参与链请求都不折叠，错藏真会话的
+  // 代价远高于多显示一条噪音。
+  if (row.has_participate === 0) flags.push('bypass');
+  // 探针组是 magpie 自己的探测请求，不是对话：没有正文可读，没有用量，也没有
+  // 会话归属。四个条件全满足才折叠，判定依据留在读模型里，渲染层只认标志。
+  if (row.all_probe_kind === 1 && row.has_readable_body === 0
+    && row.has_usage === 0 && row.has_actor === 0) flags.push('probe');
+  return {
+    conv_key: row.conv_key,
+    title: row.title ?? '',
+    last_ms: row.last_ms,
+    request_count: row.request_count,
+    agents: row.agents === null ? [] : row.agents.split(',').filter(value => value.length > 0),
+    flags,
+  };
 }
