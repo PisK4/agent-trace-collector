@@ -56,3 +56,22 @@ export function railTabParam(tab) {
 export function routeReadTarget(railTab, reqId) {
   return railTab === 'route' && reqId !== null ? reqId : null;
 }
+
+/** 拍摄直达：demo=1 进入静默模式（作废不自动重读）；其他值按未指定处理。
+ *  @param {string | null} value */
+export function demoFromParam(value) {
+  return value === '1';
+}
+
+/** 拍摄直达：expand=summary 展开 cue-board 的折叠组；其他值按未指定处理。
+ *  @param {string | null} value @returns {'summary' | null} */
+export function expandFromParam(value) {
+  return value === 'summary' ? 'summary' : null;
+}
+
+/** 拍摄直达：summary 组清单的分组键，只收五个已知组；其他值按未指定处理。
+ *  @param {string | null} value @returns {'tool' | 'read' | 'written' | 'skill' | 'interrupts' | null} */
+export function summaryKindFromParam(value) {
+  return value === 'tool' || value === 'read' || value === 'written'
+    || value === 'skill' || value === 'interrupts' ? value : null;
+}

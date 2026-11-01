@@ -15,6 +15,7 @@ const PARTS = [
   { kind: 'results', label: '工具结果' },
   { kind: 'chat', label: '对话内容' },
   { kind: 'skills', label: '技能' },
+  { kind: 'harness', label: 'Harness' },
 ];
 
 /** 未知 kind 原样显示，不折叠成"其它"。 @param {string} kind */

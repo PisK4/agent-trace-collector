@@ -42,7 +42,7 @@ import { createTracePreparation } from './trace-preparation.js';
 import { renderTracePair } from './trace-pair.js';
 import { isEmptyGroup, projectSteps, projectTailReply, renderTraceRow, tailEligibleIds as tailIds } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
-import { railTabFromParam, railTabParam, resolveTraceTarget, traceIdFromParam } from './url-route.js';
+import { demoFromParam, expandFromParam, railTabFromParam, railTabParam, resolveTraceTarget, summaryKindFromParam, traceIdFromParam } from './url-route.js';
 
 /**
  * 重绘后把滚动位置放回去。内容变短时夹到新的可滚动上限内。
@@ -62,8 +62,8 @@ if (typeof document !== 'undefined') {
     // 记录快照异步变化（409 作废、自动重读换新或失败）按影响面响应；迟到响应不进来。
     (/** @type {number} */ id) => { onStoreChange(id); },
     // 轮次快照与会话汇总落地（出现/消失、折叠区就绪）同样重绘两栏。
-    { onTurnsChanged: () => { renderMain(); renderRail(); },
-      onSummaryChanged: () => { renderMain(); renderRail(); } });
+    { onTurnsChanged: () => { consumePendingTurn(); renderMain(); renderRail(); },
+      onSummaryChanged: () => { consumePendingSummary(); renderMain(); renderRail(); } });
   /** @type {Map<string, boolean>} 折叠开合按稳定键保存（键含 req id），重绘后恢复。 */
   const folds = new Map();
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
@@ -97,6 +97,13 @@ if (typeof document !== 'undefined') {
   const mainView = createMainView(el('main'));
 
   const qp = new URLSearchParams(location.search);
+  // 拍摄直达参数：demo 静默、cue-board 展开、summary 组清单与轮锚点都只消费一次；
+  // trace 与 turn 同时给出时 trace 优先，turn 不再改写选中请求。
+  const demoMode = demoFromParam(qp.get('demo'));
+  const expandSummary = expandFromParam(qp.get('expand')) === 'summary';
+  let pendingSummaryKind = summaryKindFromParam(qp.get('summary'));
+  let pendingTurn = qp.get('trace') === null ? traceIdFromParam(qp.get('turn')) : null;
+  if (demoMode) store.setDemoSilent(true);
   const state = {
     session: qp.get('session'),
     reqId: traceIdFromParam(qp.get('trace')),
@@ -824,6 +831,10 @@ if (typeof document !== 'undefined') {
     const preferred = state.revealed ? null : state.reqId;
     mainView.commit(mainModel(), scroller(), preferred);
     restoreFolds(main);
+    // 拍摄直达 ?expand=summary：每次重绘后展开 cue-board 的折叠组（工具与路径的 +N）。
+    if (expandSummary) {
+      for (const details of /** @type {NodeListOf<HTMLDetailsElement>} */ (document.querySelectorAll('details.path-more'))) details.open = true;
+    }
     syncBandTop();
     revealSelectedChip();
   }
@@ -1525,6 +1536,42 @@ if (typeof document !== 'undefined') {
   function requestLabel(id) {
     const label = windowLabel(id);
     return label.startsWith('req ') ? label : `req ${label}`;
+  }
+
+  /** 轮锚点消费：轮次快照就绪后把 ?turn 翻译成该轮起点请求并点亮轮次带。 */
+  function consumePendingTurn() {
+    if (pendingTurn === null) return;
+    const row = turnOf(pendingTurn);
+    pendingTurn = null;
+    if (row === null) return;
+    dispatch({ kind: 'locate', reqId: row.start_req });
+    dispatch({ kind: 'select-turn', row });
+  }
+
+  /** summary 组清单消费：快照就绪后打开 count 最大的那一组（直达拍摄用）。 */
+  function consumePendingSummary() {
+    if (pendingSummaryKind === null) return;
+    const snap = store.peekSummary();
+    if (snap?.status !== 'ready' || snap.data === null) return;
+    const kind = pendingSummaryKind;
+    pendingSummaryKind = null;
+    const d = snap.data;
+    const byCount = (/** @type {{count: number}} */ a, /** @type {{count: number}} */ b) => b.count - a.count;
+    if (kind === 'tool') {
+      const group = [...d.tools].sort(byCount)[0] ?? null;
+      if (group !== null) void openSummaryList({ kind: 'tool', name: group.name }, `${group.name} 的调用`);
+    } else if (kind === 'read') {
+      const group = [...d.paths.read].sort(byCount)[0] ?? null;
+      if (group !== null) void openSummaryList({ kind: 'read', path: group.path }, `读取请求 · ${group.path.split('/').pop() ?? group.path}`);
+    } else if (kind === 'written') {
+      const group = [...d.paths.written].sort(byCount)[0] ?? null;
+      if (group !== null) void openSummaryList({ kind: 'written', path: group.path }, `写入尝试 · ${group.path.split('/').pop() ?? group.path}`);
+    } else if (kind === 'skill') {
+      const group = [...d.skills].sort(byCount)[0] ?? null;
+      if (group !== null) void openSummaryList({ kind: 'skill', name: group.name }, `Skill ${group.name}`);
+    } else {
+      void openSummaryList({ kind: 'interrupts' }, '中断的请求');
+    }
   }
 
   /**

@@ -14,53 +14,20 @@ import type { SessionRow } from '../src/queries/sessions';
 import type { TurnPairRow } from '../src/queries/turns';
 import type { ReadingDetail } from '../src/reading';
 import { WEB_HEADERS, serveWeb } from './static-web';
+import type { SynthCall, SynthMessage, SynthRequest } from './synthetic-types';
+import { STAR_CONV_KEY, starSessionData, starStaticEntries, starSummary, starTurns } from './star-session';
 
 const port = 8770;
 const convKey = 'conv-synthetic-reading';
 const convWindow = 'conv-synthetic-window';
 const convHook = 'conv-synthetic-hook';
 const convTurns = 'conv-synthetic-turns';
+const convStar = STAR_CONV_KEY;
 
 // 合成时间基准：Demo 的会话与请求显示为连续的一段时间，而不是 1970 的 id 秒。
 const BASE_MS = Date.UTC(2026, 9, 24, 8, 0, 0);
 const startOf = (r: { id: number }) =>
-  BASE_MS + (r.id >= 700 ? r.id - 700 : r.id >= 600 ? r.id - 600 : r.id >= 500 ? r.id - 500 : r.id - 101) * 60000;
-
-type SynthCall = {
-  call_id: string; ord: number; tool_name: string;
-  result_req: number | null; result_ord: number | null; result_path: string | null; state: string;
-};
-type SynthMessage = { role: string; content: unknown; tool_calls?: unknown[] };
-type SynthAttempt = {
-  index: number; model: string | null; effort: string | null; status: number | null;
-  fail: string | null; error: string | null; start_ms: number | null; ms: number | null;
-  ttft_ms: number | null; flow_ms: number | null; first_text_ms: number | null;
-  first_reasoning_ms: number | null; served: string | null; done: boolean | null;
-  tier_served: string | null; reasoning_hidden: boolean | null;
-};
-type SynthRequest = {
-  id: number; title: string; status: number | null;
-  protocol: 'anthropic' | 'chat';
-  history: SynthMessage[];
-  inputs: { message: SynthMessage; userInput: boolean; kind?: 'plain' | 'wrapped' | 'midturn' }[];
-  reply: unknown;
-  tools: unknown;
-  bodyState: 'available' | 'partial' | 'pending' | 'evicted';
-  bodyReason: string | null;
-  delta: number[] | null;
-  prevRelation: 'confirmed' | 'unknown' | 'first' | 'branch' | 'aux'; chainRole: string; purposeChain: string; reqKind: string;
-  modelTitle: string | null;
-  toolCalls: SynthCall[];
-  usage: { in: number | null; out: number | null; read: number | null; write: number | null; cost: number | null };
-  timing: { ms: number | null; ttft: number | null; flow: number | null; firstText: number | null };
-  /** 合成请求可覆盖的读取形态；缺省时按会话与状态推导。 */
-  have?: number;
-  costState?: 'priced' | 'zero' | 'absent';
-  titleSource?: string;
-  system?: string;
-  routeState?: 'available' | 'absent' | 'expired';
-  attempts?: SynthAttempt[];
-};
+  BASE_MS + (r.id >= 800 ? r.id - 740 : r.id >= 700 ? r.id - 700 : r.id >= 600 ? r.id - 600 : r.id >= 500 ? r.id - 500 : r.id - 101) * 60000;
 
 const SYS = '你是合成场景里的编码助手，只依据已读文件回答。';
 const BRIEF = '合成场景说明：排查 parse-helper 的空状态渲染问题，目录 /synth/workspace。';
@@ -454,7 +421,8 @@ const TURN_REQUESTS: SynthRequest[] = [
     toolCalls:[], usage:{in:6200,out:180,read:6600,write:150,cost:0.0037}, timing:{ms:2130,ttft:460,flow:1650,firstText:570} },
 ];
 
-const byId = new Map([...REQUESTS, ...WINDOW_REQUESTS, ...HOOK_REQUESTS, ...TURN_REQUESTS].map(r => [r.id, r]));
+const STAR = starSessionData();
+const byId = new Map([...REQUESTS, ...WINDOW_REQUESTS, ...HOOK_REQUESTS, ...TURN_REQUESTS, ...STAR.requests].map(r => [r.id, r]));
 
 /**
  * 已结算轮表：模块一阶段按判据手工推导的固定列表，只服务界面验证，不参与
@@ -481,6 +449,7 @@ const TURNS_BY_SESSION = new Map<string, TurnPairRow[]>([
     {turn:6, start_req:710, ordinals:[4], reply_req:710},
     {turn:7, start_req:711, ordinals:[3], reply_req:711},
   ]],
+  [convStar, starTurns()],
 ]);
 
 /** 合成会话池：列表顺序即 Demo 的默认会话顺序。 */
@@ -489,6 +458,7 @@ const POOLS = [
   { key: convWindow, title: '窗口分页样本（合成）', agent: 'omp', rows: WINDOW_REQUESTS, flags: [] },
   { key: convHook, title: '缺少通道的请求（合成）', agent: 'claude', rows: HOOK_REQUESTS, flags: ['missing_body'] },
   { key: convTurns, title: '轮次配对样本（合成）', agent: 'claude', rows: TURN_REQUESTS, flags: ['missing_body'] },
+  { key: convStar, title: '给 CLI 工具加 --json 输出模式（合成）', agent: 'claude', rows: STAR.requests, flags: [] },
 ];
 
 /** 会话级汇总：形状对齐 src/queries/session-summary 的 SessionSummary，数字贴合各池故事。 */
@@ -551,10 +521,11 @@ const SESSION_SUMMARIES = new Map<string, unknown>([
     coverage: { calls_total: 3, calls_paired: 3, calls_error_known: 3, calls_fact_known: 3 },
     failures: [], failures_truncated: false,
   }],
+  [convStar, starSummary()],
 ]);
 
-const convOf = (r: SynthRequest) => r.id >= 700 ? convTurns : r.id >= 600 ? convHook : r.id >= 500 ? convWindow : convKey;
-const agentOf = (r: SynthRequest) => r.id >= 500 && r.id < 600 ? 'omp' : 'claude';
+const convOf = (r: SynthRequest) => r.id >= 800 ? convStar : r.id >= 700 ? convTurns : r.id >= 600 ? convHook : r.id >= 500 ? convWindow : convKey;
+const agentOf = (r: SynthRequest) => r.agent ?? (r.id >= 500 && r.id < 600 ? 'omp' : 'claude');
 const haveOf = (r: SynthRequest) => r.have ?? 7;
 const titleSourceOf = (r: SynthRequest) => r.titleSource ?? 'user_delta';
 const costStateOf = (r: SynthRequest) => r.costState
@@ -562,8 +533,8 @@ const costStateOf = (r: SynthRequest) => r.costState
 const systemOf = (r: SynthRequest) => r.system ?? SYS;
 
 // 七类口径与 magpie 现行分类一致（skills 已拆出），权重模拟一次长会话请求。
-const PARTS_ORDER = ['system', 'tools', 'skills', 'memory', 'files', 'results', 'chat'];
-const PARTS_WEIGHT = [0.05, 0.09, 0.02, 0.02, 0.26, 0.16, 0.40];
+const PARTS_ORDER = ['system', 'tools', 'skills', 'memory', 'files', 'results', 'chat', 'harness'];
+const PARTS_WEIGHT = [0.05, 0.09, 0.02, 0.02, 0.26, 0.16, 0.40, 0];
 
 /** 每类的合成 item 模板：[名字, tag, 聚合数 n（null 为单件）, 类内占比]。 */
 const PART_ITEMS: Record<string, [string, string, number | null, number][]> = {
@@ -587,6 +558,9 @@ const PART_ITEMS: Record<string, [string, string, number | null, number][]> = {
   chat: [
     ['earlier', 'turns', 3, 0.25], ['4', 'turn', null, 0.75],
   ],
+  harness: [
+    ['Claude Code', '', null, 0.6], ['OMP', '', null, 0.4],
+  ],
 };
 
 /** 按类 token 与模板占比合成 item 明细（treemap 与内容列表的演示数据源）。 */
@@ -608,10 +582,11 @@ function promptOf(r: SynthRequest): PromptReading {
   const tokens = (r.usage.in ?? 0) + (r.usage.read ?? 0) + (r.usage.write ?? 0);
   const window = r.protocol === 'chat' ? 128000 : 200000;
   const parts = PARTS_ORDER.map((kind, index) => {
-    const kindTokens = Math.round(tokens * (PARTS_WEIGHT[index] ?? 0));
+    const share = r.promptPlan?.find(p => p.kind === kind)?.share ?? PARTS_WEIGHT[index] ?? 0;
+    const kindTokens = Math.round(tokens * share);
     return {kind, tokens: kindTokens, items: itemsOf(kind, kindTokens)};
   });
-  return {state:'recomputed', reason:'complete', actual_version:1, tokens, counted:true, window, held:null, turns:4,
+  return {state:'recomputed', reason:'complete', actual_version:1, tokens, counted:true, window, held:null, turns:r.promptPlan !== undefined ? starTurns().length : 4,
     parts, ratio: window > 0 ? tokens / window : null, legacy:false, note:null};
 }
 
@@ -655,7 +630,7 @@ function toolResultsOf(r: SynthRequest): ToolResultIndexRow[] {
 /** 同一会话中上一笔参与主链的请求；辅助请求不参与，避免把分类器请求当上下文。 */
 function mainPrevOf(r: SynthRequest): number | null {
   if (r.purposeChain === 'exclude' || r.chainRole === 'aux') return null;
-  const pool = r.id >= 700 ? TURN_REQUESTS : r.id >= 600 ? HOOK_REQUESTS : r.id >= 500 ? WINDOW_REQUESTS : REQUESTS;
+  const pool = r.id >= 800 ? STAR.requests : r.id >= 700 ? TURN_REQUESTS : r.id >= 600 ? HOOK_REQUESTS : r.id >= 500 ? WINDOW_REQUESTS : REQUESTS;
   for (let index = pool.indexOf(r) - 1; index >= 0; index -= 1) {
     const prev = pool[index]!;
     if (prev.purposeChain === 'exclude' || prev.chainRole === 'aux') continue;
@@ -707,6 +682,63 @@ function execMsOf(owner: SynthRequest, call: SynthCall): number | null {
 /** 阅读版本：合成稳定值；同一请求的输入与正文状态不变时不变。 */
 function readingTokenOf(r: SynthRequest): string {
   return 'r1-' + Buffer.from(`synth-${r.id}-${r.bodyState}`).toString('hex').padEnd(64, '0').slice(0, 64);
+}
+
+// 与生产 CONTEXT_KINDS 同表：harness 在生产白名单外，合成照抄不收录。
+const CONTEXT_KINDS = ['system', 'tools', 'memory', 'files', 'results', 'chat', 'skills'];
+const CONTEXT_ENTRY_MAX = 80;
+
+/** 目录条目形状与生产 ContextItemEntry 同形。 */
+type SynthContextEntry = {
+  req_id: number; ord: number | null; path: string; precision: 'located' | 'carrier';
+  tool_name: string | null; call_ord: number | null; owner_req: number | null; role: string | null;
+};
+
+/**
+ * 上下文明细目录：tools/system 定位顶层字段，chat 定位消息，files 定位承载
+ * 调用，results 定位工具结果块；memory 无数据给空集。明星请求有全部类别，
+ * 其余池给能从合成数据可靠构建的类别。
+ */
+function contextItemOf(r: SynthRequest, kind: string, name: string | null): unknown {
+  const token = readingTokenOf(r);
+  const base = {req_id:r.id, reading_token:token, explain_version:2, kind, name, tag:null, next_cursor:null, notes:[] as string[]};
+  if (!CONTEXT_KINDS.includes(kind)) return {...base, state:'unsupported', reason:'unknown_kind', entries:[]};
+  if (r.bodyState === 'pending' || r.bodyState === 'evicted') {
+    return {...base, state:r.bodyState, reason:r.bodyReason, entries:[]};
+  }
+  const entries: SynthContextEntry[] = [];
+  if (kind === 'tools') {
+    if (Array.isArray(r.tools)) {
+      (r.tools as {function:{name:string}}[]).forEach((t, i) => entries.push({
+        req_id:r.id, ord:null, path:`request.tools[${i}]`, precision:'carrier',
+        tool_name:t.function.name, call_ord:null, owner_req:null, role:null}));
+    }
+  } else if (kind === 'system' || kind === 'skills') {
+    entries.push({req_id:r.id, ord:null, path:'request.system', precision:'carrier',
+      tool_name:null, call_ord:null, owner_req:null, role:null});
+  } else if (kind === 'chat') {
+    fullMessages(r).forEach((m, i) => entries.push({
+      req_id:r.id, ord:i, path:`request.messages[${i}]`, precision:'located',
+      tool_name:null, call_ord:null, owner_req:null, role:m.role}));
+  } else if (kind === 'files') {
+    for (const [path, at] of STAR.fileFirstCall) {
+      if (at.req_id !== r.id) continue;
+      if (name !== null && name !== path) continue;
+      entries.push({req_id:r.id, ord:null, path, precision:'located',
+        tool_name:null, call_ord:at.ord, owner_req:at.req_id, role:null});
+    }
+  } else if (kind === 'results') {
+    for (const row of toolResultsOf(r)) {
+      if (name !== null && name !== row.tool_name) continue;
+      entries.push({req_id:r.id, ord:null, path:row.result_path ?? '', precision:'located',
+        tool_name:row.tool_name, call_ord:row.ord, owner_req:row.owner_req, role:null});
+    }
+  }
+  if (entries.length > CONTEXT_ENTRY_MAX) {
+    entries.length = CONTEXT_ENTRY_MAX;
+    base.notes.push(`条目超过 ${CONTEXT_ENTRY_MAX} 条，已截断`);
+  }
+  return {...base, state:'available', reason:null, entries};
 }
 
 function detailOf(r: SynthRequest): ReadingDetail {
@@ -762,7 +794,10 @@ function capabilityOf(r: SynthRequest, coverage: {
   if (tools === undefined) toolResult = {state:'empty', items:[], reason:null};
   else if (!Array.isArray(tools)) toolResult = {state:'unrecognized', items:[], reason:'tools_not_array'};
   else toolResult = {state:'present', items:tools.map((t:any): ToolCapability => ({name:t.function.name, description:t.function.description, schema:t.function.parameters, source:'tools'})), reason:null};
-  return {tools:toolResult, skills:{state:'present', items:SKILLS.map(skill => ({...skill, format:'claude-heading'})), reason:null}, coverage, agent:agentOf(r)};
+  const skills = r.id >= 800
+    ? [{name:'doc-render', description:'文档渲染约定。'}, {name:'atc-notes', description:'变更说明规则。'}]
+    : SKILLS;
+  return {tools:toolResult, skills:{state:'present', items:skills.map(skill => ({...skill, format:'claude-heading'})), reason:null}, coverage, agent:agentOf(r)};
 }
 
 function bodyPageOf(r: SynthRequest, from: number, to: number): BodyPage {
@@ -933,6 +968,11 @@ Bun.serve({
         ],
       };
       if (kind === 'written' || kind === 'read' || kind === 'skill') {
+        if (key === convStar) {
+          const entries = starStaticEntries();
+          const items = kind === 'written' ? entries.written : kind === 'read' ? entries.read : entries.skill;
+          return json({items, truncated: false});
+        }
         return json({items: STATIC_ENTRIES[key] ?? [], truncated: false});
       }
       return json({error:'invalid_entries_query'}, 400);
@@ -980,6 +1020,17 @@ Bun.serve({
         is_error: (block as {is_error?: unknown}).is_error === true ? true : (block as {is_error?: unknown}).is_error === false ? false : null,
         raw: block, reason: null});
     }
+    const ctxItem = /^\/api\/requests\/(\d+)\/context-item$/.exec(url.pathname);
+    if (ctxItem) {
+      const r = byId.get(Number(ctxItem[1]));
+      if (!r) return json({error:'not_found'}, 404);
+      const expected = url.searchParams.get('if_reading');
+      if (expected === null || !/^r1-[0-9a-f]{64}$/.test(expected)) return json({error:'invalid_reading_token'}, 400);
+      if (expected !== readingTokenOf(r)) return json({error:'reading_changed'}, 409);
+      const kind = url.searchParams.get('kind');
+      if (kind === null || !CONTEXT_KINDS.includes(kind) && kind !== 'harness') return json({error:'invalid_context_item_query'}, 400);
+      return json(contextItemOf(r, kind, url.searchParams.get('name')));
+    }
     const route = /^\/api\/requests\/(\d+)\/route$/.exec(url.pathname);
     if (route) {
       const r = byId.get(Number(route[1]));
@@ -999,3 +1050,5 @@ console.log('合成阅读场景：http://127.0.0.1:'+port+'/?session='+convKey);
 console.log('窗口分页场景：http://127.0.0.1:'+port+'/?session='+convWindow);
 console.log('缺通道场景：  http://127.0.0.1:'+port+'/?session='+convHook);
 console.log('轮次配对场景：http://127.0.0.1:'+port+'/?session='+convTurns);
+console.log('明星会话场景：http://127.0.0.1:'+port+'/?session='+convStar);
+console.log('拍摄直达：    http://127.0.0.1:'+port+'/?session='+convStar+'&demo=1&turn=1&expand=summary');
