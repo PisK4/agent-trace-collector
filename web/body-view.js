@@ -118,7 +118,7 @@ export function renderMessageDetail(entry, path = '', pairOf = null) {
         ? '<span class="tool-chip miss"><span>工具结果失败</span></span>' : '';
       const pair = pairOf === null ? null : pairOf(block, blockPath);
       const open = pair === null ? ''
-        : `<div class="conv-tools"><button class="chip-btn" data-tool-owner="${pair.owner}" data-call-ord="${pair.callOrd}">配对两端 ▸</button></div>`;
+        : `<div class="conv-tools"><button class="chip-btn ico" data-tool-owner="${pair.owner}" data-call-ord="${pair.callOrd}" aria-label="配对两端" title="查看配对的调用与结果">${icon('pair', 20)}</button></div>`;
       return `${failed}${open}<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(block.text)}</pre>`;
     }
     return `<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(JSON.stringify(block.raw, null, 2))}</pre>`;
@@ -190,7 +190,7 @@ export function renderUnknownBlockDetail(path, raw) {
 export function renderTools(tools) {
   if (tools.length === 0) return '';
   const rows = tools.map(tool => {
-    const open = `<button class="chip-btn" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}">配对两端 ▸</button>`;
+    const open = `<button class="chip-btn ico" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}" aria-label="配对两端" title="查看配对的调用与结果">${icon('pair', 20)}</button>`;
     const warn = tool.state === 'ambiguous'
       ? '<span class="tool-chip miss"><span>结果有多个候选，未配对</span></span>' : '';
     const parts = summaryParts(tool.name, tool.inputText);

@@ -330,7 +330,7 @@ test('工具行上屏：chip 承载工具身份，未配对结果保持中性 To
   expect(html).toContain('row-tint">Bash</span>');
   expect(html).toContain('<code>列目录</code>');
   // 未配对结果行：中性 chip 沿用现状文案。
-  expect(html).toContain('row-tint">Tool result</span>');
+  expect(html).toContain('aria-label="Tool result"');
   expect(html).not.toContain('row-kind');
   expect(html).not.toContain('Tool call');
   expect(html).not.toContain('用户');
@@ -367,7 +367,7 @@ test('结果行前缀三级：缓存内同款摘要、缓存外只工具名、�
   const unpairedSteps = projectSteps(row(), read(detail({ delta_ordinals: [2] }), [carrier],
     { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }));
   const unpaired = renderTraceRows(row(), unpairedSteps, 1, null, callOf);
-  expect(unpaired).toContain('row-tint">Tool result</span>');
+  expect(unpaired).toContain('aria-label="Tool result"');
   expect(unpaired).not.toContain('row-arrow');
   // 结果行悬停给调用摘要与完整结果正文。
   expect(cached).toContain('title="src/q.ts · 1400–1530 行 → 文件正文"');

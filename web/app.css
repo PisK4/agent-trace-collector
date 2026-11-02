@@ -542,8 +542,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .chain-row dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .chain-row code{font-size:10.5px;background:var(--inset);border:1px solid var(--line);border-radius:2px;padding:0 3px}
 /* 证据四行：行首是到达标记，只有异常态（未到/依赖）出颜色。 */
-.evidence-chain .chain-row{grid-template-columns:14px minmax(0,1fr)}
-.evidence-chain .ev{display:inline-block;width:14px;text-align:center;font-weight:600}
+.evidence-chain .chain-row{grid-template-columns:16px minmax(0,1fr)}
+.evidence-chain .ev{display:inline-flex;align-items:center;justify-content:center;width:16px}
 .evidence-chain .ev.ok{color:var(--good)}
 .evidence-chain .ev.miss{color:var(--bad)}
 .evidence-chain .ev.wait{color:var(--muted)}

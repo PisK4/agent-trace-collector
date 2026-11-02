@@ -1074,7 +1074,7 @@ if (typeof document !== 'undefined') {
     const exec = pair === null ? null : pair.exec_ms;
     return `<section class="rail-section">
       <div class="tool-page-head">
-        <button class="chip-btn ghost" data-tool-back="1">← 返回请求</button>
+        <button class="chip-btn ghost ico" data-tool-back="1" aria-label="返回请求" title="返回请求">${icon('back', 20)}</button>
         <span class="mono">${esc(tool.name)} · 调用 #${tool.ord}</span>
         ${exec === null ? '' : `<span class="cnt mono" title="${esc(EXEC_MS_HINT)}">${esc(compact(exec))}</span>`}
       </div>

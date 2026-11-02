@@ -550,21 +550,23 @@ const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'reply', tool_resul
  * @returns {{chip: string, args: string, arrow: boolean}}
  */
 function toolRowParts(step, callOf) {
+  // 无名工具没有名字可写：身份 chip 用一个形状表示，原名仍进 aria-label 与 title。
+  const unnamed = (label) => `<span class="row-tint ico" role="img" aria-label="${label}" title="${label}">${icon('role-tool', 16)}</span>`;
   if (step.kind === 'tool') {
     const name = step.toolName ?? '';
-    const label = name !== '' ? name : '未命名工具';
-    return { chip: `<span class="row-tint">${esc(label)}</span>`, args: step.toolArgs ?? '', arrow: false };
+    const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed('未命名工具');
+    return { chip, args: step.toolArgs ?? '', arrow: false };
   }
   if (step.kind === 'tool_result') {
     const owner = step.pairOwner;
     const call = owner !== null && callOf !== null ? callOf(owner.reqId, owner.callOrd) : null;
     if (call === null && (step.toolName ?? '') === '') {
-      return { chip: '<span class="row-tint">Tool result</span>', args: '', arrow: false };
+      return { chip: unnamed('Tool result'), args: '', arrow: false };
     }
     const name = call !== null ? call.name : /** @type {string} */ (step.toolName);
-    const label = name !== '' ? name : '未命名工具';
+    const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed('未命名工具');
     const args = call !== null ? summaryParts(call.name, call.inputText).args : '';
-    return { chip: `<span class="row-tint">${esc(label)}</span>`, args, arrow: true };
+    return { chip, args, arrow: true };
   }
   return { chip: '', args: '', arrow: false };
 }

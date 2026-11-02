@@ -324,8 +324,8 @@ export function sessionHead(input) {
         ${refreshedAt !== null ? `<span class="muted">刷新于 ${esc(clock(refreshedAt))}</span>` : ''}
         <button class="chip-btn ghost ico" id="refresh-window" aria-label="刷新" title="重新读取当前窗口；输入变化会换发阅读版本">${icon('refresh', 20)}</button>
         ${windowAnchor === 'latest'
-          ? '<button class="chip-btn ghost" id="jump-opposite" title="重建为会话最早一页，从头阅读">回到开头 ↑</button>'
-          : '<button class="chip-btn ghost" id="jump-opposite" title="重建为会话最新一页，选中最新一笔">回到最新 ↓</button>'}
+          ? `<button class="chip-btn ghost ico" id="jump-opposite" aria-label="回到开头" title="重建为会话最早一页，从头阅读">${icon('jump-start', 20)}</button>`
+          : `<button class="chip-btn ghost ico" id="jump-opposite" aria-label="回到最新" title="重建为会话最新一页，选中最新一笔">${icon('jump-end', 20)}</button>`}
       </div>
     </div>
     <div class="session-facts">
