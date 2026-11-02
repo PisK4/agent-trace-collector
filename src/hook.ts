@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
 import type { Store } from './store';
 import { commitUnit } from './store';
@@ -14,6 +15,7 @@ import {
 } from './derive/state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
 import { HAVE_BODY, MATCH_BY_RESPONSE_ID, hookConv, insertEvidenceTx, sessionIdentity } from './evidence';
+import type { ConvRef } from './evidence';
 
 /**
  * hook 回调的接收与证据关联。
@@ -89,6 +91,43 @@ function bytesOf(value: unknown): Uint8Array {
 }
 
 /**
+ * 复刻 magpie `conversationID` 的摘要口径：从请求对象里找首条 role="user"
+ * 元素（messages 优先、gemini contents 次之、input 兜底），取其 JSON 字节做
+ * sha256 前 12 字节 hex、加 magpie- 前缀。算不出时返回 null——fail-safe，
+ * 调用方必须退回 hookConv 的默认组键，不能猜时间近邻。
+ *
+ * 与 magpie [gateway.go:6720-6766] 保持一致：magpie 操作的是原始 JSON 字节，
+ * 这里拿的是 envelope 里 parse 后再 JSON.stringify 的元素，Hermes 客户端
+ * 实测 63/63 命中（±250ms 唯一候选、0 歧义）。
+ */
+export function convDigestOf(request: unknown): ConvRef | null {
+  if (request === null || request === undefined || typeof request !== 'object') return null;
+  const obj = request as Record<string, unknown>;
+  const geminiContents = Array.isArray(obj.messages) === false && Array.isArray(obj.contents);
+  const items = Array.isArray(obj.messages) ? obj.messages
+    : Array.isArray(obj.contents) ? obj.contents
+      : Array.isArray(obj.input) ? obj.input
+        : null;
+  if (items === null || items.length === 0) return null;
+  // 选首条 role="user" 元素，或 gemini contents 的空 role 元素；都没挑第一条。
+  let first = items[0];
+  for (const it of items) {
+    const el = it as Record<string, unknown> | null;
+    if (el === null || typeof el !== 'object') continue;
+    const role = el.role;
+    if (role === 'user' || (geminiContents && role === '')) { first = it; break; }
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = Buffer.from(JSON.stringify(first), 'utf8');
+  } catch { return null; }
+  if (bytes.length === 0) return null;
+  const hex = createHash('sha256').update(bytes).digest('hex').slice(0, 24);
+  const digest = 'magpie-' + hex;
+  return { key: JSON.stringify(['conv', digest]), source: 'conv-digest' };
+}
+
+/**
  * 按规范化 response ID 找候选。只认 route_id 非空的存活请求；
  * 多个候选时不挑一个，标 ambiguous 留给后续证据收敛。
  */
@@ -118,12 +157,13 @@ function insertHookRequest(
   envelope: HookEnvelope,
   now: number,
   responseIdNorm: string | null,
+  convOverride: ConvRef | null = null,
 ): number {
   // 上游的 session 空串表示"没报会话"，不是会话身份：组键、session 与 actor
   // 都按缺失处理，原始空值只留在 raw_hook。账本或路由后来确认身份时，
   // COALESCE 才能把真实的会话补进来。
   const session = sessionIdentity(envelope.session);
-  const conv = hookConv(session, envelope.hook_id);
+  const conv = convOverride !== null ? convOverride : hookConv(session, envelope.hook_id);
   // hook 阶段只知道会话，不知道 actor；actor_state 留 unknown，等账本或路由确认。
   const actor = session;
   const started = Number.isFinite(envelope.observed_start_ms) ? envelope.observed_start_ms : now;
@@ -191,6 +231,13 @@ export function acceptHook(
   // 暂停时不写任何东西：收下却存不进正文只会多一条误导性的"成功"记录。
   if (admission.mode === 'paused') throw new Error('disk_full');
 
+  // 会话摘要在写事务外计算：纯 CPU，不占 writer 时间窗口；算不出则不写 fallback，
+  // 让内部继续走 hookConv 的默认组键，保持现有行为。
+  // 仅当上游未显式报 session 时才使用摘要——session 是客户端直接给的会话身份，
+  // 优先级高于任何启发式摘要。
+  const sessionPresent = sessionIdentity(envelope.session) !== null;
+  const digestConv = sessionPresent ? null : convDigestOf(envelope.request);
+
   return store.write(db => {
     if (typeof envelope.hook_id !== 'string' || envelope.hook_id.length === 0) {
       throw new Error('hook_id_missing');
@@ -222,7 +269,7 @@ export function acceptHook(
     if (joined.target !== null) {
       reqId = joined.target;
     } else {
-      reqId = insertHookRequest(db, envelope, now, responseIdNorm);
+      reqId = insertHookRequest(db, envelope, now, responseIdNorm, digestConv);
     }
 
     const body: BodyInput = {
