@@ -14,48 +14,65 @@ function harness(ids: number[]) {
   const reads = new Map<number, any>();
   const starts: number[] = [];
   const completed: number[] = [];
+  /** 每次通知的 ids 形状：验证目标一次、每读取块聚合一次。 */
+  const batches: number[][] = [];
   let getRequest = async (id: number) => reads.get(id);
   const store = {
     getWindow: () => ({ requests: rows }),
     peekRequest: (id: number) => reads.get(id) ?? null,
     readRequest: async (id: number) => { starts.push(id); return getRequest(id); },
+    readRequests: async (_batch: number[]) => [] as RequestRead[],
     loadDelta: async (id: number, _pages: number) => reads.get(id),
+    loadDeltas: async (_batch: number[], _pages: number) => {},
   } as unknown as ReaderStore;
-  const preparation = createTracePreparation(store, id => completed.push(id));
+  const preparation = createTracePreparation(store, (batchIds, _dependencies) => {
+    batches.push([...batchIds]);
+    for (const id of batchIds) completed.push(id);
+  });
   const fresh = (id: number, extra: Record<string, unknown> = {}) => ({
     status: 'fresh', token: `token-${id}`, detail: { prev_relation: 'first', prev_req_id: null, tool_results: [] },
     meta: {}, delta: { done: true, error: null }, ...extra,
   });
   for (const id of ids) reads.set(id, fresh(id));
-  return { rows, reads, starts, completed, store, preparation, fresh,
+  return { rows, reads, starts, completed, batches, store, preparation, fresh,
     onRead: (fn: (id: number) => Promise<RequestRead>) => { getRequest = fn; } };
 }
 
-test('目标先准备，其余每批四组，全部完成才结束', async () => {
+test('目标先独立准备，其余一个读取块批量完成并聚合一次通知', async () => {
   const h = harness([1, 2, 3, 4, 5, 6]);
   const first = gate(), batch = gate();
   h.onRead(async id => { await (id === 3 ? first.promise : batch.promise); return h.reads.get(id); });
+  h.store.readRequests = /** @type {any} */ (async (ids: number[]) => {
+    await batch.promise;
+    for (const id of ids) h.reads.set(id, h.fresh(id));
+    return [] as RequestRead[];
+  });
   const pending = h.preparation.prepareWindow(3);
   await tick();
   expect(h.starts).toEqual([3]);
   first.release();
   await tick();
-  expect(h.completed).toEqual([3]);
-  expect(h.starts).toEqual([3, 1, 2, 4, 5]);
+  expect(h.batches).toEqual([[3]]);
   batch.release();
   expect(await pending).toBe(true);
-  expect(h.starts).toEqual([3, 1, 2, 4, 5, 6]);
-  expect(h.completed).toHaveLength(6);
+  expect(h.batches).toEqual([[3], [1, 2, 4, 5, 6]]);
+  expect(h.completed).toEqual([3, 1, 2, 4, 5, 6]);
 });
 
 test('失败组重试期间撤下旧提交资格，完成后才恢复', async () => {
   const h = harness([1]);
   h.reads.set(1, { status: 'failed', detail: null, token: null });
-  h.onRead(async () => { throw new Error('unavailable'); });
+  const reread = gate();
+  let failingRound = true;
+  h.store.readRequests = /** @type {any} */ (async () => {
+    if (failingRound) throw new Error('unavailable');
+    await reread.promise;
+    h.reads.set(1, h.fresh(1));
+    return [] as RequestRead[];
+  });
   await h.preparation.prepareWindow(null);
   expect(h.preparation.has(1)).toBe(true);
-  const reread = gate();
-  h.onRead(async () => { await reread.promise; h.reads.set(1, h.fresh(1)); return h.reads.get(1); });
+  failingRound = false;
   const retry = h.preparation.prepareWindow(null);
   expect(h.preparation.has(1)).toBe(false);
   reread.release();

@@ -40,7 +40,8 @@ bun run verify:notes   # 提交前
 - **共享解释规则不悄悄加 agent 门控**：输入包装、OMP 归档锚点与 Claude 技能标题格式的定义留在 `input-interpretation.ts` 与 `capabilities.ts`，对未知与空标签同样生效；收紧门控是行为变化，先列反例、升 `PURPOSE_VERSION` 并按显式重建交付，不混进重构提交，纯移动不升版、不开重建。
 - `main.ts` 只做 wiring（timer、防重入锁、配置装配、进程日志），任务体归持有对应概念的 module，见[定时任务体归位](.agents/notes/implemented/architecture/2026-10-23-main-orchestration-delegation.md)。
 - 监听地址写死 `127.0.0.1`，不读环境变量覆盖；运行数据在仓库外，文件 0600、目录 0700，其余边界见[安全边界](docs/architecture-design.md#安全边界)。
-- 正文与路由内容在页面一律转义，不直接插 HTML。
+- **正文与路由内容在页面一律转义**，不直接插 HTML。
+- **页面读取统一走读取架构**：新增或改动读取前先读[读取功能接入规则](docs/read-feature-rules.md)确定用途、owner 与预算；具名操作进 `src/read-contract.ts`，HTTP Fetch 只允许 `web/read-http.js`（`tests/read-boundaries.test.ts` 守门），并发与取消只归 `web/read-scheduler.js`，证据缓存只归 `web/reader-store.js`。见[读取架构](.agents/notes/implemented/architecture/2026-11-02-read-architecture-and-client-seams.md)。
 - 界面不加多余的二级标签与说明文字，让布局解释结构：分组、间距、对齐与表面明度差承担解释职责；正常态不带装饰性状态，异常才出现标签。见[前端降噪常备约束](.agents/notes/implemented/process/2026-10-24-frontend-denoise-standing-rule.md)。
 
 ## 目录与上位文档

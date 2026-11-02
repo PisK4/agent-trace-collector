@@ -194,7 +194,7 @@ function restoreAnchor(main, scroller, anchor) {
 
 /**
  * @param {HTMLElement} main 中栏容器
- * @returns {{commit: (model: MainModel, scroller: Element, preferredReq?: number | null) => void, reset: () => void}}
+ * @returns {{commit: (model: MainModel, scroller: Element, preferredReq?: number | null) => 'clean' | 'selection' | 'structural', reset: () => void}}
  */
 export function createMainView(main) {
   /** @type {Element | null} */
@@ -395,21 +395,25 @@ export function createMainView(main) {
   }
 
   /**
+   * 键控提交：clean 只可能因选择之外的输入变化出现（此处不发生），
+   * selection 只写高亮，structural 才动 DOM 与锚点。返回提交级别供调用方
+   * 决定是否做折叠恢复与布局读取。
    * @param {MainModel} model
    * @param {Element} scroller 中栏滚动容器（桌面为 main，窄屏为文档滚动元素）
    * @param {number|null} [preferredReq] 目标组：首载与定点期间优先保持它不动
+   * @returns {'clean' | 'selection' | 'structural'}
    */
   function commit(model, scroller, preferredReq = null) {
     const items = listItems(model);
     const verdict = inspect(model, items);
-    if (verdict.clean) return;
+    if (verdict.clean) return 'clean';
     if (verdict.selectionOnly) {
       applySelection(model.selectedStep);
-      return;
+      return 'selection';
     }
     const anchor = list === null ? null : captureAnchor(main, scroller, preferredReq);
     ensureSkeleton(model);
-    if (list === null) return;
+    if (list === null) return 'structural';
     // 轮次带只在内容变化时替换：它在会话头与列表之间，常驻节点不做无谓重建。
     if (model.bandHtml !== bandHtml) {
       const node = model.bandHtml === '' ? null : elementOf(model.bandHtml);
@@ -432,6 +436,7 @@ export function createMainView(main) {
     for (const group of model.groups) commitGroup(group);
     applySelection(model.selectedStep);
     restoreAnchor(main, scroller, anchor);
+    return 'structural';
   }
 
   function reset() {

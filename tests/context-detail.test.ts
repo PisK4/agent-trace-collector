@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
-  contentTextOf, contextDetailHtml, directoryStatusHtml, entryBodyUrl, entryContentHtml,
+  contentTextOf, contextDetailHtml, directoryStatusHtml, entryContentHtml, entryReadTarget,
   iidParse, sharedEntryRead,
 } from '../web/context-detail.js';
 
@@ -149,17 +149,15 @@ test('条目正文：展开即内容，抽不出文本直出 JSON，不再挂原
   expect(entryContentHtml(entry, { state: 'evicted', reason: 'budget' })).toContain('budget');
 });
 
-test('正文 URL：顶层字段条目没有消息序号，按正文根读取', () => {
+test('正文读取目标：顶层字段条目走头部区间，其余按序号读，工具结果走配对操作', () => {
   const session = { reqId: 7, token: 'r1-x' };
-  const top = entryBodyUrl(session, { ord: null, call_ord: null, owner_req: null });
-  expect(top).toBe('/api/requests/7/body?if_reading=r1-x');
-  expect(top).not.toContain('NaN');
-  expect(top).not.toContain('from=');
-  // 有消息序号的条目仍按区间读；工具结果走配对端点，不看自己有没有序号。
-  expect(entryBodyUrl(session, { ord: 3, call_ord: null, owner_req: null }))
-    .toBe('/api/requests/7/body?from=3&to=4&if_reading=r1-x');
-  expect(entryBodyUrl(session, { ord: 5, call_ord: 1, owner_req: 9 }))
-    .toBe('/api/requests/9/tools/1/result?if_reading=r1-x');
+  const top = entryReadTarget(session, { ord: null, call_ord: null, owner_req: null });
+  expect(top).toEqual({ operation: 'body', input: { id: 7, token: 'r1-x', from: 0, to: 40 } });
+  // 有消息序号的条目按单条区间读；工具结果走配对操作，不看自己有没有序号。
+  expect(entryReadTarget(session, { ord: 3, call_ord: null, owner_req: null }))
+    .toEqual({ operation: 'body', input: { id: 7, token: 'r1-x', from: 3, to: 4 } });
+  expect(entryReadTarget(session, { ord: 5, call_ord: 1, owner_req: 9 }))
+    .toEqual({ operation: 'toolResult', input: { id: 9, ord: 1, token: 'r1-x' } });
 });
 
 test('顶层字段条目按 path 解引用：工具定义给 Schema，不再渲染首条消息', () => {

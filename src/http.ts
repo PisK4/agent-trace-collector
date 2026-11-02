@@ -14,9 +14,11 @@ import { listTurns } from './queries/turns';
 import { listBgJobs } from './queries/bg-jobs';
 import { PAGE_MAX, bodyRangeError, getBodyPage } from './protocols';
 import {
-  getReadingBody, getReadingDetail, getToolResultReading, getContextItemReading,
+  getReadingBody, getReadingBatch, getReadingRangeBatch, getReadingDetail,
+  getToolResultReading, getContextItemReading,
   isValidReadingToken, ReadingConflictError,
 } from './reading';
+import type { RangeInput } from './read-contract';
 import { acceptHook } from './hook';
 import type { HookAdmission, HookEnvelope } from './hook';
 import { OtlpDecodeError } from './sources/otlp/decode';
@@ -49,11 +51,14 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/parts.js': { file: 'parts.js', type: 'text/javascript; charset=utf-8' },
   '/rail-facts.js': { file: 'rail-facts.js', type: 'text/javascript; charset=utf-8' },
   '/reader-store.js': { file: 'reader-store.js', type: 'text/javascript; charset=utf-8' },
+  '/read-http.js': { file: 'read-http.js', type: 'text/javascript; charset=utf-8' },
+  '/read-scheduler.js': { file: 'read-scheduler.js', type: 'text/javascript; charset=utf-8' },
   '/row-summary.js': { file: 'row-summary.js', type: 'text/javascript; charset=utf-8' },
   '/selection.js': { file: 'selection.js', type: 'text/javascript; charset=utf-8' },
   '/trace-commit.js': { file: 'trace-commit.js', type: 'text/javascript; charset=utf-8' },
   '/trace-dom.js': { file: 'trace-dom.js', type: 'text/javascript; charset=utf-8' },
   '/trace-preparation.js': { file: 'trace-preparation.js', type: 'text/javascript; charset=utf-8' },
+  '/trace-model.js': { file: 'trace-model.js', type: 'text/javascript; charset=utf-8' },
   '/trace-pair.js': { file: 'trace-pair.js', type: 'text/javascript; charset=utf-8' },
   '/tool-summary.js': { file: 'tool-summary.js', type: 'text/javascript; charset=utf-8' },
   '/trace-view.js': { file: 'trace-view.js', type: 'text/javascript; charset=utf-8' },
@@ -136,6 +141,46 @@ function parseIndex(url: URL, name: string, fallback: number): number {
   if (raw === null) return fallback;
   if (!/^\d+$/.test(raw)) throw new QueryInputError('invalid_body_range');
   return Number(raw);
+}
+
+/** 批读 URL 上限：客户端发送前按同一界限折半重试（414 → batch_too_large）。 */
+export const MAX_READ_URL_BYTES = 16 * 1024;
+const MAX_DETAIL_BATCH = 32;
+const MAX_RANGE_BATCH = 64;
+
+/** 批读 ids 参数：JSON 数组、正 safe integer；形状、界限与 0 项都是 invalid_input。 */
+function parseBatchIds(url: URL): number[] | null {
+  const raw = url.searchParams.get('ids');
+  if (raw === null) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > MAX_DETAIL_BATCH) return null;
+  const ids: number[] = [];
+  for (const value of parsed) {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) return null;
+    ids.push(value);
+  }
+  return ids;
+}
+
+/** 批读区间参数：每项 {id,token,from,to}；token 必填并校验格式，每片共用 bodyRangeError 界限。 */
+function parseBatchRanges(url: URL): RangeInput[] | null {
+  const raw = url.searchParams.get('items');
+  if (raw === null) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > MAX_RANGE_BATCH) return null;
+  const ranges: RangeInput[] = [];
+  for (const value of parsed) {
+    if (!isRecord(value)) return null;
+    const { id, token, from, to } = value;
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return null;
+    if (typeof token !== 'string' || !isValidReadingToken(token)) return null;
+    if (typeof from !== 'number' || typeof to !== 'number') return null;
+    if (bodyRangeError(from, to) !== null) return null;
+    ranges.push({ id, token, from, to });
+  }
+  return ranges;
 }
 
 /**
@@ -541,6 +586,28 @@ export function createHandler(
         const page = getReadingBody(store, canonical, from, to, expected);
         if (page === null) return json({ error: 'not_found' }, 404);
         return json(page);
+      }
+
+      // 阅读批端点：预算取固定默认值，不允许调用者覆盖；超长 URL 414，
+      // 客户端折半重试；参数非法整体 400，合法输入的错误逐项单列。
+      const readingsMatch = /^\/api\/sessions\/([^/]+)\/readings$/.exec(path);
+      if (readingsMatch !== null) {
+        if (Buffer.byteLength(req.url) > MAX_READ_URL_BYTES) {
+          return json({ error: 'batch_too_large' }, 414);
+        }
+        const ids = parseBatchIds(url);
+        if (ids === null) return json({ error: 'invalid_input' }, 400);
+        return json(getReadingBatch(store, decodeURIComponent(readingsMatch[1]!), ids));
+      }
+
+      const readingRangesMatch = /^\/api\/sessions\/([^/]+)\/reading-ranges$/.exec(path);
+      if (readingRangesMatch !== null) {
+        if (Buffer.byteLength(req.url) > MAX_READ_URL_BYTES) {
+          return json({ error: 'batch_too_large' }, 414);
+        }
+        const ranges = parseBatchRanges(url);
+        if (ranges === null) return json({ error: 'invalid_input' }, 400);
+        return json(getReadingRangeBatch(store, decodeURIComponent(readingRangesMatch[1]!), ranges));
       }
 
       return json({ error: 'not_found' }, 404);

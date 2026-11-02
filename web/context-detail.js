@@ -64,19 +64,22 @@ export function contentTextOf(value) {
  */
 
 /**
- * 条目的正文 URL。工具结果走配对端点；其余按消息区间读。顶层字段条目没有
- * 消息序号，走正文根读取——拼 `from=null&to=NaN` 会被服务端 400。
+ * 条目的正文读取目标。工具结果走配对操作；其余按消息区间读。顶层字段条目
+ * 没有消息序号，保留正文头部区间 [0,40) 语义——request_fields 只在头部页返回，
+ * 条目按 path 从 request_fields 解引用。
  * @param {{reqId: number, token: string}} session
  * @param {{ord: number | null, call_ord: number | null, owner_req: number | null}} entry
- * @returns {string}
+ * @returns {import('../src/read-contract').ContextBodyTarget}
  */
-export function entryBodyUrl(session, entry) {
-  const token = encodeURIComponent(session.token);
+export function entryReadTarget(session, entry) {
+  const token = session.token;
   if (entry.call_ord !== null && entry.owner_req !== null) {
-    return `/api/requests/${entry.owner_req}/tools/${entry.call_ord}/result?if_reading=${token}`;
+    return { operation: 'toolResult', input: { id: entry.owner_req, ord: entry.call_ord, token } };
   }
-  if (entry.ord === null) return `/api/requests/${session.reqId}/body?if_reading=${token}`;
-  return `/api/requests/${session.reqId}/body?from=${entry.ord}&to=${entry.ord + 1}&if_reading=${token}`;
+  if (entry.ord === null) {
+    return { operation: 'body', input: { id: session.reqId, token, from: 0, to: 40 } };
+  }
+  return { operation: 'body', input: { id: session.reqId, token, from: entry.ord, to: entry.ord + 1 } };
 }
 
 /** 目录条目的位置与身份列；正文按 entry 的落点分流到两种既有端点。
@@ -211,45 +214,47 @@ export function entryContentHtml(entry, data) {
 }
 
 /**
- * 条目正文的弹窗内读取：同一 URL 只发一次请求。已就绪直接复用；进行中共用
- * 同一 promise——多个工具定义行展开时共享一次根读取；失败不缓存，下次展开
- * 重试。
+ * 条目正文的弹窗内读取：同一目标只发一次请求。已就绪直接复用；进行中共用
+ * 同一 promise——多个工具定义行展开时共享一次头部区间读取；失败不缓存，
+ * 下次展开重试。
  * @param {Map<string, {phase: string, data?: any, promise?: Promise<{data: any} | {error: unknown}>}>} contents
- * @param {string} url
- * @param {() => Promise<any>} doFetch
+ * @param {string} key 目标缓存键（序列化的读取目标）
+ * @param {() => Promise<any>} doRead
  * @returns {Promise<{data: any} | {error: unknown}>}
  */
-export function sharedEntryRead(contents, url, doFetch) {
-  const cached = contents.get(url);
+export function sharedEntryRead(contents, key, doRead) {
+  const cached = contents.get(key);
   if (cached?.phase === 'ready') return Promise.resolve({ data: cached.data });
   if (cached?.promise !== undefined) return cached.promise;
-  const promise = doFetch().then(
+  const promise = doRead().then(
     data => ({ data }),
     error => {
-      contents.delete(url);
+      contents.delete(key);
       return { error };
     },
   );
-  contents.set(url, { phase: 'loading', promise });
+  contents.set(key, { phase: 'loading', promise });
   return promise;
 }
 
 /**
- * @param {{ fetcher: (url: string) => Promise<Response> }} io
+ * @param {{
+ *   readDirectory: (selection: ContextSelection, cursor: string | null, signal: AbortSignal) => Promise<ContextDirectory>,
+ *   readEntry: (target: import('../src/read-contract').ContextBodyTarget, signal: AbortSignal) => Promise<any>,
+ * }} io 读取经注入的具名操作 facade 走统一调度；弹窗不直接 Fetch。
  */
-export function createContextMenu({ fetcher }) {
+export function createContextMenu({ readDirectory, readEntry }) {
   /** @type {{s: ContextSelection, dir: {phase: string, data?: any, error?: string | null}, contents: Map<string, {phase: string, data?: any, promise?: Promise<{data: any} | {error: unknown}>}>, trigger: Element | null} | null} */
   let open = null;
   let generation = 0;
   /** @type {HTMLElement | null} */
   let root = null;
+  /** 弹窗生命周期：关闭与换代次即取消在途读取。 */
+  /** @type {AbortController | null} */
+  let controller = null;
 
-  const jsonOf = async (/** @type {string} */ url) => {
-    const response = await fetcher(url);
-    if (response.status === 409) throw new Error('reading_changed');
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.json();
-  };
+  /** @param {unknown} error @returns {boolean} 关闭取消不是失败：不落错误态。 */
+  const isCancelled = error => /** @type {Error & {code?: string}} */ (error).code === 'cancelled';
 
   function ensureRoot() {
     if (root !== null) return;
@@ -280,17 +285,14 @@ export function createContextMenu({ fetcher }) {
 
   async function loadDirectory() {
     const s = open;
-    if (s === null) return;
+    if (s === null || controller === null) return;
     const gen = generation;
-    const params = new URLSearchParams({ kind: s.s.kind, if_reading: s.s.token });
-    if (s.s.name !== null) params.set('name', s.s.name);
-    if (s.s.tag !== null) params.set('tag', s.s.tag);
     try {
-      const data = await jsonOf(`/api/requests/${s.s.reqId}/context-item?${params}`);
+      const data = await readDirectory(s.s, null, controller.signal);
       if (open === null || generation !== gen) return;
       open.dir = { phase: 'ready', data };
     } catch (error) {
-      if (open === null || generation !== gen) return;
+      if (open === null || generation !== gen || isCancelled(error)) return;
       open.dir = { phase: 'error', error: error instanceof Error ? error.message : '读取失败' };
     }
     paint();
@@ -298,19 +300,15 @@ export function createContextMenu({ fetcher }) {
 
   async function loadMore() {
     const s = open;
-    if (s === null || s.dir.phase !== 'ready') return;
+    if (s === null || s.dir.phase !== 'ready' || controller === null) return;
     const gen = generation;
-    const cursor = s.dir.data?.next_cursor;
-    const params = new URLSearchParams({ kind: s.s.kind, if_reading: s.s.token, cursor });
-    if (s.s.name !== null) params.set('name', s.s.name);
-    if (s.s.tag !== null) params.set('tag', s.s.tag);
     try {
-      const data = await jsonOf(`/api/requests/${s.s.reqId}/context-item?${params}`);
+      const data = await readDirectory(s.s, s.dir.data?.next_cursor ?? null, controller.signal);
       if (open === null || generation !== gen) return;
       s.dir.data.entries.push(...data.entries);
       s.dir.data.next_cursor = data.next_cursor;
     } catch (error) {
-      if (open === null || generation !== gen) return;
+      if (open === null || generation !== gen || isCancelled(error)) return;
       s.dir.error = error instanceof Error ? error.message : '读取失败';
     }
     paint();
@@ -318,20 +316,22 @@ export function createContextMenu({ fetcher }) {
 
   async function loadEntry(/** @type {number} */ index) {
     const s = open;
-    if (s === null || s.dir.phase !== 'ready') return;
+    const active = controller;
+    if (s === null || s.dir.phase !== 'ready' || active === null) return;
     const entry = s.dir.data?.entries?.[index];
     const slot = root?.querySelector(`[data-ctx-content="${index}"]`) ?? null;
     if (entry === undefined || slot === null) return;
     const gen = generation;
-    const url = entryBodyUrl({ reqId: s.s.reqId, token: s.s.token }, entry);
-    // 缓存按 URL 而不是条目序号：两个工具定义行展开共享同一次根读取。
-    const ready = s.contents.get(url);
+    const target = entryReadTarget({ reqId: s.s.reqId, token: s.s.token }, entry);
+    // 缓存按序列化目标而不是条目序号：两个工具定义行展开共享同一次头部区间读取。
+    const key = JSON.stringify(target);
+    const ready = s.contents.get(key);
     if (ready?.phase === 'ready') {
       slot.innerHTML = entryContentHtml(entry, ready.data);
       return;
     }
     slot.innerHTML = '<p class="ctx-d-note">读取正文…</p>';
-    const result = await sharedEntryRead(s.contents, url, () => jsonOf(url));
+    const result = await sharedEntryRead(s.contents, key, () => readEntry(target, active.signal));
     if (open === null || generation !== gen) return;
     if ('error' in result) {
       slot.innerHTML = `<p class="ctx-d-status">${
@@ -351,6 +351,8 @@ export function createContextMenu({ fetcher }) {
   function openDetail(selection, trigger = null) {
     ensureRoot();
     generation += 1;
+    controller?.abort();
+    controller = new AbortController();
     const triggerFocus = document.activeElement;
     const container = /** @type {HTMLElement} */ (root);
     open = { s: selection, dir: { phase: 'loading' }, contents: new Map(), trigger: triggerFocus instanceof Element ? triggerFocus : trigger };
@@ -366,6 +368,8 @@ export function createContextMenu({ fetcher }) {
     const trigger = open.trigger;
     open = null;
     generation += 1;
+    controller?.abort();
+    controller = null;
     if (root !== null) root.hidden = true;
     if (trigger instanceof HTMLElement) trigger.focus();
   }

@@ -153,22 +153,98 @@ function parseRange(from: number, to: number): void {
 }
 
 /**
- * 分页读取正文。区间左闭右开；首片带请求字段与回复，后续片只带消息。
- * 已回收或未收到的正文返回带 state 的说明，不用空数组冒充完整正文。
+ * 同一请求多个区间的共享准备：状态行、骨架解压与系统文本。单项读取与阅读
+ * 批次共同调用；准备不跨调用缓存，批次内同请求多区间共享一次解压。
  */
-export function getBodyPage(store: Store, id: number, from: number, to: number): BodyPage | null {
-  parseRange(from, to);
+export type BodyPrep = {
+  stateRow: {
+    conv_key: string | null;
+    body_state: string; parse_state: string | null; reply_state: string | null;
+    msg_count: number | null; miss_reason: string | null; body_evict_reason: string | null;
+    skeleton_z: Uint8Array | null; agent: string | null;
+  };
+  state: BodyState;
+  readable: boolean;
+  /** 骨架解析成功时的共享视图；不可读、无骨架或骨架不识别时为 null，页面给缺失能力。 */
+  skeleton: {
+    protocol: string;
+    rawFields: unknown;
+    rawReply: unknown;
+    fields: Record<string, unknown> | null;
+    stored: ReturnType<typeof validateSkeleton>;
+    systemTexts: string[];
+    systemPresent: boolean;
+  } | null;
+  /** 消息块解压缓存：同请求多区间共享，只活在一次准备里。 */
+  cache: Map<number, unknown>;
+};
+
+export function prepareBody(store: Store, id: number): BodyPrep | null {
   const stateRow = store.read.query<{
+    conv_key: string | null;
     body_state: string; parse_state: string | null; reply_state: string | null;
     msg_count: number | null; miss_reason: string | null; body_evict_reason: string | null;
     skeleton_z: Uint8Array | null; agent: string | null;
   }, [number]>(`
-    SELECT body_state, parse_state, reply_state, msg_count, miss_reason, body_evict_reason, skeleton_z, agent
+    SELECT conv_key, body_state, parse_state, reply_state, msg_count, miss_reason, body_evict_reason, skeleton_z, agent
     FROM request WHERE req_id=?`).get(id);
   if (stateRow == null) return null;
-
   const state = stateRow.body_state as BodyState;
   const readable = state === 'available' || state === 'partial';
+  let skeleton: BodyPrep['skeleton'] = null;
+  if (readable && stateRow.skeleton_z != null) {
+    // 宽松读取：损坏骨架展示为未知协议与空字段，分页不因结构损坏而拒绝整页。
+    const parsed = skeletonLike(JSON.parse(zstdDecompressSync(stateRow.skeleton_z).toString('utf8')));
+    if (parsed !== null) {
+      const fields = isRecord(parsed.request_without_messages) ? parsed.request_without_messages : null;
+      const protocol = typeof parsed.protocol === 'string' && parsed.protocol.length > 0
+        ? parsed.protocol : 'unknown';
+      const systemTexts: string[] = [];
+      const system = fields === null ? undefined : fields.system;
+      if (typeof system === 'string' && system.length > 0) systemTexts.push(system);
+      if (Array.isArray(system)) {
+        for (const block of system) {
+          if (isRecord(block) && typeof block.text === 'string' && block.text.length > 0) systemTexts.push(block.text);
+        }
+      }
+      // Responses 的系统提示在顶层 instructions，不在消息里：与 system 同源并入，
+      // 否则能力视图读不到技能、轨迹也没有顶层 System。
+      const instructions = fields === null ? undefined : fields.instructions;
+      if (typeof instructions === 'string' && instructions.length > 0) systemTexts.push(instructions);
+      // 只解压 system 块：能力提取不需要整份消息，回收后也不该扫描全部正文。
+      const systemRows = store.read.query<{ z: Uint8Array }, [number]>(`
+        SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+        WHERE rb.req_id=? AND rb.role=2 ORDER BY rb.ord`).all(id);
+      for (const row of systemRows) {
+        let message: unknown;
+        try {
+          message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
+        } catch {
+          continue;
+        }
+        const text = messageText(message);
+        if (text !== null) systemTexts.push(text);
+      }
+      skeleton = {
+        protocol,
+        rawFields: parsed.request_without_messages,
+        rawReply: parsed.reply,
+        fields,
+        stored: validateSkeleton(parsed, stateRow.msg_count),
+        systemTexts,
+        // instructions 与消息级 System 同属系统提示来源：只查 system 会把 Responses
+        // 判成「没有 system 字段」，技能视图因此永远停在 empty。
+        systemPresent: fields !== null
+          && ('system' in fields || 'instructions' in fields || systemRows.length > 0),
+      };
+    }
+  }
+  return { stateRow, state, readable, skeleton, cache: new Map() };
+}
+
+/** 用准备结果拼一个区间的页：状态、骨架与能力视图（含 request_fields/reply），不含消息。 */
+export function preparedPage(prep: BodyPrep, from: number, to: number): BodyPage {
+  const { stateRow, state, readable, skeleton } = prep;
   const missingCapabilities: CapabilityView = {
     tools: { state: 'missing', items: [], reason: 'body_unavailable' },
     skills: { state: 'missing', items: [], reason: 'body_unavailable' },
@@ -202,46 +278,11 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
     },
     capabilities: missingCapabilities,
   };
-  if (!readable) return page;
-  if (stateRow.skeleton_z == null) return page;
-
-  // 宽松读取：损坏骨架展示为未知协议与空字段，分页不因结构损坏而拒绝整页。
-  const skeleton = skeletonLike(JSON.parse(zstdDecompressSync(stateRow.skeleton_z).toString('utf8')));
   if (skeleton === null) return page;
-  const stored = validateSkeleton(skeleton, stateRow.msg_count);
-  if (stored !== null && stored.hasMessages) {
-    page.message_location = { key: stored.messagesKey, form: stored.messagesForm };
+  if (skeleton.stored !== null && skeleton.stored.hasMessages) {
+    page.message_location = { key: skeleton.stored.messagesKey, form: skeleton.stored.messagesForm };
   }
-  const fields = isRecord(skeleton.request_without_messages) ? skeleton.request_without_messages : null;
-  const protocol = typeof skeleton.protocol === 'string' && skeleton.protocol.length > 0
-    ? skeleton.protocol : 'unknown';
-  page.protocol = protocol;
-  const systemTexts: string[] = [];
-  const system = fields === null ? undefined : fields.system;
-  if (typeof system === 'string' && system.length > 0) systemTexts.push(system);
-  if (Array.isArray(system)) {
-    for (const block of system) {
-      if (isRecord(block) && typeof block.text === 'string' && block.text.length > 0) systemTexts.push(block.text);
-    }
-  }
-  // Responses 的系统提示在顶层 instructions，不在消息里：与 system 同源并入，
-  // 否则能力视图读不到技能、轨迹也没有顶层 System。
-  const instructions = fields === null ? undefined : fields.instructions;
-  if (typeof instructions === 'string' && instructions.length > 0) systemTexts.push(instructions);
-  // 只解压 system 块：能力提取不需要整份消息，回收后也不该扫描全部正文。
-  const systemRows = store.read.query<{ z: Uint8Array }, [number]>(`
-    SELECT b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
-    WHERE rb.req_id=? AND rb.role=2 ORDER BY rb.ord`).all(id);
-  for (const row of systemRows) {
-    let message: unknown;
-    try {
-      message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
-    } catch {
-      continue;
-    }
-    const text = messageText(message);
-    if (text !== null) systemTexts.push(text);
-  }
+  page.protocol = skeleton.protocol;
   const coverage: CapabilityCoverage = {
     complete: state === 'available',
     reason: state === 'available' ? 'available' : 'body_partial',
@@ -250,30 +291,43 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
     total: stateRow.msg_count,
   };
   page.capabilities = capabilityView({
-    protocol,
-    request: fields,
-    systemTexts,
+    protocol: skeleton.protocol,
+    request: skeleton.fields,
+    systemTexts: skeleton.systemTexts,
     coverage,
-    // instructions 与消息级 System 同属系统提示来源：只查 system 会把 Responses
-    // 判成「没有 system 字段」，技能视图因此永远停在 empty。
-    systemPresent: fields !== null
-      && ('system' in fields || 'instructions' in fields || systemRows.length > 0),
+    systemPresent: skeleton.systemPresent,
     agent: stateRow.agent,
   });
-
-  const cache = new Map<number, unknown>();
   if (from === 0) {
-    page.request_fields = skeleton.request_without_messages ?? null;
-    page.reply = skeleton.reply ?? null;
+    page.request_fields = skeleton.rawFields ?? null;
+    page.reply = skeleton.rawReply ?? null;
   }
-  if (from === to) return page;
+  return page;
+}
 
+/**
+ * 分页读取正文。区间左闭右开；首片带请求字段与回复，后续片只带消息。
+ * 已回收或未收到的正文返回带 state 的说明，不用空数组冒充完整正文。
+ */
+export function getBodyPage(store: Store, id: number, from: number, to: number): BodyPage | null {
+  parseRange(from, to);
+  const prep = prepareBody(store, id);
+  if (prep === null) return null;
+  const page = preparedPage(prep, from, to);
+  appendMessages(store, prep, id, page, from, to);
+  return page;
+}
+
+/** 读区间消息并解释，写进 page；from===to 只带骨架不读消息。 */
+export function appendMessages(store: Store, prep: BodyPrep, id: number, page: BodyPage, from: number, to: number): void {
+  if (!prep.readable || prep.skeleton === null) return;
+  if (from === to) return;
   const rows = store.read.query<{ ord: number; block: number }, [number, number, number]>(`
     SELECT ord, block FROM request_block WHERE req_id=? AND ord >= ? AND ord < ? ORDER BY ord`)
     .all(id, from, to);
-  page.messages = rows.map(row => ({ ord: row.ord, value: decompressBlock(store, row.block, cache) }));
+  page.messages = rows.map(row => ({ ord: row.ord, value: decompressBlock(store, row.block, prep.cache) }));
   page.interpretations = page.messages.map(message => {
-    const view = interpretMessage(message.value, stateRow.agent, message.ord);
+    const view = interpretMessage(message.value, prep.stateRow.agent, message.ord);
     // unrecognized 仍是用户消息：保留原文并标未识别，不能因为清洗失败就吞掉。
     // injected 与 empty 不是用户可见输入，页面据此不铺气泡。
     return {
@@ -281,7 +335,6 @@ export function getBodyPage(store: Store, id: number, from: number, to: number):
       is_input: view.input !== null && (view.input.state === 'text' || view.input.state === 'unrecognized'),
     };
   });
-  return page;
 }
 
 export { PAGE_MAX };

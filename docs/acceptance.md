@@ -4,6 +4,23 @@
 
 验收结果描述的是当时的代码与数据。现行行为以[架构设计](architecture-design.md)与代码为准；本文件回答的是「这条路径验证过没有、怎么验的」。
 
+## 读取架构落地（合成，2026-11-02）
+
+前提：worktree `atc-read-architecture` 的 `feat/read-architecture` 分支（基于 master `dfeccb7`），Task 1–7 全部在分支提交。合成数据只进测试与临时库；生产采集器未停，真实流量验收未执行、未授权。
+
+自动化：全量 `bun test` 1024 例通过（含 `read-boundaries` 的 fetch 旁路 AST 检查与同名掩盖检查，`web/read-http.js` 之外仅放行 app.js 的 fetcher 构造注入），`bun run typecheck` 通过，notes 门禁通过。分任务计：具名契约与双 adapter、调度并发/公平/scope 取消/dispose、全部读取入口迁移、批端点与批读契约、批量窗口准备、依赖感知显示模型各自带行为测试。
+
+合成性能（`bun scripts/perf-reader.ts`，临时库 + 真 HTTP 往返 + 真实客户端读取链 reader-store → trace-preparation → trace-model → 投影，每笔消息 6–8 条）：
+
+- 30 笔：打开会话并准备整个窗口 5 次 Fetch / 111 KB / 8ms；投影 30/30 组就绪。
+- 364 笔：窗口准备 5 次 Fetch / 9ms；连续 `loadLater` 全量加载 20 次 Fetch / 1.3 MB / 32ms。
+- 2500 笔：窗口准备 5 次 Fetch / 19ms；全量加载 106 次 Fetch / 9.2 MB / 779ms（评估目标 ≤30 秒）。
+- 取消：窗口准备发起后立即 dispose，已发出 2 次后其余读取被截断，收尾不损坏（`batch_too_large`/取消不展开单项风暴）；`oversizedFallbacks` 三个规模均为 0。
+
+浏览器合成验证（ego lite 操作 worktree 检出的生产页面，`prototypes/synthetic-server.ts` 合成数据，网络延迟注入拉大时序窗口）：目标直达（目标单项先于其余读取批）、加载中点选、A→B 快速切换、切会话取消与旧内容清除、原组节点身份（增量落地后 DOM 节点未重建）、焦点保持、文本选择保持、下方追加锚点、窄屏（390px）布局与选中渲染，全部通过且无错误横幅。
+
+未覆盖：2,500 笔规模的 GC 后堆读数与长任务采样；真实流量只读复测（同页切换、无 session 历史、pageshow.persisted、summary entries 与工具页签的费用四态）——按惯例另获授权后执行并补记本节。生产部署、合并 master 与切片解冻均未发生。
+
 ## 轨迹阅读与轮次定位（合成，2026-10-28）
 
 隔离 worktree 基于 `19d35a6`，测试只使用合成数据。初版定向运行轮次结算、末尾命令、窗口准备、自动重读、正文与前端展示、静态白名单、切片派生共 11 个文件，236 项通过；选择意图与键控提交另 23 项通过。后续坏尾块与派生版本调整后，切片派生和会话汇总 48 项通过，轮次结算、末尾扫描与轮次面板 31 项通过。右栏版本守卫调整后，轨迹展示、读数页、reader-store 与窗口准备共 110 项通过，`bun run typecheck` 通过。Responses 数组、裸字符串与工具循环、未知前驱、坏引用和末尾坏块均在合成场景检查。窗口准备的可控 Promise 场景检查重试、作废、换代和 token 变化。另对损坏骨架的消息位置执行定向测试，1 项通过。
