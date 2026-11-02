@@ -134,7 +134,7 @@ export function derivedStateOf(row: {
  */
 export const GROUP_READ_COLUMNS = `g.state AS group_state,g.input_revision AS group_input,
   g.published_revision AS group_published,g.target_algorithm,g.published_algorithm,
-  g.from_sort AS group_prefix_sort`;
+  g.published_generation AS group_generation,g.from_sort AS group_prefix_sort`;
 
 /** 摘要状态与依据：发布代映射 retention/algorithm/basis；组不 current 且本行不在前缀时置 NULL。 */
 export const SUMMARY_STATE_COL = (g: string, d: string, r: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN ${d}.retention_state WHEN ${groupCurrentSql(g)} THEN ${r}.summary_state WHEN ${rowPrefixSql(g, r)} THEN ${r}.summary_state ELSE NULL END`;
@@ -152,6 +152,8 @@ type StateColumns = {
   purpose_pending: number; summary_state: string | null; summary_algorithm: number | null;
   group_state: string | null; group_input: number | null; group_published: number | null;
   target_algorithm: number | null; published_algorithm: number | null;
+  /** 发布代非空的组走代际表，不参与前缀发布。 */
+  group_generation: string | null;
   /** 组内最早受影响的位置；本行位置严格小于它时，行级产物不受这一版输入影响。 */
   group_prefix_sort: string | null;
 };
@@ -206,6 +208,8 @@ function reasoningSpanOf(row: ProjectableRow): number | null {
  */
 export function prefixValid(row: ProjectableRow): boolean {
   if (row.purpose_pending !== 0) return false;
+  // 发布代非空的组走代际表，不参与前缀：它的行值由代际发布给出，`from_sort` 不描述那一次发布。
+  if (row.group_generation !== null) return false;
   const sort = row.group_prefix_sort;
   if (sort === null || sort === '' || sort === POSITION_ALL) return false;
   return positionKey(row.started_ms) < sort;
