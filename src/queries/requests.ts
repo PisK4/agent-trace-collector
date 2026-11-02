@@ -286,6 +286,8 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
   const { row, toolCalls, toolResults } = snapshot;
   const projected = projectRow(row);
   const current = projected.state === 'current';
+  // 关系与增量是行级产物：本行在组的最早受影响位置之前时，本轮算出的值仍成立。
+  const rowFacts = current || projected.safe.derived_prefix;
   let summaryRaw: unknown = null;
   if (row.summary_z !== null) {
     try {
@@ -303,9 +305,10 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     ...projected.safe,
     conv_key: row.conv_key ?? '',
     // 关系、增量与工具配对是组的结果：组没算完时它们描述的是上一次的输入。
-    prev_req_id: current ? row.prev_req_id : null,
-    prev_relation: current ? row.prev_relation as RequestDetail['prev_relation'] : null,
-    delta_ordinals: current && Array.isArray(parseJsonOrNull(row.delta_ordinals))
+    // 前缀行是例外：本行不受这一版输入影响，关系与增量照原值返回。
+    prev_req_id: rowFacts ? row.prev_req_id : null,
+    prev_relation: rowFacts ? row.prev_relation as RequestDetail['prev_relation'] : null,
+    delta_ordinals: rowFacts && Array.isArray(parseJsonOrNull(row.delta_ordinals))
       ? parseJsonOrNull(row.delta_ordinals) as number[] : null,
     parse_state: row.parse_state,
     reply_state: row.reply_state,
@@ -340,6 +343,7 @@ export function getRequest(store: Store, id: number): RequestDetail | null {
     derivation: derivationOf({
       derived_state: projected.state,
       summary_state: row.summary_state,
+      derived_prefix: projected.safe.derived_prefix,
     }),
     derive_version: row.derive_version,
     archive: row.archive,

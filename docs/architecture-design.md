@@ -991,10 +991,11 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | `published_revision` / `published_algorithm` | 完成时实际消费的修订与算法；与当前修订相等且 `state='clean'` 才表示产物最新 |
 | `state` | `dirty` 待派生，`clean` 已完成；待办查询一律 `state<>'clean'` |
 | `dirty_since_ms` | 首次未完成触发时间。重复 dirty 保留最早值，clean 后清空 |
+| `from_sort` | 最早受影响的位置：定宽 `started_ms`（16 位补零）。整组完成时置 `~`，位置未知（历史标记或来源没给位置）为空串 |
 
 组内请求的 `input_epoch` / `input_revision` 是同一套修订的请求侧。输入指正文、回复、归属与来源证据：正文保存、hook 到达或合并、账本或路由的字段级事实变化、证据过期、正文回收都会推进它；只改费用不推进，因为费用不改变用途判定与派生结果。合并把两笔请求的证据并成一笔时，存活请求换新 `input_epoch`，旧 epoch 下的用途结论不再复用。
 
-完成用比较交换而不是无条件写：同步路径先只读算完本组（`computeDeriveGroup`，产出落库计划），再由落库段（`applyDeriveGroup`）在一个事务里写回全部阶段并做交换：计划带着认领时读到的 `{group_epoch, input_revision, target_algorithm}`，交换成功才把状态改成 clean 并记下消费的修订与算法；交换失败回滚本组整轮丢弃，旧完成记录不会覆盖新输入。台账见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)。在线路径把计算段交给 Worker、落库段留在主线程（见[派生计算线程](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-worker.md)），维护与回填仍在主线程算。在线已提交组独立保留，重启只需继续未完成组；未发布的切片代由启动恢复丢弃，上一代发布指针保持不动。离线调用 `drainDeriveTx` 时，由调用方外层事务决定整批回滚范围。
+完成用比较交换而不是无条件写：同步路径先只读算完本组（`computeDeriveGroup`，产出落库计划），再由落库段（`applyDeriveGroup`）在一个事务里写回并做交换：计划带着认领时读到的 `{group_epoch, input_revision, target_algorithm}`，交换成功才把状态改成 clean 并记下消费的修订与算法。交换不命中时按 `from_sort` 只写边界之前的行（一致前缀发布）：链关系与展示列落库，`chain_role`、工具行与后台作业留到整组完成，组保持 dirty；边界未知则整轮丢弃。可写集合按库里此刻的 `started_ms` 取，不按计划里的位置，因为迟到账本会改写开始时刻。台账见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)与[一致前缀发布](../.agents/notes/implemented/architecture/2026-11-02-derive-prefix-publish.md)。在线路径把计算段交给 Worker、落库段留在主线程（见[派生计算线程](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-worker.md)），维护与回填仍在主线程算。在线已提交组独立保留，重启只需继续未完成组；未发布的切片代由启动恢复丢弃，上一代发布指针保持不动。离线调用 `drainDeriveTx` 时，由调用方外层事务决定整批回滚范围。
 
 #### 两个粒度：请求用途先于组结果
 
@@ -1049,6 +1050,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 `listRequests` 与 `getRequest` 各自在一个只读事务里取行、组状态与工具行，投影按同一个 `current` 判定做替换：
 
 - 关系、增量、`chain_role`、折叠行摘要与工具结果位置只在 `current` 时出现在顶层；否则为 `null`、`unknown` 与 `pending`。
+- 组未完成但本行位置严格早于 `from_sort` 时，行级列（关系、增量、标题、摘要、回复形状、上下文事件）按落库值返回，并带 `derived_prefix=true`；`chain_role` 仍是 `unknown`，因为它是整组产物。`derivationOf` 把这种行记成 `chain_state='prefix'`，前端按它决定是否标新增。
 - 标题退到不依赖正文的那一档：标题请求用已判定的 `model_title`，其余用模型时间占位。
 - 独立事实（耗时、费用、正文状态、回复摘要、模型、时间）不受状态影响。
 - 详情另带 `historical` 白名单，把旧的标题、摘要、关系与增量连同 `derived_state` 一起给出；列表不携带它。

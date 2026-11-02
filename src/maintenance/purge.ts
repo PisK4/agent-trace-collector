@@ -2,7 +2,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
-import { markGroupDirtyTx } from '../derive/state';
+import { markGroupDirtyTx, positionKey } from '../derive/state';
 import type { Store } from '../store';
 
 export type PurgePreview = {
@@ -292,10 +292,12 @@ function purgeTargetsTx(
     );
     // 3) 其他引用先清掉，再删别名与请求。
     //    删行前先记下受影响的组：这些请求消失后，同组剩下的成员要重算链与增量。
-    const affected = db.query<{ conv_key: string; actor: string }, []>(`
-      SELECT DISTINCT conv_key, actor FROM request
+    //    边界取被删请求里最早的开始时刻：删行后它之前的行不受影响。
+    const affected = db.query<{ conv_key: string; actor: string; earliest: number }, []>(`
+      SELECT conv_key, actor, MIN(started_ms) AS earliest FROM request
       WHERE req_id IN (SELECT req_id FROM purge_requests)
-        AND conv_key IS NOT NULL AND actor IS NOT NULL AND actor_state='known'`).all();
+        AND conv_key IS NOT NULL AND actor IS NOT NULL AND actor_state='known'
+      GROUP BY conv_key, actor`).all();
     beforeDelete?.(db);
     db.run('DELETE FROM tool_call WHERE req_id IN (SELECT req_id FROM purge_requests)');
     db.run('DELETE FROM tool_call WHERE result_req IN (SELECT req_id FROM purge_requests)');
@@ -330,7 +332,7 @@ function purgeTargetsTx(
           [group.conv_key, group.actor, randomUUID()],
         );
       } else {
-        markGroupDirtyTx(db, group.conv_key, group.actor, '');
+        markGroupDirtyTx(db, group.conv_key, group.actor, positionKey(group.earliest));
       }
     }
     return { deleted: count, event_id: Number(event_id.lastInsertRowid) };

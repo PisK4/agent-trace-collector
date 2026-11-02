@@ -660,7 +660,7 @@ function rowOf(r: SynthRequest): RequestRow {
     context_event: 'none',
     req_kind: r.reqKind, chain_role: r.chainRole, model_title: r.modelTitle,
     purpose_status: 'selected', purpose_version: 1, purpose_rule: null, purpose_chain: r.purposeChain,
-    derived_state: 'current',
+    derived_state: 'current', derived_prefix: false,
   };
 }
 
@@ -769,7 +769,7 @@ function detailOf(r: SynthRequest): ReadingDetail {
     context_event:'none',
     req_kind:r.reqKind, chain_role:r.chainRole, model_title:r.modelTitle,
     purpose_status:'selected', purpose_version:1, purpose_rule:null, purpose_chain:r.purposeChain,
-    derived_state:'current',
+    derived_state:'current', derived_prefix:false,
     prev_req_id:mainPrevOf(r), prev_relation:r.prevRelation, delta_ordinals:r.delta,
     parse_state:r.bodyState === 'available' || r.bodyState === 'partial' ? 'ok' : null,
     reply_state:r.bodyState === 'available' || r.bodyState === 'partial' ? (r.reply === null ? 'absent' : 'ok') : null,

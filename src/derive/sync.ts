@@ -1,7 +1,8 @@
 import type { Database } from 'bun:sqlite';
 import type { Store } from '../store';
 import {
-  GROUP_ALGORITHM, markGroupDirtyTx, normalizeTargetAlgorithmTx, purposePendingSql, queuePendingSql,
+  GROUP_ALGORITHM, POSITION_ALL, POSITION_UNKNOWN, markGroupDirtyTx, normalizeTargetAlgorithmTx,
+  positionKey, purposePendingSql, queuePendingSql,
 } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
 import { readBodyTx } from '../body';
@@ -483,28 +484,75 @@ export function computeDeriveGroup(db: Database, convKey: string, actor: string,
   };
 }
 
-/** 落库段：一个事务按序执行计划，末尾 CAS 守卫；输入在计划之后变过就抛 `derive_input_changed`。 */
+/**
+ * 落库段：一个事务按序执行计划。
+ *
+ * 计划算完之后输入可能又变过。输入没变时整组落库并清脏；变过时只写「最早受影响
+ * 位置」之前的行——这些行的祖先与自身输入都没变，本轮算出的值仍然成立。位置之后
+ * 的行一行都不写，组保持 dirty，等下一轮补齐。组身份或目标算法变过则整轮作废。
+ *
+ * 边界按库里此刻的 `started_ms` 取，不按计划算时的位置：迟到账本会改写开始时刻，
+ * 计划里的位置可能已经过期。`started_ms` 只用于取可写集合，结论本身来自计划。
+ */
 export function applyDeriveGroup(db: Database, round: DeriveGroupRound): DeriveGroupOutcome {
   const { plan } = round;
   const group = plan.group;
   if (plan.normalize_algorithm) normalizeTargetAlgorithmTx(db, group.conv_key, group.actor, GROUP_ALGORITHM);
-  const relation = db.prepare(`UPDATE request SET prev_req_id=?,prev_relation=?,delta_ordinals=?,
-    chain_role=? WHERE req_id=?`);
-  for (const row of plan.chain) {
-    if (row.changed) relation.run(row.prevReqId, row.relation, row.deltaJson, row.chainRole, row.reqId);
+  const now = db.query<{
+    group_epoch: string; input_revision: number; target_algorithm: number; from_sort: string;
+  }, [string, string]>(`SELECT group_epoch,input_revision,target_algorithm,from_sort
+      FROM derive_queue WHERE conv_key=? AND actor=?`).get(group.conv_key, group.actor);
+  if (now === null || now.group_epoch !== group.group_epoch
+    || now.target_algorithm !== group.target_algorithm) throw new Error('derive_input_changed');
+  const full = now.input_revision === group.input_revision;
+  // 前缀边界：位置严格小于它的行可写；相等说明分不出先后，一并排除。
+  const boundary = full ? POSITION_ALL : now.from_sort;
+  // 边界未知（空串，历史脏标记或来源没给位置）时一行都不能认：整轮作废，
+  // 与旧口径的整轮丢弃同义，调用方据此记一次丢弃。
+  if (!full && boundary === POSITION_UNKNOWN) throw new Error('derive_input_changed');
+  // 可写集合：整组完成时是全部行，否则按库里此刻的位置筛出边界之前的行。
+  // 前缀轮只查这一次，组规模与一次组读同量级。
+  const allowed: Set<number> | null = full ? null : new Set(
+    db.query<{ req_id: number; position: string }, [string, string, string]>(`
+      SELECT req_id, printf('%016d',started_ms) AS position FROM request
+      WHERE conv_key=? AND actor=? AND purpose_pending=0 AND printf('%016d',started_ms)<?`)
+      .all(group.conv_key, group.actor, boundary)
+      .map(row => row.req_id),
+  );
+  const writable = (reqId: number): boolean => allowed === null || allowed.has(reqId);
+  if (full) {
+    // 链角色是整组产物，只在整组完成时写。
+    const relation = db.prepare(`UPDATE request SET prev_req_id=?,prev_relation=?,delta_ordinals=?,
+      chain_role=? WHERE req_id=?`);
+    for (const row of plan.chain) {
+      if (row.changed) relation.run(row.prevReqId, row.relation, row.deltaJson, row.chainRole, row.reqId);
+    }
+    writeToolPlanTx(db, group, plan.tools);
+    writeBackgroundJobsTx(db, group, plan.jobs);
+  } else {
+    const relation = db.prepare(`UPDATE request SET prev_req_id=?,prev_relation=?,delta_ordinals=?
+      WHERE req_id=?`);
+    for (const row of plan.chain) {
+      if (row.changed && writable(row.reqId)) {
+        relation.run(row.prevReqId, row.relation, row.deltaJson, row.reqId);
+      }
+    }
   }
-  writeToolPlanTx(db, group, plan.tools);
-  writeBackgroundJobsTx(db, group, plan.jobs);
-  for (const write of plan.presentations) writePresentationTx(db, write);
-  // CAS 失败回滚本组的全部阶段。在线已提交组保留，维护由外层事务决定整批回滚。
-  const changed = db.run(
-    `UPDATE derive_queue SET state='clean',dirty_since_ms=NULL,
-       published_revision=?,published_algorithm=?
-     WHERE conv_key=? AND actor=? AND group_epoch=? AND input_revision=? AND target_algorithm=?`,
-    [group.input_revision, group.target_algorithm, group.conv_key, group.actor,
-      group.group_epoch, group.input_revision, group.target_algorithm],
-  ).changes;
-  if (changed !== 1) throw new Error('derive_input_changed');
+  for (const write of plan.presentations) {
+    if (writable(write.reqId)) writePresentationTx(db, write);
+  }
+  if (full) {
+    // 整组完成：整条链都按这一版落过，下一次标记从这里重新计边界。
+    // CAS 失败回滚本组的全部阶段。在线已提交组保留，维护由外层事务决定整批回滚。
+    const changed = db.run(
+      `UPDATE derive_queue SET state='clean',dirty_since_ms=NULL,
+         published_revision=?,published_algorithm=?,from_sort=?
+       WHERE conv_key=? AND actor=? AND group_epoch=? AND input_revision=? AND target_algorithm=?`,
+      [group.input_revision, group.target_algorithm, POSITION_ALL, group.conv_key, group.actor,
+        group.group_epoch, group.input_revision, group.target_algorithm],
+    ).changes;
+    if (changed !== 1) throw new Error('derive_input_changed');
+  }
   return round.outcome;
 }
 

@@ -50,6 +50,41 @@ export function groupIsCurrent(row: {
 }
 
 /**
+ * 遍历位置的可比较形态：定宽的 `started_ms`（16 位补零）。
+ *
+ * 只用时间、不用同毫秒的来源位置：读侧要在 SQL 与 JS 两处判同一个前缀边界，
+ * 两边都只比较这一列才不会分叉。同一时刻的行一律排除——分不出先后时宁可退回中性值。
+ */
+export function positionKey(startedMs: number): string {
+  return String(startedMs).padStart(16, '0');
+}
+
+/** 没有待处理变化：整组都可以按上一次完成值发布。`~` 大于任何位置串。 */
+export const POSITION_ALL = '~';
+
+/** 位置未知：整组都不能按前缀发布。历史行存的就是空串，与它同义。 */
+export const POSITION_UNKNOWN = '';
+
+/** 请求在组遍历序里的位置；读不到行时返回未知位置，调用方据此放弃前缀发布。 */
+export function requestPositionTx(db: Database, reqId: number): string {
+  const row = db.query<{ started_ms: number }, [number]>(
+    'SELECT started_ms FROM request WHERE req_id=?').get(reqId);
+  return row === null ? POSITION_UNKNOWN : positionKey(row.started_ms);
+}
+
+/**
+ * 行级前缀判定的 SQL 片段：本行位置严格小于组的最早受影响位置。
+ *
+ * 与 `prefixValid` 是同一个判据的两处实现（SQL 用于摘要列取值，JS 用于投影），
+ * 只比较 `started_ms` 这一列，两边不会分叉。发布代非空的组走代际表，不参与前缀；
+ * 用途还没判完的行自己的列也还没重算，一并排除。
+ */
+export function rowPrefixSql(g: string, r: string): string {
+  return `${g}.published_generation IS NULL AND ${g}.from_sort<>'' AND ${g}.from_sort<>'~'`
+    + ` AND ${r}.purpose_pending=0 AND printf('%016d',${r}.started_ms)<${g}.from_sort`;
+}
+
+/**
  * 队列与发布代结果行的一对 join；发布代按队列指针取，不跨代。
  * 行读取与读取身份共用这一对 join：选哪张表、判不判 current 由调用方的
  * 查询决定，join 的形状只在这里写一遍。
@@ -106,8 +141,13 @@ export function normalizeTargetAlgorithmTx(
  * `dirty_since_ms` 只表示首次未完成触发时间：重复 dirty 保留最早值，
  * clean 之后重新 dirty 才换成本次时间。容量积压年龄按它计算，
  * 不能拿请求的 `started_ms` 冒充等待时间。
+ *
+ * `from_sort` 是最早受影响的位置，取历史最小值：它之前的位置不受这一版输入影响，
+ * 计算完才发现输入又变时，这些行仍可按本轮结果落库（前缀发布）。未知位置用
+ * `POSITION_UNKNOWN`，整组都不参与前缀发布；完整完成后由落库段改成 `POSITION_ALL`。
  */
 export function markGroupDirtyTx(db: Database, convKey: string, actor: string, fromSort: string): void {
+  const guard = fromSort === '' ? POSITION_UNKNOWN : fromSort;
   db.run(
     `INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,
        input_revision,published_revision,target_algorithm,state,dirty_since_ms)
@@ -116,7 +156,7 @@ export function markGroupDirtyTx(db: Database, convKey: string, actor: string, f
        dirty_since_ms=CASE WHEN derive_queue.state='clean' THEN excluded.dirty_since_ms
          ELSE COALESCE(derive_queue.dirty_since_ms,excluded.dirty_since_ms) END,
        from_sort=MIN(derive_queue.from_sort,excluded.from_sort)`,
-    [convKey, actor, fromSort, randomUUID(), GROUP_ALGORITHM, Date.now()],
+    [convKey, actor, guard, randomUUID(), GROUP_ALGORITHM, Date.now()],
   );
 }
 
@@ -133,7 +173,9 @@ export function requestGroupTx(db: Database, reqId: number): RequestGroup | null
 /** 只标记已确认归属的组；未知归属的请求不产生派生任务。 */
 export function markRequestGroupsTx(db: Database, reqId: number): void {
   const group = requestGroupTx(db, reqId);
-  if (group !== null) markGroupDirtyTx(db, group.convKey, group.actor, '');
+  if (group !== null) {
+    markGroupDirtyTx(db, group.convKey, group.actor, requestPositionTx(db, reqId));
+  }
 }
 
 /**
@@ -145,7 +187,9 @@ export function markRequestGroupsTx(db: Database, reqId: number): void {
 export function markOwnershipChangeTx(db: Database, reqId: number, before: RequestGroup | null): void {
   const after = requestGroupTx(db, reqId);
   if (before?.convKey === after?.convKey && before?.actor === after?.actor) return;
-  if (before !== null) markGroupDirtyTx(db, before.convKey, before.actor, '');
+  if (before !== null) {
+    markGroupDirtyTx(db, before.convKey, before.actor, requestPositionTx(db, reqId));
+  }
   markRequestInputTx(db, reqId);
 }
 
