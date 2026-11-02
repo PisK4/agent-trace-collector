@@ -551,7 +551,7 @@ const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'reply', tool_resul
  */
 function toolRowParts(step, callOf) {
   // 无名工具没有名字可写：身份 chip 用一个形状表示，原名仍进 aria-label 与 title。
-  const unnamed = (label) => `<span class="row-tint ico" role="img" aria-label="${label}" title="${label}">${icon('role-tool', 16)}</span>`;
+  const unnamed = (/** @type {string} */ label) => `<span class="row-tint ico" role="img" aria-label="${label}" title="${label}">${icon('role-tool', 16)}</span>`;
   if (step.kind === 'tool') {
     const name = step.toolName ?? '';
     const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed('未命名工具');

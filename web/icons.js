@@ -71,6 +71,7 @@ const BODY = {
 };
 
 /** 8px 网格的两枚特例：按 8px 实际渲染给线宽，不套 16px 的 1.5。 */
+/** @type {Record<string, string>} */
 const TINY = {
   'fail-solid': '<path d="M2 2l4 4M6 2L2 6" stroke-width="1.7"/>',
   'missing-body': '<circle cx="4" cy="4" r="2.5" stroke-width="1.4"/>',
@@ -103,6 +104,7 @@ export function icon(name, size = 16, cls = '') {
  * @returns {string}
  */
 export function rolePill(name, cls) {
+  /** @type {Record<string, string>} */
   const map = {
     User: 'role-user', Assistant: 'role-assistant', Tool: 'role-tool',
     System: 'role-system', Aux: 'role-aux', Event: 'role-event',
