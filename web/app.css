@@ -256,6 +256,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
    不按每行的数字单独撑宽，标签起点不参差。 */
 .compact-meta{display:flex;align-items:center;flex:none;width:max(28px,calc(var(--ord-digits,1)*1ch + 8px));font:9px var(--mono);color:var(--muted)}
 .compact-meta b{font-weight:400;color:var(--text-2)}
+/* 图标：一份 16 网格、整枚缩放；颜色一律继承外层，不单独定色。 */
+.ico{display:inline-block;flex:none;vertical-align:-.18em}
 /* 角色标签用英文（User/Assistant/Tool/System/Aux/Event），列宽按最宽的 Assistant 给足，
    不截断；pill 形状（全圆角）压缩色块观感，四档角色色封顶。 */
 .row-label{width:62px;flex:none;padding:2px 3px;border-radius:999px;text-align:center;font:10px var(--ui);color:var(--k-user);background:var(--k-user-bg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -288,7 +290,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-reading{flex:none;margin-left:auto;min-width:78px;display:flex;justify-content:flex-end}
 .row-reading{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 0;border-radius:0;font:9.5px var(--mono);white-space:nowrap;color:var(--muted);background:none}
 .row-reading.reason,.row-reading.exec,.row-reading.wait{color:var(--muted);background:none}
-.row-reading .k{font-size:9px}
+.row-reading .k{display:inline-flex;align-items:center;color:var(--muted)}
 .row-reading .v{font-weight:600;font-variant-numeric:tabular-nums}
 /* 时长档位：中栏读数槽的数值与右栏尝试链共用同一组色类。正常档是弱灰。 */
 .t-good{color:var(--muted)}

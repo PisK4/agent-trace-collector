@@ -2,6 +2,7 @@
 import { deltaOrdinals, messagePathOf, replyView, systemPathOf, toolCallOfBlock } from './body-model.js';
 import { compact, secs, tierOf, TIER_LIMITS, toolCategory } from './duration.js';
 import { esc } from './html.js';
+import { icon } from './icons.js';
 import { bodyStateText } from './row-summary.js';
 import { clipChars, summaryParts, toolSummary } from './tool-summary.js';
 
@@ -585,7 +586,7 @@ function readingChip(reading, step) {
   const limits = reason ? TIER_LIMITS.reason : TIER_LIMITS[toolCategory(step.toolName)];
   const tier = limits === undefined ? '' : ` t-${tierOf(reading.ms, limits)}`;
   return `<span class="row-reading ${reason ? 'reason' : 'exec'}${limits === undefined ? ' wait' : ''}">`
-    + `<span class="k">${reason ? '思考' : '执行'}</span>`
+    + `<span class="k" role="img" aria-label="${reason ? '思考' : '执行'}" title="${reason ? '思考' : '执行'}">${icon(reason ? 'reason' : 'exec', 16)}</span>`
     + `<b class="v${tier}">${compact(reading.ms)}</b></span>`;
 }
 
