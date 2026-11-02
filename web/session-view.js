@@ -19,7 +19,33 @@ import { pairStateText } from './trace-pair.js';
 export const clock = (ms) => new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 /** @param {number} ms */
 export const dayTime = (ms) => new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-const AGENT_LABELS = /** @type {Record<string, string>} */ ({ claude: 'Claude Code', omp: 'OMP', codex: 'Codex', hermes: 'Hermes' });
+/** Magpie 注册表里的 69 个显示名；未登记的第三方 agent 才回退到原始 id。 */
+const AGENT_LABELS = /** @type {Record<string, string>} */ ({
+  claude: 'Claude Code', 'claude-desktop': 'Claude Desktop', 'claude-science': 'Claude Science',
+  codex: 'Codex', gemini: 'Gemini CLI', agy: 'Antigravity CLI',
+  opencode: 'OpenCode', openchamber: 'OpenChamber', mimocode: 'MiMo Code',
+  deveco: 'DevEco Code', pi: 'Pi', stepcode: 'StepCode',
+  mothx: 'MothX', aside: 'Aside', omo: 'OmO',
+  'prime-agent': 'Prime Agent', goose: 'Goose', cursor: 'Cursor CLI',
+  'cursor-local': 'Cursor Private Inference', zed: 'Zed',
+  vscode: 'VS Code', 'vscode-insiders': 'VS Code Insiders', vscodium: 'VSCodium',
+  'zoo-code': 'Zoo Code', 'copilot-jetbrains': 'Copilot (JetBrains)', air: 'JetBrains Air',
+  copilot: 'Copilot CLI', crush: 'Crush', dsh: 'DeepSeek Harness',
+  reasonix: 'Reasonix Studio', commandcode: 'Command Code', fx: 'fx',
+  omp: 'OMP', devin: 'Devin', hermes: 'Hermes',
+  morph: 'Mister Morph', kimi: 'Kimi Code', qwen: 'Qwen Code',
+  muse: 'Muse Code', empryo: 'Empryo', ante: 'Ante',
+  astrbot: 'AstrBot', jcode: 'jcode', 'minimax-code': 'MiniMax Code',
+  droid: 'Droid', cline: 'Cline', qoder: 'Qoder',
+  'qoder-cn': 'Qoder CN', grok: 'Grok Build', 'grok-app': 'Grok App',
+  zcode: 'ZCode', workbuddy: 'WorkBuddy', 'workbuddy-ai': 'WorkBuddy AI',
+  codebuddy: 'CodeBuddy Code', pencil: 'Pencil', openpencil: 'OpenPencil',
+  raycast: 'Raycast', kirocrew: 'Kiro Crew', t3code: 'T3 Code',
+  hanako: 'OpenHanako', atomcode: 'AtomCode', snow: 'Snow CLI',
+  alma: 'Alma', cindy: 'Cindy', aionui: 'AionUi',
+  lody: 'Lody', magpie: 'magpie', curl: 'curl',
+  'pi-desktop': 'PI-Desktop',
+});
 /** @param {string} v */
 export const agentLabel = (v) => AGENT_LABELS[v] ?? v;
 
