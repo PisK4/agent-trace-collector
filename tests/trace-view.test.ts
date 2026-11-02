@@ -421,6 +421,14 @@ test('dirty、branch、unknown 没有确定用户步骤', () => {
   expect(branch.some(s => s.text.includes('分支链请求'))).toBe(false);
 });
 
+test('前缀行按可读增量标新增，不收成新增未确认', () => {
+  const prefix = detail({ derived_state: 'dirty', derivation: { chain_state: 'prefix' }, delta_ordinals: [2] });
+  const steps = projectSteps(row(), read(prefix, [entry(2, { role: 'user', content: [{ type: 'text', text: 'q' }] }, true)],
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
+  expect(steps.some(s => s.kind === 'user')).toBe(true);
+  expect(steps.find(s => s.kind === 'flag')?.text ?? null).not.toBe('新增未确认');
+});
+
 test('已确认归属但关系未确认时不把已缓存历史当成新增', () => {
   const cached = [entry(0, { state: 'text', text: 'historical', original: 'historical' }, true)];
   for (const d of [

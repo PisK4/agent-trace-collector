@@ -724,6 +724,12 @@ test('链结果非 current 时不标记新增与 confirmed', () => {
     derivation: { state: 'clean', chain_state: 'current', summary_state: 'current', reason: null },
   } as RequestDetail;
   expect([...(deltaOrdinals(current) ?? [])]).toEqual([3]);
+  // 前缀行：组还没算完，但本行不受这一版输入影响，增量仍然成立。
+  const prefix = {
+    ...dirty,
+    derivation: { state: 'dirty', chain_state: 'prefix', summary_state: 'current', reason: 'derive_prefix' },
+  } as RequestDetail;
+  expect([...(deltaOrdinals(prefix) ?? [])]).toEqual([3]);
   // 没有派生视图的旧载荷同样不能冒充确定新增。
   expect(deltaOrdinals({ prev_relation: 'confirmed', delta_ordinals: [3] } as RequestDetail)).toBeNull();
 });
