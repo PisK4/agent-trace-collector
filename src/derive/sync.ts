@@ -87,6 +87,8 @@ type PresentationWrite = {
   inputKind: string | null; replyPreview: string | null; replyShape: string | null;
   interruptCount: number | null; contextEvent: string | null;
   comparable: boolean; basis: string;
+  /** 本次写入是否真的改变行内容；未变化时落库段跳过，derive_version 也不加一。 */
+  changed: boolean;
 };
 
 function presentationWrite(db: Database, input: PresentationInput,
@@ -114,8 +116,12 @@ function presentationWrite(db: Database, input: PresentationInput,
   }, associations);
   // 摘要与标题是派生结果，不是来源事实：可比较时记下算法与本次消费的输入身份，
   // 不可比较时保留原算法与 basis 只把状态标成 retained——不能把旧值冒充成本次重算。
-  const inputRow = db.query<{ input_epoch: string; input_revision: number }, [number]>(
-    'SELECT input_epoch,input_revision FROM request WHERE req_id=?').get(row.req_id);
+  const inputRow = db.query<{
+    input_epoch: string; input_revision: number;
+    summary_algorithm: number | null; summary_basis: string | null; summary_state: string | null;
+  }, [number]>(
+    'SELECT input_epoch,input_revision,summary_algorithm,summary_basis,summary_state FROM request WHERE req_id=?')
+    .get(row.req_id);
   const basis = JSON.stringify({
     epoch: inputRow?.input_epoch ?? '', input_revision: inputRow?.input_revision ?? 0,
     group_epoch: group.group_epoch, algorithm: GROUP_ALGORITHM,
@@ -130,17 +136,34 @@ function presentationWrite(db: Database, input: PresentationInput,
   const interruptCount = interrupts ?? row.interrupt_count;
   // 上下文事件位同一套保留语义：判定在手时按本次写，判不出来沿用旧值。
   const contextEvent = context?.event ?? row.context_event;
+  const summaryAlgorithm = comparable ? GROUP_ALGORITHM : inputRow?.summary_algorithm ?? null;
+  const summaryBasis = comparable ? basis : inputRow?.summary_basis ?? null;
+  const summaryState = comparable ? 'recomputed' : 'retained';
+  // 整组重算常把同一批行原样写回；比较所有待写列，跳过无变化行。
+  const changed =
+    (row.title ?? null) !== decision.title ||
+    (row.title_source ?? null) !== decision.titleSource ||
+    (row.input_preview ?? null) !== decision.inputPreview ||
+    (row.input_preview_kind ?? null) !== decision.inputKind ||
+    (row.reply_preview ?? null) !== decision.replyPreview ||
+    (row.reply_shape ?? null) !== replyShape ||
+    (row.interrupt_count ?? null) !== interruptCount ||
+    (row.context_event ?? null) !== contextEvent ||
+    (inputRow?.summary_algorithm ?? null) !== summaryAlgorithm ||
+    (inputRow?.summary_basis ?? null) !== summaryBasis ||
+    (inputRow?.summary_state ?? null) !== summaryState;
   return {
     reqId: row.req_id,
     title: decision.title, titleSource: decision.titleSource,
     inputPreview: decision.inputPreview, inputKind: decision.inputKind,
     replyPreview: decision.replyPreview, replyShape, interruptCount, contextEvent,
-    comparable, basis,
+    comparable, basis, changed,
   };
 }
 
-/** 展示列的落库：版本自增；不可比较时保留原算法与依据，状态标 retained。 */
+/** 展示列的落库：只写实际变化的行；derive_version 记录内容真正变化的次数。 */
 function writePresentationTx(db: Database, write: PresentationWrite): void {
+  if (!write.changed) return;
   db.run(`UPDATE request SET title=?,title_source=?,input_preview=?,
     input_preview_kind=?,reply_preview=?,reply_shape=?,interrupt_count=?,context_event=?,
     derive_version=derive_version+1,

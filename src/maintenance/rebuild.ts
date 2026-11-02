@@ -52,7 +52,7 @@ export async function rebuildSession(store: Store, session: string): Promise<Reb
   } while (drained.remaining > 0 || drained.purpose_remaining > 0);
   const version = store.read.query<{ v: number | null }, [string]>(
     'SELECT MAX(derive_version) AS v FROM request WHERE conv_key=?').get(session);
-  // 目标版本、实际算法分布与保留行分开报告：`derive_version` 已经不再逐次累加，
+  // 目标版本、实际算法分布与保留行分开报告：`derive_version` 只是内容变化计数，
   // 拿它的 MAX 当"当前算法"会把保留行误报成最新。
   const algorithms = store.read.query<{ algorithm: number | null; n: number }, [string]>(`
     SELECT summary_algorithm AS algorithm, COUNT(*) AS n FROM request

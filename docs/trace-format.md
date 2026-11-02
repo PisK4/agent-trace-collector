@@ -119,7 +119,7 @@ token 只是读取身份，不是认证凭证。
 | `redact_version` | 正文脱敏的规则版本 |
 | `adapter_version` | 协议适配器版本 |
 | `purpose_version` | 请求用途规则的版本 |
-| `derive_version` | 这一行被重算过几次；只是历史计数，不表示按哪版算 |
+| `derive_version` | 这一行内容实际变化的次数；重算但结果没变不加一，不表示按哪版算 |
 | `summary_algorithm` | 摘要实际用的算法号 |
 
 已验证的 magpie 区间是 `>=0.1.1294 <0.2.0`。超区间仍启动，但每条记录写 `magpie_version`，探测结果与 `verified` 标记落在 `/api/stats`；接口形状的假设集中在一个模块里，版本变了只改那处。

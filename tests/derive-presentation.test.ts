@@ -108,6 +108,33 @@ test('可读工具轮次标题不依赖旧值且缺正文标题保留', () => {
   } finally { f.close(); }
 });
 
+test('重算不改变内容时 derive_version 不增长', () => {
+  const f = fixture();
+  try {
+    seedDeriveRound(f.store, [1, 2]);
+    rebuildDeriveGroup(f.store);
+    const versions = () => f.store.read.query<{ req_id: number; derive_version: number }, []>(
+      'SELECT req_id,derive_version FROM request ORDER BY req_id').all();
+    const first = versions();
+    rebuildDeriveGroup(f.store);
+    expect(versions()).toEqual(first);
+    // 只改第二笔的回复：标题与输入预览不变，只有回复摘要要重写。
+    const user = { role: 'user', content: [{ type: 'text', text: 'synthetic input' }] };
+    const call = { type: 'tool_use', id: 'synthetic_call', name: 'read_file', input: {} };
+    persistBody(f.store, 2, {
+      protocol: 'anthropic',
+      request: { messages: [user,
+        { role: 'assistant', content: [call] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'synthetic_call',
+          content: 'synthetic output' }] }] },
+      reply: { content: [{ type: 'text', text: 'different reply' }] },
+      redact_version: 1,
+    });
+    rebuildDeriveGroup(f.store);
+    expect(versions()).toEqual([first[0], { req_id: 2, derive_version: 2 }]);
+  } finally { f.close(); }
+});
+
 test('工具结果轮次不重复末轮用户输入，纯工具调用回复有摘要', () => {
   const f = fixture();
   try {

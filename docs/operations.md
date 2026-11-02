@@ -193,7 +193,7 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 - `queued`：处理的分组数（按 `conv_key` + `actor` 拆）。
 - `unavailable`：正文不可用的请求数；它们保持原样。
 - `reasons`：不可用的原因分类。`body_evicted_raw_present` 表示正文已回收但 raw 层还有原文，可以按物理身份重放后再重建；`body_evicted_raw_expired` 表示两边都没了，重算不出任何东西。
-- `derive_version`：重排后该会话的最大派生版本。它不表示算法覆盖率。
+- `derive_version`：重排后该会话的最大内容变化次数。它不表示算法覆盖率。
 - `queue_remaining`：目标会话重排后队列剩余量，正常为 0；其它会话的积压不计入。
 - `recomputed_requests`：本次真正按可比较消息序列重算的请求数。
 - `retained_requests`：本次消息序列不可比较、标题与摘要按旧值保留的请求数。
