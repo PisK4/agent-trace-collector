@@ -86,6 +86,14 @@ const FALLBACK = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" str
 let logos = null;
 /** @type {Promise<Record<string, string> | null> | null} */
 let loading = null;
+/**
+ * 装配处注入的 Fetch：本模块不直接触碰全局 fetch，读取只由 app.js 组装点提供。
+ * @type {((url: string, init?: { credentials?: RequestCredentials }) => Promise<Response>) | null}
+ */
+let fetcher = null;
+
+/** @param {(url: string, init?: { credentials?: RequestCredentials }) => Promise<Response>} fn */
+export function setAgentLogoFetcher(fn) { fetcher = fn; }
 
 /** 去掉 omp#profile 这类后缀，再把 Magpie 别名归一。 @param {string} agent */
 const canonical = (agent) => {
@@ -108,7 +116,8 @@ const assetHtml = (asset) => asset.startsWith('data:')
 export function loadAgentLogos() {
   if (logos !== null) return Promise.resolve(logos);
   if (loading !== null) return loading;
-  const request = fetch('/agent-logos.json', { credentials: 'same-origin' })
+  if (fetcher === null) return Promise.resolve(null);
+  const request = fetcher('/agent-logos.json', { credentials: 'same-origin' })
     .then((response) => (response.ok ? response.json() : null))
     .then((payload) => {
       const next = payload !== null && typeof payload === 'object' && payload.icons ? payload.icons : null;
