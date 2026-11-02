@@ -5,6 +5,8 @@
  * 焦点与轮次带定位仍归控制器。
  */
 
+import { icon } from './icons.js';
+
 /** @param {string} id */
 function el(id) {
   const element = document.getElementById(id);
@@ -19,8 +21,14 @@ export function applyTheme() {
   if (themePref === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = themePref;
   const btn = el('theme-toggle');
-  btn.textContent = themePref === 'dark' ? '☾' : themePref === 'light' ? '☀' : '◐';
-  btn.title = `主题：${themePref === 'system' ? '跟随系统' : themePref === 'dark' ? '深色' : '浅色'}（点击切换）`;
+  // 两周形（日/月）表达当前生效的明暗；三态循环里的「跟随系统」没有第三种形状，
+  // 由 title 与 aria-label 说明，不用额外符号占位。
+  const dark = themePref === 'dark'
+    || (themePref === 'system' && window.matchMedia?.('(prefers-color-scheme: dark)').matches === true);
+  btn.innerHTML = icon(dark ? 'moon' : 'sun', 20);
+  const label = `主题：${themePref === 'system' ? `跟随系统（${dark ? '深色' : '浅色'}）` : themePref === 'dark' ? '深色' : '浅色'}（点击切换）`;
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
 }
 
 /** 折叠按钮的 aria 状态与 body 类同步。 */

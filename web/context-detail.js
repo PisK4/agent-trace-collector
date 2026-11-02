@@ -16,6 +16,7 @@
  */
 
 import { esc } from './html.js';
+import { icon } from './icons.js';
 import { baseNameOf, isPathKind, kk, partLabel } from './parts.js';
 
 /** iid → {kind, tag, name}；iid 由 kind\01tag\01name 拼成，名字段允许含分隔符。
@@ -130,7 +131,7 @@ export function contextDetailHtml(s, dir) {
     <span class="t"><b${nameTitle}>${esc(shown)}</b></span>
     <span class="v">${s.tokens === null ? '' : `${kk(s.tokens)} tokens`}</span>
     <span class="grow"></span>
-    <button type="button" class="x" data-ctx-close aria-label="关闭明细">×</button>
+    <button type="button" class="x" data-ctx-close aria-label="关闭明细" title="关闭明细">${icon('close', 20)}</button>
   </header>`;
   const body = dir.phase === 'loading' ? '<div class="ctx-d-body"><p class="ctx-d-status">读取目录…</p></div>' : (() => {
     // 集合块的成员身份：目录按类别范围取，成员名单在此如实列出。
@@ -161,7 +162,7 @@ export function contextDetailHtml(s, dir) {
             </details>`;
           }).join('');
           const more = data?.next_cursor !== null && data?.next_cursor !== undefined && data?.next_cursor !== null
-            ? '<button type="button" class="chip-btn" data-ctx-more>继续扫描</button>' : '';
+            ? `<button type="button" class="chip-btn ico" data-ctx-more aria-label="继续扫描" title="继续扫描">${icon('retry', 20)}</button>` : '';
           const empty = entries.length === 0 && data?.state === 'available'
             ? '<p class="ctx-d-note">本笔请求的已保存正文里没有该范围的片段。</p>' : '';
           return `<div class="ctx-d-body">${directoryStatusHtml(data ?? null)}${empty}

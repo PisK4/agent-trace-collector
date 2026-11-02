@@ -838,7 +838,8 @@ test('会话头双列：左右分组、副标题删除与身份行', () => {
   expect(html).toContain('cue-account');
   expect(html).toContain('cue-activity');
   expect(html).not.toContain('<strong>');
-  expect(html).not.toContain('<svg');
+  // 分组读数行不带图标；头部动作（刷新、复制会话 ID）现在是图标按钮，按区域断言。
+  expect(html.slice(html.indexOf('cue-board'))).not.toContain('<svg');
   // 七处常驻副标题不再出现，也没有换成同类副标题。
   expect(html).not.toContain('<small');
   expect(html).not.toContain('会话合计');

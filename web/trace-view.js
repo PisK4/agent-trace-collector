@@ -2,6 +2,7 @@
 import { deltaOrdinals, messagePathOf, replyView, systemPathOf, toolCallOfBlock } from './body-model.js';
 import { compact, secs, tierOf, TIER_LIMITS, toolCategory } from './duration.js';
 import { esc } from './html.js';
+import { icon, rolePill } from './icons.js';
 import { bodyStateText } from './row-summary.js';
 import { clipChars, summaryParts, toolSummary } from './tool-summary.js';
 
@@ -549,21 +550,23 @@ const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'reply', tool_resul
  * @returns {{chip: string, args: string, arrow: boolean}}
  */
 function toolRowParts(step, callOf) {
+  // 无名工具没有名字可写：身份 chip 用一个形状表示，原名仍进 aria-label 与 title。
+  const unnamed = (label) => `<span class="row-tint ico" role="img" aria-label="${label}" title="${label}">${icon('role-tool', 16)}</span>`;
   if (step.kind === 'tool') {
     const name = step.toolName ?? '';
-    const label = name !== '' ? name : '未命名工具';
-    return { chip: `<span class="row-tint">${esc(label)}</span>`, args: step.toolArgs ?? '', arrow: false };
+    const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed('未命名工具');
+    return { chip, args: step.toolArgs ?? '', arrow: false };
   }
   if (step.kind === 'tool_result') {
     const owner = step.pairOwner;
     const call = owner !== null && callOf !== null ? callOf(owner.reqId, owner.callOrd) : null;
     if (call === null && (step.toolName ?? '') === '') {
-      return { chip: '<span class="row-tint">Tool result</span>', args: '', arrow: false };
+      return { chip: unnamed('Tool result'), args: '', arrow: false };
     }
     const name = call !== null ? call.name : /** @type {string} */ (step.toolName);
-    const label = name !== '' ? name : '未命名工具';
+    const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed('未命名工具');
     const args = call !== null ? summaryParts(call.name, call.inputText).args : '';
-    return { chip: `<span class="row-tint">${esc(label)}</span>`, args, arrow: true };
+    return { chip, args, arrow: true };
   }
   return { chip: '', args: '', arrow: false };
 }
@@ -585,7 +588,7 @@ function readingChip(reading, step) {
   const limits = reason ? TIER_LIMITS.reason : TIER_LIMITS[toolCategory(step.toolName)];
   const tier = limits === undefined ? '' : ` t-${tierOf(reading.ms, limits)}`;
   return `<span class="row-reading ${reason ? 'reason' : 'exec'}${limits === undefined ? ' wait' : ''}">`
-    + `<span class="k">${reason ? '思考' : '执行'}</span>`
+    + `<span class="k" role="img" aria-label="${reason ? '思考' : '执行'}" title="${reason ? '思考' : '执行'}">${icon(reason ? 'reason' : 'exec', 16)}</span>`
     + `<b class="v${tier}">${compact(reading.ms)}</b></span>`;
 }
 
@@ -604,6 +607,10 @@ function readingChip(reading, step) {
  */
 export function renderTraceRow(row, step, ordinal, callOf = null, selected = false) {
   const label = KIND_LABEL[step.kind] ?? 'Event';
+  // 组级状态行的标签位只放形状：失败是裸 X、其余缺口是三角；事实句子仍在行内说明。
+  const labelHtml = step.kind === 'flag'
+    ? `<span class="row-label flag" role="img" aria-label="${step.status === 'failed' ? '失败' : '缺口'}" title="${step.status === 'failed' ? '失败' : '缺口'}">${icon(step.status === 'failed' ? 'failure' : 'gap')}</span>`
+    : rolePill(label, KIND_CLASS[step.kind] ?? 'aux');
   const { chip, args, arrow } = toolRowParts(step, callOf);
   const isTool = step.kind === 'tool' || step.kind === 'tool_result';
   // 悬停给完整信息：调用行放完整参数 JSON，结果行放调用摘要与完整结果正文；属性按 TITLE_MAX 截断。
@@ -631,7 +638,7 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
 <div class="compact-row${step.isError === true ? ' step-error' : ''}${step.kind === 'flag' ? ' step-flag' : ''}"${statusAttr}>
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${selected}">
     <span class="compact-meta" title="序号表示当前窗口内的请求 · 请求 ${ordinal}"><b>${ordinal}</b></span>
-    <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
+    ${labelHtml}
     ${chip}
     <span class="compact-preview"${titleAttr}>${previewHtml}</span>${bgNoteHtml}<span class="compact-reading">${readingHtml}</span>
   </button>

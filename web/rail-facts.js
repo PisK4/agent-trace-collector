@@ -13,6 +13,7 @@ import {
   renderMessageDetail, renderMessages,
 } from './body-view.js';
 import { esc } from './html.js';
+import { icon } from './icons.js';
 import { isFixedKind, kk, partLabel, partShade } from './parts.js';
 import { contextMapShellHtml, contextRowsHtml } from './context-map.js';
 import { messagePathOf, replyView, topSystemText } from './body-model.js';
@@ -148,7 +149,7 @@ export function structureFoldHtml(input) {
   if (chosen !== null) {
     // 返回入口在详情上方：长消息的正文可以把页脚推到视口外，返回就不该跟着正文
     // 一起沉底。位置与「加载更早」一致，都在列表／详情的上方。
-    body = `<div class="conv-tools"><button class="chip-btn" data-structure-back="${reqId}">返回消息列表</button></div>
+    body = `<div class="conv-tools"><button class="chip-btn ico" data-structure-back="${reqId}" aria-label="返回消息列表" title="返回消息列表">${icon('back', 20)}</button></div>
       ${renderMessageDetail(chosen, messagePathOf(meta, chosen.ord), pairOf)}`;
   } else if (entries.length === 0 && !canLoad) {
     body = `<p class="note">${esc(bodyLabelText(row))}</p>`;
@@ -164,9 +165,9 @@ export function structureFoldHtml(input) {
     const deltaNote = delta === null
       ? relation ? `<p class="note">${esc(relation)}：不标记新增消息，按原顺序列出。</p>` : ''
       : deltaState !== null && deltaState.error !== null
-        ? `<p class="note warn">新增读取失败（${esc(deltaState.error)}）：已消费 ${consumed} / ${delta.size}，未读位置保留，不吞掉剩余输入。<button class="chip-btn" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''}>重试续读</button></p>`
+        ? `<p class="note warn">新增读取失败（${esc(deltaState.error)}）：已消费 ${consumed} / ${delta.size}，未读位置保留，不吞掉剩余输入。<button class="chip-btn ico" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''} aria-label="重试续读" title="重试续读">${icon('retry', 20)}</button></p>`
         : deltaState !== null && !deltaState.done
-          ? `<p class="note">新增 ${delta.size} 条消息 · 已消费 ${consumed} / ${delta.size}。<button class="chip-btn" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''}>继续读取</button></p>`
+          ? `<p class="note">新增 ${delta.size} 条消息 · 已消费 ${consumed} / ${delta.size}。<button class="chip-btn ico" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''} aria-label="继续读取" title="继续读取">${icon('read', 20)}</button></p>`
           : '';
     // 已缓存消息的有序并集；相邻序号的空洞是未读区间，不用连续游标删掉缓存尾部。
     const listEntries = [...entries].sort((a, b) => a.ord - b.ord);
@@ -259,7 +260,7 @@ export function toolSchemaSection(capabilities, toolName) {
  */
 export function readingChangedNote(reqId) {
   return `<p class="note warn">阅读版本已变化：这一笔的详情与正文缓存已作废，正在自动重读。</p>
-    <div class="conv-tools"><button class="chip-btn" data-body-load="${reqId}">立即重读</button></div>`;
+    <div class="conv-tools"><button class="chip-btn ico" data-body-load="${reqId}" aria-label="立即重读" title="立即重读">${icon('read', 20)}</button></div>`;
 }
 
 /**
@@ -299,7 +300,7 @@ export function evidenceFoldHtml(row, detail, meta) {
   const view = meta === null ? null : replyView(meta);
   /** @param {'ok'|'miss'|'wait'} state @param {string} text */
   const rowHtml = (state, text) =>
-    `<div class="chain-row"><dt><span class="ev ${state}" aria-hidden="true">${state === 'ok' ? '✓' : state === 'miss' ? '✗' : '?'}</span></dt><dd>${text}</dd></div>`;
+    `<div class="chain-row"><dt><span class="ev ${state}" aria-hidden="true">${icon(state === 'ok' ? 'check' : state === 'miss' ? 'failure' : 'question', 16)}</span></dt><dd>${text}</dd></div>`;
   const ledger = row.status !== null
     ? rowHtml('ok', `HTTP ${row.status}${error !== null ? ` · ${esc(error)}` : ''}`)
     : rowHtml('miss', '没有关联到账本行');
@@ -559,7 +560,7 @@ export function contextStatsHtml(r, p, detail = null) {
       ${hitPct === null ? '<div class="ctx-sub">缓存读数未上报</div>' : ''}
     </div>
     <div class="ctx-stat ctx-stat-time">
-      <div class="ctx-k">耗时</div>
+      <div class="ctx-k" role="img" aria-label="耗时" title="耗时">${icon('stopwatch', 16)}</div>
       <div class="ctx-big"><b>${ms === null ? '<i class="miss">—</i>' : secsValue(ms)}</b>${ms === null ? '' : '<span>s</span>'}</div>
       <div class="ctx-sub" title="总时长；首 token 到第一个内容，首个文本到第一个文本块，速度＝输出 ÷（总 − 首 token）">${ms === null ? '没有计时读数' : timeSub}</div>
     </div>

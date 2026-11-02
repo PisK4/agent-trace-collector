@@ -14,6 +14,7 @@
  */
 
 import { esc, mdToHtml } from './html.js';
+import { icon } from './icons.js';
 import { clip, displayRoleOf } from './body-model.js';
 import { clipChars, summaryParts } from './tool-summary.js';
 
@@ -117,7 +118,7 @@ export function renderMessageDetail(entry, path = '', pairOf = null) {
         ? '<span class="tool-chip miss"><span>工具结果失败</span></span>' : '';
       const pair = pairOf === null ? null : pairOf(block, blockPath);
       const open = pair === null ? ''
-        : `<div class="conv-tools"><button class="chip-btn" data-tool-owner="${pair.owner}" data-call-ord="${pair.callOrd}">配对两端 ▸</button></div>`;
+        : `<div class="conv-tools"><button class="chip-btn ico" data-tool-owner="${pair.owner}" data-call-ord="${pair.callOrd}" aria-label="配对两端" title="查看配对的调用与结果">${icon('pair', 20)}</button></div>`;
       return `${failed}${open}<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(block.text)}</pre>`;
     }
     return `<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(JSON.stringify(block.raw, null, 2))}</pre>`;
@@ -126,7 +127,7 @@ export function renderMessageDetail(entry, path = '', pairOf = null) {
     <div class="bp-head">
       <span class="kind ${roleClass(displayRole)} bp-kind">${roleTag(displayRole)}</span>
       ${path === '' ? '' : `<span class="bp-path">${esc(path.replace(/^request\./, ''))}</span>`}
-      <button class="chip-btn" data-copy-msg="${entry.ord}">复制原文</button>
+      <button class="chip-btn ico" data-copy-msg="${entry.ord}" aria-label="复制原文" title="复制原文">${icon('copy', 16)}</button>
     </div>
     <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${entry.blocks.length} 个内容块</span></div>
     ${blocks.length > 0 ? blocks : '<p class="note">这条消息没有内容块。</p>'}
@@ -189,7 +190,7 @@ export function renderUnknownBlockDetail(path, raw) {
 export function renderTools(tools) {
   if (tools.length === 0) return '';
   const rows = tools.map(tool => {
-    const open = `<button class="chip-btn" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}">配对两端 ▸</button>`;
+    const open = `<button class="chip-btn ico" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}" aria-label="配对两端" title="查看配对的调用与结果">${icon('pair', 20)}</button>`;
     const warn = tool.state === 'ambiguous'
       ? '<span class="tool-chip miss"><span>结果有多个候选，未配对</span></span>' : '';
     const parts = summaryParts(tool.name, tool.inputText);
