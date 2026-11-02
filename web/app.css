@@ -591,10 +591,10 @@ pre.raw{
 .ctx-stat .miss{color:var(--missing);font-style:normal}
 .ctx-sub{font-size:10px;line-height:1.35;color:var(--muted);overflow-wrap:anywhere}
 
-.comp-legend{display:grid;grid-template-columns:1fr auto auto;gap:3px 8px;font-size:10.5px}
-.comp-legend .name{display:flex;align-items:center;gap:6px;color:var(--text-2);min-width:0}
+.comp-legend{display:grid;grid-template-columns:1fr auto auto;gap:3px 8px;font-size:12px}
+.comp-legend .name{display:flex;align-items:center;gap:6px;font-weight:600;color:var(--text);min-width:0}
 .comp-legend .name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.comp-legend .val{font:10.5px var(--mono);color:var(--text-2);text-align:right}
+.comp-legend .val{font:600 12px var(--mono);color:var(--text);text-align:right}
 .comp-legend .pct{font:10.5px var(--mono);color:var(--muted);text-align:right;width:34px}
 
 /* 上下文分布图：读数折叠行内的 treemap 与内容列表（web/context-map.js 拼装）。
@@ -615,11 +615,9 @@ pre.raw{
 .ctx-row{display:flex;align-items:center;gap:7px;padding:2.5px 6px;border-radius:4px;font-size:11px}
 .ctx-row:hover,.ctx-row.ctx-hl{background:var(--hover)}
 .ctx-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ctx-row .nm b{font-weight:500}
+.ctx-row .nm b{font-weight:450;color:var(--text-2)}
 .ctx-row .xn{color:var(--muted);font-size:10px;white-space:nowrap}
 .ctx-row .tg{font:10px var(--mono);color:var(--text-2);background:var(--inset);border:1px solid var(--line);border-radius:3px;padding:0 4px;white-space:nowrap}
-.ctx-row .bar{width:72px;flex:none;height:5px;border-radius:2.5px;background:var(--inset);overflow:hidden}
-.ctx-row .bar i{display:block;height:100%;border-radius:2.5px}
 .ctx-row .v{width:44px;flex:none;text-align:right;font:10.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--text-2)}
 /* 列表超出 8 行的「显示全部」：开合走既有 data-fold 恢复机制。 */
 .ctx-more{margin:2px 0 0}

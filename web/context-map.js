@@ -252,7 +252,6 @@ export function contextRowsHtml(p, reqId) {
   }
   if (rows.length === 0) return '';
   rows.sort((a, b) => b.it.tokens - a.it.tokens || cmpItems(a.it, b.it));
-  const most = Math.max(1, ...rows.map(r => r.it.tokens));
   const sum = p.parts.reduce((a, x) => a + Math.max(0, x.tokens), 0) || 1;
   /** @param {{it: PromptItem, kind: string}} row */
   const rowHtml = (row) => {
@@ -265,7 +264,6 @@ export function contextRowsHtml(p, reqId) {
       <span class="nm"><b>${esc(base)}</b></span>
       ${xn !== '' ? `<span class="xn">${xn}</span>` : ''}
       ${tg !== '' ? `<span class="tg">${esc(tg)}</span>` : ''}
-      <span class="bar"><i style="width:${Math.max(2, it.tokens / most * 100).toFixed(1)}%;background:var(--t2)"></i></span>
       <span class="v">${kk(it.tokens)}</span>
     </button>`;
   };
