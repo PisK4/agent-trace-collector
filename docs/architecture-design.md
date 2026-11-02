@@ -1050,7 +1050,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 `listRequests` 与 `getRequest` 各自在一个只读事务里取行、组状态与工具行，投影按同一个 `current` 判定做替换：
 
 - 关系、增量、`chain_role`、折叠行摘要与工具结果位置只在 `current` 时出现在顶层；否则为 `null`、`unknown` 与 `pending`。
-- 组未完成但本行位置严格早于 `from_sort` 时，行级列（关系、增量、标题、摘要、回复形状、上下文事件）按落库值返回，并带 `derived_prefix=true`；`chain_role` 仍是 `unknown`，因为它是整组产物。`derivationOf` 把这种行记成 `chain_state='prefix'`，前端按它决定是否标新增。
+- 组未完成但本行位置严格早于 `from_sort` 时，行级列（关系、增量、标题、摘要、回复形状、上下文事件）按落库值返回，并带 `derived_prefix=true`；`chain_role` 仍是 `unknown`，因为它是整组产物。`derivationOf` 把这种行记成 `chain_state='prefix'`，前端按它决定是否标新增。发布代非空的组走代际表，不参与前缀。
 - 标题退到不依赖正文的那一档：标题请求用已判定的 `model_title`，其余用模型时间占位。
 - 独立事实（耗时、费用、正文状态、回复摘要、模型、时间）不受状态影响。
 - 详情另带 `historical` 白名单，把旧的标题、摘要、关系与增量连同 `derived_state` 一起给出；列表不携带它。
