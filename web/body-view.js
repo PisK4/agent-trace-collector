@@ -14,6 +14,7 @@
  */
 
 import { esc, mdToHtml } from './html.js';
+import { icon } from './icons.js';
 import { clip, displayRoleOf } from './body-model.js';
 import { clipChars, summaryParts } from './tool-summary.js';
 
@@ -126,7 +127,7 @@ export function renderMessageDetail(entry, path = '', pairOf = null) {
     <div class="bp-head">
       <span class="kind ${roleClass(displayRole)} bp-kind">${roleTag(displayRole)}</span>
       ${path === '' ? '' : `<span class="bp-path">${esc(path.replace(/^request\./, ''))}</span>`}
-      <button class="chip-btn" data-copy-msg="${entry.ord}">复制原文</button>
+      <button class="chip-btn ico" data-copy-msg="${entry.ord}" aria-label="复制原文" title="复制原文">${icon('copy', 16)}</button>
     </div>
     <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${entry.blocks.length} 个内容块</span></div>
     ${blocks.length > 0 ? blocks : '<p class="note">这条消息没有内容块。</p>'}

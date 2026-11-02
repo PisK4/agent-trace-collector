@@ -9,6 +9,7 @@
  */
 
 import { esc } from './html.js';
+import { icon } from './icons.js';
 import { kk } from './rail-facts.js';
 import { bodyStateText } from './row-summary.js';
 import { compact, EXEC_MS_HINT, secs } from './duration.js';
@@ -36,7 +37,7 @@ export function sessionsListFoldHtml(items, showFolded) {
   if (probe > 0) parts.push(`${probe} 条探针记录`);
   if (bypass > 0) parts.push(`${bypass} 条旁路会话`);
   const label = showFolded ? `收起 ${parts.join(' · ')}` : `已折叠 ${parts.join(' · ')}（已加载页）`;
-  return `<div class="sess-fold"><button class="chip-btn" data-fold-toggle="1">${esc(label)}</button></div>`;
+  return `<div class="sess-fold"><button class="chip-btn" data-fold-toggle="1">${icon(showFolded ? 'caret-up' : 'caret-down', 16)}<span>${esc(label)}</span></button></div>`;
 }
 
 /** @param {string} key */
@@ -257,7 +258,7 @@ export function sessionHiddenFold(rows, hidden, sessionKey, open) {
     </button>`;
   });
   return `<details class="hidden-more" data-fold="hidden:${esc(sessionKey ?? '')}"${open ? ' open' : ''}>
-    <summary>无正文 <b>${hidden.length}</b> 笔</summary>
+    <summary><span class="chev" aria-hidden="true"></span>无正文 <b>${hidden.length}</b> 笔</summary>
     <div class="more-body">${items.join('')}</div>
   </details>`;
 }
@@ -321,7 +322,7 @@ export function sessionHead(input) {
       <h1>${esc(row ? row.title || '（无标题）' : unknown ? '这个会话不在已加载列表里' : '未选择会话')}</h1>
       <div class="head-actions">
         ${refreshedAt !== null ? `<span class="muted">刷新于 ${esc(clock(refreshedAt))}</span>` : ''}
-        <button class="chip-btn ghost" id="refresh-window" title="重新读取当前窗口；输入变化会换发阅读版本">刷新</button>
+        <button class="chip-btn ghost ico" id="refresh-window" aria-label="刷新" title="重新读取当前窗口；输入变化会换发阅读版本">${icon('refresh', 20)}</button>
         ${windowAnchor === 'latest'
           ? '<button class="chip-btn ghost" id="jump-opposite" title="重建为会话最早一页，从头阅读">回到开头 ↑</button>'
           : '<button class="chip-btn ghost" id="jump-opposite" title="重建为会话最新一页，选中最新一笔">回到最新 ↓</button>'}
@@ -330,7 +331,7 @@ export function sessionHead(input) {
     <div class="session-facts">
       ${row && row.agents.length > 0 ? row.agents.map((/** @type {string} */ a) => `<span><b title="${esc(a)}">${esc(agentLabel(a))}</b></span>`).join('') : '<span class="muted">归属未知</span>'}
       <span class="mono" title="${esc(sessionKey ?? '')}">${esc(sessionKey === null ? '' : sessionKeyLabel(sessionKey))}</span>
-      ${sessionKey !== null ? '<button class="fact-copy" id="copy-session" aria-label="复制当前会话 ID" title="复制当前会话 ID">⧉</button>' : ''}
+      ${sessionKey !== null ? `<button class="fact-copy" id="copy-session" aria-label="复制当前会话 ID" title="复制当前会话 ID">${icon('copy', 14)}</button>` : ''}
       <span>已加载 <b>${rows.length}</b> 笔 Request</span>
       ${first && latest ? `<span>${esc(dayTime(first.started_ms))}–${esc(clock(latest.started_ms))}</span>` : ''}
     </div>

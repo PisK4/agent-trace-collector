@@ -2,6 +2,7 @@
 import { bodyNotice, renderReplyDetail } from './body-view.js';
 import { messagePathOf, replyView } from './body-model.js';
 import { esc } from './html.js';
+import { icon } from './icons.js';
 import { bodyLabelText, bodyStateText } from './row-summary.js';
 
 /**
@@ -69,7 +70,7 @@ function commandPanel(entry, ord, ownerId, ownerRow, path) {
   const head = `<div class="bp-head">
     <span class="kind user bp-kind">User</span>
     ${path === '' ? '' : `<span class="bp-path">${esc(path)}</span>`}
-    ${entry !== null ? `<button class="chip-btn" data-copy-msg="${ord}" data-copy-owner="${ownerId}">复制原文</button>` : ''}
+    ${entry !== null ? `<button class="chip-btn ico" data-copy-msg="${ord}" data-copy-owner="${ownerId}" aria-label="复制原文" title="复制原文">${icon('copy', 16)}</button>` : ''}
   </div>`;
   if (entry === null) {
     if (ownerRow !== null && ownerRow.body_state !== 'available' && ownerRow.body_state !== 'partial') {

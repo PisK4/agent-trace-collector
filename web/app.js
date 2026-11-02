@@ -461,7 +461,7 @@ if (typeof document !== 'undefined') {
     // 加载更多是列表尾部入口：保留 id 与分页游标条件，错误时可再次点击重试。
     const last = store.getSessions();
     const more = last.cursor === null
-      ? '' : '<div class="sess-more"><button class="chip-btn ghost" id="load-more-sessions">加载更多会话</button></div>';
+      ? '' : `<div class="sess-more"><button class="chip-btn ghost ico" id="load-more-sessions" aria-label="加载更多会话" title="加载更多会话">${icon('load-more', 20)}</button></div>`;
     const error = last.error === null ? ''
       : `<p class="sess-empty">会话列表读取失败：${esc(last.error)}。可再次点击加载更多重试。</p>`;
     el('sessions-list').innerHTML = body + more + error;
@@ -694,7 +694,7 @@ if (typeof document !== 'undefined') {
     const loaderHtml = window.loading
       ? '<div class="history-loader"><span class="history-start">正在读取后续记录…</span></div>'
       : window.newerCursor !== null
-        ? '<div class="history-loader"><button id="load-later" class="history-button">↓ 加载后续记录</button></div>'
+        ? `<div class="history-loader"><button id="load-later" class="history-button ico" aria-label="加载后续记录" title="加载后续记录">${icon('load-more', 20)}</button></div>`
         : '';
     const tails = traceModel.tailEligibleIds();
     // 轮次带点得到被省略的起点时，中栏也要有这一行：选中态之外再放行轮次起点。
@@ -950,7 +950,7 @@ if (typeof document !== 'undefined') {
         <summary>本次回复${canLoad ? '' : `<span class="fold-count">${esc(bodyStateText(r))}</span>`}</summary>
         <div class="fold-body"><p class="note">${esc(bodyLabelText(r))}</p>
           ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
-          ${canLoad ? `<div class="conv-tools"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>
+          ${canLoad ? `<div class="conv-tools"><button class="chip-btn ico" data-body-load="${r.req_id}" aria-label="读取正文" title="读取正文">${icon('read', 20)}</button></div>` : ''}</div>
       </details>`;
     } else {
       const cls = completeness.key === 'absent' ? 'bad' : 'warn';
@@ -1018,7 +1018,7 @@ if (typeof document !== 'undefined') {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
         ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
-        ${canLoad ? `<div style="margin-top:10px"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>`;
+        ${canLoad ? `<div class="conv-tools"><button class="chip-btn ico" data-body-load="${r.req_id}" aria-label="读取正文" title="读取正文">${icon('read', 20)}</button></div>` : ''}</div>`;
     }
     const detail = read.detail;
     if (state.toolOrd === null) {
@@ -1061,7 +1061,7 @@ if (typeof document !== 'undefined') {
     const pages = [['overview', '概览'], ['params', '参数'], ['pair', '配对'], ['schema', 'Schema']];
     const pageBody = state.toolPage === 'params'
       ? `<pre class="raw" tabindex="0">${esc(tool.inputText)}</pre>
-        <div class="conv-tools"><button class="chip-btn" data-copy-tool="${tool.ord}">复制参数原文</button></div>`
+        <div class="conv-tools"><button class="chip-btn ico" data-copy-tool="${tool.ord}" aria-label="复制参数原文" title="复制参数原文">${icon('copy', 16)}</button></div>`
       : state.toolPage === 'pair'
         ? renderTracePair({
           owner, ownerLabel: windowLabel(owner), call: tool, pair, reading,
@@ -1180,7 +1180,7 @@ if (typeof document !== 'undefined') {
       const retryId = stale === 'failed' || staleOwner === null ? r.req_id : ownerRow?.req_id ?? r.req_id;
       const status = failed ? '当前版本读取失败，可重试。' : '正在准备当前版本，请稍候。';
       return `<div class="rail-empty"><b>阅读版本已变化</b>${status}
-        <div style="margin-top:10px"><button class="chip-btn" data-body-load="${retryId}">立即重读</button></div></div>`;
+        <div style="margin-top:10px"><button class="chip-btn ico" data-body-load="${retryId}" aria-label="立即重读" title="立即重读">${icon('read', 20)}</button></div></div>`;
     }
     if (state.railTab === 'tools') return railTools();
     if (state.railTab === 'facts') return railFacts();
@@ -1193,7 +1193,7 @@ if (typeof document !== 'undefined') {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
         ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
-        ${canLoad ? `<div style="margin-top:10px"><button class="chip-btn" data-body-load="${r.req_id}">读取正文</button></div>` : ''}</div>`;
+        ${canLoad ? `<div class="conv-tools"><button class="chip-btn ico" data-body-load="${r.req_id}" aria-label="读取正文" title="读取正文">${icon('read', 20)}</button></div>` : ''}</div>`;
     }
     const page = read.meta;
     if (page.state !== 'available' && page.state !== 'partial') {
@@ -1926,7 +1926,8 @@ if (typeof document !== 'undefined') {
       // 参数只复制原文，不走 HTML 展示路径。
       if (tool !== null && navigator.clipboard !== undefined) {
         void navigator.clipboard.writeText(tool.inputText).then(() => {
-          copyTool.textContent = '已复制';
+          copyTool.innerHTML = icon('check', 16);
+          setTimeout(() => { copyTool.innerHTML = icon('copy', 16); }, 300);
         }).catch(() => {});
       }
       return;
@@ -1942,7 +1943,8 @@ if (typeof document !== 'undefined') {
       const entry = read === null ? null : read.entries.find((/** @type {{ord: number}} */ item) => item.ord === ord) ?? null;
       if (entry !== null && navigator.clipboard !== undefined) {
         void navigator.clipboard.writeText(messageCopyText(entry)).then(() => {
-          /** @type {HTMLElement} */ (copyMsg).textContent = '已复制';
+          copyMsg.innerHTML = icon('check', 16);
+          setTimeout(() => { copyMsg.innerHTML = icon('copy', 16); }, 300);
         }).catch(() => {});
       }
       return;

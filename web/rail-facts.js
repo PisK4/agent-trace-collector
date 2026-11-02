@@ -13,6 +13,7 @@ import {
   renderMessageDetail, renderMessages,
 } from './body-view.js';
 import { esc } from './html.js';
+import { icon } from './icons.js';
 import { isFixedKind, kk, partLabel, partShade } from './parts.js';
 import { contextMapShellHtml, contextRowsHtml } from './context-map.js';
 import { messagePathOf, replyView, topSystemText } from './body-model.js';
@@ -164,9 +165,9 @@ export function structureFoldHtml(input) {
     const deltaNote = delta === null
       ? relation ? `<p class="note">${esc(relation)}：不标记新增消息，按原顺序列出。</p>` : ''
       : deltaState !== null && deltaState.error !== null
-        ? `<p class="note warn">新增读取失败（${esc(deltaState.error)}）：已消费 ${consumed} / ${delta.size}，未读位置保留，不吞掉剩余输入。<button class="chip-btn" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''}>重试续读</button></p>`
+        ? `<p class="note warn">新增读取失败（${esc(deltaState.error)}）：已消费 ${consumed} / ${delta.size}，未读位置保留，不吞掉剩余输入。<button class="chip-btn ico" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''} aria-label="重试续读" title="重试续读">${icon('retry', 20)}</button></p>`
         : deltaState !== null && !deltaState.done
-          ? `<p class="note">新增 ${delta.size} 条消息 · 已消费 ${consumed} / ${delta.size}。<button class="chip-btn" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''}>继续读取</button></p>`
+          ? `<p class="note">新增 ${delta.size} 条消息 · 已消费 ${consumed} / ${delta.size}。<button class="chip-btn ico" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''} aria-label="继续读取" title="继续读取">${icon('read', 20)}</button></p>`
           : '';
     // 已缓存消息的有序并集；相邻序号的空洞是未读区间，不用连续游标删掉缓存尾部。
     const listEntries = [...entries].sort((a, b) => a.ord - b.ord);
@@ -259,7 +260,7 @@ export function toolSchemaSection(capabilities, toolName) {
  */
 export function readingChangedNote(reqId) {
   return `<p class="note warn">阅读版本已变化：这一笔的详情与正文缓存已作废，正在自动重读。</p>
-    <div class="conv-tools"><button class="chip-btn" data-body-load="${reqId}">立即重读</button></div>`;
+    <div class="conv-tools"><button class="chip-btn ico" data-body-load="${reqId}" aria-label="立即重读" title="立即重读">${icon('read', 20)}</button></div>`;
 }
 
 /**

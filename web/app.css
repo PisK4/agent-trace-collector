@@ -20,6 +20,8 @@
   --shadow:0 1px 2px rgba(0,0,0,.06);
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  /* 折叠箭头：统一取 16 网格同一枚 chevron，用 mask 而不是字形，避免各系统基线偏移。 */
+  --chev-right:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6.2 4.4L9.8 8l-3.6 3.6' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
@@ -151,6 +153,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .chip-btn.ghost{border-color:transparent;background:transparent;color:var(--text-2)}
 .chip-btn.ghost:hover{background:var(--hover);color:var(--text)}
 .chip-btn[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+/* 纯图标按钮：正方形，去掉文字内边距；20px 图标落在 24px 外框里。 */
+.chip-btn.ico{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;line-height:0}
 .sessions-list{flex:1;min-height:0;overflow:auto;padding:2px 8px 16px}
 .group-label{
   display:flex;align-items:center;gap:6px;padding:10px 6px 5px;
@@ -188,7 +192,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .session-facts .mono{font-size:10.5px}
 .session-facts .sum{color:var(--text-2)}
 /* 会话 ID 后的内联复制钮：与 facts 行同高的小方块，不用顶栏 icon-btn 的 28px 规格。 */
-.fact-copy{flex:none;width:18px;height:18px;border:1px solid var(--line);border-radius:3px;background:var(--surface);display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:var(--muted);padding:0}
+.fact-copy{flex:none;width:18px;height:18px;border:1px solid var(--line);border-radius:3px;background:var(--surface);display:inline-flex;align-items:center;justify-content:center;color:var(--muted);padding:0;line-height:0}
 .fact-copy:hover{background:var(--hover);color:var(--text-2)}
 .session-note{
   margin-top:9px;padding:6px 9px;border-radius:4px;border:1px solid var(--line);
@@ -231,6 +235,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 /* 加载入口在列表尾部：与从头往下读的方向一致，上边框与末组分隔。 */
 .history-loader{display:flex;align-items:center;flex-wrap:wrap;gap:9px;justify-content:center;padding:14px 0 15px;border-top:1px solid var(--line)}
 .history-button{border:1px solid var(--line);border-radius:5px;padding:7px 13px;background:var(--surface);font-size:11px;color:var(--text-2)}
+.history-button.ico{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;line-height:0}
 .history-button:hover{border-color:var(--accent);color:var(--accent)}
 .history-start{font-size:11px;color:var(--muted)}
 /* 滚动定位的让位随会话头实际高度走：app.js 的 syncBandTop 把头与带的高度
@@ -260,6 +265,12 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-meta b{font-weight:400;color:var(--text-2)}
 /* 图标：一份 16 网格、整枚缩放；颜色一律继承外层，不单独定色。 */
 .ico{display:inline-block;flex:none;vertical-align:-.18em}
+/* 折叠 affordance 统一为一枚 12px chevron：闭合朝右，展开旋转 90° 朝下。
+   summary 的 ::before 与 JS 里显式放置的 .chev 共用同一套取形规则。 */
+.chev,.disclosures summary::before,.msg-thinking summary::before,.rail-fold>summary::before,.usage-more>summary::before,.ctx-d-entry>summary::before,.cap-item>details>summary::before{
+  content:"";display:inline-block;width:12px;height:12px;flex:none;background-color:currentColor;
+  mask:var(--chev-right) center/contain no-repeat;-webkit-mask:var(--chev-right) center/contain no-repeat;
+}
 /* 角色标签用英文（User/Assistant/Tool/System/Aux/Event），列宽按最宽的 Assistant 给足，
    不截断；pill 形状（全圆角）压缩色块观感，四档角色色封顶。 */
 .row-label{width:62px;flex:none;padding:2px 3px;border-radius:999px;text-align:center;font:10px var(--ui);color:var(--k-user);background:var(--k-user-bg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -346,6 +357,9 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .hidden-more{display:inline-flex;flex-wrap:wrap;flex:none;min-width:0}
 .hidden-more summary{color:var(--accent);font:10.5px/1.7 var(--ui);cursor:pointer;list-style:none;white-space:nowrap}
 .hidden-more summary::-webkit-details-marker{display:none}
+/* JS 显式放置的 chevron：与文字同色，收起朝右、展开朝下。 */
+.hidden-more summary .chev{margin-right:5px;vertical-align:-.12em;color:var(--accent)}
+.hidden-more[open] summary .chev{transform:rotate(90deg)}
 .hidden-more summary:hover,.hidden-more summary:focus-visible{text-decoration:underline;outline:0}
 .hidden-more summary b{font-variant-numeric:tabular-nums}
 .hidden-more .more-body{display:flex;flex-direction:column;gap:2px;flex-basis:100%;padding:5px 0 2px}
@@ -406,8 +420,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .msg-thinking{margin:6px 0;border:1px dashed var(--line-strong);border-radius:4px;padding:0 9px}
 .msg-thinking summary{font-size:10.5px;color:var(--muted);padding:6px 0;cursor:pointer;list-style:none}
 .msg-thinking summary::-webkit-details-marker{display:none}
-.msg-thinking summary::before{content:"▸";margin-right:6px;font-size:9px}
-.msg-thinking[open] summary::before{content:"▾"}
+.msg-thinking summary::before{margin-right:6px}
+.msg-thinking[open] summary::before{transform:rotate(90deg)}
 .msg-thinking pre{margin:0 0 8px}
 .bp-plain{white-space:pre-wrap}
 .tool-row{display:flex;flex-wrap:wrap;gap:5px;align-items:center;width:100%;padding:2px 0}
@@ -451,8 +465,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .cap-item{font-size:11px;line-height:1.5;min-width:0}
 .cap-item>details>summary{display:flex;align-items:baseline;gap:7px;cursor:pointer;list-style:none;padding:3px 0;min-width:0}
 .cap-item>details>summary::-webkit-details-marker{display:none}
-.cap-item>details>summary::before{content:"›";color:var(--muted);flex:none}
-.cap-item>details[open]>summary::before{content:"⌄"}
+.cap-item>details>summary::before{color:var(--muted)}
+.cap-item>details[open]>summary::before{transform:rotate(90deg)}
 .cap-item>details>summary:hover .cap-name{color:var(--accent)}
 .cap-name{font:10.5px var(--mono);color:var(--text);flex:none;background:none;border:0;padding:0}
 .cap-desc{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -515,7 +529,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .disclosures>details:last-child{border-bottom:0}
 .disclosures summary{display:flex;align-items:center;gap:7px;padding:8px 12px;font-size:11px;color:var(--text-2);cursor:pointer;list-style:none}
 .disclosures summary::-webkit-details-marker{display:none}
-.disclosures summary::before{content:"▸";color:var(--muted);font-size:9px;transition:transform .12s}
+.disclosures summary::before{color:var(--muted);transition:transform .12s}
 .disclosures details[open] summary::before{transform:rotate(90deg)}
 .disclosures summary:hover{background:var(--hover)}
 .disclosures .d-body{padding:2px 12px 12px}
@@ -645,7 +659,7 @@ pre.raw{
 .rail-fold{border:1px solid var(--line);border-radius:6px;background:var(--inset);margin:12px 0 0;overflow:hidden}
 .rail-fold>summary{display:flex;align-items:center;gap:7px;padding:8px 10px;font-size:11px;font-weight:550;color:var(--text-2);cursor:pointer;list-style:none}
 .rail-fold>summary::-webkit-details-marker{display:none}
-.rail-fold>summary::before{content:"▸";color:var(--muted);font-size:9px;flex:none;transition:transform .12s}
+.rail-fold>summary::before{color:var(--muted);transition:transform .12s}
 .rail-fold[open]>summary::before{transform:rotate(90deg)}
 .rail-fold>summary:hover{background:var(--hover)}
 .rail-fold .fold-count{margin-left:auto;font:10.5px var(--mono);color:var(--muted);font-weight:400}
@@ -663,7 +677,7 @@ pre.raw{
 .usage-more{margin:8px 0 0;border-top:1px solid var(--line)}
 .usage-more>summary{display:flex;align-items:center;gap:6px;padding:6px 0 2px;font-size:10px;color:var(--muted);cursor:pointer;list-style:none}
 .usage-more>summary::-webkit-details-marker{display:none}
-.usage-more>summary::before{content:"▸";font-size:8px;flex:none;transition:transform .12s}
+.usage-more>summary::before{transition:transform .12s}
 .usage-more[open]>summary::before{transform:rotate(90deg)}
 .usage-more>summary:hover{color:var(--text-2)}
 
@@ -764,7 +778,7 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 .ctx-d-head .t b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctx-d-head .v{font:11px var(--mono);color:var(--text-2);flex:none}
 .ctx-d-head .grow{flex:1}
-.ctx-d-head .x{border:0;background:none;font-size:16px;line-height:1;color:var(--muted);padding:2px 6px;border-radius:4px;cursor:pointer}
+.ctx-d-head .x{border:0;background:none;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;line-height:0;border-radius:4px;cursor:pointer}
 .ctx-d-head .x:hover{background:var(--hover);color:var(--text)}
 .ctx-d-body{padding:10px 14px 14px;overflow:auto}
 .ctx-d-status{font-size:11px;color:var(--warn);margin:0 0 6px}
@@ -773,7 +787,7 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 .ctx-d-entry{border:1px solid var(--line);border-radius:5px;background:var(--inset)}
 .ctx-d-entry>summary{display:flex;align-items:baseline;gap:8px;padding:6px 9px;font-size:11px;cursor:pointer;list-style:none}
 .ctx-d-entry>summary::-webkit-details-marker{display:none}
-.ctx-d-entry>summary::before{content:"▸";color:var(--muted);font-size:9px;flex:none;transition:transform .12s}
+.ctx-d-entry>summary::before{color:var(--muted);transition:transform .12s}
 .ctx-d-entry[open]>summary::before{transform:rotate(90deg)}
 .ctx-d-entry>summary:hover{background:var(--hover)}
 .ctx-d-entry .p{font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 4px;flex:none}

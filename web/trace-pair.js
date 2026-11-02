@@ -1,6 +1,7 @@
 // @ts-check
 import { messagesKeyOfPath } from './body-model.js';
 import { esc } from './html.js';
+import { icon } from './icons.js';
 
 /**
  * 工具配对页：一次调用的两端在右栏同屏就地阅读，Call 在上、Result 在下，
@@ -152,7 +153,7 @@ export function renderTracePair(input) {
     const retryable = reading.reason !== 'body_evicted' && reading.reason !== 'message_missing';
     resultBody = `<p class="note warn">结果正文不可读（${esc(reading.reason ?? '')}）。</p>
       ${retryable ? `<div class="conv-tools">
-        <button class="chip-btn" data-tool-retry="${input.owner}" data-call-ord="${input.call.ord}">重试读取</button>
+        <button class="chip-btn ico" data-tool-retry="${input.owner}" data-call-ord="${input.call.ord}" aria-label="重试读取" title="重试读取">${icon('retry', 20)}</button>
       </div>` : ''}`;
   }
   const resultPath = reading !== null && reading.target !== null ? reading.target.path
