@@ -73,7 +73,7 @@ export function migrateOmpSemantics(db: Database): void {
 // 所以自己开连接。schema.sql 已带全部新列，这里只处理还没升级的旧库。
 // 主体收在 import.meta.main 里：tests 只导入 migrateOmpSemantics，
 // 导入不得有副作用，更不允许摸到生产库。
-export function runBackfill(): void {
+export async function runBackfill(): Promise<void> {
   const db = new Database(path);
   db.exec('PRAGMA journal_mode=WAL');
   migrateOmpSemantics(db);
@@ -101,7 +101,7 @@ export function runBackfill(): void {
 
   let processed = 0;
   for (;;) {
-    const result = drainDeriveEntry(store, 50);
+    const result = await drainDeriveEntry(store, 50);
     processed += result.processed;
     if (result.remaining === 0) break;
   }
@@ -115,4 +115,4 @@ export function runBackfill(): void {
   store.close();
 }
 
-if (import.meta.main) runBackfill();
+if (import.meta.main) await runBackfill();

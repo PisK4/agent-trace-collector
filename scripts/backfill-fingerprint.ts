@@ -92,7 +92,7 @@ for (const group of groups) enqueueDerive(store, group.conv_key, group.actor, ''
 
 let processed = 0;
 for (;;) {
-  const result = drainDeriveEntry(store, 50);
+  const result = await drainDeriveEntry(store, 50);
   processed += result.processed;
   if (result.remaining === 0) break;
 }

@@ -100,12 +100,12 @@ function compressedRuntime(dir: string, maxCandidatesPerBatch = 1): SliceRuntime
 }
 
 /** 切片入口排空到没有待派生组为止。一次调用只推进一个阶段批次。 */
-function drainSlice(store: Store, runtime: SliceRuntime): void {
+async function drainSlice(store: Store, runtime: SliceRuntime): Promise<void> {
   store.deriveRuntime = runtime;
   const why = (): string => JSON.stringify(store.read.query<Record<string, unknown>, []>(
     'SELECT conv_key,actor,last_error FROM derive_queue WHERE last_error IS NOT NULL').all());
   for (let step = 0; step < 20_000; step++) {
-    const result = drainDeriveEntry(store, 1);
+    const result = await drainDeriveEntry(store, 1);
     if (result.remaining === 0) return;
     // 等价性场景里没有"输入在构建期变化"这回事，丢弃只会是指向真实缺陷的信号。
     if (result.discarded > 0) throw new Error(`slice_discarded:${result.discarded}:${why()}`);
@@ -185,14 +185,14 @@ function seedEquivalenceCase(store: Store, group: GroupKey): void {
   enqueueDerive(store, group.convKey, group.actor, '');
 }
 
-test('切片与同步在压缩预算下逐行等价', () => {
+test('切片与同步在压缩预算下逐行等价', async () => {
   const sync = fixture();
   const slice = fixture();
   try {
     seedEquivalenceCase(sync.store, GROUP);
     seedEquivalenceCase(slice.store, GROUP);
     drainSync(sync.store);
-    drainSlice(slice.store, compressedRuntime(slice.dir));
+    await drainSlice(slice.store, compressedRuntime(slice.dir));
 
     expectEquivalent(GROUP, snapshot(sync.store, GROUP, 'sync'),
       snapshot(slice.store, GROUP, 'slice'));
@@ -351,7 +351,7 @@ function seedFuzzGroup(store: Store, group: FuzzGroup): void {
   enqueueDerive(store, group.key.convKey, group.key.actor, '');
 }
 
-test('固定种子的模糊组在两条路径上等价', () => {
+test('固定种子的模糊组在两条路径上等价', async () => {
   const sync = fixture();
   const slice = fixture();
   try {
@@ -360,7 +360,7 @@ test('固定种子的模糊组在两条路径上等价', () => {
         seedFuzzGroup(sync.store, group);
         seedFuzzGroup(slice.store, group);
         drainSync(sync.store);
-        drainSlice(slice.store, compressedRuntime(slice.dir, 2));
+        await drainSlice(slice.store, compressedRuntime(slice.dir, 2));
         expectEquivalent(group.key, snapshot(sync.store, group.key, 'sync'),
           snapshot(slice.store, group.key, 'slice'));
       }

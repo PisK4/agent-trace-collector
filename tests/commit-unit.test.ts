@@ -24,7 +24,7 @@ test('重复空闲轮询不增加事务，指标快照保留具名计数', async
     expect(before.writer.by_name.probe.count).toBe(1);
     expect(before.writer.by_name.cost.count).toBe(1);
     for (let tick = 0; tick < 10; tick++) {
-      unit.run({ budgetMs: 400 });
+      await unit.run({ budgetMs: 400 });
       saveProbe(f.store, probe, tick + 2);
       reconcilePending(f.store, tick + 2);
       resumeSourceGaps(f.store, 'usage.jsonl');

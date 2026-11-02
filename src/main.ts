@@ -14,6 +14,7 @@ import { probeMagpie, saveProbe } from './sources/magpie/probe';
 import { createHandler, loadReadToken } from './http';
 import { markHookAbsent, reconcilePending } from './hook';
 import { createDeriveUnit } from './derive/unit';
+import { createDeriveWorker } from './derive/worker';
 import {
   RAW_TTL_MS,
   createAdmissionGate,
@@ -35,8 +36,14 @@ const RAW_PRUNE_INTERVAL_MS = 60 * 60_000;
 /**
  * 切片只供显式容量实验使用。查询已接入发布代，生产启用仍等待长组容量收敛、
  * 实际切片发布后的完整读侧验收与算法切换核验；错误码保留 slice_read_unmigrated。
+ *
+ * `deriveComputeInWorker: false` 是任务 6 的回退开关：计算退回主线程，行为与
+ * 隔离前一致，只失去事件循环的让出。
  */
-export type CollectorOptions = { capacityExperiment?: boolean };
+export type CollectorOptions = {
+  capacityExperiment?: boolean;
+  deriveComputeInWorker?: boolean;
+};
 
 export async function startCollector(
   config: Config,
@@ -51,6 +58,8 @@ export async function startCollector(
   }
   const dbPath = join(config.dataDir, 'trace.db');
   const store = openStore(dbPath);
+  // 计算线程要等库的 WAL 文件落下来才打得开只读连接；openStore 已经做过那一步。
+  const deriveWorker = options?.deriveComputeInWorker === false ? null : createDeriveWorker(store.path);
   // 派生路径按配置定下来，定时器之前就设好：一旦有派生任务进来，模式和预算都
   // 必须是已确定的，不能"先按同步跑一会儿再切"。
   if (config.deriveBudget !== undefined) {
@@ -78,6 +87,8 @@ export async function startCollector(
   metrics.eventLoop.start();
   const deriveUnit = createDeriveUnit(store, {
     onBodyRead: stats => metrics.bodyRead.record(stats),
+    // 计算段交给 Worker：主线程只跑落库段，事件循环不再被长组的读与计算占住。
+    compute: deriveWorker === null ? undefined : deriveWorker.compute,
   });
   // 准入闸门在每个写入点共用：模式变了才落库，量测按 TTL 缓存。
   const gate = createAdmissionGate(store, config.dataDir, {
@@ -190,15 +201,22 @@ export async function startCollector(
     if (result.unrecoverable > 0) process.stderr.write(`source_gap_unrecoverable:${result.unrecoverable}\n`);
   });
 
-  const deriveTick = guard('derive', () => {
+  // 停止要等当前组落盘：计算在 Worker 里，落库在 await 之后，中间是一个让出点。
+  let deriveLanded: Promise<void> | null = null;
+  const deriveTick = guard('derive', async () => {
     let nextDueMs = intervalOf(config, 'derive', DERIVE_INTERVAL_MS);
     try {
-      const result = deriveUnit.run({ budgetMs: 400 });
+      const result = await deriveUnit.run({ budgetMs: 400 });
       if (result.nextDueMs === 0) nextDueMs = 0;
     } finally {
-      if (!stopped) deriveTimer = setTimeout(deriveTick, nextDueMs);
+      if (!stopped) deriveTimer = setTimeout(trackedDeriveTick, nextDueMs);
     }
   });
+  function trackedDeriveTick(): Promise<void> {
+    const pending = deriveTick();
+    deriveLanded = pending;
+    return pending;
+  }
 
   const server = Bun.serve({
     hostname: '127.0.0.1',
@@ -228,7 +246,7 @@ export async function startCollector(
   void routeTick();
   void probeTick();
   void pendingTick();
-  void deriveTick();
+  void trackedDeriveTick();
   void gapTick();
   // 启动时就评估一次：上一个进程可能是在暂停状态下退出的，不必等一个周期。
   void retentionTick();
@@ -239,6 +257,12 @@ export async function startCollector(
     for (const timer of timers) clearInterval(timer);
     clearTimeout(deriveTimer);
     metrics.eventLoop.stop();
+    // 等在飞的那一轮派生走完落库段再关：计算在 Worker 里，此时也只是拒绝新请求。
+    // shortcut: 等待没有上限，单组计算超长的会话会让 stop 变慢；超出 service stop 的
+    // 30 秒轮询就如实报 stop_failed，进程仍会自己退出。
+    await deriveLanded;
+    // 计算线程随后终止，再关库：不留 Worker 在库关掉后继续读。
+    deriveWorker?.close();
     await server.stop(true);
     store.close();
   };

@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript、Bun、`bun:sqlite` WAL、不增加依赖。执行位置用 Bun `new Worker`（已有 spike 证据）。
 
-**Spec:** [派生移出主线程提案](../../../.agents/notes/proposed/architecture/2026-11-02-derive-worker-isolation.md)、[语句级拆分读数](../../acceptance.md#派生写事务语句级拆分生产读数真实流量2026-11-02)、[组内原子性](../../../.agents/notes/implemented/bug-fix/2026-10-22-atomic-synchronous-derivation.md)、[按组提交的预算调度](../../../.agents/notes/implemented/architecture/2026-10-24-budgeted-derive-unit.md)。
+**Spec:** [派生计算线程](../../../.agents/notes/implemented/architecture/2026-11-02-derive-compute-worker.md)、[语句级拆分读数](../../acceptance.md#派生写事务语句级拆分生产读数真实流量2026-11-02)、[组内原子性](../../../.agents/notes/implemented/bug-fix/2026-10-22-atomic-synchronous-derivation.md)、[按组提交的预算调度](../../../.agents/notes/implemented/architecture/2026-10-24-budgeted-derive-unit.md)。
 
 **当前数字（565.0 秒、78 组真实流量）：** 读语句 40.2%、纯计算 51.4%、写语句 5.6%、事务开合 2.8%。落库段合计 8.4%，最长一组 13.35 s 里推算约 1.1 s。
 
@@ -79,10 +79,10 @@ export type ApplyPlan = {
 
 ## Task 6：计算交 Worker（显式动作）
 
-- [ ] 计算段搬进 Worker（spike 的 `perf-derive-worker-entry` 形状），主线程只跑落库段。
-- [ ] 主线程写策略显式化：落库窗口内的 `busy_timeout` 与失败重试写进[架构设计](../../architecture-design.md)与[运维手册](../../operations.md)。
-- [ ] 崩溃与关闭：Worker 在计算或落库中被终止后重启，组状态不半发布；`service stop` 等当前组落盘。
-- [ ] 合成验收：长组派生期间事件循环 lag、读探针、写探针三项读数（沿用 `scripts/perf-derive-worker.ts` 的探针口径）。
+- [x] 计算段搬进 Worker（`src/derive/worker-entry.ts` + `worker.ts`，只读连接只算），主线程只跑落库段。
+- [x] 主线程写策略显式化：单写者不变、写连接 `busy_timeout=1000`、落库失败整组重算，写进[架构设计](../../architecture-design.md#系统边界与进程模型)与[运维手册](../../operations.md#起停与状态)。
+- [x] 崩溃与关闭：计算线程出错丢弃实例、组保持 dirty 不半发布；`stop()` 先等在飞一轮落盘再关线程与库。见 `tests/derive-worker.test.ts`。
+- [x] 合成验收：`bun scripts/perf-derive-worker.ts --requests 800` 两场景（基线 / Worker 只算 + 主线程落库），读数记入[验收记录](../../acceptance.md#派生计算线程落地合成2026-11-02)。
 
 ## Task 7：真实流量验收（显式动作）
 
