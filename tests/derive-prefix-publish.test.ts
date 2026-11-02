@@ -150,6 +150,25 @@ test('脏组里前缀行可读行级产物，链角色与边界之后的行仍�
   }
 });
 
+test('发布代非空的组不参与前缀发布', () => {
+  const f = fixture();
+  try {
+    seedGroup(f.store, [['A'], ['A', 'B']]);
+    const stale = computeDeriveGroup(f.store.read, CONV, ACTOR);
+    touchFrom(f.store, 2);
+    f.store.write(db => applyDeriveGroup(db, stale!), 'derive');
+    // 切片路径留下的发布代：行值由代际发布给出，`from_sort` 不描述那一次发布。
+    f.store.write(db => db.run(
+      `UPDATE derive_queue SET published_generation='gen-x' WHERE conv_key=? AND actor=?`,
+      [CONV, ACTOR]));
+    const page = listRequests(f.store, CONV, 10);
+    expect(page.items.every(item => item.derived_prefix === false)).toBe(true);
+    expect(getRequest(f.store, 1)!.derivation).toMatchObject({ chain_state: 'unavailable' });
+  } finally {
+    f.close();
+  }
+});
+
 test('整组完成后前缀标记消失', () => {
   const f = fixture();
   try {
