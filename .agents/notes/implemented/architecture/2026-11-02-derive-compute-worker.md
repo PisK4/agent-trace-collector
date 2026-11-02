@@ -74,12 +74,13 @@ Status: implemented
 | 主线程同步派生（基线） | 869.2 ms | 861.0 ms | 1.0 ms | 0.3 ms |
 | Worker 只算 + 主线程落库 | 793.0 ms | 1.8 ms | 0.0 ms | 2.8 ms |
 
-派生耗时差异在噪声内，事件循环 lag 从 861.0 ms 降到 1.8 ms；两场景处理同一组后队列都是 `state='clean'`。生产窗口的 p99 与 max 是否与 `writer.by_name.derive` 单次耗时解耦，按真实流量验收判，合成读数不替代。
+派生耗时差异在噪声内，事件循环 lag 从 861.0 ms 降到 1.8 ms；两场景处理同一组后队列都是 `state='clean'`。真实流量两窗口（pid 67826，合计 908.9 秒，见[验收记录](../../../../docs/acceptance.md#派生计算线程生产部署真实流量2026-11-02)）：`writer.by_name.derive` 单次上限 1,834.8 ms（复核升到 2,060.2 ms），事件循环 max 4,284.6–5,136.0 ms，13 秒级尖刺没有出现。`jobs.derive` 单次 max 18.1 秒，整轮墙钟与隔离前同量级；解耦的是它占不占事件循环。
 
 代价与未覆盖项：
 
 - 落库段仍持有写锁，最长一组推算约 1.1 s；在线路径下争这把锁的只有同进程其它写任务，它们共用同一 writer 排队。Worker 不写库，所以这条约束没有变成跨线程的等待或拒绝策略。
 - 算与写的接缝本身是新增复杂度：落库携带计算期读到的旧值（标题、摘要、配对关联、前驱关系），期间到达的新输入由 CAS 守卫挡住并重试本轮。这层边界没有现成实现，切片路径的放大效应说明改写阶段划分很容易把重复工作带进来。
+- 活跃会话下热组持续 dirty：真实流量窗口内最老 66–356 秒，B 窗口 23 次 derive 写事务里 6 次因 `derive_input_changed` 整轮丢弃。计算移出主线程后，主线程在计算期间继续摄入新请求，整轮结果在落库 CAS 处作废并重算；接缝窗口没有计这个次数，频率差异未比较。
 - 计算段的解码每次重来：窗口内 68,060 次消息块解码，命中数为 0，每次都是冷解码；[派生正文重复解压修复](../bug-fix/2026-10-26-derive-body-decompression-amplification.md)是能独立压掉的一段计算，与本条并行。
 - Bun Worker 与 `bun:sqlite` 的跨线程行为覆盖极窄：现有证据来自本机合成库、单组、无并发摄入；Worker 崩溃恢复、WAL checkpoint 与主线程关闭顺序、维护任务替换库文件都没覆盖。
 - 读侧代际不受影响：计算线程不写发布指针，指针写入仍在主线程的落库事务里。
@@ -89,4 +90,5 @@ Status: implemented
 
 - `tests/derive-worker.test.ts`：同一合成组在主线程与 Worker 两条路径上逐表一致（`request`、`tool_call`、`derive_queue`）；计算线程打不开库时这一组保持 `dirty`、`prev_relation` 一行未写。
 - `tests/derive-unit.test.ts`、`tests/derive-slice.test.ts`、`tests/capacity-slice.test.ts`、`tests/commit-unit.test.ts` 随入口异步化更新，覆盖预算截断、组数上限、第二组失败回滚与两条路径等价。
+- 真实流量两窗口与队列采样见[验收记录](../../../../docs/acceptance.md#派生计算线程生产部署真实流量2026-11-02)；追平项未达成，合成读数不替代。
 - `bun scripts/perf-derive-worker.ts --requests 800` 是显式动作，不进测试套件。

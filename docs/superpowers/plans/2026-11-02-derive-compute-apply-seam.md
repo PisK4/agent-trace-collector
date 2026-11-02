@@ -86,10 +86,10 @@ export type ApplyPlan = {
 
 ## Task 7：真实流量验收（显式动作）
 
-- [ ] 部署后按同一窗口口径取 `writer.by_name.derive.sql` 与 `event_loop`：落库段占写事务总时长的比例、最长一组单次写事务耗时。
-- [ ] 派生追平：`derive_queue` 无长期 dirty 组，`input_revision == published_revision`。
-- [ ] hook 摄入 `busy` 拒绝次数与窗口对照，不作因果结论，只记观测。
-- [ ] 未覆盖项单列：分组级落库耗时、Worker 崩溃恢复、多 Worker 竞争。
+- [x] 部署后按同一窗口口径取 `writer.by_name.derive.sql` 与 `event_loop`：落库段占写事务总时长的比例、最长一组单次写事务耗时。
+- [ ] 派生追平：`derive_queue` 无长期 dirty 组，`input_revision == published_revision`。未达成：活跃会话下热组持续 dirty 66–356 秒，整轮丢弃见[验收记录](../../acceptance.md#派生计算线程生产部署真实流量2026-11-02)。
+- [x] hook 摄入 `busy` 拒绝次数与窗口对照，不作因果结论，只记观测。
+- [x] 未覆盖项单列：分组级落库耗时、Worker 崩溃恢复、多 Worker 竞争。
 
 ## 验收与回退
 
