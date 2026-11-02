@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { acceptHook } from '../src/hook';
+import { acceptHook, convDigestOf } from '../src/hook';
 import type { HookEnvelope } from '../src/hook';
 import { reconcilePending } from '../src/hook';
 import { EMPTY_SESSION_KEY, migrateHookIdentity, previewHookIdentityMigration } from '../src/maintenance/identity';
@@ -75,7 +76,7 @@ function seedHookEvidence(
   });
 }
 
-test('新请求把空 session 当缺失，原始空值只留在 raw_hook', () => {
+test('新请求把空 session 当缺失，空 session 时用摘要归组，原始空值只留在 raw_hook', () => {
   const f = fixture();
   try {
     const result = acceptHook(f.store, envelope(), 1000, salt);
@@ -84,14 +85,18 @@ test('新请求把空 session 当缺失，原始空值只留在 raw_hook', () =>
       actor: string | null; actor_state: string;
     }, [number]>('SELECT conv_key,conv_source,session,actor,actor_state FROM request WHERE req_id=?')
       .get(result.req_id);
+    // 空 session：按消息摘要归到 ["conv",digest] 组，不退回 ["hook",id]。
+    // 但 actor 仍未知、session 列仍 NULL、derive_queue 不进。
+    const digest = JSON.parse(request!.conv_key)[1];
     expect(request).toEqual({
-      conv_key: JSON.stringify(['hook', 'hook-identity-1']),
-      conv_source: 'hook', session: null, actor: null, actor_state: 'unknown',
+      conv_key: JSON.stringify(['conv', digest]),
+      conv_source: 'conv-digest', session: null, actor: null, actor_state: 'unknown',
     });
+    expect(digest).toMatch(/^magpie-[0-9a-f]{24}$/);
     expect(f.store.read.query<{ session: string | null }, [string]>(
       'SELECT session FROM raw_hook WHERE hook_id=?').get('hook-identity-1'))
       .toEqual({ session: '' });
-    // 空 session 行不进组：没有派生队列行。
+    // actor 仍未知，不进派生队列。
     expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_queue').get()).toEqual({ n: 0 });
   } finally {
     f.close();
@@ -258,6 +263,95 @@ test('迁移后的孤儿仍能按唯一 response ID 并入账本目标', () => {
     expect(f.store.read.query<{ conv_key: string; actor: string | null }, []>(
       'SELECT conv_key,actor FROM request WHERE req_id=2').get())
       .toEqual({ conv_key: JSON.stringify(['session', 'real-session']), actor: 'actor-real' });
+  } finally {
+    f.close();
+  }
+});
+
+// ─── convDigestOf 纯函数单测 ───
+
+test('convDigestOf：从 messages 里选首条 user 元素算摘要', () => {
+  const firstUser = JSON.stringify({ role: 'user', content: [{ type: 'text', text: 'hello' }] });
+  const hex = createHash('sha256').update(firstUser).digest('hex').slice(0, 24);
+  expect(convDigestOf({
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'sys' }] },
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+    ],
+    model: 'gpt-4o',
+  })).toEqual({ key: JSON.stringify(['conv', 'magpie-' + hex]), source: 'conv-digest' });
+});
+
+test('convDigestOf：无 user 角色时挑首条元素（magpie 口径）', () => {
+  const firstAny = JSON.stringify({ role: 'assistant', content: 'hi' });
+  const hex = createHash('sha256').update(firstAny).digest('hex').slice(0, 24);
+  expect(convDigestOf({
+    messages: [
+      { role: 'assistant', content: 'hi' },
+      { role: 'tool', content: 'r', tool_call_id: 'tc1' },
+    ],
+  })).toEqual({ key: JSON.stringify(['conv', 'magpie-' + hex]), source: 'conv-digest' });
+});
+
+test('convDigestOf：无 session 时 acceptHook 走摘要归组（有摘要路径）', () => {
+  const f = fixture();
+  try {
+    const result = acceptHook(f.store, envelope({
+      session: '',
+      hook_id: 'hook-digest-1',
+    }), 1000, salt);
+    const row = f.store.read.query<{ conv_key: string; conv_source: string }, [number]>(
+      'SELECT conv_key,conv_source FROM request WHERE req_id=?').get(result.req_id);
+    const parsed = JSON.parse(row!.conv_key);
+    expect(parsed[0]).toBe('conv');
+    expect(parsed[1]).toMatch(/^magpie-[0-9a-f]{24}$/);
+    expect(row!.conv_source).toBe('conv-digest');
+  } finally {
+    f.close();
+  }
+});
+
+test('convDigestOf：有 session 时 acceptHook 保持 session 路径（不被摘要覆盖）', () => {
+  const f = fixture();
+  try {
+    const result = acceptHook(f.store, envelope({
+      session: 'explicit-session',
+      hook_id: 'hook-digest-2',
+    }), 1000, salt);
+    const row = f.store.read.query<{ conv_key: string; conv_source: string }, [number]>(
+      'SELECT conv_key,conv_source FROM request WHERE req_id=?').get(result.req_id);
+    expect(row).toEqual({
+      conv_key: JSON.stringify(['session', 'explicit-session']),
+      conv_source: 'session',
+    });
+  } finally {
+    f.close();
+  }
+});
+
+test('convDigestOf：null / 非对象 / 无 messages 数组 → null（无摘要路径）', () => {
+  expect(convDigestOf(null)).toBeNull();
+  expect(convDigestOf('not-an-object')).toBeNull();
+  expect(convDigestOf({})).toBeNull();
+  expect(convDigestOf({ messages: [] })).toBeNull();
+  expect(convDigestOf({ model: 'gpt-4o' })).toBeNull();
+});
+
+test('convDigestOf：无 session 但 request 无 messages → acceptHook 回退 hookConv', () => {
+  const f = fixture();
+  try {
+    const result = acceptHook(f.store, envelope({
+      session: '',
+      hook_id: 'hook-fallback-1',
+      request: { model: 'gpt-4o', tools: [{ name: 'search' }] }, // 无 messages/contents/input
+    }), 1000, salt);
+    const row = f.store.read.query<{ conv_key: string; conv_source: string }, [number]>(
+      'SELECT conv_key,conv_source FROM request WHERE req_id=?').get(result.req_id);
+    expect(row).toEqual({
+      conv_key: JSON.stringify(['hook', 'hook-fallback-1']),
+      conv_source: 'hook',
+    });
   } finally {
     f.close();
   }
