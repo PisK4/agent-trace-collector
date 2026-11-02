@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
 import { readBodyMetaTx } from './body';
-import { markGroupDirtyTx } from './derive/state';
+import { markGroupDirtyTx, requestPositionTx } from './derive/state';
 import { classifyPurpose } from './harness/purpose';
 import { parseProtocol } from './protocols';
 import { readSourceFacts } from './sources/facts';
@@ -318,7 +318,8 @@ export function readPurposeTaskTx(db: Database, reqId: number): PurposeTask | nu
 function markKnownGroup(db: Database, identity: PurposeIdentity): void {
   if (identity.actorState !== 'known'
     || identity.convKey === null || identity.actor === null) return;
-  markGroupDirtyTx(db, identity.convKey, identity.actor, '');
+  // 用途结论决定这一笔是否参与链，只影响它自己与其后的行：边界取它的位置。
+  markGroupDirtyTx(db, identity.convKey, identity.actor, requestPositionTx(db, identity.reqId));
 }
 
 /**

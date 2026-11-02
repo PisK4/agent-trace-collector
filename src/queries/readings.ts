@@ -53,7 +53,11 @@ export type PromptReading = {
 
 export type DerivationReading = {
   state: 'clean' | 'dirty' | 'retained' | 'legacy' | 'unknown';
-  chain_state: 'current' | 'retained' | 'unavailable';
+  /**
+   * `prefix`：组还没算完，但本行在最早受影响位置之前，行级产物仍然成立。
+   * 链角色与工具配对是整组产物，只有 `current` 可读。
+   */
+  chain_state: 'current' | 'prefix' | 'retained' | 'unavailable';
   summary_state: 'current' | 'retained' | 'unavailable';
   reason: string | null;
 };
@@ -148,6 +152,8 @@ export function projectionMetaReading(raw: unknown): ProjectionMetaReading {
 export function derivationOf(input: {
   derived_state: string | null;
   summary_state: string | null;
+  /** 投影判定这一行属于已落库前缀；与 `derived_state` 一起决定链可读性。 */
+  derived_prefix?: boolean;
 }): DerivationReading {
   if (input.derived_state === 'current') {
     return {
@@ -159,7 +165,9 @@ export function derivationOf(input: {
     };
   }
   if (input.derived_state === 'dirty') {
-    return { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' };
+    return input.derived_prefix === true
+      ? { state: 'dirty', chain_state: 'prefix', summary_state: 'current', reason: 'derive_prefix' }
+      : { state: 'dirty', chain_state: 'unavailable', summary_state: 'retained', reason: 'derive_dirty' };
   }
   if (input.derived_state === 'retained') {
     return { state: 'retained', chain_state: 'retained', summary_state: 'retained', reason: 'derived_retained' };

@@ -11,6 +11,7 @@ import {
   markGroupDirtyTx,
   markRequestInputTx,
   requestGroupTx,
+  requestPositionTx,
   resetRequestInputEpochTx,
 } from './derive/state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
@@ -413,8 +414,10 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
   projectRequestTx(db, targetId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
 
   // 7) 源请求即将消失：它原来那一组少了一个成员，必须在删行前标脏，
-  //    否则那一组的产物会一直停在把源请求算进去的旧结果上。
-  if (sourceGroup !== null) markGroupDirtyTx(db, sourceGroup.convKey, sourceGroup.actor, '');
+  //    否则那一组的产物会一直停在把源请求算进去的旧结果上。边界取源行的位置。
+  if (sourceGroup !== null) {
+    markGroupDirtyTx(db, sourceGroup.convKey, sourceGroup.actor, requestPositionTx(db, sourceId));
+  }
   db.run('DELETE FROM pending_hook WHERE hook_id=?', [hookId]);
   db.run('DELETE FROM request WHERE req_id=?', [sourceId]);
 
@@ -426,7 +429,8 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
     (targetGroupAfter === null ||
       targetGroupAfter.convKey !== targetGroupBefore.convKey || targetGroupAfter.actor !== targetGroupBefore.actor);
   if (moved && targetGroupBefore !== null) {
-    markGroupDirtyTx(db, targetGroupBefore.convKey, targetGroupBefore.actor, '');
+    markGroupDirtyTx(db, targetGroupBefore.convKey, targetGroupBefore.actor,
+      requestPositionTx(db, targetId));
   }
   markRequestInputTx(db, targetId);
 }

@@ -361,7 +361,9 @@ export function messageCopyText(entry) {
 export function deltaOrdinals(detail) {
   if (detail === null) return null;
   // 链结果不是当前结论时，增量是上一次完成时的产物，不能当成这一轮新增。
-  if (detail.derivation === undefined || detail.derivation.chain_state !== 'current') return null;
+  // 前缀行例外：组还没算完，但本行不受这一版输入影响，增量仍然成立。
+  const chainState = detail.derivation === undefined ? null : detail.derivation.chain_state;
+  if (chainState !== 'current' && chainState !== 'prefix') return null;
   if (detail.prev_relation !== 'first' && detail.prev_relation !== 'confirmed') return null;
   if (!Array.isArray(detail.delta_ordinals)) return null;
   return new Set(detail.delta_ordinals);

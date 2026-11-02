@@ -2,7 +2,7 @@
 
 import type { BodyState } from '../store';
 import { modelTimeTitle } from '../format';
-import { groupCurrentSql, groupIsCurrent } from '../derive/state';
+import { POSITION_ALL, groupCurrentSql, groupIsCurrent, positionKey, rowPrefixSql } from '../derive/state';
 
 export type CostState = 'priced' | 'zero' | 'unpriced' | 'absent';
 
@@ -50,6 +50,11 @@ export type RequestRow = {
   chain_role: string;
   /** 正式标题；只有用途阶段写下的值，回复文本不再参与。 */
   model_title: string | null;
+  /**
+   * 组没算完，但本行在最早受影响位置之前：行级派生列仍然成立。
+   * 关系、标题、摘要可读；链角色与工具配对仍是整组产物，不可读。
+   */
+  derived_prefix: boolean;
   purpose_status: string;
   purpose_version: number | null;
   purpose_rule: string | null;
@@ -123,14 +128,18 @@ export function derivedStateOf(row: {
  * 关系、增量、链角色与折叠行摘要都是组的产物：组没算完时它们描述的是上一次
  * 完成时的输入，不是现在的。留在顶层就等于把它们当作当前结论返回。
  * 独立事实（耗时、费用、正文、模型、时间兜底标题）不受影响，照常返回。
+ *
+ * 组没算完不等于行没算完：`from_sort` 之前的行不受这一版输入影响，行级产物
+ * 仍然成立（见 `prefixValid`）。链角色是整组产物，只有 current 才可读。
  */
 export const GROUP_READ_COLUMNS = `g.state AS group_state,g.input_revision AS group_input,
-  g.published_revision AS group_published,g.target_algorithm,g.published_algorithm`;
+  g.published_revision AS group_published,g.target_algorithm,g.published_algorithm,
+  g.from_sort AS group_prefix_sort`;
 
-/** 摘要状态与依据：发布代映射 retention/algorithm/basis；组不 current 时置 NULL，让 derived_state 落到非 current。 */
-export const SUMMARY_STATE_COL = (g: string, d: string, r: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN ${d}.retention_state WHEN ${groupCurrentSql(g)} THEN ${r}.summary_state ELSE NULL END`;
-export const SUMMARY_ALGO_COL = (g: string, d: string, r: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN CASE WHEN ${d}.retention_state='legacy' THEN NULL ELSE ${d}.algorithm END WHEN ${groupCurrentSql(g)} THEN ${r}.summary_algorithm ELSE NULL END`;
-export const SUMMARY_BASIS_COL = (g: string, d: string, r: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN ${d}.basis_json WHEN ${groupCurrentSql(g)} THEN ${r}.summary_basis ELSE NULL END`;
+/** 摘要状态与依据：发布代映射 retention/algorithm/basis；组不 current 且本行不在前缀时置 NULL。 */
+export const SUMMARY_STATE_COL = (g: string, d: string, r: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN ${d}.retention_state WHEN ${groupCurrentSql(g)} THEN ${r}.summary_state WHEN ${rowPrefixSql(g, r)} THEN ${r}.summary_state ELSE NULL END`;
+export const SUMMARY_ALGO_COL = (g: string, d: string, r: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN CASE WHEN ${d}.retention_state='legacy' THEN NULL ELSE ${d}.algorithm END WHEN ${groupCurrentSql(g)} THEN ${r}.summary_algorithm WHEN ${rowPrefixSql(g, r)} THEN ${r}.summary_algorithm ELSE NULL END`;
+export const SUMMARY_BASIS_COL = (g: string, d: string, r: string) => `CASE WHEN ${g}.published_generation IS NOT NULL THEN ${d}.basis_json WHEN ${groupCurrentSql(g)} THEN ${r}.summary_basis WHEN ${rowPrefixSql(g, r)} THEN ${r}.summary_basis ELSE NULL END`;
 
 type DerivedColumns = {
   prev_req_id: number | null; prev_relation: string | null; delta_ordinals: string | null;
@@ -143,6 +152,8 @@ type StateColumns = {
   purpose_pending: number; summary_state: string | null; summary_algorithm: number | null;
   group_state: string | null; group_input: number | null; group_published: number | null;
   target_algorithm: number | null; published_algorithm: number | null;
+  /** 组内最早受影响的位置；本行位置严格小于它时，行级产物不受这一版输入影响。 */
+  group_prefix_sort: string | null;
 };
 
 /**
@@ -185,21 +196,43 @@ function reasoningSpanOf(row: ProjectableRow): number | null {
 }
 
 /**
+ * 前缀判定：组没算完，但这一行在最早受影响位置之前。
+ *
+ * `from_sort` 是脏标记写入时记下的最早受影响位置（定宽 `started_ms`）。
+ * 只有位置严格小于它的行才可用：位置相等说明分不出先后，宁可退回中性值。
+ * 历史行的 `from_sort` 是空串，与"位置未知"同义，比较恒不成立。
+ * 用途还没判完的行自己的列也还没重算，同样排除。
+ * 与 SQL 侧的 `rowPrefixSql` 是同一个判据的两处实现。
+ */
+export function prefixValid(row: ProjectableRow): boolean {
+  if (row.purpose_pending !== 0) return false;
+  const sort = row.group_prefix_sort;
+  if (sort === null || sort === '' || sort === POSITION_ALL) return false;
+  return positionKey(row.started_ms) < sort;
+}
+
+/**
  * 把一行 SQL 结果投影成可返回的请求行。
  *
  * `current` 之外的状态一律把派生列换成中性值：关系 null、链角色 `unknown`、
  * 折叠行摘要 null；标题退到"不依赖正文"的那一档——标题请求用回复里的正式标题，
  * 其余用模型时间占位。这样界面上不会出现"看起来像当前结论"的旧值。
+ *
+ * 前缀行是例外：组还没算完，但本行不受这一版输入影响，行级列按原值返回，
+ * `derived_prefix` 说明它还没等到整组完成。链角色仍是 `unknown`。
  */
 export function projectRow(row: ProjectableRow): {
   safe: RequestRow; state: DerivedState; historical: HistoricalResult | null;
 } {
   const state = derivedStateOf(row);
   const current = state === 'current';
+  // 前缀只对 dirty 有意义：retained/legacy 讲的是正文与算法，不是输入版本。
+  const prefix = state === 'dirty' && prefixValid(row);
+  const rowFacts = current || prefix;
   // 标题请求的正式标题来自用途列，与组结果无关；用途还没判完时才不可信。
   const modelTitleUsable = row.purpose_pending === 0 && row.req_kind === 'title'
     && row.model_title !== null;
-  const historical: HistoricalResult | null = current ? null : {
+  const historical: HistoricalResult | null = rowFacts ? null : {
     derived_state: state,
     title: row.title,
     title_source: row.title_source,
@@ -218,10 +251,10 @@ export function projectRow(row: ProjectableRow): {
     agent: row.agent,
     actor_state: row.actor_state === 'known' ? 'known' : 'unknown',
     started_ms: row.started_ms,
-    title: current
+    title: rowFacts
       ? row.title ?? ''
       : modelTitleUsable ? row.model_title! : fallbackTitle(row.model_served, row.started_ms),
-    title_source: current ? row.title_source : modelTitleUsable ? 'model_title' : 'model_time',
+    title_source: rowFacts ? row.title_source : modelTitleUsable ? 'model_title' : 'model_time',
     status: row.status,
     model_requested: row.model_requested,
     model_served: row.model_served,
@@ -240,13 +273,14 @@ export function projectRow(row: ProjectableRow): {
     reasoning_span_ms: reasoningSpanOf(row),
     body_state: row.body_state as BodyState,
     miss_reason: row.miss_reason,
-    input_preview: current ? row.input_preview : null,
-    input_preview_kind: current
+    input_preview: rowFacts ? row.input_preview : null,
+    input_preview_kind: rowFacts
       ? row.input_preview_kind as RequestRow['input_preview_kind'] : null,
     reply_preview: row.reply_preview,
-    reply_shape: current ? row.reply_shape as RequestRow['reply_shape'] : null,
-    context_event: current ? row.context_event as RequestRow['context_event'] : null,
+    reply_shape: rowFacts ? row.reply_shape as RequestRow['reply_shape'] : null,
+    context_event: rowFacts ? row.context_event as RequestRow['context_event'] : null,
     req_kind: row.req_kind ?? 'unknown',
+    // 链角色按整组选主干，本行算完也不足以确认；工具配对同理，在详情层单独屏蔽。
     chain_role: current ? (row.chain_role ?? 'unknown') : 'unknown',
     model_title: row.model_title,
     purpose_status: row.purpose_status,
@@ -254,6 +288,7 @@ export function projectRow(row: ProjectableRow): {
     purpose_rule: row.purpose_rule,
     purpose_chain: row.purpose_chain,
     derived_state: state,
+    derived_prefix: prefix,
   };
   return { safe, state, historical };
 }

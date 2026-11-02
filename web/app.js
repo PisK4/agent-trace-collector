@@ -497,7 +497,8 @@ if (typeof document !== 'undefined') {
   function relationTextOf(reqId) {
     const detail = reqId === null ? null : store.peekRequest(reqId)?.detail ?? null;
     if (detail === null) return '';
-    if (detail.derivation === undefined || detail.derivation.chain_state !== 'current') {
+    const chainState = detail.derivation === undefined ? null : detail.derivation.chain_state;
+    if (chainState !== 'current' && chainState !== 'prefix') {
       return '关系待重建或为旧结果，不标记新增';
     }
     if (detail.purpose_chain === 'exclude' || detail.chain_role === 'aux') return '辅助请求，不在主链上';

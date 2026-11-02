@@ -225,8 +225,10 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
     && read.meta !== null && (read.meta.state === 'available' || read.meta.state === 'partial');
   if (trusted === null) {
     // 归属与新增是同一件事的两面：归属未知时不猜会话关系，只说明按原文展示的范围。
+    const chainState = detail.derivation === undefined ? null : detail.derivation.chain_state;
     gap('attribution', unassigned ? '归属未确认' : '新增未确认',
-      detail.prev_relation === 'unknown' || detail.derived_state !== 'current' ? 'unknown' : null);
+      detail.prev_relation === 'unknown' || (chainState !== 'current' && chainState !== 'prefix')
+        ? 'unknown' : null);
   }
   // 产出请求：承载 delta 里 assistant 消息的来源。只有已确认前驱才可读它的
   // 调用表与推理读数；分叉、未知与首笔都没有可对齐的产出请求。
