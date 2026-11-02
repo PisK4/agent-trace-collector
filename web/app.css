@@ -271,9 +271,9 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
   content:"";display:inline-block;width:12px;height:12px;flex:none;background-color:currentColor;
   mask:var(--chev-right) center/contain no-repeat;-webkit-mask:var(--chev-right) center/contain no-repeat;
 }
-/* 角色标签用英文（User/Assistant/Tool/System/Aux/Event），列宽按最宽的 Assistant 给足，
-   不截断；pill 形状（全圆角）压缩色块观感，四档角色色封顶。 */
-.row-label{width:62px;flex:none;padding:2px 3px;border-radius:999px;text-align:center;font:10px var(--ui);color:var(--k-user);background:var(--k-user-bg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 角色 pill 换成图标后只保留形状与角色色，原名进 aria-label 与 title；
+   34px 是六种角色共用的栅格，比原来的 62px 窄 28px。 */
+.row-label{width:34px;height:20px;flex:none;padding:0;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;color:var(--k-user);background:var(--k-user-bg);overflow:hidden}
 .row-label.tool{color:var(--k-tool);background:var(--k-tool-bg)}
 .row-label.reply{color:var(--k-assistant);background:var(--k-assistant-bg)}
 .row-label.system{color:var(--k-system);background:var(--k-system-bg)}
@@ -398,7 +398,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 /* 轮次面板的空态比整栏空态紧凑。 */
 .turn-panel-empty{padding:10px 4px;text-align:left}
 @media(max-width:1300px){.compact-meta{font-size:8px}}
-@media(max-width:620px){.compact-row{gap:5px}.compact-select{gap:5px}.compact-preview{font-size:11px}.row-label{width:56px;font-size:9px}.row-tint{max-width:120px;font-size:9px}.compact-reading{min-width:64px}.row-reading{font-size:9px;gap:3px;padding:2px 4px}.row-reading .k{font-size:8.5px}}
+@media(max-width:620px){.compact-row{gap:5px}.compact-select{gap:5px}.compact-preview{font-size:11px}.row-label{width:32px;height:19px}.row-tint{max-width:120px;font-size:9px}.compact-reading{min-width:64px}.row-reading{font-size:9px;gap:3px;padding:2px 4px}.row-reading .k{font-size:8.5px}}
 
 .msg-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
 .msg{border-bottom:1px solid var(--line)}
@@ -652,6 +652,12 @@ pre.raw{
 .u-pill.warn{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
 
 .rail-empty{padding:26px 4px;text-align:center;font-size:11.5px;color:var(--muted);line-height:1.7}
+/* 空状态四套构图：24px 标记独占一行，句子不动；左对齐的面板不让标记居中。 */
+.rail-empty .ico,.sess-empty .ico{display:block;margin:0 auto 7px;color:var(--muted)}
+.turn-panel-empty .ico{margin-left:0}
+/* 读取失败提示里图标与句子同排（G7），不占一整行。 */
+.note.with-ico{display:flex;align-items:flex-start;gap:8px}
+.note.with-ico .ico{flex:none;color:var(--warn)}
 .rail-empty b{display:block;color:var(--text-2);font-weight:550;margin-bottom:3px}
 .rail-note{margin-top:9px;padding:7px 9px;border-radius:4px;background:var(--inset);border:1px solid var(--line);font-size:10px;line-height:1.6;color:var(--muted)}
 

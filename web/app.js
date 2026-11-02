@@ -457,13 +457,13 @@ if (typeof document !== 'undefined') {
       ? list.map(item).join('') + foldHtml
       : (foldHtml !== ''
         ? foldHtml
-        : '<p class="sess-empty">当前已加载的会话里没有符合条件的项。搜索与筛选只覆盖已加载范围。</p>');
+        : `<p class="sess-empty">${icon('empty-tray', 24)}当前已加载的会话里没有符合条件的项。搜索与筛选只覆盖已加载范围。</p>`);
     // 加载更多是列表尾部入口：保留 id 与分页游标条件，错误时可再次点击重试。
     const last = store.getSessions();
     const more = last.cursor === null
       ? '' : `<div class="sess-more"><button class="chip-btn ghost ico" id="load-more-sessions" aria-label="加载更多会话" title="加载更多会话">${icon('load-more', 20)}</button></div>`;
     const error = last.error === null ? ''
-      : `<p class="sess-empty">会话列表读取失败：${esc(last.error)}。可再次点击加载更多重试。</p>`;
+      : `<p class="sess-empty">${icon('empty-broken', 24)}会话列表读取失败：${esc(last.error)}。可再次点击加载更多重试。</p>`;
     el('sessions-list').innerHTML = body + more + error;
   }
 
@@ -754,7 +754,7 @@ if (typeof document !== 'undefined') {
       emptyHtml: rows.length === 0
         ? `<p class="sess-empty">${state.pendingSession !== null ? '正在读取请求…' : '这个会话没有已记录的请求。'}</p>`
         : groups.length === 0
-          ? '<p class="sess-empty">当前窗口的请求都没有可读正文，不在对话时间线里；请求记录在会话头。</p>'
+          ? `<p class="sess-empty">${icon('empty-page', 24)}当前窗口的请求都没有可读正文，不在对话时间线里；请求记录在会话头。</p>`
           : '',
       // 「已是最新记录」只在后续游标耗尽后出现：还有更晚记录时不冒充结尾。
       endHtml: window.loading || window.newerCursor !== null ? ''
@@ -932,7 +932,7 @@ if (typeof document !== 'undefined') {
 
   function railFacts() {
     const r = currentRow();
-    if (r === null) return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
+    if (r === null) return '<div class="rail-empty">' + icon('empty-select', 24) + '<b>未选择请求</b>在中间选择一个 Request。</div>';
     const read = currentRead();
     const meta = read?.meta ?? null;
     const detail = read?.detail ?? null;
@@ -1012,11 +1012,11 @@ if (typeof document !== 'undefined') {
    */
   function railTools() {
     const r = currentRow();
-    if (r === null) return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
+    if (r === null) return '<div class="rail-empty">' + icon('empty-select', 24) + '<b>未选择请求</b>在中间选择一个 Request。</div>';
     const read = currentRead();
     if (read === null || read.meta === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
-      return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
+      return `<div class="rail-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
         ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
         ${canLoad ? `<div class="conv-tools"><button class="chip-btn ico" data-body-load="${r.req_id}" aria-label="读取正文" title="读取正文">${icon('read', 20)}</button></div>` : ''}</div>`;
     }
@@ -1024,7 +1024,7 @@ if (typeof document !== 'undefined') {
     if (state.toolOrd === null) {
       const tools = toolEntries(detail, read.meta);
       if (tools.length === 0) {
-        return '<div class="rail-empty"><b>没有工具调用</b>这一笔已读回复里没有工具调用；更早分片读取后可再查。</div>';
+        return `<div class="rail-empty">${icon('empty-tray', 24)}<b>没有工具调用</b>这一笔已读回复里没有工具调用；更早分片读取后可再查。</div>`;
       }
       const rows = tools.map(tool => {
         // 正常态（已配对、正文未读已读）不挂 chip；异常（多候选）才提示，详情页给完整状态。
@@ -1161,7 +1161,7 @@ if (typeof document !== 'undefined') {
           replyRow: currentRows().find(row => row.req_id === turn.reply_req) ?? null,
         });
       }
-      return '<div class="rail-empty"><b>轮次不可用</b>重新结算后这一轮不在列表里；点击轨迹任意行返回请求态。</div>';
+      return '<div class="rail-empty">' + icon('empty-select', 24) + '<b>轮次不可用</b>重新结算后这一轮不在列表里；点击轨迹任意行返回请求态。</div>';
     }
     const r = currentRow();
     if (r === null) {
@@ -1169,7 +1169,7 @@ if (typeof document !== 'undefined') {
         const read = store.peekRequest(state.offPageReqId);
         return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口。这里只读了它的详情；需要完整轨迹请调整窗口（会话头有切窗按钮），不自动扫描全部历史。</p></section>${read?.detail ? ledgerRowsHtml(read.detail, read.detail) : ''}`;
       }
-      return '<div class="rail-empty"><b>未选择请求</b>在中间选择一个 Request。</div>';
+      return '<div class="rail-empty">' + icon('empty-select', 24) + '<b>未选择请求</b>在中间选择一个 Request。</div>';
     }
     const owner = state.railTab === 'tools' && state.toolOrd !== null ? state.toolOwner ?? r.req_id : null;
     const ownerRow = owner === null ? null : currentRows().find(row => row.req_id === owner) ?? null;
@@ -1179,7 +1179,7 @@ if (typeof document !== 'undefined') {
       const failed = stale === 'failed' || staleOwner === 'failed';
       const retryId = stale === 'failed' || staleOwner === null ? r.req_id : ownerRow?.req_id ?? r.req_id;
       const status = failed ? '当前版本读取失败，可重试。' : '正在准备当前版本，请稍候。';
-      return `<div class="rail-empty"><b>阅读版本已变化</b>${status}
+      return `<div class="rail-empty">${failed ? icon('empty-broken', 24) : ''}<b>阅读版本已变化</b>${status}
         <div style="margin-top:10px"><button class="chip-btn ico" data-body-load="${retryId}" aria-label="立即重读" title="立即重读">${icon('read', 20)}</button></div></div>`;
     }
     if (state.railTab === 'tools') return railTools();
@@ -1191,13 +1191,13 @@ if (typeof document !== 'undefined') {
     const read = store.peekRequest(r.req_id);
     if (read === null || read.meta === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
-      return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
+      return `<div class="rail-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
         ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
         ${canLoad ? `<div class="conv-tools"><button class="chip-btn ico" data-body-load="${r.req_id}" aria-label="读取正文" title="读取正文">${icon('read', 20)}</button></div>` : ''}</div>`;
     }
     const page = read.meta;
     if (page.state !== 'available' && page.state !== 'partial') {
-      return `<div class="rail-empty"><b>${esc(bodyStateText(r))}</b>${esc(bodyNotice(page) || '这一笔没有可读的正文。')}</div>`;
+      return `<div class="rail-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(r))}</b>${esc(bodyNotice(page) || '这一笔没有可读的正文。')}</div>`;
     }
     const view = replyView(page);
     const detail = read.detail ?? null;
@@ -1219,7 +1219,7 @@ if (typeof document !== 'undefined') {
       const chosen = read.entries.find((/** @type {{ord: number}} */ entry) => entry.ord === source.messageOrd) ?? null;
       const path = messagePathOf(page, source.messageOrd);
       body = chosen !== null ? renderMessageDetail(chosen, path, messagePairIndexOf(detail, prevDetailOf(detail)))
-        : `<div class="rail-empty"><b>消息未读取</b>${path === '' ? `消息 #${source.messageOrd}` : esc(path.replace(/^request\./, ''))} 不在已加载的分片里；读取完成后回到这一步。</div>`;
+        : `<div class="rail-empty">${icon('empty-page', 24)}<b>消息未读取</b>${path === '' ? `消息 #${source.messageOrd}` : esc(path.replace(/^request\./, ''))} 不在已加载的分片里；读取完成后回到这一步。</div>`;
     } else if (source.side === 'reply' && source.target === 'text') {
       body = `${truncNote}${renderReplyBlockDetail(source.path, source.text)}`;
     } else if (source.side === 'reply' && source.target === 'block') {
@@ -1227,7 +1227,7 @@ if (typeof document !== 'undefined') {
     } else if (view.state === 'ok') {
       body = `${truncNote}${renderReplyDetail(view, tools, String(r.req_id))}`;
     } else {
-      body = `<div class="rail-empty"><b>没有可读的回复</b>${esc(bodyNotice(page) || '这一笔只有请求。')}</div>`;
+      body = `<div class="rail-empty">${icon('empty-tray', 24)}<b>没有可读的回复</b>${esc(bodyNotice(page) || '这一笔只有请求。')}</div>`;
     }
     const structure = read.structure;
     // 结构总数未读时用元信息页的 total 判断；未读口径与读数页折叠共用一份。

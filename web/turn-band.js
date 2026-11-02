@@ -74,7 +74,7 @@ function commandPanel(entry, ord, ownerId, ownerRow, path) {
   </div>`;
   if (entry === null) {
     if (ownerRow !== null && ownerRow.body_state !== 'available' && ownerRow.body_state !== 'partial') {
-      return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty"><b>${esc(bodyStateText(ownerRow))}</b>${esc(bodyLabelText(ownerRow))}</div></div>`;
+      return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(ownerRow))}</b>${esc(bodyLabelText(ownerRow))}</div></div>`;
     }
     return `<div class="body-panel">${head}<p class="note">正在读取这条消息…</p></div>`;
   }
@@ -88,13 +88,13 @@ function missingCommandPanel(read, row) {
   const head = '<div class="bp-head"><span class="kind user bp-kind">User</span></div>';
   const page = read?.meta ?? null;
   if (row !== null && row.body_state !== 'available' && row.body_state !== 'partial') {
-    return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty"><b>${esc(bodyStateText(row))}</b>${esc(bodyLabelText(row))}</div></div>`;
+    return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(row))}</b>${esc(bodyLabelText(row))}</div></div>`;
   }
   if (page === null) {
     return `<div class="body-panel">${head}<p class="note">正在读取命令正文…</p></div>`;
   }
   if (page !== null && page.state !== 'available' && page.state !== 'partial') {
-    return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty"><b>${esc(bodyNotice(page) || '正文不可读')}</b></div></div>`;
+    return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty">${icon('empty-page', 24)}<b>${esc(bodyNotice(page) || '正文不可读')}</b></div></div>`;
   }
   return `<div class="body-panel">${head}<p class="note">命令位置不可用，无法读取命令正文。</p></div>`;
 }

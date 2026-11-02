@@ -2,7 +2,7 @@
 import { deltaOrdinals, messagePathOf, replyView, systemPathOf, toolCallOfBlock } from './body-model.js';
 import { compact, secs, tierOf, TIER_LIMITS, toolCategory } from './duration.js';
 import { esc } from './html.js';
-import { icon } from './icons.js';
+import { icon, rolePill } from './icons.js';
 import { bodyStateText } from './row-summary.js';
 import { clipChars, summaryParts, toolSummary } from './tool-summary.js';
 
@@ -608,7 +608,7 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
   // 组级状态行的标签位只放形状：失败是裸 X、其余缺口是三角；事实句子仍在行内说明。
   const labelHtml = step.kind === 'flag'
     ? `<span class="row-label flag" role="img" aria-label="${step.status === 'failed' ? '失败' : '缺口'}" title="${step.status === 'failed' ? '失败' : '缺口'}">${icon(step.status === 'failed' ? 'failure' : 'gap')}</span>`
-    : `<span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>`;
+    : rolePill(label, KIND_CLASS[step.kind] ?? 'aux');
   const { chip, args, arrow } = toolRowParts(step, callOf);
   const isTool = step.kind === 'tool' || step.kind === 'tool_result';
   // 悬停给完整信息：调用行放完整参数 JSON，结果行放调用摘要与完整结果正文；属性按 TITLE_MAX 截断。

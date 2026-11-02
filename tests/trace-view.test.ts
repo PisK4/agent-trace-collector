@@ -154,9 +154,9 @@ test('System 步骤：顶层独立来源键，消息级带原路径，输入总�
   expect(msgSys?.source).toEqual({ side: 'request', path: 'request.messages[1]', messageOrd: 1, blockIndex: null });
   // ord1 是 System 消息，不是用户输入；输入总数不含它。
   expect(steps.some(s => s.kind === 'user')).toBe(false);
-  // 渲染：System 英文标签一行摘要，全文放右栏。
+  // 渲染：System 英文标签收进图标 pill 的可访问名，全文放右栏。
   const html = renderTraceRows(row(), steps, 1, null);
-  expect(html).toContain('>System<');
+  expect(html).toContain('aria-label="System" title="System"');
   expect(html).toContain('be nice');
 });
 
@@ -323,8 +323,9 @@ test('工具行上屏：chip 承载工具身份，未配对结果保持中性 To
     { kind: 'call', text: 'Bash({"command":"ls","description":"列目录"})', index: 0, raw: { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls', description: '列目录' } }, path: 'content[0]' },
   ])], null));
   const html = renderTraceRows(row(), steps, 3, null);
-  expect(html).toContain('>Assistant<');
-  expect(html).toContain('>Tool<');
+  // 角色 pill 改为图标后，原名保留在可访问名与悬停说明里。
+  expect(html).toContain('aria-label="Assistant" title="Assistant"');
+  expect(html).toContain('aria-label="Tool" title="Tool"');
   // 调用行：工具名 chip 带色类，参数段不再重复工具名。
   expect(html).toContain('row-tint">Bash</span>');
   expect(html).toContain('<code>列目录</code>');
@@ -873,8 +874,8 @@ test('行尾读数：承载消息的文本行挂产出请求的推理段，调�
   expect(steps.find(s => s.kind === 'user')?.reading).toBeUndefined();
 
   const html = renderTraceRows(r, steps, 1, null);
-  expect(html).toContain('<span class="row-reading reason"><span class="k">思考</span><b class="v t-good">2.1s</b></span>');
-  expect(html).toContain('<span class="row-reading exec"><span class="k">执行</span><b class="v t-good">2.4s</b></span>');
+  expect(html).toContain('<span class="row-reading reason"><span class="k" role="img" aria-label="思考" title="思考">');
+  expect(html).toContain('<span class="row-reading exec"><span class="k" role="img" aria-label="执行" title="执行">');
   // 每行（含请求级记录）都有读数槽，User 行、第二段文本与记录行留空：槽宽不随内容跳。
   expect(html.match(/class="compact-reading"/g)?.length).toBe(5);
   expect(html.match(/class="compact-reading"><\/span>/g)?.length).toBe(3);
@@ -895,7 +896,8 @@ test('读数按工具类别取档位，等待型工具不上色', () => {
   ];
   const html = renderTraceRows(r, projectSteps(r, read(d, entries, null), null, [], () => ({ reasoningMs: null, calls })), 1, null);
   // 等人回答的 45s 不上档：数值照常显示，整枚标签退成中性色。
-  expect(html).toContain('<span class="row-reading exec wait"><span class="k">执行</span><b class="v">45.0s</b></span>');
+  expect(html).toContain('<span class="row-reading exec wait">');
+  expect(html).toContain('aria-label="执行" title="执行"');
   // 读 12s 超过 1s/10s 的第二档。
   expect(html).toContain('<b class="v t-bad">12.0s</b>');
   // 子代理 95s 落在 30s/120s 之间。

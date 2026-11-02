@@ -361,7 +361,7 @@ export function railSummaryListHtml(list, labelOf, meta = { count: null, errors:
   if (list.loading) {
     body = '<p class="note">正在读取条目…</p>';
   } else if (list.error !== null) {
-    body = `<p class="note warn">读取失败：${esc(list.error)}。重新点击条目可重试。</p>`;
+    body = `<p class="note warn with-ico">${icon('empty-broken', 24)}<span>读取失败：${esc(list.error)}。重新点击条目可重试。</span></p>`;
   } else if (list.data !== null && 'requests' in list.data) {
     const rows = list.data.requests.map(item => {
       const label = labelOf(item.req_id);
