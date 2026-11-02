@@ -18,6 +18,7 @@ import {
 } from './body-model.js';
 import { backendStateHtml } from './backend-state.js';
 import { esc } from './html.js';
+import { icon } from './icons.js';
 import { partLabel } from './parts.js';
 import { createReaderStore } from './reader-store.js';
 import { createHttpReadTransport } from './read-http.js';
@@ -435,17 +436,18 @@ if (typeof document !== 'undefined') {
     // 列表被搜索或筛选收窄时才给分母；默认只报已加载数量，不伪造全库总数。
     el('sess-count').textContent = all.length === items.length ? `已加载 ${items.length}` : `${all.length} / ${items.length}`;
     const item = (/** @type {SessionRow} */ s) => {
-      // 左栏只保留具体事实标记；失败由红点承载，字眼进悬停；缺正文的点刻意低
-      // 对比，与正常点的差别不可辨，文字仍是唯一载体，保留。
-      const flag = s.flags.includes('failed') ? { color: 'var(--bad)', text: '', title: '含失败' }
-        : s.flags.includes('missing_body') ? { color: 'var(--muted)', text: '缺正文', title: '缺正文' }
-          : { color: 'var(--line-strong)', text: '', title: '' };
+      // 失败与缺正文不再只靠颜色：8px 实心 X / 空心圆，正常行仍用中性点。
+      const failed = s.flags.includes('failed');
+      const missing = !failed && s.flags.includes('missing_body');
+      const markColor = failed ? 'var(--bad)' : missing ? 'var(--muted)' : 'var(--line-strong)';
+      const mark = failed || missing
+        ? `<span class="dot flagmark" role="img" aria-label="${failed ? '含失败' : '缺正文'}" title="${failed ? '含失败' : '缺正文'}" style="color:${markColor}">${icon(failed ? 'fail-solid' : 'missing-body', 8)}</span>`
+        : `<span class="dot" style="background:${markColor}"></span>`;
       return `<button class="sess" data-session="${esc(s.conv_key)}" aria-current="${s.conv_key === state.session}">
         <span class="sess-title">${esc(s.title || '（无标题）')}</span>
         <span class="sess-meta">
-          <span class="dot" style="background:${flag.color}"${flag.title ? ` title="${flag.title}"` : ''}></span>
+          ${mark}
           <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')} · ${s.request_count} 笔</span>
-          ${flag.text ? `<span class="sep">·</span><span style="color:${flag.color}">${flag.text}</span>` : ''}
           <span class="sess-time num">${esc(clock(s.last_ms))}</span>
         </span>
       </button>`;

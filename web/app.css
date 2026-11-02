@@ -94,7 +94,7 @@ code,pre,.mono{font-family:var(--mono)}
 .icon-btn:hover{background:var(--hover)}
 /* 后端降级标签：正常态不渲染；点按重新读取准入状态。 */
 .backend-chip{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 8px;border:1px solid currentColor;border-radius:4px;font:10.5px var(--ui);cursor:pointer;white-space:nowrap}
-.backend-chip .d{width:5px;height:5px;border-radius:50%;background:currentColor}
+.backend-chip .ico{opacity:.9}
 .backend-chip.warn{color:var(--warn);background:var(--warn-soft)}
 .backend-chip.bad{color:var(--bad);background:var(--bad-soft)}
 
@@ -167,6 +167,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .sess-title{font-size:12.5px;font-weight:550;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sess-meta{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);min-width:0}
 .sess-meta .dot{width:5px;height:5px;border-radius:50%;flex:none}
+/* 失败与缺正文的形状标记：8px 是形状可辨的下限，正常行仍是 5px 中性点。 */
+.sess-meta .dot.flagmark{width:8px;height:8px;border-radius:0;display:inline-flex;align-items:center;justify-content:center}
 .sess-meta .who{color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .sess-time{font:10.5px var(--mono);color:var(--muted);margin-left:auto;flex:none}
 .sess-more{display:flex;justify-content:center;padding:10px 0 4px}
@@ -267,7 +269,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .row-label.aux{color:var(--k-system);background:var(--k-system-bg)}
 /* 组级证据状态行：标签位是警示符号，不再满铺行底，用虚线左缘标记缺口强度——
    失败用 bad、其余用 warn。正常请求不产出这一行。 */
-.row-label.flag{color:var(--warn);background:var(--warn-soft);font:600 11px var(--mono)}
+.row-label.flag{color:var(--warn);background:var(--warn-soft);display:inline-flex;align-items:center;justify-content:center}
 .compact-row.step-flag{border-left:2px dashed var(--warn);padding-left:3px}
 .compact-row.step-flag[data-flag="failed"]{border-left-color:var(--bad)}
 .compact-row.step-flag[data-flag="failed"] .row-label.flag{color:var(--bad)}

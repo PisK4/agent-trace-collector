@@ -605,6 +605,10 @@ function readingChip(reading, step) {
  */
 export function renderTraceRow(row, step, ordinal, callOf = null, selected = false) {
   const label = KIND_LABEL[step.kind] ?? 'Event';
+  // 组级状态行的标签位只放形状：失败是裸 X、其余缺口是三角；事实句子仍在行内说明。
+  const labelHtml = step.kind === 'flag'
+    ? `<span class="row-label flag" role="img" aria-label="${step.status === 'failed' ? '失败' : '缺口'}" title="${step.status === 'failed' ? '失败' : '缺口'}">${icon(step.status === 'failed' ? 'failure' : 'gap')}</span>`
+    : `<span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>`;
   const { chip, args, arrow } = toolRowParts(step, callOf);
   const isTool = step.kind === 'tool' || step.kind === 'tool_result';
   // 悬停给完整信息：调用行放完整参数 JSON，结果行放调用摘要与完整结果正文；属性按 TITLE_MAX 截断。
@@ -632,7 +636,7 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
 <div class="compact-row${step.isError === true ? ' step-error' : ''}${step.kind === 'flag' ? ' step-flag' : ''}"${statusAttr}>
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${selected}">
     <span class="compact-meta" title="序号表示当前窗口内的请求 · 请求 ${ordinal}"><b>${ordinal}</b></span>
-    <span class="row-label ${KIND_CLASS[step.kind] ?? 'aux'}">${label}</span>
+    ${labelHtml}
     ${chip}
     <span class="compact-preview"${titleAttr}>${previewHtml}</span>${bgNoteHtml}<span class="compact-reading">${readingHtml}</span>
   </button>

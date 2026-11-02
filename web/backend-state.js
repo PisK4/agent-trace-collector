@@ -4,6 +4,7 @@
  * 都不占顶栏。文案只陈述准入模式与原因，不推断哪些数据已经丢失。
  */
 import { esc } from './html.js';
+import { icon } from './icons.js';
 
 /**
  * @typedef {{mode: string, reason: string | null, at_ms: number | null}} Admission
@@ -41,5 +42,5 @@ export function backendStateHtml(admission) {
   const state = backendStateText(admission);
   if (state === null) return '';
   return `<button class="backend-chip ${state.level}" id="backend-state" title="${esc(state.detail)}">`
-    + `<span class="d" aria-hidden="true"></span>${esc(state.label)}</button>`;
+    + `${icon(state.level === 'bad' ? 'failure' : 'gap', 16)}${esc(state.label)}</button>`;
 }
