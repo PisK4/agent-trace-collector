@@ -949,7 +949,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 ### 派生算法版本
 
-`request.derive_version` 在同步组派生更新请求摘要时递增，包括保留旧摘要的更新；它是该路径的历史计数，不代表算法版本、切片发布次数或结果是否最新。算法改动后按会话或按天批量重算，整体重建入口：从 `request_evidence` 找到原始记录，按当前算法重跑，写回同一 `req_id`。目标版本、实际算法与保留行由下面两节的三类记录回答。
+`request.derive_version` 在同步组派生实际改变请求行内容时递增；重算后各待写列与原值相同则不写行，也不加一。它是该行的历史变化计数，不代表算法版本、切片发布次数或结果是否最新。算法改动后按会话或按天批量重算，整体重建入口：从 `request_evidence` 找到原始记录，按当前算法重跑，写回同一 `req_id`。目标版本、实际算法与保留行由下面两节的三类记录回答。
 
 ### 有界来源事实与结果依据
 
@@ -968,7 +968,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 原始行与证据行记下 `mapping_version` 与 `privacy_version`：脱敏规则或字段映射改动后，旧行是按旧规则变换的，读模型与迁移要能分辨，而不是假设库里所有行同口径。
 
-摘要与工具配对也记自己的依据。`summary_state='recomputed'` 时写 `summary_algorithm` 与 `summary_basis`（输入修订、组世代、算法）；正文不可读时 `summary_state='retained'`，原算法与 basis 原样保留。工具行写 `algorithm_version` 与 `basis_json`，正文已回收、本轮没有重建的行只标 `retention_state='retained'`。`derive_version` 的历史计数语义见[派生算法版本](#派生算法版本)。维护报告用 `target_algorithm`、`actual_algorithms`（按实际算法分组计数，null 归 `legacy`）与 `legacy_requests` 分开回答目标、实际与保留。
+摘要与工具配对也记自己的依据。`summary_state='recomputed'` 时写 `summary_algorithm` 与 `summary_basis`（输入修订、组世代、算法）；正文不可读时 `summary_state='retained'`，原算法与 basis 原样保留。工具行写 `algorithm_version` 与 `basis_json`，正文已回收、本轮没有重建的行只标 `retention_state='retained'`。`derive_version` 的内容变化计数语义见[派生算法版本](#派生算法版本)。维护报告用 `target_algorithm`、`actual_algorithms`（按实际算法分组计数，null 归 `legacy`）与 `legacy_requests` 分开回答目标、实际与保留。
 
 ### 正文块读取复用
 
