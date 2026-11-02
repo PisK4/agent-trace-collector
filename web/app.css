@@ -19,7 +19,7 @@
   --t1:rgba(0,122,255,.16); --t2:rgba(0,122,255,.12); --t3:rgba(0,122,255,.08); --t4:rgba(0,122,255,.05);
   --shadow:0 1px 2px rgba(0,0,0,.06);
   /* 空状态蜘蛛（B1）：身体对 --canvas 11.85:1；丝与眼沿用的是 B1 原值。 */
-  --spider-body:#013660; --spider-belly:#0F4C80; --spider-thread:#F29176; --spider-accent:#FF896D;
+  --spider-body:#013660; --spider-thread:#F29176; --spider-accent:#FF896D;
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
   /* 折叠箭头：统一取 16 网格同一枚 chevron，用 mask 而不是字形，避免各系统基线偏移。 */
@@ -40,7 +40,7 @@
     --t1:rgba(10,132,255,.18); --t2:rgba(10,132,255,.13); --t3:rgba(10,132,255,.08); --t4:rgba(10,132,255,.04);
     --shadow:0 1px 2px rgba(0,0,0,.35);
     /* 深色身体提亮到 #2166B0：对 --surface 3.23:1、--canvas 3.39:1（#1B5A9E 只有 2.70:1）。 */
-    --spider-body:#2166B0; --spider-belly:#5290CF;
+    --spider-body:#2166B0;
   }
 }
 :root[data-theme="dark"]{
@@ -57,7 +57,7 @@
   --t1:rgba(10,132,255,.18); --t2:rgba(10,132,255,.13); --t3:rgba(10,132,255,.08); --t4:rgba(10,132,255,.04);
   --shadow:0 1px 2px rgba(0,0,0,.35);
   /* 深色身体提亮到 #2166B0：对 --surface 3.23:1、--canvas 3.39:1（#1B5A9E 只有 2.70:1）。 */
-  --spider-body:#2166B0; --spider-belly:#5290CF;
+  --spider-body:#2166B0;
 }
 
 *{box-sizing:border-box}
@@ -183,6 +183,10 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .sess-time{font:10.5px var(--mono);color:var(--muted);margin-left:auto;flex:none}
 .sess-more{display:flex;justify-content:center;padding:10px 0 4px}
 .sess-empty{padding:16px 8px;font-size:12px;color:var(--muted)}
+/* 插画 0.35s 淡入：节点出现后由 JS 隔帧加 .is-in；静态降级与 reduce 直接就位。 */
+.spider-art{opacity:0;transition:opacity .35s ease}
+.spider-art.is-in,.spider-art[data-motion="static"]{opacity:1}
+@media (prefers-reduced-motion:reduce){.spider-art{opacity:1;transition:none}}
 /* 空状态插画：方框内接 200，插画与说明间距 12px，文字不再从左上角起排。 */
 .sess-empty-art{display:flex;flex-direction:column;align-items:center;gap:12px;margin:0;padding:24px 16px;text-align:center}
 .sess-empty-art .spider-art{width:200px;height:200px}
