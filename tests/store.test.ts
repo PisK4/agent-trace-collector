@@ -354,6 +354,26 @@ test('v5库拒绝普通启动且没有迁移入口', () => {
   } finally { f.close(); }
 });
 
+test('语句级拆分只记长事务排查的写路径', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run("INSERT INTO collector_state(key,value_json) VALUES ('c','1')"), 'synthetic');
+    expect(f.store.writeStats.by_name.synthetic?.sql).toBeUndefined();
+    f.store.write(db => {
+      const counted = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM request').get()!.n;
+      db.run('INSERT INTO collector_state(key,value_json) VALUES (?,?)', ['split', String(counted)]);
+    }, 'derive');
+    const named = f.store.writeStats.by_name.derive!;
+    const split = named.sql!;
+    expect(split.reads).toBeGreaterThanOrEqual(1);
+    expect(split.writes).toBeGreaterThanOrEqual(1);
+    expect(split.fn_ms).toBeGreaterThan(0);
+    expect(split.read_ms + split.write_ms).toBeLessThanOrEqual(split.fn_ms);
+    // 累计口径：事务体耗时加事务开合等于该名字的总耗时。
+    expect(split.fn_ms + split.txn_ms).toBeCloseTo(named.total_ms, 6);
+  } finally { f.close(); }
+});
+
 test('写事务统计覆盖成功与回滚', () => {
   const f = fixture();
   try {

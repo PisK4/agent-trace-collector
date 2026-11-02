@@ -1,9 +1,83 @@
 import { Database } from 'bun:sqlite';
+import type { Statement } from 'bun:sqlite';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { SliceRuntime } from './config';
 
-export type WriteStats = { count: number; total_ms: number; max_ms: number };
+/**
+ * 写事务的语句级拆分（进程内累计），只对长事务排查的写路径记（见 `TIMED_WRITES`）。
+ * `read_ms`/`write_ms` 是语句自身耗时，`fn_ms` 是事务体内总耗时，
+ * `txn_ms` 是事务开合（含等锁与提交）；`fn_ms` 减掉两条语句耗时就是纯计算。
+ */
+export type SqlSplit = {
+  read_ms: number; write_ms: number; fn_ms: number; txn_ms: number;
+  reads: number; writes: number;
+};
+
+export type WriteStats = {
+  count: number; total_ms: number; max_ms: number;
+  /** 语句级拆分累计；不计时的写路径没有这个字段。 */
+  sql?: SqlSplit;
+};
+
+/**
+ * 做语句级计时的写路径。派生组事务一次可跑十几秒，要分清那段时间花在
+ * SQL 还是计算上；其余写路径都是短事务，不引入代理开销。
+ */
+const TIMED_WRITES = new Set(['derive']);
+
+function timedCall<T>(kind: 'read' | 'write', split: SqlSplit, run: () => T): T {
+  const started = performance.now();
+  try {
+    return run();
+  } finally {
+    const elapsed = performance.now() - started;
+    if (kind === 'read') {
+      split.read_ms += elapsed;
+      split.reads += 1;
+    } else {
+      split.write_ms += elapsed;
+      split.writes += 1;
+    }
+  }
+}
+
+/** 语句代理：读方法按读计时，`run` 按写计时；其余方法原样绑定。 */
+function timedStatement(statement: Statement, split: SqlSplit): Statement {
+  return new Proxy(statement, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (typeof value !== 'function') return value;
+      if (property === 'get' || property === 'all' || property === 'values') {
+        return (...args: unknown[]) =>
+          timedCall('read', split, () => (value as (...rest: unknown[]) => unknown).apply(target, args));
+      }
+      if (property === 'run') {
+        return (...args: unknown[]) =>
+          timedCall('write', split, () => (value as (...rest: unknown[]) => unknown).apply(target, args));
+      }
+      return (value as (...rest: unknown[]) => unknown).bind(target);
+    },
+  }) as Statement;
+}
+
+function timedDatabase(db: Database, split: SqlSplit): Database {
+  return new Proxy(db, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (typeof value !== 'function') return value;
+      if (property === 'query' || property === 'prepare') {
+        return (...args: unknown[]) =>
+          timedStatement((value as (...rest: unknown[]) => Statement).apply(target, args), split);
+      }
+      if (property === 'run' || property === 'exec') {
+        return (...args: unknown[]) =>
+          timedCall('write', split, () => (value as (...rest: unknown[]) => unknown).apply(target, args));
+      }
+      return (value as (...rest: unknown[]) => unknown).bind(target);
+    },
+  }) as Database;
+}
 
 /**
  * 正文当前能否读取。`body_state` 与 `have` 分开：`have` 表示收到过哪几路证据，
@@ -165,10 +239,15 @@ export function openStore(path: string): Store {
   const writeStats: Store['writeStats'] = { count: 0, total_ms: 0, max_ms: 0, by_name: {} };
   const write = <T>(fn: (db: Database) => T, name = 'other'): T => {
     const started = performance.now();
+    const split: SqlSplit | null = TIMED_WRITES.has(name)
+      ? { read_ms: 0, write_ms: 0, fn_ms: 0, txn_ms: 0, reads: 0, writes: 0 }
+      : null;
     try {
       return db.transaction(() => {
-        const result = fn(db);
+        const fnStarted = performance.now();
+        const result = fn(split === null ? db : timedDatabase(db, split));
         if (result instanceof Promise) throw new TypeError('async writer');
+        if (split !== null) split.fn_ms = performance.now() - fnStarted;
         return result;
       }).immediate();
     } finally {
@@ -181,6 +260,16 @@ export function openStore(path: string): Store {
       named.count += 1;
       named.total_ms += elapsed;
       named.max_ms = Math.max(named.max_ms, elapsed);
+      if (split !== null) {
+        const sums = named.sql ?? { read_ms: 0, write_ms: 0, fn_ms: 0, txn_ms: 0, reads: 0, writes: 0 };
+        sums.read_ms += split.read_ms;
+        sums.write_ms += split.write_ms;
+        sums.fn_ms += split.fn_ms;
+        sums.txn_ms += elapsed - split.fn_ms;
+        sums.reads += split.reads;
+        sums.writes += split.writes;
+        named.sql = sums;
+      }
       writeStats.by_name[name] = named;
     }
   };

@@ -41,7 +41,9 @@ Status: proposed
 - **W1：Worker 成为唯一 writer。** 沿用[架构设计](../../../../docs/architecture-design.md#系统边界与进程模型)的「写操作全部走一个 writer」，主线程的写经消息投递给 Worker 执行。保留写者不变式，读连接不迁移；代价是 hook ingest 的 200 应答要等长组事务结束，确认语义得重排。
 - **W2：主线程保留 writer，Worker 的组事务忙则不等。** Worker 用 `busy_timeout=0`，拿不到锁就放弃本轮，靠下一 tick 重试。derive 本来就是 tick 驱动、状态持久化的幂等轮次（dirty 组不因放弃而丢），重试代价低；但 hook 摄入不能靠 tick 重试，必须给它一条明确的「拒绝即可重试」契约，并把这个计数纳入观测。
 
-还有一个未测的分界，决定 W1 与 W2 谁更划算：把 `drainDeriveGroupTx` 的**计算**时间与**提交**时间分开测。若提交本身短，就会出现第三条路——Worker 只算，主线程提交短事务，也就是[交互延迟第一轮](../bug-fix/2026-11-01-collection-interactive-latency.md#deferred)提到的长事务方向的落点；那时写者归属争议会小很多，Worker 与主线程甚至不需要争锁。这个测量是一次插桩，不改变行为。
+还有一个未测的分界，决定 W1 与 W2 谁更划算：把组事务的**计算**与**写库**分开测。若写库本身短，就会出现第三条路——Worker 只算（只读连接、不持写锁），主线程提交短事务，也就是[交互延迟第一轮](../bug-fix/2026-11-01-collection-interactive-latency.md#deferred)提到的长事务方向的落点；那时两边不争写锁，「写操作全部走一个 writer」这条不变式也不用改。
+
+插桩已落地：`writer.by_name.derive.sql` 给出累计的读语句、写语句、事务体与事务开合四段。只有派生名下的写事务代理语句计时（`src/store.ts` 的 `TIMED_WRITES`），其余短事务写路径不引入开销。写库占比由 `write_ms` 与 `txn_ms` 给出；纯计算由 `fn_ms` 减掉两条语句耗时得到。真实流量读数与结论补齐后回填本节。
 
 ## Alternatives considered
 
