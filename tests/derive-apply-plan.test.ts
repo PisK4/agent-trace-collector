@@ -63,11 +63,10 @@ test('计算段只读：只读连接上算完计划，写计数与库内容都�
     expect(f.store.writeStats.count).toBe(writes);
     expect(dumpTables(f.store)).toEqual(before);
     // 计划里的关系与角色就是本轮结论：首笔起链，后两笔各自续上前一笔。
+    // 角色已在计划里合并成最终值，落库段不再另写一遍。
     expect(round!.plan.chain.map(row => [row.reqId, row.prevReqId, row.relation, row.chainRole]))
       .toEqual([[1, null, 'first', 'main'], [2, 1, 'confirmed', 'main'], [3, 2, 'confirmed', 'main']]);
-    expect(round!.plan.roles).toEqual([
-      { reqId: 1, role: 'main' }, { reqId: 2, role: 'main' }, { reqId: 3, role: 'main' },
-    ]);
+    expect(round!.plan.chain.every(row => row.changed)).toBe(true);
     // 读数与整组规模一致：三笔全部重算，没有保留行。
     expect(round!.outcome).toMatchObject({ processed: 3, recomputed: 3, retained: 0 });
     expect(round!.plan.normalize_algorithm).toBe(false);
@@ -108,6 +107,32 @@ test('计划落库前输入变过就整轮丢弃，库回到计划前状态', ()
     expect(() => f.store.write(db => applyDeriveGroup(db, round!))).toThrow('derive_input_changed');
     // 落库段整体回滚：一条链关系、一个角色、一行工具都没有留下。
     expect(dumpTables(f.store)).toEqual(before);
+  } finally {
+    f.close();
+  }
+});
+
+test('重算不改内容时链与工具行一条都不写', () => {
+  const f = fixture();
+  try {
+    seedGroup(f.store, [['A'], ['A', 'B'], ['A', 'B', 'C']]);
+    drainDerive(f.store);
+    // 组再次变脏但输入没变：计划里的链、工具与展示行全部与库里一致。
+    enqueueDerive(f.store, CONV, ACTOR, '');
+    const before = dumpTables(f.store);
+    const round = computeDeriveGroup(f.store.read, CONV, ACTOR);
+    expect(round).not.toBeNull();
+    expect(round!.plan.chain.every(row => !row.changed)).toBe(true);
+    expect(round!.plan.tools.upserts).toEqual([]);
+    expect(round!.plan.tools.deletes).toEqual([]);
+    expect(round!.plan.presentations.every(row => !row.changed)).toBe(true);
+    f.store.write(db => applyDeriveGroup(db, round!), 'derive');
+    // 只剩三条组级语句：背景作业清空、工具保留行标记与 CAS；行级写入一条都没有。
+    expect(f.store.writeStats.by_name.derive!.sql!.writes).toBe(3);
+    const after = dumpTables(f.store);
+    // 队列行会前进发布修订，派生结论行必须逐列不变。
+    expect(after.request).toEqual(before.request);
+    expect(after.tool_call).toEqual(before.tool_call);
   } finally {
     f.close();
   }
