@@ -198,8 +198,8 @@ export function metadataSnapshot(store: Store): {
     ? numeric(store.read, "SELECT COUNT(*) FROM derive_queue WHERE state='clean'")
     : numeric(store.read, 'SELECT COUNT(*) FROM derive_queue');
   const queueCleanBytes = byteSum(store.read, 'derive_queue',
-    ['conv_key', 'actor', 'from_sort', 'group_epoch', 'input_revision', 'published_revision',
-      'published_algorithm'], hasState ? "WHERE state='clean'" : '');
+    ['conv_key', 'actor', 'from_sort', 'claim_from_sort', 'group_epoch', 'input_revision',
+      'published_revision', 'published_algorithm'], hasState ? "WHERE state='clean'" : '');
   const sourceFactsBytes = byteSum(store.read, 'request', ['source_facts_json']);
   const projectionMetaBytes = byteSum(store.read, 'request', ['projection_meta_json']);
   const resultColumns = tableColumns(store.read, 'derive_request_result');

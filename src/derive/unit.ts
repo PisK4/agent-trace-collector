@@ -3,7 +3,7 @@ import { addBodyReadStats, emptyBodyReadStats } from '../body-cache';
 import type { BodyReadStats } from '../body-cache';
 import type { DeriveGroupRound, DeriveScope, DrainResult } from './sync';
 import { applyDeriveGroup, computeDeriveGroup } from './sync';
-import { queuePendingSql } from './state';
+import { claimGroupTx, queuePendingSql } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
 import { recoverSlice } from './slice/generation';
 import { sliceGroupStep } from './slice/scheduler';
@@ -58,7 +58,9 @@ async function drain(store: Store, limit: number, scope: DeriveScope | undefined
         ORDER BY q.conv_key,q.actor LIMIT 1`).get(scope?.convKey ?? null, scope?.convKey ?? null);
       if (candidate === null) break;
       // 计算不持写锁；落库另起一个短写事务，CAS 挡住计算期间到达的输入。
+      // 认领单独一个短事务，落在计算快照之前：写侧边界因此比真实快照更保守。
       // shortcut: 同步单组不可中断，需在读取与长组容量验收后启用切片。
+      store.write(db => claimGroupTx(db, candidate.conv_key, candidate.actor), 'derive-claim');
       const round = compute === undefined
         ? computeDeriveGroup(store.read, candidate.conv_key, candidate.actor)
         : await compute(candidate.conv_key, candidate.actor);

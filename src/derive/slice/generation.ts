@@ -116,6 +116,7 @@ export function publishGeneration(db: Database, generation: string, now: number)
     [now, generation]);
     db.run(`UPDATE derive_queue SET published_generation=?,published_revision=input_revision,
       published_algorithm=?,state='clean',dirty_since_ms=NULL,legacy_snapshot=0,
+      from_sort='~',claim_from_sort='~',
       compute_generation=NULL,compute_started_ms=NULL,last_completed_ms=?,last_error=NULL
       WHERE conv_key=? AND actor=?`,
     [generation, gen.algorithm, now, gen.conv_key, gen.actor]);

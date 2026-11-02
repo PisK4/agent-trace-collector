@@ -1,8 +1,8 @@
 import type { Database } from 'bun:sqlite';
 import type { Store } from '../store';
 import {
-  GROUP_ALGORITHM, POSITION_ALL, POSITION_UNKNOWN, markGroupDirtyTx, normalizeTargetAlgorithmTx,
-  positionKey, purposePendingSql, queuePendingSql,
+  GROUP_ALGORITHM, POSITION_ALL, POSITION_UNKNOWN, claimGroupTx, markGroupDirtyTx,
+  normalizeTargetAlgorithmTx, positionKey, purposePendingSql, queuePendingSql,
 } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
 import { readBodyTx } from '../body';
@@ -499,17 +499,22 @@ export function applyDeriveGroup(db: Database, round: DeriveGroupRound): DeriveG
   const group = plan.group;
   if (plan.normalize_algorithm) normalizeTargetAlgorithmTx(db, group.conv_key, group.actor, GROUP_ALGORITHM);
   const now = db.query<{
-    group_epoch: string; input_revision: number; target_algorithm: number; from_sort: string;
-  }, [string, string]>(`SELECT group_epoch,input_revision,target_algorithm,from_sort
+    group_epoch: string; input_revision: number; target_algorithm: number;
+    from_sort: string; claim_from_sort: string;
+  }, [string, string]>(`SELECT group_epoch,input_revision,target_algorithm,from_sort,claim_from_sort
       FROM derive_queue WHERE conv_key=? AND actor=?`).get(group.conv_key, group.actor);
   if (now === null || now.group_epoch !== group.group_epoch
     || now.target_algorithm !== group.target_algorithm) throw new Error('derive_input_changed');
   const full = now.input_revision === group.input_revision;
-  // 前缀边界：位置严格小于它的行可写；相等说明分不出先后，一并排除。
-  const boundary = full ? POSITION_ALL : now.from_sort;
-  // 边界未知（空串，历史脏标记或来源没给位置）时一行都不能认：整轮作废，
-  // 与旧口径的整轮丢弃同义，调用方据此记一次丢弃。
-  if (!full && boundary === POSITION_UNKNOWN) throw new Error('derive_input_changed');
+  // 写侧边界：本轮认领以来最早受影响的位置，位置严格小于它的行可写；相等说明
+  // 分不出先后，一并排除。读侧仍看 `from_sort`，所以计算期间页面不会失去已发布前缀。
+  const boundary = now.claim_from_sort;
+  // 边界必须是位置串。空串表示来源没给位置（这一组还没按认领流程跑过），
+  // `~` 表示认领之后没有任何变化——两种情况都与「修订变了」自相矛盾，
+  // 说明有别的路径推进了修订，此时不能认任何行：整轮作废，与旧口径同义。
+  if (!full && (boundary === POSITION_UNKNOWN || boundary === POSITION_ALL)) {
+    throw new Error('derive_input_changed');
+  }
   // 可写集合：整组完成时是全部行，否则按库里此刻的位置筛出边界之前的行。
   // 前缀轮只查这一次，组规模与一次组读同量级。
   const allowed: Set<number> | null = full ? null : new Set(
@@ -542,16 +547,24 @@ export function applyDeriveGroup(db: Database, round: DeriveGroupRound): DeriveG
     if (writable(write.reqId)) writePresentationTx(db, write);
   }
   if (full) {
-    // 整组完成：整条链都按这一版落过，下一次标记从这里重新计边界。
+    // 整组完成：整条链都按这一版落过，两个边界一起清成「无待处理」，
+    // 下一次标记从这里重新计边界。
     // CAS 失败回滚本组的全部阶段。在线已提交组保留，维护由外层事务决定整批回滚。
     const changed = db.run(
       `UPDATE derive_queue SET state='clean',dirty_since_ms=NULL,
-         published_revision=?,published_algorithm=?,from_sort=?
+         published_revision=?,published_algorithm=?,from_sort=?,claim_from_sort=?
        WHERE conv_key=? AND actor=? AND group_epoch=? AND input_revision=? AND target_algorithm=?`,
-      [group.input_revision, group.target_algorithm, POSITION_ALL, group.conv_key, group.actor,
+      [group.input_revision, group.target_algorithm, POSITION_ALL, POSITION_ALL,
+        group.conv_key, group.actor,
         group.group_epoch, group.input_revision, group.target_algorithm],
     ).changes;
     if (changed !== 1) throw new Error('derive_input_changed');
+  } else {
+    // 前缀轮：已发布前缀推进到写侧边界。读侧 `from_sort` 因此跟着前进，
+    // 组仍 dirty，下一轮认领会重新起算。
+    db.run(`UPDATE derive_queue SET from_sort=? WHERE conv_key=? AND actor=?
+      AND state<>'clean' AND from_sort<>?`,
+    [boundary, group.conv_key, group.actor, POSITION_ALL]);
   }
   return round.outcome;
 }
@@ -559,6 +572,8 @@ export function applyDeriveGroup(db: Database, round: DeriveGroupRound): DeriveG
 /** 组内全部阶段与 CAS 在调用方的同一个事务内完成；失败回滚当前事务。 */
 export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
   groupOptions: DeriveGroupOptions = {}): DeriveGroupOutcome | null {
+  // 认领与计算在同一事务里，写侧边界就是这一份快照的起点。
+  claimGroupTx(db, convKey, actor);
   const round = computeDeriveGroup(db, convKey, actor, groupOptions);
   return round === null ? null : applyDeriveGroup(db, round);
 }
