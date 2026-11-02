@@ -264,6 +264,111 @@ test('空页结束窗口且不产生观测', async () => {
   }
 });
 
+function usagePageMock(period: string, state: { total: number; pricing: string }, urls: string[]) {
+  return spyOn(globalThis, 'fetch').mockImplementation((async (input: RequestInfo | URL) => {
+    const url = String(input);
+    urls.push(url);
+    const offset = Number(new URL(url).searchParams.get('offset'));
+    const count = Math.max(0, Math.min(500, state.total - offset));
+    const rows = Array.from({ length: count }, (_, i) => ({ route_id: 500000 + offset + i, priced: true, cost: 0 }));
+    return Response.json({ period, rows, offset, total: state.total, pricing_version: state.pricing });
+  }) as unknown as typeof fetch);
+}
+
+test('已完成的窗口下一轮只扫头部新增与回看', async () => {
+  const f = fixture();
+  const period = '2026-10-20..2026-10-20';
+  const cursor = { total: 900, pricing: 'pricing-v1' };
+  const urls: string[] = [];
+  const mock = usagePageMock(period, cursor, urls);
+  try {
+    const first = await syncCosts(f.store, period, 'http://127.0.0.1:8317', 1_000, salt);
+    expect(first.pages).toBe(2);
+    const before = urls.length;
+    cursor.total = 910;
+    const second = await syncCosts(f.store, period, 'http://127.0.0.1:8317', 61_000, salt);
+    // 新增 10 行加固定回看 100 行落在第一页内，不再翻到第二页。
+    expect(second.pages).toBe(1);
+    expect(urls.length - before).toBe(1);
+    const state = f.store.read.query<{ value_json: string }, [string]>(
+      'SELECT value_json FROM collector_state WHERE key=?').get(JSON.stringify(['cost-window', period]));
+    expect(JSON.parse(state!.value_json)).toMatchObject({
+      next_offset: 0, done: true, total: 910, pricing_version: 'pricing-v1', full_done_at: 1_000,
+    });
+  } finally {
+    mock.mockRestore();
+    f.close();
+  }
+});
+
+test('定价版本变化让下一轮退回全量', async () => {
+  const f = fixture();
+  const period = '2026-10-20..2026-10-20';
+  const cursor = { total: 900, pricing: 'pricing-v1' };
+  const urls: string[] = [];
+  const mock = usagePageMock(period, cursor, urls);
+  try {
+    await syncCosts(f.store, period, 'http://127.0.0.1:8317', 1_000, salt);
+    const before = urls.length;
+    cursor.pricing = 'pricing-v2';
+    const second = await syncCosts(f.store, period, 'http://127.0.0.1:8317', 61_000, salt);
+    // 第一页发现新版本后从 0 重扫：两次 offset=0 加一次 offset=500。
+    expect(urls.length - before).toBe(3);
+    expect(second.pages).toBe(2);
+    const state = f.store.read.query<{ value_json: string }, [string]>(
+      'SELECT value_json FROM collector_state WHERE key=?').get(JSON.stringify(['cost-window', period]));
+    expect(JSON.parse(state!.value_json)).toMatchObject({
+      next_offset: 0, done: true, total: 900, pricing_version: 'pricing-v2', full_done_at: 61_000,
+    });
+  } finally {
+    mock.mockRestore();
+    f.close();
+  }
+});
+
+test('超过校准间隔的下一轮退回全量', async () => {
+  const f = fixture();
+  const period = '2026-10-20..2026-10-20';
+  const cursor = { total: 900, pricing: 'pricing-v1' };
+  const urls: string[] = [];
+  const mock = usagePageMock(period, cursor, urls);
+  try {
+    await syncCosts(f.store, period, 'http://127.0.0.1:8317', 1_000, salt);
+    const before = urls.length;
+    const second = await syncCosts(f.store, period, 'http://127.0.0.1:8317', 1_000 + 30 * 60_000, salt);
+    expect(second.pages).toBe(2);
+    expect(urls.length - before).toBe(2);
+  } finally {
+    mock.mockRestore();
+    f.close();
+  }
+});
+
+test('增量轮重复行不新增观测', async () => {
+  const f = fixture();
+  const period = '2026-10-20..2026-10-20';
+  const rows = [
+    { t: '2026-10-20T00:00:00Z', route_id: 900001, priced: true, cost: 1 },
+    { t: '2026-10-20T00:00:01Z', route_id: 900002, priced: true, cost: 2 },
+  ];
+  const body = (offset: number) => Response.json({
+    period, rows: offset === 0 ? rows : [], offset, total: rows.length, pricing_version: 'pricing-v1',
+  });
+  const mock = spyOn(globalThis, 'fetch').mockImplementation((async (input: RequestInfo | URL) => {
+    const offset = Number(new URL(String(input)).searchParams.get('offset'));
+    return body(offset);
+  }) as unknown as typeof fetch);
+  try {
+    const first = await syncCosts(f.store, period, 'http://127.0.0.1:8317', 1_000, salt);
+    expect(first.observations).toBe(2);
+    const second = await syncCosts(f.store, period, 'http://127.0.0.1:8317', 61_000, salt);
+    expect(second.observations).toBe(0);
+  } finally {
+    mock.mockRestore();
+    f.close();
+  }
+});
+
 test('错误offset拒绝本页且保留前页进度', async () => {
   const f = fixture();
   const period = '2026-10-20..2026-10-20';

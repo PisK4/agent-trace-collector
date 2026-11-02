@@ -40,7 +40,22 @@ export function costWindowKey(period: string): string {
   return JSON.stringify(['cost-window', period]);
 }
 
-type CostWindowState = { run_id: string; next_offset: number; done: boolean };
+type CostWindowState = {
+  run_id: string;
+  next_offset: number;
+  done: boolean;
+  /** 上一轮完成时看到的行总数；null 表示旧状态或从未完成。 */
+  total: number | null;
+  /** 上一轮使用的定价版本；版本变化时本轮退回全量。 */
+  pricing_version: string | null;
+  /** 上一次全量完成的时间；用于周期性校准。 */
+  full_done_at: number | null;
+};
+
+/** 增量轮固定回看的行数：覆盖头部迟到修正，不必重扫全天。 */
+const INCREMENTAL_LOOKBACK_ROWS = 100;
+/** 两次全量校准之间的最长间隔。 */
+const FULL_RESCAN_MS = 30 * 60_000;
 
 /** 费用时钟冲突的健康状态：计数与最新阻塞时点，读出来就知道扫描停在哪儿。 */
 export const COST_HEALTH_KEY = JSON.stringify(['cost', 'clock_conflict']);
@@ -91,7 +106,14 @@ function readCostWindow(store: Store, period: string): CostWindowState | null {
   if (!isRecord(parsed) || typeof parsed.run_id !== 'string' || typeof parsed.next_offset !== 'number' || !Number.isInteger(parsed.next_offset) || parsed.next_offset < 0) {
     throw new Error('cost_window_state_invalid');
   }
-  return { run_id: parsed.run_id, next_offset: parsed.next_offset, done: parsed.done === true };
+  return {
+    run_id: parsed.run_id,
+    next_offset: parsed.next_offset,
+    done: parsed.done === true,
+    total: typeof parsed.total === 'number' && Number.isInteger(parsed.total) && parsed.total >= 0 ? parsed.total : null,
+    pricing_version: typeof parsed.pricing_version === 'string' ? parsed.pricing_version : null,
+    full_done_at: typeof parsed.full_done_at === 'number' ? parsed.full_done_at : null,
+  };
 }
 
 function saveCostWindow(db: Database, period: string, state: CostWindowState): void {
@@ -193,10 +215,20 @@ export async function syncCosts(
   fetcher: typeof fetch = fetch,
 ): Promise<CostSyncResult> {
   validateCostPeriod(period);
-  void now;
   let state = readCostWindow(store, period);
-  if (state === null) state = { run_id: randomUUID(), next_offset: 0, done: false };
-  else if (state.done) state = { run_id: state.run_id, next_offset: 0, done: false };
+  // 已完成的窗口下一轮从头部增量继续：usage 行按时间倒序，新行插在开头。
+  // 距上次全量太久（或旧状态没有全量时间）时退回全量校准。
+  let incremental = false;
+  if (state === null) {
+    state = {
+      run_id: randomUUID(), next_offset: 0, done: false,
+      total: null, pricing_version: null, full_done_at: null,
+    };
+  } else if (state.done) {
+    const fullDue = state.full_done_at === null || now - state.full_done_at >= FULL_RESCAN_MS;
+    incremental = !fullDue;
+    state = { ...state, next_offset: 0, done: false };
+  }
 
   const base = baseUrl.replace(/\/$/, '');
   const result: CostSyncResult = { pages: 0, observations: 0, matched: 0, ambiguous: 0 };
@@ -224,6 +256,19 @@ export async function syncCosts(
     }
     const observedAt = Date.now();
     const pricingVersion = optionalString(page, 'pricing_version');
+    const pageTotal = typeof page.total === 'number' && Number.isInteger(page.total) && page.total >= 0
+      ? page.total : null;
+    // 增量轮只看头部新增行加固定回看；定价版本变化会让历史金额过期，退回全量。
+    let incrementalStop: number | null = null;
+    if (incremental) {
+      if (state.pricing_version !== null && pricingVersion !== null && pricingVersion !== state.pricing_version) {
+        incremental = false;
+        state = { ...state, next_offset: 0 };
+        continue;
+      }
+      const fresh = pageTotal === null ? INCREMENTAL_LOOKBACK_ROWS : Math.max(0, pageTotal - (state.total ?? 0));
+      incrementalStop = fresh + INCREMENTAL_LOOKBACK_ROWS;
+    }
     const pageCounts = new Map<number, number>();
     for (const row of rows) {
       if (!isRecord(row)) continue;
@@ -276,11 +321,15 @@ export async function syncCosts(
             }
           }
         }
-        const done = rows.length === 0 || rows.length < 500;
+        const done = rows.length === 0 || rows.length < 500
+          || (incrementalStop !== null && offset + rows.length >= incrementalStop);
         saveCostWindow(db, period, {
           run_id: state!.run_id,
           next_offset: done ? 0 : offset + rows.length,
           done,
+          total: pageTotal ?? state!.total,
+          pricing_version: pricingVersion ?? state!.pricing_version,
+          full_done_at: done && !incremental ? now : state!.full_done_at,
         });
         return { observations, matched, ambiguous, done };
       }, 'cost');
@@ -298,7 +347,14 @@ export async function syncCosts(
     result.observations += pageResult.observations;
     result.matched += pageResult.matched;
     result.ambiguous += pageResult.ambiguous;
-    state = { run_id: state.run_id, next_offset: pageResult.done ? 0 : offset + rows.length, done: pageResult.done };
+    state = {
+      run_id: state.run_id,
+      next_offset: pageResult.done ? 0 : offset + rows.length,
+      done: pageResult.done,
+      total: pageTotal ?? state.total,
+      pricing_version: pricingVersion ?? state.pricing_version,
+      full_done_at: pageResult.done && !incremental ? now : state.full_done_at,
+    };
     if (pageResult.done) break;
   }
   return result;
