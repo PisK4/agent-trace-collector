@@ -12,7 +12,7 @@ Status: implemented
 
 Pis 于 2026-11-02 明确要求从全局架构制定规则，并为中期 macOS 客户端做好准备。当前未选定 WebView、SwiftUI 或其他桌面技术，也未确认打包、更新和后台驻留方式。这些决定不应成为本轮读取优化的前置条件。
 
-## Proposal
+## Decision
 
 把阅读能力组织为可测试的 module。变化应集中在拥有该知识的 module：HTTP adapter 负责编码与连接，调度 module 负责有界执行，reader-store 负责证据与版本，投影 module 负责显示模型，DOM module 负责节点、焦点和锚点。feature 描述需要读取什么，不自行决定并发数、URL 或版本恢复。
 
@@ -116,11 +116,11 @@ SQLite 继续由 collector 管理，UI 不直接开生产库写入；否则 sche
 
 **立刻重构所有后台任务与切片。** 客户端读取与后台单组事务是不同工作。读取改造独立交付；后台继续按现有预算与性能触发条件评审，不能靠新 Interface 宣称阻塞消失。
 
-## Acceptance criteria
+## Consequences
 
-交付时已达成：生产页面只有 HTTP adapter 执行读取 Fetch（`read-boundaries` AST 检查守门，fetcher 构造注入除外）；HTTP adapter 与合成内存 adapter 共用读取行为测试；并发、后台保留槽、待发上限、公平性、scope 取消、失败释放与 dispose 有确定性测试；读批次覆盖逐项错误、别名、跨会话、区间空洞、预算截断、超大单项、迟到 409 与正文回收；追加新组时未变化旧组的投影调用为零、依赖更新只重生成对应组（trace-model 测试）；同页切换、弹窗关闭、无 session 历史恢复与页面销毁释放对应 owner；不新增生产数据库直连 UI、不放宽监听或访问控制、不引运行依赖、不启用生产切片、不改变派生语义。
+已达成的现状：生产页面只有 HTTP adapter 执行读取 Fetch（`read-boundaries` AST 检查守门，fetcher 构造注入除外）；HTTP adapter 与合成内存 adapter 共用读取行为测试；并发、后台保留槽、待发上限、公平性、scope 取消、失败释放与 dispose 有确定性测试；读批次覆盖逐项错误、别名、跨会话、区间空洞、预算截断、超大单项、迟到 409 与正文回收；追加新组时未变化旧组的投影调用为零、依赖更新只重生成对应组（trace-model 测试）；同页切换、弹窗关闭、无 session 历史恢复与页面销毁释放对应 owner；不新增生产数据库直连 UI、不放宽监听或访问控制、不引运行依赖、不启用生产切片、不改变派生语义。
 
-仍未覆盖：2,500 笔规模与 GC 后堆读数的合成验收（30/364 笔及交互场景已在合成服务器浏览器走查）、真实流量只读复测——两者按[验收记录](../../../../docs/acceptance.md)登记的范围另行执行。
+仍未覆盖：2,500 笔规模的 GC 后堆读数与长任务采样、真实流量只读复测——两者按[验收记录](../../../../docs/acceptance.md)登记的范围另行执行。首次迁移为弹窗读取、静态白名单与合成服务器带来一次性成本；Interface 的长期代价是 feature 不能再就地 fetch，接入问题见[读取接入规则](../../../../docs/read-feature-rules.md)。
 
 ## Risks
 
