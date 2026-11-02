@@ -130,11 +130,11 @@ bun prototypes/synthetic-server.ts
 - 消费：Task 1–3 的已提交分支与合成验收结果。
 - 产出：master 上的 merge commit、生产验收段与真实页面证据；合成结果不改为生产结果。
 
-- [ ] 发布前记录生产服务 pid、代码新鲜度与 local master 未被并行变动。
-- [ ] 计划补入发布步骤，note 把「尚未部署」改为用户已授权发布、生产验收另记。
-- [ ] 显式暂存本轮文件，`bun run verify:notes` 与 `git diff --cached --check` 通过后提交实现分支。
-- [ ] 在 master 以 `git merge --no-ff` 合并实现分支，保留用户未提交的 note 修改。
-- [ ] 合并后 `bun run service restart`，确认服务可读、src 版本新鲜、无旧服务消费新前端字段的窗口。
-- [ ] 只读 API 与真实页面验收：新字段、目录、三行头部、+N、tooltip、主题、窄容器、配对耗时与吸顶。
-- [ ] 在 `docs/acceptance.md` 新增生产验收段，记录提交与合并 hash、restart 结果、接口与 DOM 证据、未覆盖项。
+- [x] 发布前记录生产服务 pid、代码新鲜度与 local master 未被并行变动（pid 23211，master `0749d7f`）。
+- [x] 计划补入发布步骤，note 把「尚未部署」改为用户已授权发布、生产验收另记。
+- [x] 显式暂存本轮文件，`bun run verify:notes` 与 `git diff --cached --check` 通过后提交实现分支（`3c25614`）。
+- [x] 在 master 以 `git merge --no-ff` 合并实现分支（`81cd711`），保留用户未提交的 note 修改。
+- [x] 合并后先 stop、合并、再 start（15:18:35–15:18:57，pid 23211 → 58335），确认服务可读、src 版本新鲜；并行 Task 6 随后重启为 pid 67826。
+- [x] 只读 API 与真实页面验收：新字段、目录、三行头部、+N、tooltip、主题、窄容器、配对耗时与吸顶；stats 首次 15 秒超时如实记为响应未全通过，待 Worker 专项复测。
+- [x] 在 `docs/acceptance.md` 新增生产验收段，记录提交与合并 hash、两个进程窗口、restart 结果、接口与 DOM 证据、未覆盖项。
 - [ ] 确认分支已合并且工作区干净，移除实施 worktree 目录、保留分支名，并行 worktree 不动。
