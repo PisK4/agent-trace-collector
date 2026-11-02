@@ -4,6 +4,29 @@
 
 验收结果描述的是当时的代码与数据。现行行为以[架构设计](architecture-design.md)与代码为准；本文件回答的是「这条路径验证过没有、怎么验的」。
 
+## 派生 Worker 隔离 spike（合成，2026-11-02）
+
+前提：worktree `atc-derive-worker` 的 `feat/derive-worker` 分支（基于 master `e155eb3`）。合成数据只进临时库（`mkdtempSync`），不进生产库、不改派生算法；验证的是执行位置，不是新算法。生产读数同期取自本机运行中的采集器（pid 12759），只经 `GET /api/ingest-metrics` 读取。这是 spike 验收，不是生产方案验收。
+
+自动化：`bun scripts/perf-derive-worker.ts --requests 800`，四大场景各一次。合成 800 笔累积链（每笔携带前 n 条消息），主线程 10 ms 定时器测事件循环 lag、5 ms 只读探针、20 ms 小写事务探针；Worker 里跑既有入口 `drainDeriveEntry`，把每步耗时回报主线程。
+
+| 场景 | 派生耗时 | 事件循环 lag max | 读探针 max | 写探针 max | 写被拒 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 主线程同步派生（基线） | 780.9 ms | 771.8 ms | 0.8 ms | 0.1 ms | 0 |
+| Worker 派生，主线程只读 | 759.3 ms | 1.4 ms | 0 ms | — | — |
+| Worker 派生，主线程写等待锁（`busy_timeout=5000`） | 776.9 ms | 833.9 ms | 0 ms | 834.6 ms | 0 |
+| Worker 派生，主线程写不等待（`busy_timeout=0`） | 795.1 ms | 1.9 ms | 0 ms | 0.9 ms | 38/40 |
+
+派生总耗时四种场景相当（759–795 ms，差异在噪声内），说明隔离不改变计算量。结论三条：
+
+- 计算搬出主线程后事件循环不再被占（lag max 1.4 ms 对基线 771.8 ms），只读路径读数不变；阻塞源是主线程 CPU 时间，不是 SQLite 锁。
+- 收益取决于主线程写是否等待 Worker 的写锁：等待把锁等原样转成事件循环阻塞（833.9 ms，与不隔离持平），不等待则事件循环保持毫秒级，代价是 38/40 次写被 `SQLITE_BUSY` 拒绝。
+- 因此正式实现必须同时定写锁归属与写失败的重试语义，方案与代价见[派生移出主线程提案](../.agents/notes/proposed/architecture/2026-11-02-derive-worker-isolation.md)。
+
+生产同期读数（15.6 分钟窗口）：`writer.by_name.derive` 240 次 / 495.0 s，占写事务总耗时 500.7 s 的 98.9%，单次 max 13.3 s；其余全部命名写合计 447 次 / 5.7 s。事件循环 50 ms 采样 p50 1.02 ms、p95 30.8 ms、p99 645.8 ms、max 13,777 ms。hook 摄入到达 278 次、61 次以 `busy` 429 被拒，守卫在 `src/http.ts` 的 `ingesting` 单飞位。
+
+未覆盖：Worker 崩溃恢复、WAL checkpoint 与关闭顺序、库文件被维护任务替换、真实流量下的隔离运行（本轮未部署、未启用）、并发多 Worker 的锁竞争。这些留给正式实现前的验收。
+
 ## 读取架构落地（合成，2026-11-02）
 
 前提：worktree `atc-read-architecture` 的 `feat/read-architecture` 分支（基于 master `dfeccb7`），Task 1–7 全部在分支提交。合成数据只进测试与临时库；生产采集器未停，真实流量验收未执行、未授权。
