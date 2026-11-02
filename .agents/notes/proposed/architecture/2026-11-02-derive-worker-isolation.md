@@ -47,6 +47,8 @@ Status: proposed
 
 插桩形态：`TIMED_WRITES` 只列派生名下的写事务，由语句代理累计四段耗时（`src/store.ts`）；其余短事务写路径不引入代理。
 
+落地步骤、文件范围与逐任务验收见[派生算/写接缝实施计划](../../../../docs/superpowers/plans/2026-11-02-derive-compute-apply-seam.md)。接缝的跨段契约是 `ApplyPlan`：链关系、角色、工具行、后台作业行与展示列值五组写操作，加上 `group_epoch` 与 `input_revision` 两个守卫字段；计算段只读，落库段一个事务执行计划并在 CAS 失败时整轮丢弃。
+
 ## Alternatives considered
 
 **直接启用已有切片路径。** 已实测否决：长链上总耗时放大 16.4×–67.2×，不满足启用门槛，且每步 250–279 ms 仍会打断事件循环。切片作为阶段化实现保留，不是本轮手段。
