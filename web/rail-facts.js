@@ -560,7 +560,7 @@ export function contextStatsHtml(r, p, detail = null) {
       ${hitPct === null ? '<div class="ctx-sub">缓存读数未上报</div>' : ''}
     </div>
     <div class="ctx-stat ctx-stat-time">
-      <div class="ctx-k">耗时</div>
+      <div class="ctx-k" role="img" aria-label="耗时" title="耗时">${icon('stopwatch', 16)}</div>
       <div class="ctx-big"><b>${ms === null ? '<i class="miss">—</i>' : secsValue(ms)}</b>${ms === null ? '' : '<span>s</span>'}</div>
       <div class="ctx-sub" title="总时长；首 token 到第一个内容，首个文本到第一个文本块，速度＝输出 ÷（总 − 首 token）">${ms === null ? '没有计时读数' : timeSub}</div>
     </div>
