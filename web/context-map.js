@@ -26,6 +26,8 @@ export const MAP_GAP = 2;
 const NAME_MIN_H = 24;
 const BOTH_MIN_H = 44;
 const BOTH_MIN_W = 47;
+/** 数值展示预算：只给份额前几名，避免小块逐块标数；完整读数仍在 aria 与图例。 */
+const VALUE_BUDGET = 4;
 
 /** item 的稳定身份：tile、列表行与点击明细共用的匹配键。 @param {string} kind @param {PromptItem} it */
 export const iidOf = (kind, it) => `${kind}\u0001${it.tag ?? ''}\u0001${it.name}`;
@@ -187,6 +189,11 @@ export function contextMapInnerHtml(p, W, H, reqId) {
   const sum = p.parts.reduce((a, x) => a + Math.max(0, x.tokens), 0) || 1;
   const half = MAP_GAP / 2;
   const fmt = (/** @type {number} */ v) => v.toLocaleString('en-US');
+  // 同值按稳定身份键定序，避免容器尺寸变化时前几名在并列份额间跳动。
+  const topValueKeys = new Set([...tiles]
+    .sort((a, b) => b.tokens - a.tokens || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .slice(0, VALUE_BUDGET)
+    .map(t => t.key));
   return tiles.map(t => {
     const x = t.x + half, y = t.y + half;
     const w = Math.max(0, t.w - MAP_GAP), h = Math.max(0, t.h - MAP_GAP);
@@ -197,9 +204,10 @@ export function contextMapInnerHtml(p, W, H, reqId) {
       ? `${partLabel(t.kind)} · ${itemLabel(t.item)}`
       : t.name;
     const aria = `${label}，${fmt(t.tokens)} tokens，占提示总量 ${Math.round(t.tokens / sum * 100)}%，打开明细`;
-    return `<button type="button" class="ctx-tile${bare ? ' bare' : low ? ' low' : ''}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;--c:${partShade(t.tokens, sum)}" data-ctx-key="${esc(t.key)}" data-ctx-kind="${esc(t.kind)}" data-ctx-its="${esc(its)}" data-ctx-scope="${t.scope}" data-ctx-req="${reqId}" aria-label="${esc(aria)}">` +
+    const showValue = topValueKeys.has(t.key) && !bare && !low;
+    return `<button type="button" class="ctx-tile${bare ? ' bare' : low ? ' low' : ''}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;--c:${partShade(t.tokens, sum)}" data-ctx-key="${esc(t.key)}" data-ctx-kind="${esc(t.kind)}" data-ctx-its="${esc(its)}" data-ctx-scope="${t.scope}" data-ctx-req="${reqId}" aria-label="${esc(aria)}" title="${esc(aria)}">` +
       `<span class="ctx-tname">${esc(t.name)}</span>` +
-      `<span class="ctx-tval">${kk(t.tokens)} · ${Math.round(t.tokens / sum * 100)}%</span>` +
+      (showValue ? `<span class="ctx-tval">${kk(t.tokens)} · ${Math.round(t.tokens / sum * 100)}%</span>` : '') +
       `</button>`;
   }).join('');
 }

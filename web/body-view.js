@@ -72,13 +72,14 @@ export function renderMessages(entries, options) {
     const current = options.selectedOrd === entry.ord ? ' aria-current="true"' : '';
     const displayRole = displayRoleOf(entry);
     // 消息级列表用主角色加内容类型：纯结果与纯调用在预览前标明类型。
-    const typePrefix = entry.blocks.length > 0 && entry.blocks.every(block => block.kind === 'result') ? 'Tool result · '
+    const toolResultOnly = entry.blocks.length > 0 && entry.blocks.every(block => block.kind === 'result');
+    const typePrefix = toolResultOnly ? 'Tool result · '
       : entry.blocks.length > 0 && entry.blocks.every(block => block.kind === 'call') ? 'Tool call · ' : '';
     rows.push(`<li class="msg${isNew ? ' msg-new' : ''}" data-ord="${entry.ord}"${current}>
       <button class="msg-head" data-msg="${entry.ord}" aria-label="查看消息 ${entry.ord}${isNew ? '，新增消息' : ''}">
-        <span class="kind ${roleClass(displayRole)}">${roleTag(displayRole)}</span>
         <span class="msg-ord">#${entry.ord}</span>
-        <span class="msg-preview">${esc(typePrefix + entry.preview)}</span>
+        <span class="kind ${roleClass(displayRole)}">${roleTag(displayRole)}</span>
+        <span class="msg-preview${toolResultOnly ? ' result' : ''}">${esc(typePrefix + entry.preview)}</span>
       </button>
     </li>`);
   });

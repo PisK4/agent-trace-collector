@@ -276,13 +276,105 @@ test('点击定位按组查支撑记录', () => {
     seedRoundWithInterrupt(f.store);
     rebuild(f.store);
     expect(getSummaryEntries(f.store, GROUP, { kind: 'tool', name: 'Edit' }))
-      .toEqual({ items: [{ req_id: 1, ord: 0, tool_name: 'Edit', state: 'resolved' }], truncated: false });
+      .toEqual({ items: [{ req_id: 1, ord: 0, tool_name: 'Edit', state: 'resolved',
+        exec_ms: null, summary: '/repo/src/a.ts' }], truncated: false });
     expect(getSummaryEntries(f.store, GROUP, { kind: 'written', path: '/repo/src/a.ts' }))
-      .toEqual({ items: [{ req_id: 1, ord: 0, tool_name: 'Edit', state: 'resolved' }], truncated: false });
+      .toEqual({ items: [{ req_id: 1, ord: 0, tool_name: 'Edit', state: 'resolved',
+        exec_ms: null, summary: '/repo/src/a.ts' }], truncated: false });
     expect(getSummaryEntries(f.store, GROUP, { kind: 'read', path: '/repo/src/a.ts' }))
-      .toEqual({ items: [{ req_id: 2, ord: 0, tool_name: 'Read', state: 'resolved' }], truncated: false });
+      .toEqual({ items: [{ req_id: 2, ord: 0, tool_name: 'Read', state: 'resolved',
+        exec_ms: null, summary: '/repo/src/a.ts' }], truncated: false });
     expect(getSummaryEntries(f.store, GROUP, { kind: 'interrupts' }))
       .toEqual({ requests: [{ req_id: 2, count: 1 }] });
+  } finally { f.close(); }
+});
+
+test('条目带执行段与已有参数摘要：resolved 正/零/负、缺时长与 pending', () => {
+  const f = fixture();
+  try {
+    const req = (id: number, startedMs: number, ms: number | null) => f.store.write(db => db.run(`
+      INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,body_state,
+        derive_version,have,created_at,updated_at,sort_source,sort_key,ms)
+      VALUES (?,?,'main','known',?,'2026-10-25','hook','pending',0,1,1,1,'ledger',?,?)`,
+    [id, GROUP, startedMs, `e|${id}`, ms]));
+    const call = (row: {
+      id: number; ord: number; name: string; path: string | null; skill: string | null;
+      result: number | null; state: string;
+    }) => f.store.write(db => db.run(`
+      INSERT INTO tool_call(call_id,req_id,ord,tool_name,arg_path,arg_skill,result_req,
+        result_ord,result_path,is_error,state,derive_version,algorithm_version)
+      VALUES (?,?,?,?,?,?,?,0,?,0,?,0,?)`,
+    [`c-${row.id}-${row.ord}`, row.id, row.ord, row.name, row.path, row.skill, row.result,
+      row.result === null ? null : 'request.messages[2].content[0]', row.state, GROUP_ALGORITHM]));
+    for (const [id, started, ms] of [
+      [1, 1000, 100], [2, 1500, null], [3, 2000, 100], [4, 2100, null],
+      [5, 3000, 100], [6, 3050, null], [7, 4000, null], [8, 4500, null], [9, 5000, 100],
+    ] as [number, number, number | null][]) req(id, started, ms);
+    call({ id: 1, ord: 0, name: 'Edit', path: '/repo/positive', skill: null, result: 2, state: 'resolved' });
+    // 两个参数事实同时存在时 arg_path 优先。
+    call({ id: 1, ord: 1, name: 'Edit', path: '/repo/preferred', skill: 'ignored', result: 2, state: 'resolved' });
+    call({ id: 1, ord: 2, name: 'Skill', path: null, skill: 'ponytail', result: 2, state: 'resolved' });
+    call({ id: 3, ord: 0, name: 'Edit', path: '/repo/zero', skill: null, result: 4, state: 'resolved' });
+    call({ id: 5, ord: 0, name: 'Edit', path: '/repo/negative', skill: null, result: 6, state: 'resolved' });
+    call({ id: 7, ord: 0, name: 'Edit', path: '/repo/no-duration', skill: null, result: 8, state: 'resolved' });
+    call({ id: 9, ord: 0, name: 'Bash', path: null, skill: null, result: null, state: 'pending' });
+
+    expect(getSummaryEntries(f.store, GROUP, { kind: 'tool', name: 'Edit' })).toEqual({
+      items: [
+        { req_id: 1, ord: 0, tool_name: 'Edit', state: 'resolved', exec_ms: 400, summary: '/repo/positive' },
+        { req_id: 1, ord: 1, tool_name: 'Edit', state: 'resolved', exec_ms: 400, summary: '/repo/preferred' },
+        { req_id: 3, ord: 0, tool_name: 'Edit', state: 'resolved', exec_ms: 0, summary: '/repo/zero' },
+        // 负窗口是时钟或结算异常，与 getRequest 同口径留空。
+        { req_id: 5, ord: 0, tool_name: 'Edit', state: 'resolved', exec_ms: null, summary: '/repo/negative' },
+        // 调用请求缺时长，执行段同样留空。
+        { req_id: 7, ord: 0, tool_name: 'Edit', state: 'resolved', exec_ms: null, summary: '/repo/no-duration' },
+      ],
+      truncated: false,
+    });
+    expect(getSummaryEntries(f.store, GROUP, { kind: 'skill', name: 'ponytail' })).toEqual({
+      items: [{ req_id: 1, ord: 2, tool_name: 'Skill', state: 'resolved', exec_ms: 400, summary: 'ponytail' }],
+      truncated: false,
+    });
+    // Bash 没有已提取的摘要，pending 也没有执行段。
+    expect(getSummaryEntries(f.store, GROUP, { kind: 'tool', name: 'Bash' })).toEqual({
+      items: [{ req_id: 9, ord: 0, tool_name: 'Bash', state: 'pending', exec_ms: null, summary: null }],
+      truncated: false,
+    });
+  } finally { f.close(); }
+});
+
+test('条目选源沿用发布代优先、同步回退，且同一请求不重复', () => {
+  const f = fixture();
+  const GEN_GROUP = JSON.stringify(['session', 'generation']);
+  try {
+    f.store.write(db => {
+      for (const [id, started, ms] of [[1, 1000, 100], [2, 2000, null]] as [number, number, number | null][]) {
+        db.run(`INSERT INTO request(req_id,conv_key,actor,actor_state,started_ms,day,via,body_state,
+          derive_version,have,created_at,updated_at,sort_source,sort_key,ms)
+          VALUES (?,?,'main','known',?,'2026-10-25','hook','pending',0,1,1,1,'ledger',?,?)`,
+        [id, GEN_GROUP, started, `g|${id}`, ms]);
+        db.run(`INSERT INTO tool_call(call_id,req_id,ord,tool_name,arg_path,result_req,
+          is_error,state,derive_version,algorithm_version)
+          VALUES (?,?,0,'Edit',?,NULL,0,'resolved',0,?)`,
+        [`sync-${id}`, id, `/sync-${id}`, GROUP_ALGORITHM]);
+      }
+      db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,state,published_generation)
+        VALUES (?,'main','','clean','gen-00000000000000')`, [GEN_GROUP]);
+      db.run(`INSERT INTO derive_tool_result(generation,req_id,ord,call_id,tool_name,arg_path,
+        arg_skill,result_req,result_ord,result_path,is_error,state,algorithm_version,
+        basis_json,retention_state)
+        VALUES ('gen-00000000000000',1,0,'gen-call','Edit','/generation',NULL,2,0,?,0,
+          'resolved',?, '{}','recomputed')`,
+      ['request.messages[2].content[0]', DERIVE_ALGORITHM]);
+    });
+    // req1 有发布代行：用代里的路径与配对，同步旧行被排除；req2 无代行：回退同步。
+    expect(getSummaryEntries(f.store, GEN_GROUP, { kind: 'tool', name: 'Edit' })).toEqual({
+      items: [
+        { req_id: 1, ord: 0, tool_name: 'Edit', state: 'resolved', exec_ms: 900, summary: '/generation' },
+        { req_id: 2, ord: 0, tool_name: 'Edit', state: 'resolved', exec_ms: null, summary: '/sync-2' },
+      ],
+      truncated: false,
+    });
   } finally { f.close(); }
 });
 
@@ -320,9 +412,11 @@ test('OMP 小写工具的 path 参数进写入/读取分组，点击定位同认
       read: [{ path: 'docs/x.md', count: 1 }],
     });
     expect(getSummaryEntries(f.store, GROUP, { kind: 'written', path: 'docs/x.md' }))
-      .toEqual({ items: [{ req_id: 1, ord: 0, tool_name: 'write', state: 'resolved' }], truncated: false });
+      .toEqual({ items: [{ req_id: 1, ord: 0, tool_name: 'write', state: 'resolved',
+        exec_ms: null, summary: 'docs/x.md' }], truncated: false });
     expect(getSummaryEntries(f.store, GROUP, { kind: 'read', path: 'docs/x.md' }))
-      .toEqual({ items: [{ req_id: 2, ord: 0, tool_name: 'read', state: 'resolved' }], truncated: false });
+      .toEqual({ items: [{ req_id: 2, ord: 0, tool_name: 'read', state: 'resolved',
+        exec_ms: null, summary: 'docs/x.md' }], truncated: false });
   } finally { f.close(); }
 });
 

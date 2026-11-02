@@ -68,7 +68,10 @@ test('批次输入编码为 JSON 查询参数', async () => {
 });
 
 test('汇总条目按判别 kind 编码', async () => {
-  const { fetcher, calls } = scriptedFetch([{}, {}, {}]);
+  const { fetcher, calls } = scriptedFetch([{
+    body: { items: [{ req_id: 1, ord: 0, tool_name: 'Bash', state: 'resolved',
+      exec_ms: 25, summary: null }], truncated: false },
+  }, {}, {}]);
   const transport = createHttpReadTransport({ fetcher });
   await transport.execute('summaryEntries', { key: 'k', query: { kind: 'tool', name: 'Bash' } },
     { signal: new AbortController().signal });
@@ -263,6 +266,15 @@ test('页面与目录响应的顶层形状校验', async () => {
     { body: { req_id: 1, reading_token: token, entries: null },
       run: t => t.execute('contextItem', { id: 1, token,
         query: { kind: 'files', name: null, tag: null, cursor: null } }, { signal: signal() }) },
+    // 汇总条目旧形状（缺 exec_ms/summary）不能当成功结果。
+    { body: { items: [{ req_id: 1, ord: 0, tool_name: 'Bash', state: 'resolved' }], truncated: false },
+      run: t => t.execute('summaryEntries', { key: 'k', query: { kind: 'tool', name: 'Bash' } },
+        { signal: signal() }) },
+    // 服务端把负窗口折成 null；负值属于畸形响应。
+    { body: { items: [{ req_id: 1, ord: 0, tool_name: 'Bash', state: 'resolved',
+      exec_ms: -1, summary: null }], truncated: false },
+      run: t => t.execute('summaryEntries', { key: 'k', query: { kind: 'tool', name: 'Bash' } },
+        { signal: signal() }) },
   ];
   for (const { run, body } of cases) {
     const { fetcher } = scriptedFetch([{ body }]);

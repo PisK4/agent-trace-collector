@@ -192,6 +192,20 @@ test('渲染入口的文字取舍来自实测尺寸：宽度不足整块 bare，
   }
 });
 
+test('树图数值只给份额前四名的可见块，完整读数留在 aria 与 title', () => {
+  const inner = contextMapInnerHtml(sevenKinds(), 592, 240, 7);
+  const buttons = tileButtons(inner);
+  const values = [...inner.matchAll(/class="ctx-tval"/g)].length;
+  expect(values).toBeGreaterThan(0);
+  expect(values).toBeLessThanOrEqual(4);
+  // 完整读数不因省略文字而丢失：每个 tile 都有 aria-label 与 title。
+  expect(inner.match(/aria-label="[^"]*tokens，占提示总量/g)?.length).toBe(buttons.length);
+  expect(inner.match(/title="[^"]*tokens，占提示总量/g)?.length).toBe(buttons.length);
+  // 小份额块只留名称，不再逐块标数。
+  const small = buttons.find(button => button.body.includes('reminders'));
+  expect(small?.body).not.toContain('ctx-tval');
+});
+
 test('碎项并入成员集合：大项保留、其余并成一块带类别名的集合块', () => {
   const smalls = Array.from({ length: 30 }, (_, i) => ({ name: `frag-${i}`, tag: 'read' as const, n: null, tokens: 300 }));
   const p = reading({

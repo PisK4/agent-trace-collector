@@ -11,7 +11,7 @@
 
 <header class="topbar">
   <button class="brand" id="brand-home" title="回到主页并刷新">
-    <svg width="18" height="20" viewBox="0 0 30 32" fill="none" aria-hidden="true"><path d="M5 6v20M5 10h12l8 6-8 6H5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="25" cy="16" r="3.2" fill="currentColor"/></svg>
+    <svg width="18" height="20" viewBox="0 0 30 32" fill="none" aria-hidden="true"><path d="M5 4v24M5 9h12l8 7-8 7H5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="9" r="2.6" fill="var(--text-2)"/><circle cx="25" cy="16" r="2.6" fill="var(--accent)"/><circle cx="5" cy="23" r="2.6" fill="var(--text-2)"/></svg>
     <span>Trace Collector</span>
   </button>
   <div class="crumb" id="crumb"></div>
@@ -33,7 +33,6 @@
         <input id="sess-search" type="search" placeholder="搜索已加载会话、请求或 ID" aria-label="搜索已加载会话">
       </div>
       <div class="filters" id="agent-filters" role="group" aria-label="按 Agent 筛选"></div>
-      <button class="chip-btn" id="load-more-sessions" hidden>加载更多会话</button>
     </div>
     <div class="sessions-list" id="sessions-list"><p class="sess-empty">正在读取本机会话…</p></div>
   </aside>

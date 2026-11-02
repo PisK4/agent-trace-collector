@@ -68,8 +68,8 @@ test('会话汇总配对列表行内是调用序号，页头带计数与失败�
     kind: 'pair', param: 'Bash', label: 'Bash 调用', loading: false, error: null,
     data: {
       items: [
-        { req_id: 7, ord: 1, tool_name: 'Bash', state: 'resolved' },
-        { req_id: 8, ord: 2, tool_name: null, state: 'pending' },
+        { req_id: 7, ord: 1, tool_name: 'Bash', state: 'resolved', exec_ms: 179, summary: 'git worktree list' },
+        { req_id: 8, ord: 2, tool_name: null, state: 'pending', exec_ms: null, summary: null },
       ],
       truncated: false,
     },
@@ -79,15 +79,27 @@ test('会话汇总配对列表行内是调用序号，页头带计数与失败�
     id => ({ text: `req 0${id}`, dim: id === 8 }),
     { count: 2, errors: 1 },
   );
-  // 逐行工具名 chip 删除：行内只有调用序号，来源在右侧 mono 弱化。
-  expect(html).toContain('调用 #1');
+  // 逐行工具名 chip 删除：行内是调用序号与已有摘要，来源在右侧 mono 弱化。
+  expect(html).toContain('调用 #1 · git worktree list');
+  expect(html).toContain('179ms');
+  expect(html).toContain('结果请求开始 − 调用请求结束推算');
+  expect(html).not.toContain('0ms');
   expect(html).not.toContain('tool-chip call"');
   expect(html).toContain('req 07');
-  // 未配对的行带状态标；窗口外的行整行 dim。
+  // 未配对的行带状态标；窗口外的行整行 dim，点击属性保持。
   expect(html).toContain('tool-chip miss');
   expect(html).toContain('tool-row tool-link dim"');
-  // 页头右侧计数与失败数（失败红字由 .err 类之外的 cnt 承载，红字走 CSS）。
-  expect(html).toContain('class="cnt mono">2 次 · 1 次失败</span>');
+  expect(html).toContain('data-summary-pair="1" data-owner="7" data-ord="1"');
+  expect(html).toContain('data-summary-pair="1" data-owner="8" data-ord="2"');
+  // 摘要按文本转义，不成为标签。
+  const evil = railSummaryListHtml({
+    ...list,
+    data: { items: [{ req_id: 7, ord: 1, tool_name: 'Bash', state: 'resolved', exec_ms: null, summary: '<img src=x onerror=alert(1)>' }], truncated: false },
+  }, id => ({ text: `req 0${id}`, dim: false }), { count: 1, errors: 0 });
+  expect(evil).not.toContain('<img');
+  expect(evil).toContain('&lt;img');
+  // 页头右侧计数与失败数：失败段独立红字，不再合成同一枚 muted 文本。
+  expect(html).toContain('class="cnt mono">2 次 · <span class="err">1 次失败</span></span>');
 });
 
 test('resolveTraceTarget 区分窗口内、canonical、窗口外与不存在', () => {
@@ -239,6 +251,21 @@ test('delta=null 给关系说明不标新增，delta=[] 显示新增 0', () => {
   // delta 空集不再渲染「新增 0 条消息」横幅：没有新增就没有可说的。
   const empty = structureFoldHtml({ ...base, delta: new Set<number>(), relation: '' });
   expect(empty).not.toContain('新增 0');
+});
+
+test('请求结构头部保留总数并显示新增数，空集不写新增 0', () => {
+  const base = {
+    reqId: 1, row: factsRow, meta: { total: 8 },
+    structure: { ...emptyStructure, total: 8, next: 8, ords: [0, 1] },
+    entries: [entryOf(0, '开场'), entryOf(1, '回答')],
+    relation: '',
+  };
+  const html = structureFoldHtml({ ...base, delta: new Set([2, 3, 4]) });
+  expect(html).toContain('<span class="fold-count">8 条消息</span>');
+  expect(html).toContain('<span class="fold-count new">新增 3</span>');
+  const empty = structureFoldHtml({ ...base, delta: new Set<number>() });
+  expect(empty).not.toContain('新增 0');
+  expect(empty).toContain('<span class="fold-count">8 条消息</span>');
 });
 
 test('结构内点开消息详情可返回，消息总数不变', () => {
@@ -782,7 +809,7 @@ test('会话头输出速度只统计计时与输出都在的行', () => {
   const timed = requestRow({ req_id: 2, out_tok: 100, ms: 2000, ttft_ms: 500, flow_ms: 1500 });
   const mixed = sessionHead({ ...headBase, rows: [untimed, timed] as never });
   expect(mixed).toContain('<b>67</b> tok/s');
-  expect(mixed).toContain('首字 <b>0.50 s</b>');
+  expect(mixed).toContain('<i>首字</i> <b>0.50 s</b>');
 });
 
 test('会话头汇总状态：资源回退可见标明已加载窗口，读取中与不可用分开说', () => {
@@ -822,6 +849,31 @@ test('会话头双列：左右分组、副标题删除与身份行', () => {
   // 身份行保留已加载请求数；路径条目可定位。
   expect(html).toContain('已加载 <b>1</b> 笔 Request');
   expect(html).toContain('data-summary-path="src/a.ts"');
+  // 左列顺序是资源、性能、结构：性能夹在资源与结构之间。
+  expect(html.indexOf('<i>提示</i>')).toBeLessThan(html.indexOf('<i>首字</i>'));
+  expect(html.indexOf('<i>首字</i>')).toBeLessThan(html.indexOf('<i>主链</i>'));
+  // 写入/读取短前缀常驻，路径与计数仍可定位。
+  expect(html).toContain('<span class="path-lab">写入</span>');
+  expect(html).toContain('<span class="path-lab">读取</span>');
+  // 数值名称分开：名称留在 UI 字体，读数在 mono 的 cue-line 里。
+  expect(html).toContain('<span class="cue-line"><i>提示</i> <b>');
+});
+
+test('工具与路径的 +N 折叠键含会话键，刷新后按 folds 恢复', () => {
+  const tools = ['Bash', 'Read', 'Edit', 'Write', 'ToolSearch'].map((name, i) => ({
+    name, count: 5 - i, paired: 5 - i, error_known: 5 - i, errors: 0,
+  }));
+  const paths = {
+    written: Array.from({ length: 4 }, (_, i) => ({ path: `src/w${i}.ts`, count: 4 - i })),
+    read: Array.from({ length: 4 }, (_, i) => ({ path: `docs/r${i}.md`, count: 4 - i })),
+  };
+  const html = sessionHead({
+    ...headBase, rows: [requestRow()] as never,
+    summary: summaryFixture({ tools, paths }) as never, summaryStatus: 'ready',
+  });
+  expect(html).toContain('data-fold="headmore:tool:k"');
+  expect(html).toContain('data-fold="headmore:w:k"');
+  expect(html).toContain('data-fold="headmore:r:k"');
 });
 
 test('空集合的分组整组隐藏，右列全空不留空列', () => {
@@ -880,8 +932,8 @@ test('费用缺值不给 0，缺值笔数进按需说明', () => {
     }) as never,
     summaryStatus: 'ready',
   });
-  expect(html).toContain('提示 <b>');
-  expect(html).not.toContain('费用 <b>');
+  expect(html).toContain('<i>提示</i> <b>');
+  expect(html).not.toContain('<i>费用</i> <b>');
   expect(html).not.toContain('$');
   expect(html).toContain('2 笔未取得费用');
   expect(html).toContain('本次没有可用分母，不给数');
@@ -898,11 +950,11 @@ test('结构组条件字段非零才出现', () => {
     }) as never,
     summaryStatus: 'ready',
   });
-  expect(html).toContain('主链 <b>4</b> · 旁路 <b>1</b>');
-  expect(html).toContain('峰值 <b>41%</b>');
-  expect(html).toContain('子代理 <b>2</b> 个 · <b>5</b> 笔');
-  expect(html).toContain('重试 <b>3</b> 笔');
-  expect(html).toContain('模型 <b>2</b>');
+  expect(html).toContain('<i>主链</i> <b>4</b> · <i>旁路</i> <b>1</b>');
+  expect(html).toContain('<i>峰值</i> <b>41%</b>');
+  expect(html).toContain('<i>子代理</i> <b>2</b> 个 · <b>5</b> 笔');
+  expect(html).toContain('<i>重试</i> <b>3</b> 笔');
+  expect(html).toContain('<i>模型</i> <b>2</b>');
   const quiet = sessionHead({
     ...headBase, rows: [requestRow()] as never,
     summary: summaryFixture({
@@ -914,9 +966,9 @@ test('结构组条件字段非零才出现', () => {
     summaryStatus: 'ready',
   });
   // 「子代理」一词也出现在资源组的口径说明里；这里断言的是结构组的读数槽。
-  expect(quiet).not.toContain('子代理 <b>');
-  expect(quiet).not.toContain('重试 <b>');
-  expect(quiet).not.toContain('模型 <b>');
+  expect(quiet).not.toContain('<i>子代理</i> <b>');
+  expect(quiet).not.toContain('<i>重试</i> <b>');
+  expect(quiet).not.toContain('<i>模型</i> <b>');
 });
 
 test('汇总过期出现可见警示，正常态不出现', () => {
@@ -957,6 +1009,8 @@ test('工具组前三直接可见，其余进 +N 展开', () => {
   expect(capped).toContain('data-summary-tool="Bash"');
   expect(capped).toContain('data-summary-tool="Write"');
   expect(capped).toContain('data-summary-tool="ToolSearch"');
+  // 名称可省略，计数与失败数是独立的不可收缩片段。
+  expect(capped).toContain('<span class="nm">Bash</span><span class="n">5</span>');
   const three = sessionHead({
     ...headBase, rows: [requestRow()] as never,
     summary: summaryFixture({ tools: five.slice(0, 3) }) as never, summaryStatus: 'ready',

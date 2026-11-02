@@ -22,6 +22,12 @@ export const TIER_LIMITS = {
 };
 
 /**
+ * 执行窗口说明：结果请求开始 − 调用请求结束，含客户端处理与人工确认，
+ * 是上界而不是工具进程自身的精确耗时。所有展示 exec_ms 的地方共用。
+ */
+export const EXEC_MS_HINT = '结果请求开始 − 调用请求结束推算，含客户端处理与人工确认，是上界';
+
+/**
  * @param {number} ms
  * @param {readonly [number, number]} limits
  * @returns {'good'|'warn'|'bad'}

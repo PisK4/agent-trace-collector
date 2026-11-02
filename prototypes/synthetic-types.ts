@@ -3,6 +3,8 @@
 export type SynthCall = {
   call_id: string; ord: number; tool_name: string;
   result_req: number | null; result_ord: number | null; result_path: string | null; state: string;
+  /** 调用参数里已提取的事实；未提供时摘要为 null。 */
+  arg_path?: string | null; arg_skill?: string | null;
 };
 export type SynthMessage = { role: string; content: unknown; tool_calls?: unknown[] };
 export type SynthAttempt = {

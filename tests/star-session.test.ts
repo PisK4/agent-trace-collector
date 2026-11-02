@@ -84,6 +84,20 @@ test('八类占比合计 100 且含 harness；回复正文带调用块（配对�
   }
 });
 
+test('调用带回已提取的参数事实：Read/Edit 有路径，Skill 有名字，Bash 没有', () => {
+  const calls = starSessionData().requests.flatMap(r => r.toolCalls);
+  for (const call of calls) {
+    if (call.tool_name === 'Read' || call.tool_name === 'Edit' || call.tool_name === 'Write') {
+      expect(typeof call.arg_path).toBe('string');
+    } else if (call.tool_name === 'Skill') {
+      expect(typeof call.arg_skill).toBe('string');
+    } else {
+      expect(call.arg_path ?? null).toBeNull();
+      expect(call.arg_skill ?? null).toBeNull();
+    }
+  }
+});
+
 test('summary 数字取表：工具分布、totals、models、路径计数与静态条目', () => {
   const s = starSummary();
   expect(s.totals).toEqual({ in_tok: 208000, out_tok: 17400, cost: 0.42, cost_absent: 0, cache_hit: 0.932 });

@@ -941,7 +941,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 会话口径的事实汇总落在 session-head 的双列分组板：左列资源（会话口径合计：提示、输出、费用与缓存命中——Σ`cache_read` ÷ Σ(`in_tok + cache_read`)，只计两个读数都在的请求，分母为空不给数；费用覆盖与口径进组标题说明）、结构与性能，右列工具、Skill、写入尝试与读取请求；标题行放会话标题与刷新、回窗按钮，身份行放 Harness、会话 ID、已加载请求数与窗口时间范围。每个分组的数据严格一行：左列统计合并成一段放不下整段省略，右列 chips 按调用次数取前三、其余进 +N 展开，失败与中断入口常驻，展开 +N 时该行临时恢复换行；分组只在有可展示事实时出现，整列全空不保留空列与列间分隔线；中栏容器不超过 650px 退单列。统计范围不设常驻副标题：资源与结构的会话口径、性能的已加载窗口口径、调用总数与覆盖缺口、路径总数与显式 Skill 限定都进各自组标题的悬停与键盘聚焦说明（`data-desc`，标题可聚焦）。汇总快照读取中或不可用时，资源回退为已加载窗口相加，并以可见的「已加载窗口」标记标明口径更换，不给 0 或替代文字。工具 chip 六色身份配色，失败数只在非零时给「⚠ N 失败」入口，中断计数非零才出现；路径写入=橙、读取=蓝，与工具、Skill 同为前三加 `+N` 二级展开；结构行主链/旁路按 `purpose_chain` 分、上下文峰值取 max(`prompt_tokens`/`prompt_window`) 整百分点，子代理/重试/多模型足迹非零才出现。会话级命中率只在资源组一处表达；读数页用量两列的请求级命中行仍不设，请求级命中只在构成区顶部「提示词缓存」表达（同口径 `cache_read ÷ (in_tok + cache_read)`），缓读行的悬停同时指向两处。滚动定位让位与轮次带吸顶位置随头部实际高度走（`--head-h`/`--band-h`，由 `syncBandTop` 维护）。呈现的来由见[会话头双列常驻](../.agents/notes/implemented/feature/2026-11-01-session-header-two-column.md)。
 
-数据由 `GET /api/sessions/:key/summary` 查询时聚合，不物化：单会话量级小，物化要跨 actor 组协调代际发布，买不来收益。有效工具行与请求详情同一套选源（发布代有该请求的行用发布代，否则回退同步旧表）；`interrupt_count` 与标题摘要同一套选源（发布代优先、回收保留旧值）。中断计数按 delta 归属：中断标记随上下文延续出现在后续每笔请求里，只在首次落入某笔确定增量的那笔计一次，判定只认用户消息第一个文本块的开头前缀（大小写不敏感），摘要引用与 tool_result 内文不算。覆盖度（配对数、失败位已知数、参数事实已知数、中断未判定数）如实呈现缺口；组 dirty 时返回已发布事实加 dirty 标志。失败调用集合直接随首屏返回；工具、路径与 Skill 条目点击后经 `GET /api/sessions/:key/summary/entries` 按组查询，右栏先开条目列表再逐项跳配对页或定位请求（窗口外走既有窗口外详情）。判据的来由、否决过的备选与正反代价见[会话信息汇总](../.agents/notes/implemented/feature/2026-10-25-session-trace-summary.md)。
+数据由 `GET /api/sessions/:key/summary` 查询时聚合，不物化：单会话量级小，物化要跨 actor 组协调代际发布，买不来收益。有效工具行与请求详情同一套选源（发布代有该请求的行用发布代，否则回退同步旧表）；`interrupt_count` 与标题摘要同一套选源（发布代优先、回收保留旧值）。中断计数按 delta 归属：中断标记随上下文延续出现在后续每笔请求里，只在首次落入某笔确定增量的那笔计一次，判定只认用户消息第一个文本块的开头前缀（大小写不敏感），摘要引用与 tool_result 内文不算。覆盖度（配对数、失败位已知数、参数事实已知数、中断未判定数）如实呈现缺口；组 dirty 时返回已发布事实加 dirty 标志。失败调用集合直接随首屏返回；工具、路径与 Skill 条目点击后经 `GET /api/sessions/:key/summary/entries` 按组查询，右栏先开条目列表再逐项跳配对页或定位请求（窗口外走既有窗口外详情）。条目沿用同一套选源，并带配对状态、执行段 `exec_ms` 与已提取的参数摘要（`arg_path` 优先、其次 `arg_skill`）；摘要只复用行上的事实，不读正文，缺摘要的调用如实为 null。判据的来由、否决过的备选与正反代价见[会话信息汇总](../.agents/notes/implemented/feature/2026-10-25-session-trace-summary.md)。
 
 ### 派生算法版本
 
@@ -1135,7 +1135,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | `GET /api/sessions?limit=50&cursor=` | 会话列表，含笔数、最后时间、异常标记 | keyset，(last_ms, conv_key) |
 | `GET /api/sessions/:key/requests?limit=100&cursor=&direction=older` | 会话内请求列表，只返回列字段；direction 省略为 forward | keyset，(started_ms, req_id)；older 游标绑定会话与方向 |
 | `GET /api/sessions/:key/summary` | 会话口径汇总：工具、路径、Skill、中断、资源合计、结构与覆盖度；查询时聚合 | 无 |
-| `GET /api/sessions/:key/summary/entries?kind=&name=/path=` | 汇总条目点击后的按组支撑记录；kind 取 tool/written/read/skill/interrupts | 上限 1000 |
+| `GET /api/sessions/:key/summary/entries?kind=&name=/path=` | 汇总条目点击后的按组支撑记录，带配对状态、执行段耗时与已有参数摘要；kind 取 tool/written/read/skill/interrupts | 上限 1000 |
 | `GET /api/requests/:id` | 单笔读数、费用状态、正文状态 | 无 |
 | `GET /api/requests/:id/body?from=0&to=40&if_reading=` | 分页取消息；`if_reading` 可选，携带时校验阅读版本 | 消息序号区间 |
 | `GET /api/requests/:owner/tools/:ord/result?if_reading=` | 按调用位置读取一个工具结果内容块与原始协议对象；token 必填 | 无 |
@@ -1149,7 +1149,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 列表与详情都带 `derived_state`，并只在该值为 `current` 时把关系、增量与折叠行摘要放在顶层。详情另带 `historical`（旧派生结论连同状态）、摘要的算法三列与 `tool_results` 反向配对；列表不携带这几项。`tool_results` 是本请求承载的结果块指向的已发布调用（调用方请求加既有工具行）：与 `tool_calls` 同源同闸门，发布代表先、非空不回退，同步回退用同组请求（conv_key/actor）的 IN 子查询驱动 `(req_id, ord)` 主键，候选规模是组内请求数，不全局扫描，也不外露跨组脏行；非 current 为空数组。判定的具体规则见[读模型里的派生状态](#读模型里的派生状态)。
 
-两个时长读数是独立事实，不受派生状态影响，但都要守卫。`reasoning_span_ms` 是首个文本减首 token，只有末次尝试报告 `firstReasoning` 时才说明首个内容是推理：列表与详情共用 `route_summary.tries_json` 的同一段 SQL，先用 `json_valid` 短路再取 `$[#-1]`，摘要缺行、非法 JSON 与非数组都读成 null，差值为零或负同样留空。`tool_calls` 的 `exec_ms` 是结果请求开始时刻减调用请求结束时刻（`started_ms + ms`），两笔时长都在且窗口非负才算；非 current 时它与配对位置一起收起，旧读数不外露。
+两个时长读数是独立事实，不受派生状态影响，但都要守卫。`reasoning_span_ms` 是首个文本减首 token，只有末次尝试报告 `firstReasoning` 时才说明首个内容是推理：列表与详情共用 `route_summary.tries_json` 的同一段 SQL，先用 `json_valid` 短路再取 `$[#-1]`，摘要缺行、非法 JSON 与非数组都读成 null，差值为零或负同样留空。`tool_calls` 的 `exec_ms` 是结果请求开始时刻减调用请求结束时刻（`started_ms + ms`），调用方 `ms` 与结果请求 `started_ms` 都在且窗口非负才算；非 current 时它与配对位置一起收起，旧读数不外露。
 
 派生列的取值来源整套一致：队列带 `published_generation` 指针时，标题、摘要、关系、增量、链角色、回复摘要、中断计数与工具配对整组读 `derive_request_result` / `derive_tool_result`，摘要状态映射代际的 `retention_state` / `algorithm` / `basis_json`；没有指针时整组读 `request` / `tool_call` 同步旧列，它们同时是「上一次完成值」的家，dirty 组的 `historical` 从这里取。同一条件应用于整组列，不出现标题取发布代、摘要取同步列的混拼；当前与否的屏蔽闸门仍是 `projectRow` 与 `derived_state`。同步可用性判据唯一落在 `derive-state` 的 `groupCurrentSql` / `groupIsCurrent`，查询不另立第二套口径。alias 解析与行读取在同一只读事务内，避免跨快照。
 

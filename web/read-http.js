@@ -153,6 +153,17 @@ export function createHttpReadTransport({ fetcher, baseUrl = '', headers }) {
         return;
       case 'summaryEntries':
         if (!isObj(parsed) || !(Array.isArray(parsed.items) || Array.isArray(parsed.requests))) reject();
+        // 调用条目必须带定位与新字段；缺字段的半成品不能当成功结果。
+        if (Array.isArray(parsed.items)) {
+          for (const item of parsed.items) {
+            if (!isObj(item) || !Number.isSafeInteger(item.req_id) || !Number.isSafeInteger(item.ord)
+              || !(item.tool_name === null || typeof item.tool_name === 'string')
+              || typeof item.state !== 'string'
+              || !(item.exec_ms === null
+                || (typeof item.exec_ms === 'number' && Number.isFinite(item.exec_ms) && item.exec_ms >= 0))
+              || !(item.summary === null || typeof item.summary === 'string')) reject();
+          }
+        }
         return;
       case 'contextItem':
         if (!isObj(parsed) || typeof parsed.req_id !== 'number' || !isToken(parsed.reading_token)
