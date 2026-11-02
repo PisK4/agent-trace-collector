@@ -16,7 +16,7 @@ import {
 import {
   deltaOrdinals, messageCopyText, messagePairIndexOf, messagePathOf, replyView, toolEntries,
 } from './body-model.js';
-import { agentLogoHtml } from './agent-logos.js';
+import { agentLogoHtml, setAgentLogoFetcher } from './agent-logos.js';
 import { backendStateHtml } from './backend-state.js';
 import { esc } from './html.js';
 import { icon } from './icons.js';
@@ -64,7 +64,10 @@ export function restoreScroll(element, previous) {
 if (typeof document !== 'undefined') {
   // store 是唯一的读取缓存：页面同步渲染经 peek* 消费，副本不作第二份真相。
   // 读取经具名契约的 HTTP adapter 走 store 内部调度；store 是唯一可 Fetch 的读取方。
-  const store = createReaderStore(createHttpReadTransport({ fetcher: (/** @type {string} */ url) => fetch(url) }),
+  // 同一 fetcher 交给 logo 懒加载，装配点以外不接触全局 fetch。
+  const fetcher = fetch;
+  setAgentLogoFetcher(fetcher);
+  const store = createReaderStore(createHttpReadTransport({ fetcher }),
     // 记录快照异步变化（409 作废、自动重读换新或失败）按影响面响应；迟到响应不进来。
     (/** @type {number} */ id) => { onStoreChange(id); },
     // 轮次快照与会话汇总落地（出现/消失、折叠区就绪）同样重绘两栏。
