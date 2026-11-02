@@ -60,6 +60,104 @@ export function restoreScroll(element, previous) {
   return element.scrollTop;
 }
 
+/* ---------------- 空状态插画：B1 吊丝蜘蛛 ---------------- */
+
+/**
+ * 空状态里的 B1 蜘蛛。几何直接取自设计目录的 `spider.svg`（1161 B 矢量稿），
+ * 只把身体一组平移到原点，好让呼吸围绕身体中心缩放；丝、腿、眼、嘴的坐标不变。
+ * viewBox 是 1580 方框、以丝的中轴（x=340）居中，方框内接 160 / 200 不拉伸。
+ *
+ * 三段 SMIL 沿用 B1 语言：钟摆 ±2°（3s，9s 里 3 个周期）、呼吸 1.8%（4.5s，2 个周期）、
+ * 眨眼每 9s 一次——三段都在 9s 内闭合，循环无缝。全部 `begin="indefinite"`：
+ * 未启动时渲染的就是完整静态首帧（丝、睁眼、身体在位），由 armSpider 在空状态
+ * 持续 500ms 后统一启动。
+ *
+ * @param {number} size 渲染边长（属性初值；实际尺寸由 CSS 决定，窄容器会降级）
+ * @returns {string}
+ */
+function spiderArt(size) {
+  return `<svg class="spider-art" width="${size}" height="${size}" viewBox="-450 0 1580 1580"`
+    + ' data-motion="idle" aria-hidden="true" focusable="false">'
+    + '<g>'
+    + '<animateTransform attributeName="transform" type="rotate" values="-2 340 0;2 340 0;-2 340 0"'
+    + ' keyTimes="0;0.5;1" dur="3s" repeatCount="indefinite" begin="indefinite"/>'
+    + '<line x1="340" y1="0" x2="340" y2="740" stroke="var(--spider-thread)" stroke-width="42" stroke-linecap="round"/>'
+    + '<circle cx="340" cy="830" r="80" fill="var(--spider-accent)"/>'
+    + '<g transform="translate(340 1250)"><g>'
+    + '<animateTransform attributeName="transform" type="scale" values="1 1;1 1.018;1 1"'
+    + ' keyTimes="0;0.5;1" dur="4.5s" repeatCount="indefinite" begin="indefinite"/>'
+    + '<ellipse cx="0" cy="0" rx="335" ry="270" fill="var(--spider-body)"/>'
+    + '<circle cx="-280" cy="-60" r="60" fill="var(--spider-body)"/><circle cx="-310" cy="90" r="54" fill="var(--spider-body)"/>'
+    + '<circle cx="-245" cy="230" r="50" fill="var(--spider-body)"/>'
+    + '<circle cx="280" cy="-70" r="60" fill="var(--spider-body)"/><circle cx="310" cy="80" r="54" fill="var(--spider-body)"/>'
+    + '<circle cx="250" cy="225" r="50" fill="var(--spider-body)"/>'
+    + '<path d="M-150 -150 Q-195 -320 -90 -435" stroke="var(--spider-body)" stroke-width="74" fill="none" stroke-linecap="round"/>'
+    + '<path d="M150 -150 Q195 -320 90 -435" stroke="var(--spider-body)" stroke-width="74" fill="none" stroke-linecap="round"/>'
+    + '<ellipse cx="0" cy="-90" rx="290" ry="200" fill="var(--spider-belly)" opacity=".35"/>'
+    + '<g fill="var(--spider-accent)">'
+    + '<circle cx="10" cy="75" r="30"><animate attributeName="r" values="30;30;4;30"'
+    + ' keyTimes="0;0.94;0.965;1" dur="9s" repeatCount="indefinite" begin="indefinite"/></circle>'
+    + '<circle cx="115" cy="70" r="30"><animate attributeName="r" values="30;30;4;30"'
+    + ' keyTimes="0;0.94;0.965;1" dur="9s" repeatCount="indefinite" begin="indefinite"/></circle>'
+    + '<path d="M-28 120 Q0 145 28 120" stroke="var(--spider-accent)" stroke-width="10" fill="none" stroke-linecap="round"/>'
+    + '</g></g></g></svg>';
+}
+
+/** 空状态插画不抢首屏：节点自己出现满 500ms 才启动 SMIL；后续重绘不重置这个计时。 */
+const reducedMotion = typeof window === 'undefined' ? null : window.matchMedia('(prefers-reduced-motion: reduce)');
+let spiderTimer = /** @type {ReturnType<typeof setTimeout> | null} */ (null);
+/** @type {WeakMap<SVGSVGElement, number>} */
+const spiderArmedAt = new WeakMap();
+
+/** @param {SVGSVGElement} art */
+function startSpider(art) {
+  for (const node of art.querySelectorAll('animate, animateTransform')) {
+    /** @type {SVGAnimationElement} */ (node).beginElement();
+  }
+  art.dataset.motion = 'running';
+}
+
+function armSpider() {
+  const idle = [...document.querySelectorAll('.spider-art[data-motion="idle"]')]
+    .map(node => /** @type {SVGSVGElement} */ (node));
+  if (idle.length === 0) {
+    if (spiderTimer !== null) { clearTimeout(spiderTimer); spiderTimer = null; }
+    return;
+  }
+  if (reducedMotion !== null && reducedMotion.matches) {
+    for (const art of idle) art.dataset.motion = 'static';
+    if (spiderTimer !== null) { clearTimeout(spiderTimer); spiderTimer = null; }
+    return;
+  }
+  const now = performance.now();
+  for (const art of idle) {
+    if (!spiderArmedAt.has(art)) spiderArmedAt.set(art, now);
+    // 计时期间被选中：节点离开文档，计时随 WeakMap 一起失效，不必显式清理。
+    if (now - (spiderArmedAt.get(art) ?? now) >= 500) {
+      startSpider(art);
+      spiderArmedAt.delete(art);
+    }
+  }
+  const waiting = idle.filter(art => art.dataset.motion === 'idle');
+  if (waiting.length === 0) {
+    if (spiderTimer !== null) { clearTimeout(spiderTimer); spiderTimer = null; }
+    return;
+  }
+  if (spiderTimer !== null) return;
+  const due = Math.min(...waiting.map(art => (spiderArmedAt.get(art) ?? now) + 500 - now));
+  spiderTimer = setTimeout(() => { spiderTimer = null; armSpider(); }, Math.max(0, due));
+}
+
+reducedMotion?.addEventListener('change', () => {
+  if (reducedMotion === null || !reducedMotion.matches) return;
+  for (const node of document.querySelectorAll('.spider-art')) {
+    const art = /** @type {SVGSVGElement} */ (node);
+    art.pauseAnimations();
+    art.dataset.motion = 'static';
+  }
+});
+
+
 if (typeof document !== 'undefined') {
   // store 是唯一的读取缓存：页面同步渲染经 peek* 消费，副本不作第二份真相。
   // 读取经具名契约的 HTTP adapter 走 store 内部调度；store 是唯一可 Fetch 的读取方。
@@ -746,14 +844,18 @@ if (typeof document !== 'undefined') {
         rows: tail.steps.map((step, index) => ({ key: step.key, html: tailHtmls[index] })),
       });
     }
+    // 没有已记录请求时给的是插画居中的空列；读取中仍是紧凑单行，不给插画。
+    const noRequests = rows.length === 0 && state.pendingSession === null;
     return {
       headHtml: sessionHead(hiddenRows),
       bandHtml: band,
-      listClass: `step-list${band !== '' ? ' band-above' : ''}`,
+      listClass: `step-list${band !== '' ? ' band-above' : ''}${noRequests ? ' art-empty' : ''}`,
       ordDigits,
       loaderHtml,
       emptyHtml: rows.length === 0
-        ? `<p class="sess-empty">${state.pendingSession !== null ? '正在读取请求…' : '这个会话没有已记录的请求。'}</p>`
+        ? (state.pendingSession !== null
+          ? '<p class="sess-empty">正在读取请求…</p>'
+          : `<p class="sess-empty sess-empty-art">${spiderArt(200)}<span>这个会话没有已记录的请求。</span></p>`)
         : groups.length === 0
           ? `<p class="sess-empty">${icon('empty-page', 24)}当前窗口的请求都没有可读正文，不在对话时间线里；请求记录在会话头。</p>`
           : '',
@@ -840,6 +942,7 @@ if (typeof document !== 'undefined') {
     if (state.pendingSession !== null) {
       mainView.reset();
       main.innerHTML = `<p class="sess-empty" style="padding:24px">正在读取${esc(shortSession(state.pendingSession))}的请求…</p>`;
+      armSpider();
       return;
     }
     // 首载窗口准备完成前以选中组为锚，其余组提交不把它挤出视口；准备完成后
@@ -857,6 +960,7 @@ if (typeof document !== 'undefined') {
       syncBandTop();
     }
     revealSelectedChip();
+    armSpider();
   }
 
   /* ---------------- 右栏 ---------------- */
@@ -931,9 +1035,14 @@ if (typeof document !== 'undefined') {
     return store.peekRequest(detail.prev_req_id)?.detail ?? null;
   }
 
+  /** 右栏三处「未选择请求」共用同一段标记：B1 吊丝插画 + 原文案（文案不动）。 */
+  function railEmptySelect() {
+    return `<div class="rail-empty rail-empty-art">${spiderArt(160)}<b>未选择请求</b>在中间选择一个 Request。</div>`;
+  }
+
   function railFacts() {
     const r = currentRow();
-    if (r === null) return '<div class="rail-empty">' + icon('empty-select', 24) + '<b>未选择请求</b>在中间选择一个 Request。</div>';
+    if (r === null) return railEmptySelect();
     const read = currentRead();
     const meta = read?.meta ?? null;
     const detail = read?.detail ?? null;
@@ -1013,7 +1122,7 @@ if (typeof document !== 'undefined') {
    */
   function railTools() {
     const r = currentRow();
-    if (r === null) return '<div class="rail-empty">' + icon('empty-select', 24) + '<b>未选择请求</b>在中间选择一个 Request。</div>';
+    if (r === null) return railEmptySelect();
     const read = currentRead();
     if (read === null || read.meta === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
@@ -1170,7 +1279,7 @@ if (typeof document !== 'undefined') {
         const read = store.peekRequest(state.offPageReqId);
         return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口。这里只读了它的详情；需要完整轨迹请调整窗口（会话头有切窗按钮），不自动扫描全部历史。</p></section>${read?.detail ? ledgerRowsHtml(read.detail, read.detail) : ''}`;
       }
-      return '<div class="rail-empty">' + icon('empty-select', 24) + '<b>未选择请求</b>在中间选择一个 Request。</div>';
+      return railEmptySelect();
     }
     const owner = state.railTab === 'tools' && state.toolOrd !== null ? state.toolOwner ?? r.req_id : null;
     const ownerRow = owner === null ? null : currentRows().find(row => row.req_id === owner) ?? null;
@@ -1313,6 +1422,7 @@ if (typeof document !== 'undefined') {
     restoreScroll(rail, keep);
     lastRailKey = key;
     wireContextMap();
+    armSpider();
   }
 
   /**
