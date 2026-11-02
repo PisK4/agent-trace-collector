@@ -9,7 +9,7 @@ import {
   addBodyReadStats, bodyReadCounters, createBodyReadCache, emptyBodyReadStats,
 } from '../body-cache';
 import type { BodyReadCache, BodyReadStats } from '../body-cache';
-import { pairBackgroundJobsTx } from './bg-jobs';
+import { planBackgroundJobs, writeBackgroundJobsTx } from './bg-jobs';
 import {
   chainRolesOf, confirmedDeltaOf, initialPairState, matchPredecessor, pairOutcome,
   presentationDecision, replyCallsOf, requestResultsOf,
@@ -79,8 +79,17 @@ type PresentationInput = {
  * 正文可读时标题从当前输入重算，不沿用旧派生值；正文不可读时旧标题与旧摘要
  * 原样保留——那是当时按正文算出来的，没有正文重算只会把它们降级成时间兜底。
  */
-function writePresentationTx(db: Database, input: PresentationInput,
-  associations: readonly ResolvedTool[], group: QueuedGroup, bodyCache: BodyReadCache): void {
+/** 展示阶段的待写列值：标题、摘要依据与可比较位；落库段按同一 SQL 写回。 */
+type PresentationWrite = {
+  reqId: number;
+  title: string | null; titleSource: string | null; inputPreview: string | null;
+  inputKind: string | null; replyPreview: string | null; replyShape: string | null;
+  interruptCount: number | null; contextEvent: string | null;
+  comparable: boolean; basis: string;
+};
+
+function presentationWrite(db: Database, input: PresentationInput,
+  associations: readonly ResolvedTool[], group: QueuedGroup, bodyCache: BodyReadCache): PresentationWrite {
   const { row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts, context } = input;
   const decision = presentationDecision(presentationPortsOf(db, bodyCache), {
     reqId: row.req_id,
@@ -120,6 +129,17 @@ function writePresentationTx(db: Database, input: PresentationInput,
   const interruptCount = interrupts ?? row.interrupt_count;
   // 上下文事件位同一套保留语义：判定在手时按本次写，判不出来沿用旧值。
   const contextEvent = context?.event ?? row.context_event;
+  return {
+    reqId: row.req_id,
+    title: decision.title, titleSource: decision.titleSource,
+    inputPreview: decision.inputPreview, inputKind: decision.inputKind,
+    replyPreview: decision.replyPreview, replyShape, interruptCount, contextEvent,
+    comparable, basis,
+  };
+}
+
+/** 展示列的落库：版本自增；不可比较时保留原算法与依据，状态标 retained。 */
+function writePresentationTx(db: Database, write: PresentationWrite): void {
   db.run(`UPDATE request SET title=?,title_source=?,input_preview=?,
     input_preview_kind=?,reply_preview=?,reply_shape=?,interrupt_count=?,context_event=?,
     derive_version=derive_version+1,
@@ -127,10 +147,10 @@ function writePresentationTx(db: Database, input: PresentationInput,
     summary_basis=CASE WHEN ?=1 THEN ? ELSE summary_basis END,
     summary_state=CASE WHEN ?=1 THEN 'recomputed' ELSE 'retained' END
     WHERE req_id=?`, [
-    decision.title, decision.titleSource, decision.inputPreview, decision.inputKind,
-    decision.replyPreview, replyShape, interruptCount, contextEvent,
-    comparable ? 1 : 0, GROUP_ALGORITHM, comparable ? 1 : 0, basis, comparable ? 1 : 0,
-    row.req_id,
+    write.title, write.titleSource, write.inputPreview, write.inputKind,
+    write.replyPreview, write.replyShape, write.interruptCount, write.contextEvent,
+    write.comparable ? 1 : 0, GROUP_ALGORITHM, write.comparable ? 1 : 0, write.basis,
+    write.comparable ? 1 : 0, write.reqId,
   ]);
 }
 
@@ -147,23 +167,28 @@ function writePresentationTx(db: Database, input: PresentationInput,
  * unknown 节点及其 confirmed 后继的不确定闭包记 unknown——链上存在无法证明的
  * 环节时，后继不能因为 trunk 够不到就被读成另起一支。
  */
-function assignChainRoles(db: Database, convKey: string, actor: string): void {
-  const rows = db.query<{ req_id: number; prev_req_id: number | null;
-    prev_relation: string | null; started_ms: number;
-    sort_source: string | null; sort_key: string | null }, [string, string]>(`
-    SELECT req_id, prev_req_id, prev_relation, started_ms, sort_source, sort_key FROM request
-    WHERE conv_key=? AND actor=? AND actor_state='known' AND purpose_chain='participate'
-    ORDER BY started_ms ASC, req_id ASC`).all(convKey, actor);
-  // 按时间与来源位置遍历，第一个根就是逻辑上最早的根；req_id 只兜底同位置。
-  const ordered = [...rows].sort(compareTraversalOrder);
-  if (ordered[0] === undefined) return;
-  const nodes = ordered.map(row => ({
-    reqId: row.req_id, parentReqId: row.prev_req_id, relation: row.prev_relation,
-  }));
+function planChainRoles(ordered: readonly { req_id: number; purpose_chain: string }[],
+  relations: ReadonlyMap<number, { parent: number | null; relation: string }>):
+  { reqId: number; role: string }[] {
+  // 顺序按 compareTraversalOrder 全序（同位置按 req_id 兜底），先排序再筛参与用途
+  // 与先筛再排序得到同一顺序；节点关系取本轮内存结论，不回读刚写下的行。
+  const nodes = ordered
+    .filter(row => row.purpose_chain === 'participate')
+    .map(row => {
+      const known = relations.get(row.req_id);
+      return { reqId: row.req_id, parentReqId: known?.parent ?? null, relation: known?.relation ?? 'unknown' };
+    });
+  if (nodes.length === 0) return [];
   // trunk 与不确定闭包都在 chainRolesOf 里；切片路径按同一判据传播。
   const roles = chainRolesOf(nodes);
+  return nodes.map(node => ({ reqId: node.reqId, role: roles.get(node.reqId) ?? 'branch' }));
+}
+
+/** 角色落库：整组统一重算，逐行写 chain_role。 */
+function writeChainRolesTx(db: Database, plan: readonly { reqId: number; role: string }[]): void {
+  if (plan.length === 0) return;
   const update = db.prepare('UPDATE request SET chain_role=? WHERE req_id=?');
-  for (const row of rows) update.run(roles.get(row.req_id) ?? 'branch', row.req_id);
+  for (const row of plan) update.run(row.role, row.reqId);
 }
 
 export type DrainResult = {
@@ -302,6 +327,8 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
     // 链阶段只收集；工具与摘要依赖本次配对，必须等全部关系确定后再写。
     const pairRows: PairRow[] = [];
     const presentations: PresentationInput[] = [];
+    // 本轮结论按 req_id 留一份内存副本：角色判定消费它，不再回读刚写下的行。
+    const relationByReq = new Map<number, { parent: number | null; relation: string }>();
     for (const row of ordered) {
       const current = fingerprintsOf(db, row.req_id);
       // 增量输入（Responses 的 previous_response_id）不含完整历史：
@@ -351,6 +378,7 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
         match.parent, match.relation, deltaJson,
         isAux ? 'aux' : 'main', row.req_id,
       ]);
+      relationByReq.set(row.req_id, { parent: match.parent, relation: match.relation });
       pairRows.push({ ...row,
         prev_relation: match.relation, delta_ordinals: deltaJson });
       // 中断计数：排除用途按规则贡献 0（排除是判定，不留 NULL，改判行也不带旧值）；
@@ -370,12 +398,13 @@ export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
       }
       processed += 1;
     }
-    assignChainRoles(db, group.conv_key, group.actor);
-    const paired = pairToolCallsTx(db, group, pairRows, uncertain, bodyCache);
+    writeChainRolesTx(db, planChainRoles(ordered, relationByReq));
+    const toolPlan = planToolCalls(db, group, pairRows, uncertain, bodyCache);
+    writeToolPlanTx(db, group, toolPlan);
     // 背景作业配对与工具配对同批：都在组完成事务里按当前可读正文重建。
-    pairBackgroundJobsTx(db, group, pairRows, bodyCache);
+    writeBackgroundJobsTx(db, group, planBackgroundJobs(db, pairRows, bodyCache));
     for (const input of presentations) {
-      writePresentationTx(db, input, paired.associations, group, bodyCache);
+      writePresentationTx(db, presentationWrite(db, input, toolPlan.associations, group, bodyCache));
     }
     // CAS 失败回滚本组的全部阶段。在线已提交组保留，维护由外层事务决定整批回滚。
     const changed = db.run(
@@ -411,28 +440,33 @@ export type PairRow = LogicalRow & {
   prev_relation: string | null; delta_ordinals: string | null;
 };
 
-type PairResult = {
-  resolved: number; ambiguous: number; pending: number;
+/**
+ * 工具配对的产物：待写的调用行与结果位更新、本轮确定下来的关联。
+ *
+ * 计划与写分开，是为了让计算段不持有写锁；写由调用方在自己的事务里按序执行
+ * （先删本组旧行，再插调用行，再更新结果位，最后标保留行）。
+ */
+export type ToolPlan = {
+  inserts: {
+    callId: string; reqId: number; ord: number; name: string;
+    argPath: string | null; argSkill: string | null; state: string; basis: string;
+  }[];
+  updates: {
+    reqId: number; ord: number; resultReq: number; resultOrd: number;
+    resultPath: string; isError: number; state: string;
+  }[];
   associations: ResolvedTool[];
 };
 
 /**
- * 工具往返的事务内实现。外部不再导出独立入口：完整的完成入口是 `drainDerive`，
- * 它保证配对之后还有摘要与队列确认。
+ * 工具往返的计算段。配对阶梯（`pairOutcome`）的 `alreadyResolved` /
+ * `alreadyPending` 只看本轮初值：重建式语义下旧行在落库时先被删除，读回自己
+ * 刚写的行等于读本轮内存状态，所以在状态表里推进，不再查表。
  */
-function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[],
-  uncertain: ReadonlySet<number>, bodyCache: BodyReadCache): PairResult {
+function planToolCalls(db: Database, group: Group, ordered: readonly PairRow[],
+  uncertain: ReadonlySet<number>, bodyCache: BodyReadCache): ToolPlan {
   const rows = ordered;
-  if (rows.length === 0) return { resolved: 0, ambiguous: 0, pending: 0, associations: [] };
-
-  // 先清空本组旧配对，再按当前数据重建；配对是可变状态，重算比增量修补更不容易漂移。
-  // 正文已回收的请求不在重算范围内：它们的块已经不在，从空数据重配只会把原有关系抹掉，
-  // 所以只删正文仍可读的那部分，其余行保持原样。
-  db.run(`
-    DELETE FROM tool_call WHERE req_id IN (
-      SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known'
-        AND body_state IN ('available','partial'))`,
-  [group.conv_key, group.actor]);
+  if (rows.length === 0) return { inserts: [], updates: [], associations: [] };
 
   type Call = {
     req_id: number; ord: number; call_id: string; name: string; index: number;
@@ -477,22 +511,18 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     byCallId.set(call.call_id, list);
   }
 
-  let resolved = 0;
-  let ambiguous = 0;
-  let pending = 0;
+  const plan: ToolPlan = { inserts: [], updates: [], associations: [] };
+  const key = (reqId: number, ord: number): string => `${reqId}:${ord}`;
+  // 本轮的行状态：插入时的初值，随结果更新推进；等价于旧实现的读回结果。
+  const stateByKey = new Map<string, string>();
+  const resultByKey = new Map<string, { req: number; ord: number; path: string }>();
   for (const call of calls) {
-    const candidates = byCallId.get(call.call_id) ?? [];
-    const state = initialPairState(candidates.length);
-    if (state === 'ambiguous') ambiguous += 1;
-    else pending += 1;
-    db.run(
-      `INSERT INTO tool_call(call_id,req_id,ord,tool_name,arg_path,arg_skill,
-         result_req,result_ord,result_path,is_error,state,derive_version,
-         algorithm_version,basis_json,retention_state)
-       VALUES (?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,1,?,?,'recomputed')`,
-      [call.call_id, call.req_id, call.ord, call.name, call.arg_path, call.arg_skill,
-        state, GROUP_ALGORITHM, toolBasis(group, call.call_id)],
-    );
+    const state = initialPairState((byCallId.get(call.call_id) ?? []).length);
+    plan.inserts.push({
+      callId: call.call_id, reqId: call.req_id, ord: call.ord, name: call.name,
+      argPath: call.arg_path, argSkill: call.arg_skill, state, basis: toolBasis(group, call.call_id),
+    });
+    stateByKey.set(key(call.req_id, call.ord), state);
   }
 
   for (const result of results) {
@@ -501,20 +531,18 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
     if (candidates.length > 1) {
       // 多候选保持 ambiguous，结果位置与失败位照样记下，便于人工核对。
       for (const call of candidates) {
-        db.run(
-          `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, is_error=?, state='ambiguous'
-           WHERE req_id=? AND ord=?`,
-          [result.req_id, result.ord, result.path, result.is_error, call.req_id, call.ord],
-        );
+        plan.updates.push({
+          reqId: call.req_id, ord: call.ord, resultReq: result.req_id, resultOrd: result.ord,
+          resultPath: result.path, isError: result.is_error, state: 'ambiguous',
+        });
+        stateByKey.set(key(call.req_id, call.ord), 'ambiguous');
       }
       continue;
     }
     const call = candidates[0]!;
     const callRow = rows[call.index]!;
     const resultRow = rows[result.index]!;
-    const paired = db.query<{ state: string }, [number, number]>(
-      'SELECT state FROM tool_call WHERE req_id=? AND ord=?',
-    ).get(call.req_id, call.ord);
+    const current = stateByKey.get(key(call.req_id, call.ord)) ?? 'pending';
     // 阶梯顺序（多候选 → 必须更晚 → 顺序可证 → resolved 终态 → pending 保留首见）
     // 在 pairOutcome 里，两条路径共用。
     const outcome = pairOutcome({
@@ -522,34 +550,60 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
       resultLater: compareLogicalOrder(callRow, resultRow) < 0,
       orderCertain: callRow.started_ms !== resultRow.started_ms
         || (!uncertain.has(callRow.req_id) && !uncertain.has(resultRow.req_id)),
-      alreadyResolved: paired?.state === 'resolved',
-      alreadyPending: paired?.state === 'pending',
+      alreadyResolved: current === 'resolved',
+      alreadyPending: current === 'pending',
       resultConfirmed: result.confirmed,
     });
     if (outcome === 'skip') continue;
-    db.run(
-      `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, is_error=?, state=?
-       WHERE req_id=? AND ord=?`,
-      [result.req_id, result.ord, result.path, result.is_error, outcome, call.req_id, call.ord],
-    );
-    if (outcome === 'resolved') resolved += 1;
+    plan.updates.push({
+      reqId: call.req_id, ord: call.ord, resultReq: result.req_id, resultOrd: result.ord,
+      resultPath: result.path, isError: result.is_error, state: outcome,
+    });
+    stateByKey.set(key(call.req_id, call.ord), outcome);
+    resultByKey.set(key(call.req_id, call.ord), { req: result.req_id, ord: result.ord, path: result.path });
   }
 
   // 本次确定下来的关联：只从本轮新建且最终 resolved 的调用行形成。
-  const associations: ResolvedTool[] = [];
   for (const call of calls) {
-    const row = db.query<{
-      state: string; result_req: number | null; result_ord: number | null; result_path: string | null;
-    }, [number, number]>(`SELECT state,result_req,result_ord,result_path
-      FROM tool_call WHERE req_id=? AND ord=?`).get(call.req_id, call.ord);
-    if (row?.state !== 'resolved' || row.result_req === null
-      || row.result_ord === null || row.result_path === null) continue;
-    associations.push({
+    const state = stateByKey.get(key(call.req_id, call.ord));
+    const placed = resultByKey.get(key(call.req_id, call.ord));
+    if (state !== 'resolved' || placed === undefined) continue;
+    plan.associations.push({
       callReq: call.req_id, callOrd: call.ord, callId: call.call_id, name: call.name,
-      resultReq: row.result_req, resultOrd: row.result_ord, resultPath: row.result_path,
+      resultReq: placed.req, resultOrd: placed.ord, resultPath: placed.path,
     });
   }
+  return plan;
+}
 
+/** 计划落库：本组旧配对先删，再插调用行、更新结果位，最后标出保留行。 */
+function writeToolPlanTx(db: Database, group: Group, plan: ToolPlan): void {
+  // 先清空本组旧配对，再按当前数据重建；配对是可变状态，重算比增量修补更不容易漂移。
+  // 正文已回收的请求不在重算范围内：它们的块已经不在，从空数据重配只会把原有关系抹掉，
+  // 所以只删正文仍可读的那部分，其余行保持原样。
+  db.run(`
+    DELETE FROM tool_call WHERE req_id IN (
+      SELECT req_id FROM request WHERE conv_key=? AND actor=? AND actor_state='known'
+        AND body_state IN ('available','partial'))`,
+  [group.conv_key, group.actor]);
+  for (const insert of plan.inserts) {
+    db.run(
+      `INSERT INTO tool_call(call_id,req_id,ord,tool_name,arg_path,arg_skill,
+         result_req,result_ord,result_path,is_error,state,derive_version,
+         algorithm_version,basis_json,retention_state)
+       VALUES (?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,1,?,?,'recomputed')`,
+      [insert.callId, insert.reqId, insert.ord, insert.name, insert.argPath, insert.argSkill,
+        insert.state, GROUP_ALGORITHM, insert.basis],
+    );
+  }
+  for (const update of plan.updates) {
+    db.run(
+      `UPDATE tool_call SET result_req=?, result_ord=?, result_path=?, is_error=?, state=?
+       WHERE req_id=? AND ord=?`,
+      [update.resultReq, update.resultOrd, update.resultPath, update.isError, update.state,
+        update.reqId, update.ord],
+    );
+  }
   // 保留行原 metadata 不动，只标出它们本轮没有被重算：正文已回收的请求不在
   // 重建范围内，把它们的算法版本提升到本次版本等于声称重算过。
   db.run(
@@ -558,7 +612,6 @@ function pairToolCallsTx(db: Database, group: Group, ordered: readonly PairRow[]
         AND body_state NOT IN ('available','partial'))`,
     [group.conv_key, group.actor],
   );
-  return { resolved, ambiguous, pending, associations };
 }
 
 /** 一条工具行的算法依据：组身份与调用身份，足以复现配对输入。 */

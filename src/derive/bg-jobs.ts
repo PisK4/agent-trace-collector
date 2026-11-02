@@ -84,13 +84,22 @@ function scanNotices(db: Database, reqId: number,
 /** 配对的行形状：遍历序已排好的组内请求，带用途结论。 */
 export type BgPairRow = { req_id: number; purpose_chain: string };
 
+/** 待写的作业行；落库段按同一删除谓词先清可重算范围，再逐行插入。 */
+export type BgJobPlan = {
+  rows: {
+    jobId: string; spawnReq: number | null; spawnOrd: number | null;
+    noticeReq: number | null; noticeOrd: number | null; state: string;
+  }[];
+};
+
 /**
- * 一组完成后的 bg_job 重建。只重建本 actor 的行：conv 内多 actor 时互不覆盖，
- * 两端正文都已回收的保留行原样留在表里。
+ * 一组完成后的 bg_job 重建计算段：只扫描正文，产出待写的行。
+ *
+ * 扫描只重建本 actor 的范围：conv 内多 actor 时互不覆盖，两端正文都已回收的
+ * 保留行由落库段的删除谓词留在表里。
  */
-export function pairBackgroundJobsTx(db: Database,
-  group: { conv_key: string; actor: string }, rows: readonly BgPairRow[],
-  cache?: BodyReadCache): void {
+export function planBackgroundJobs(db: Database,
+  rows: readonly BgPairRow[], cache?: BodyReadCache): BgJobPlan {
   const spawns = new Map<string, { req: number; ord: number }>();
   const notices = new Map<string, { req: number; ord: number }>();
   for (const row of rows) {
@@ -99,7 +108,24 @@ export function pairBackgroundJobsTx(db: Database,
     scanSpawns(db, row.req_id, spawns, cache);
     scanNotices(db, row.req_id, notices, cache);
   }
-  // 重算范围只盖两端落在可读正文上的行；正文已回收的端点拿不回证据，行保留。
+  const jobs = new Set<string>([...spawns.keys(), ...notices.keys()]);
+  const plan: BgJobPlan = { rows: [] };
+  for (const job of jobs) {
+    const spawn = spawns.get(job) ?? null;
+    const notice = notices.get(job) ?? null;
+    if (spawn === null && notice === null) continue;
+    plan.rows.push({
+      jobId: job, spawnReq: spawn?.req ?? null, spawnOrd: spawn?.ord ?? null,
+      noticeReq: notice?.req ?? null, noticeOrd: notice?.ord ?? null,
+      state: spawn !== null && notice !== null ? 'resolved' : 'pending',
+    });
+  }
+  return plan;
+}
+
+/** 计划落库：重算范围只盖两端落在可读正文上的行；正文已回收的端点拿不回证据，行保留。 */
+export function writeBackgroundJobsTx(db: Database,
+  group: { conv_key: string; actor: string }, plan: BgJobPlan): void {
   db.run(`DELETE FROM bg_job WHERE conv_key=? AND (
     spawn_req IN (SELECT req_id FROM request WHERE conv_key=? AND actor=?
       AND body_state IN ('available','partial'))
@@ -107,16 +133,10 @@ export function pairBackgroundJobsTx(db: Database,
       AND body_state IN ('available','partial'))
     OR (spawn_req IS NULL AND notice_req IS NULL))`,
   [group.conv_key, group.conv_key, group.actor, group.conv_key, group.actor]);
-  const jobs = new Set<string>([...spawns.keys(), ...notices.keys()]);
-  for (const job of jobs) {
-    const spawn = spawns.get(job) ?? null;
-    const notice = notices.get(job) ?? null;
-    if (spawn === null && notice === null) continue;
+  for (const row of plan.rows) {
     db.run(`INSERT INTO bg_job(job_id,conv_key,spawn_req,spawn_ord,notice_req,notice_ord,state)
       VALUES (?,?,?,?,?,?,?)
       ON CONFLICT(conv_key, job_id) DO NOTHING`,
-    [job, group.conv_key, spawn?.req ?? null, spawn?.ord ?? null,
-      notice?.req ?? null, notice?.ord ?? null,
-      spawn !== null && notice !== null ? 'resolved' : 'pending']);
+    [row.jobId, group.conv_key, row.spawnReq, row.spawnOrd, row.noticeReq, row.noticeOrd, row.state]);
   }
 }
