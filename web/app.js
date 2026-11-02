@@ -29,7 +29,8 @@ import {
   resolveSelectedSource, structureFoldHtml, structureMoreParts, structureUnread, systemContextOf, toolOverviewHtml,
   toolSchemaSection, usageFoldHtml,
 } from './rail-facts.js';
-import { secs } from './duration.js';
+import { compact, EXEC_MS_HINT, secs } from './duration.js';
+import { summaryParts } from './tool-summary.js';
 import { bodyLabelText, bodyStateText, replyCompleteness } from './row-summary.js';
 import {
   agentLabel, clock, dayTime,
@@ -394,9 +395,9 @@ if (typeof document !== 'undefined') {
     const here = state.missingReqId !== null ? `Request ${state.missingReqId} 未找到`
       : state.offPageReqId !== null ? `Request ${state.offPageReqId} 未在当前窗口`
         : idx > 0 ? `Request ${String(idx).padStart(2, '0')}` : '';
-    // 面包屑带会话标题承接顶栏定位；中栏 sticky h1 仍是主标题。
+    // 面包屑先给请求位置，再跟会话标题；长标题只截断自己，不挤掉「我在哪」。
     el('crumb').innerHTML = row === null ? (here === '' ? '' : `<b>${esc(here)}</b>`)
-      : `${esc(row.title)}${here === '' ? '' : `<span class="sep">·</span><b>${esc(here)}</b>`}`;
+      : `${here === '' ? '' : `<b>${esc(here)}</b><span class="sep">·</span>`}<span class="crumb-title">${esc(row.title)}</span>`;
     document.title = row ? `${here === '' ? row.title : `${here} · ${row.title}`} — Trace Collector`
       : 'Trace Collector';
   }
@@ -431,9 +432,8 @@ if (typeof document !== 'undefined') {
     const folded = (/** @type {SessionRow} */ s) => s.flags.includes('probe') || s.flags.includes('bypass');
     const list = state.showFolded ? all : all.filter(s => !folded(s) || s.conv_key === state.session);
     const foldable = all.filter(s => folded(s) && s.conv_key !== state.session);
-    el('load-more-sessions').hidden = store.getSessions().cursor === null;
-    // 列表被搜索或筛选收窄时才计数；折叠不算收窄，折叠行自己给条数。
-    el('sess-count').textContent = all.length === items.length ? '' : `${all.length} / ${items.length}`;
+    // 列表被搜索或筛选收窄时才给分母；默认只报已加载数量，不伪造全库总数。
+    el('sess-count').textContent = all.length === items.length ? `已加载 ${items.length}` : `${all.length} / ${items.length}`;
     const item = (/** @type {SessionRow} */ s) => {
       // 左栏只保留具体事实标记；失败由红点承载，字眼进悬停；缺正文的点刻意低
       // 对比，与正常点的差别不可辨，文字仍是唯一载体，保留。
@@ -442,21 +442,27 @@ if (typeof document !== 'undefined') {
           : { color: 'var(--line-strong)', text: '', title: '' };
       return `<button class="sess" data-session="${esc(s.conv_key)}" aria-current="${s.conv_key === state.session}">
         <span class="sess-title">${esc(s.title || '（无标题）')}</span>
-        <span class="sess-count num">${s.request_count} 笔</span>
-        <span class="sess-time num">${esc(clock(s.last_ms))}</span>
         <span class="sess-meta">
           <span class="dot" style="background:${flag.color}"${flag.title ? ` title="${flag.title}"` : ''}></span>
-          <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')}</span>
+          <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')} · ${s.request_count} 笔</span>
           ${flag.text ? `<span class="sep">·</span><span style="color:${flag.color}">${flag.text}</span>` : ''}
+          <span class="sess-time num">${esc(clock(s.last_ms))}</span>
         </span>
       </button>`;
     };
     const foldHtml = sessionsListFoldHtml(foldable, state.showFolded);
-    el('sessions-list').innerHTML = list.length
+    const body = list.length
       ? list.map(item).join('') + foldHtml
       : (foldHtml !== ''
         ? foldHtml
         : '<p class="sess-empty">当前已加载的会话里没有符合条件的项。搜索与筛选只覆盖已加载范围。</p>');
+    // 加载更多是列表尾部入口：保留 id 与分页游标条件，错误时可再次点击重试。
+    const last = store.getSessions();
+    const more = last.cursor === null
+      ? '' : '<div class="sess-more"><button class="chip-btn ghost" id="load-more-sessions">加载更多会话</button></div>';
+    const error = last.error === null ? ''
+      : `<p class="sess-empty">会话列表读取失败：${esc(last.error)}。可再次点击加载更多重试。</p>`;
+    el('sessions-list').innerHTML = body + more + error;
   }
 
   /* ---------------- 中栏 ---------------- */
@@ -769,6 +775,11 @@ if (typeof document !== 'undefined') {
       const open = folds.get(key);
       if (open !== undefined) details.open = open;
     }
+    // 头部单行分组板在清单展开时恢复换行；开合类必须跟 folds 一起恢复，
+    // 否则刷新后 open 属性是对的，行仍按单行裁掉清单。
+    for (const cue of root.querySelectorAll('.cue-data')) {
+      cue.classList.toggle('open-wrap', cue.querySelector('details[open]') !== null);
+    }
   }
 
   /** 选中轮次的轮次行；列表未就绪或该轮已不在时为 null。 @param {number} n */
@@ -1017,9 +1028,13 @@ if (typeof document !== 'undefined') {
         // 正常态（已配对、正文未读已读）不挂 chip；异常（多候选）才提示，详情页给完整状态。
         const warn = tool.state === 'ambiguous'
           ? '<span class="tool-chip miss"><span>多个候选</span></span>' : '';
+        // 执行窗口取调用索引里已有的读数；缺值留空，不拿请求耗时替代。
+        const exec = detail?.tool_calls.find(call => call.ord === tool.ord)?.exec_ms ?? null;
+        const dur = exec === null ? ''
+          : `<span class="dur" title="${esc(EXEC_MS_HINT)}">${esc(compact(exec))}</span>`;
         return `<button class="tool-row tool-link" data-tool-select="${tool.ord}">
-          <span class="tool-chip call" title="${esc(tool.name)}"><span>${esc(tool.name)}(${esc(clipText(tool.inputText, 60))})</span></span>
-          ${warn}
+          <span class="tool-chip call" title="${esc(tool.name)}"><span class="nm">${esc(tool.name)}(${esc(clipText(tool.inputText, 60))})</span></span>
+          ${warn}${dur}
         </button>`;
       });
       return `<section class="rail-section"><h3>工具调用<span class="grow"></span><span class="hint">${tools.length} 次调用</span></h3>${rows.join('')}</section>`;
@@ -1054,10 +1069,12 @@ if (typeof document !== 'undefined') {
         : state.toolPage === 'schema'
           ? toolSchemaSection(ownerPage.capabilities, tool.name)
           : toolOverviewHtml(owner, pair, reading);
+    const exec = pair === null ? null : pair.exec_ms;
     return `<section class="rail-section">
       <div class="tool-page-head">
-        <button class="chip-btn" data-tool-back="1">← 返回请求</button>
+        <button class="chip-btn ghost" data-tool-back="1">← 返回请求</button>
         <span class="mono">${esc(tool.name)} · 调用 #${tool.ord}</span>
+        ${exec === null ? '' : `<span class="cnt mono" title="${esc(EXEC_MS_HINT)}">${esc(compact(exec))}</span>`}
       </div>
       <div class="tool-page-tabs">${pages.map(([key, label]) => `<button data-tool-page="${key}" aria-pressed="${state.toolPage === key}">${label}</button>`).join('')}</div>
       ${pageBody}
@@ -1107,10 +1124,28 @@ if (typeof document !== 'undefined') {
         count: groupCount ?? (items !== null ? items.length : null),
         errors: groupErrors,
       };
+      // 条目自带摘要优先；缺摘要时只同步复用已缓存的 detail/meta。同一请求的
+      // toolEntries 在一次目录渲染内复用，避免每行重建同一份解析结果。
+      /** @type {Map<number, import('./body-model.js').ToolEntry[] | null>} */
+      const toolEntriesByReq = new Map();
       return railSummaryListView(list, id => {
         const text = requestLabel(id);
         return { text, dim: text.includes('（未在窗口）') };
-      }, meta);
+      }, meta, item => {
+        if (typeof item.summary === 'string' && item.summary !== '') return item.summary;
+        if (!toolEntriesByReq.has(item.req_id)) {
+          const read = store.peekRequest(item.req_id);
+          toolEntriesByReq.set(item.req_id,
+            read === null || read.detail === null || read.meta === null
+              ? null : toolEntries(read.detail, read.meta));
+        }
+        const entries = toolEntriesByReq.get(item.req_id) ?? [];
+        const tool = entries.find(entry => entry.ord === item.ord);
+        if (tool === undefined) return null;
+        const parts = summaryParts(tool.name, tool.inputText);
+        const text = parts.args === '' ? parts.label : `${parts.label} · ${parts.args}`;
+        return text === '' ? null : text;
+      });
     }
     // 轮次态：命令组与最终回复两个面板，两端默认展开；点轨迹任意行经选择转换回请求态。
     if (state.turn !== null) {

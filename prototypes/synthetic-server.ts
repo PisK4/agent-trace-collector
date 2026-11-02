@@ -679,6 +679,17 @@ function execMsOf(owner: SynthRequest, call: SynthCall): number | null {
   return span >= 0 ? span : null;
 }
 
+/** 条目补齐执行段与已有参数摘要；原调用不存在时两者如实为 null。 */
+function summaryEntryOf(item: { req_id: number; ord: number; tool_name: string | null; state: string }) {
+  const owner = byId.get(item.req_id);
+  const call = owner?.toolCalls.find(c => c.ord === item.ord);
+  return {
+    ...item,
+    exec_ms: owner !== undefined && call !== undefined ? execMsOf(owner, call) : null,
+    summary: call?.arg_path ?? call?.arg_skill ?? null,
+  };
+}
+
 /** 阅读版本：合成稳定值；同一请求的输入与正文状态不变时不变。 */
 function readingTokenOf(r: SynthRequest): string {
   return 'r1-' + Buffer.from(`synth-${r.id}-${r.bodyState}`).toString('hex').padEnd(64, '0').slice(0, 64);
@@ -950,7 +961,7 @@ Bun.serve({
         // tool 列表从池内真实调用派生：点进配对页时 ord 与 detail 一致。
         const pool = POOLS.find(p => p.key === key);
         const items = (pool?.rows ?? []).flatMap(r =>
-          r.toolCalls.filter(c => c.tool_name === name).map(c => ({
+          r.toolCalls.filter(c => c.tool_name === name).map(c => summaryEntryOf({
             req_id: r.id, ord: c.ord, tool_name: c.tool_name, state: c.state,
           })));
         return json({items, truncated: false});
@@ -968,12 +979,13 @@ Bun.serve({
         ],
       };
       if (kind === 'written' || kind === 'read' || kind === 'skill') {
-        if (key === convStar) {
-          const entries = starStaticEntries();
-          const items = kind === 'written' ? entries.written : kind === 'read' ? entries.read : entries.skill;
-          return json({items, truncated: false});
-        }
-        return json({items: STATIC_ENTRIES[key] ?? [], truncated: false});
+        const items = key === convStar
+          ? (() => {
+            const entries = starStaticEntries();
+            return kind === 'written' ? entries.written : kind === 'read' ? entries.read : entries.skill;
+          })()
+          : STATIC_ENTRIES[key] ?? [];
+        return json({items: items.map(summaryEntryOf), truncated: false});
       }
       return json({error:'invalid_entries_query'}, 400);
     }

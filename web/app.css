@@ -81,9 +81,10 @@ code,pre,.mono{font-family:var(--mono)}
 /* 品牌是回主页的按钮：内距与负外距让 hover 底色外扩一圈，不挤动相邻元素。 */
 .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;white-space:nowrap;border-radius:4px;padding:4px 7px;margin:-4px -7px}
 .brand:hover{background:var(--hover)}
-.brand svg{color:var(--accent);flex:none}
+.brand svg{color:var(--text-2);flex:none}
 .crumb{display:flex;align-items:center;gap:7px;min-width:0;font-size:12px;color:var(--text-2)}
-.crumb b{font-weight:550;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:34ch}
+.crumb b{font-weight:550;color:var(--text);white-space:nowrap;flex:none}
+.crumb-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .grow{flex:1;min-width:8px}
 .toolbar-right{display:flex;align-items:center;gap:6px}
 .icon-btn{
@@ -124,7 +125,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .sessions-head{padding:12px 12px 8px;display:flex;flex-direction:column;gap:8px;flex:none}
 .sessions-title{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
 .sessions-title h2{font-size:12.5px;font-weight:600;letter-spacing:.02em}
-.sessions-title span{font-size:11px;color:var(--muted)}
+.sessions-title span{font:10.5px var(--mono);color:var(--muted)}
 .search{position:relative}
 .search input{
   width:100%;height:30px;border:1px solid transparent;border-radius:6px;background:var(--inset);
@@ -146,6 +147,9 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
   background:var(--surface);white-space:nowrap;
 }
 .chip-btn:hover{background:var(--hover)}
+/* 导航动作的局部 ghost：只用于刷新、回到最新、返回与加载更多，不动其他 chip-btn。 */
+.chip-btn.ghost{border-color:transparent;background:transparent;color:var(--text-2)}
+.chip-btn.ghost:hover{background:var(--hover);color:var(--text)}
 .chip-btn[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .sessions-list{flex:1;min-height:0;overflow:auto;padding:2px 8px 16px}
 .group-label{
@@ -154,18 +158,18 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 }
 .group-label::after{content:"";flex:1;height:1px;background:var(--line)}
 .sess{
-  display:grid;grid-template-columns:1fr auto auto;gap:1px 8px;width:100%;
+  display:flex;flex-direction:column;gap:2px;width:100%;
   padding:8px 8px 8px 9px;border-radius:6px;margin-bottom:1px;
 }
 /* 导航选中是中性的灰底：accent 只留给内容区选中态。 */
 .sess:hover{background:var(--inset)}
 .sess[aria-current="true"]{background:var(--hover)}
 .sess-title{font-size:12.5px;font-weight:550;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sess-count{font:10.5px var(--mono);color:var(--muted);align-self:start;padding-top:1px}
-.sess-meta{grid-column:1/-1;display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);min-width:0}
+.sess-meta{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);min-width:0}
 .sess-meta .dot{width:5px;height:5px;border-radius:50%;flex:none}
-.sess-meta .who{color:var(--text-2);white-space:nowrap}
-.sess-time{font:10.5px var(--mono);color:var(--muted);align-self:start;padding-top:1px}
+.sess-meta .who{color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.sess-time{font:10.5px var(--mono);color:var(--muted);margin-left:auto;flex:none}
+.sess-more{display:flex;justify-content:center;padding:10px 0 4px}
 .sess-empty{padding:16px 8px;font-size:12px;color:var(--muted)}
 .sess-fold{padding:8px 10px;border-top:1px dashed var(--line)}
 .bg-note{font-size:10.5px;color:var(--muted);white-space:nowrap}
@@ -267,50 +271,56 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .compact-row.step-flag[data-flag="failed"] .row-label.flag{color:var(--bad)}
 /* 工具 chip 沿用 row-label 的低饱和底色模式，色类只包工具名；宽度随内容伸缩，
    超长省略号截断。参数摘要与结果正文以普通文本跟随，不进色类。 */
-.row-tint{flex:none;max-width:170px;padding:2px 5px;border-radius:999px;font:9.5px var(--mono);background:var(--inset);color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-tint{flex:none;max-width:170px;padding:2px 5px;border-radius:999px;font:9.5px var(--mono);font-weight:600;background:var(--inset);color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-arrow{color:var(--muted);font-size:10px;margin:0 4px}
 /* 失败的工具结果行不再满铺 warn 软色，改虚线左缘。 */
 .compact-row.step-error{border-left:2px dashed var(--warn);padding-left:3px}
 .compact-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:11px}
 .compact-preview code{font-size:10px;color:var(--text-2)}
+/* 工具调用整行等宽弱化，工具名已加重；结果正文再弱一档。 */
+.compact-select[data-kind="tool"] .compact-preview{font-family:var(--mono)}
+.compact-select[data-kind="tool"] .compact-preview code{font-size:10.5px;color:var(--text-2)}
+.compact-select[data-kind="tool_result"] .compact-preview{font-family:var(--mono)}
+.compact-select[data-kind="tool_result"] .compact-preview code{font-size:10.5px;color:var(--muted)}
 /* 行尾读数槽：定宽右对齐，没有读数的行也占位，读数右边缘在所有行上成一条竖线。
-   标签带角色底色（推理=Assistant 琥珀、执行=Tool 青），只有数字按档位换色；
-   等待型工具没有档位，整枚标签退成中性色。正常态不加边框、图标或说明。 */
+   标签保留「思考/执行」，读数槽本身不再带角色色底；正常档弱灰，只有数字按档位换色。
+   等待型工具没有档位，数值照常显示——长窗口来自等人，不是工具开销。 */
 .compact-reading{flex:none;margin-left:auto;min-width:78px;display:flex;justify-content:flex-end}
-.row-reading{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 5px;border-radius:999px;font:9.5px var(--mono);white-space:nowrap}
-.row-reading.reason{color:var(--k-assistant);background:var(--k-assistant-bg)}
-.row-reading.exec{color:var(--k-tool);background:var(--k-tool-bg)}
-.row-reading.wait{color:var(--muted);background:var(--inset)}
+.row-reading{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 0;border-radius:0;font:9.5px var(--mono);white-space:nowrap;color:var(--muted);background:none}
+.row-reading.reason,.row-reading.exec,.row-reading.wait{color:var(--muted);background:none}
 .row-reading .k{font-size:9px}
 .row-reading .v{font-weight:600;font-variant-numeric:tabular-nums}
-/* 时长档位：中栏读数槽的数值与右栏尝试链共用同一组色类。 */
-.t-good{color:var(--good)}
+/* 时长档位：中栏读数槽的数值与右栏尝试链共用同一组色类。正常档是弱灰。 */
+.t-good{color:var(--muted)}
 .t-warn{color:var(--warn)}
 .t-bad{color:var(--bad)}
 .timeline-end{display:flex;align-items:center;justify-content:center;gap:6px;padding:22px 0 5px;color:var(--muted);font-size:10px}
 .timeline-end span{width:5px;height:5px;background:var(--line-strong);border-radius:50%}
 
-/* ---------- 会话头双列分组板：左资源/结构/性能，右工具/Skill/路径 ---------- */
-/* 双列由列间距与细分隔线区分，不加嵌套卡片或整组彩色底板；分组只在有
-   可展示事实时渲染，整列都空时不保留空列与分隔线。每个分组严格一行。
-   左列 1fr/1.3fr：统计行不再换行后需要足额宽度，右列放不下由 chip 收缩承担。 */
-.cue-board{display:grid;grid-template-columns:minmax(200px,1fr) minmax(0,1.3fr);gap:4px 18px;margin-top:10px}
+/* ---------- 会话头双列分组板：左资源/性能/结构，右工具/Skill/路径 ---------- */
+/* 左右两列共享三条行轨道：左侧资源/性能/结构，右侧工具/写入/读取。
+   用 subgrid 让对应行同起同止，右侧 chip 换行时左侧对应行随轨道下移。 */
+.cue-board{display:grid;grid-template-columns:minmax(200px,1fr) minmax(0,1.3fr);grid-template-rows:repeat(3,auto);gap:8px 18px;margin-top:10px}
 .cue-board.solo{grid-template-columns:minmax(0,1fr)}
-.cue-account,.cue-activity{min-width:0;display:flex;flex-direction:column;gap:8px}
+.cue-account,.cue-activity{min-width:0;display:grid;grid-template-rows:subgrid;grid-row:span 3;align-content:start}
 .cue-account{padding-right:14px;border-right:1px solid var(--line)}
 .cue-board.solo .cue-account{border-right:0;padding-right:0}
 .cue-row{display:grid;grid-template-columns:minmax(0,1fr);gap:3px 8px;align-items:start}
 @container (max-width:650px){
-  .cue-board{grid-template-columns:1fr;gap:12px}
+  .cue-board{grid-template-columns:1fr;grid-template-rows:none;gap:12px}
+  .cue-account,.cue-activity{grid-row:auto;display:flex;flex-direction:column;gap:12px}
   .cue-account{border-right:0;padding-right:0}
 }
 /* 摘要行不再带图标与标签，两列分工靠列间 1px 细线与间距；按需说明放 data-desc，
-   悬停与键盘聚焦都可见。 */
-.cue-data{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:3px 10px;min-width:0;overflow:hidden;font-size:11px;line-height:1.7;color:var(--muted);cursor:default}
-.cue-data.open-wrap{flex-wrap:wrap;overflow:visible}
+   悬停与键盘聚焦都可见。读数与单位用 mono，常驻文字标签留在 UI 字体。 */
+.cue-data{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:3px 10px;min-width:0;font-size:11px;line-height:1.7;color:var(--muted);cursor:default}
+.cue-data.open-wrap{flex-wrap:wrap}
+.cue-data.chips{align-items:flex-start;flex-wrap:wrap}
 .cue-data>span{white-space:nowrap}
-.cue-data .cue-line{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cue-data .cue-line{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cue-data .cue-line i{font-family:var(--ui);font-style:normal}
 .cue-data:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* 说明浮层挂在行本身而不是被截断的文本上；行不再 overflow:hidden，浮层不被裁。 */
 .cue-data::after{
   content:attr(data-desc);display:none;position:absolute;left:0;top:calc(100% + 4px);z-index:6;
   width:max-content;max-width:min(300px,100%);padding:5px 8px;border:1px solid var(--line);border-radius:4px;
@@ -319,7 +329,10 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 }
 .cue-data:hover::after,.cue-data:focus-visible::after{display:block}
 .cue-data b{color:var(--text);font-weight:550;font-variant-numeric:tabular-nums}
+/* 名称可以省略，计数与失败数不收缩；chip 可换行，展开清单占满一整行。 */
 .cue-data .tool-chip{cursor:pointer;max-width:220px;flex:0 1 auto;min-width:0}
+.cue-data .tool-chip .nm{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cue-data .tool-chip .n,.cue-data .tool-chip .err{flex:none;overflow:visible;text-overflow:clip}
 .cue-data .tool-chip .n{font-weight:550;color:var(--text)}
 .cue-data .tool-chip .err{color:var(--bad);font-weight:550;margin-left:2px}
 .cue-data .interrupt{font-size:10px;white-space:nowrap;flex:none}
@@ -332,15 +345,18 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .hidden-more summary:hover,.hidden-more summary:focus-visible{text-decoration:underline;outline:0}
 .hidden-more summary b{font-variant-numeric:tabular-nums}
 .hidden-more .more-body{display:flex;flex-direction:column;gap:2px;flex-basis:100%;padding:5px 0 2px}
+.path-lab{font:10.5px/1.7 var(--ui);color:var(--muted);flex:none;white-space:nowrap}
 .path-chip{display:inline-flex;align-items:baseline;gap:6px;font:10.5px var(--mono);padding:2px 7px;border-radius:3px;cursor:pointer;border:0;background:var(--inset);color:var(--text-2);max-width:260px;flex:0 1 auto;min-width:0}
-.path-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.path-chip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.path-chip .c{font-weight:550;flex:none;overflow:visible;text-overflow:clip}
 .path-chip:hover{filter:brightness(.96)}
-.path-chip .c{font-weight:550}
 .path-more{display:inline-flex;flex-wrap:wrap;flex:none;min-width:0}
 .path-more summary{font:10.5px var(--mono);padding:2px 7px;border-radius:3px;cursor:pointer;list-style:none;font-weight:550;background:var(--inset);color:var(--text-2)}
 .path-more summary::-webkit-details-marker{display:none}
 .path-more summary:hover{filter:brightness(.96)}
 .path-more .more-body{display:flex;flex-wrap:wrap;gap:5px;padding:5px 0 2px;flex-basis:100%}
+/* 展开清单占满整行，行内 chip 才有宽度换行；收起时仍是一枚 +N。 */
+.cue-data.chips .path-more[open],.cue-data .hidden-more[open]{flex-basis:100%}
 
 /* ---------- 轮次带：轨迹的目录层，吸顶贴 session-head 下沿随滚动常驻 ---------- */
 /* 一行高度横向滚动，轮数多少都只占一行；与轨迹同底色，下缘一条线划分层。 */
@@ -370,13 +386,14 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .msg{border-bottom:1px solid var(--line)}
 .msg:last-child{border-bottom:0}
 .msg-head{
-  display:grid;grid-template-columns:64px 34px minmax(0,1fr) auto;gap:8px;align-items:center;
+  display:grid;grid-template-columns:34px 64px minmax(0,1fr);gap:8px;align-items:center;
   width:100%;padding:6px 10px;font-size:12px;border-left:2px solid transparent;
 }
 .msg-head:hover{background:var(--hover)}
 .msg[aria-current="true"] .msg-head{background:var(--accent-soft);border-left-color:var(--accent)}
 .msg-ord{font:10px var(--mono);color:var(--muted);text-align:right}
 .msg-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.msg-preview.result{font:11px var(--mono);color:var(--text-2)}
 /* 新增消息：行左缘 2px accent（方向 A 第 6 步），无底色——选中态才有浅蓝底，两态可区分。 */
 .msg.msg-new .msg-head{border-left-color:var(--accent)}
 .msg-more{padding:8px 10px;text-align:center;border-top:1px solid var(--line)}
@@ -568,7 +585,7 @@ pre.raw{
 }
 .ctx-stat{display:flex;flex-direction:column;gap:3px;min-width:0}
 .ctx-k{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;font:500 9.5px var(--ui);letter-spacing:.06em;color:var(--muted)}
-.ctx-big{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px .3em;min-width:0;overflow:hidden;font:600 20px/1.15 var(--ui);font-variant-numeric:tabular-nums;color:var(--text)}
+.ctx-big{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px .3em;min-width:0;overflow:hidden;font:600 20px/1.15 var(--mono);font-variant-numeric:tabular-nums;color:var(--text)}
 .ctx-big b{font-weight:600}
 .ctx-big span{font:10.5px/1.5 var(--mono);color:var(--muted);font-weight:400}
 .ctx-stat .miss{color:var(--missing);font-style:normal}
@@ -628,6 +645,7 @@ pre.raw{
 .rail-fold[open]>summary::before{transform:rotate(90deg)}
 .rail-fold>summary:hover{background:var(--hover)}
 .rail-fold .fold-count{margin-left:auto;font:10.5px var(--mono);color:var(--muted);font-weight:400}
+.rail-fold .fold-count.new{margin-left:6px;color:var(--accent)}
 .rail-fold .fold-count.warn{color:var(--warn)}
 .rail-fold .fold-count.bad{color:var(--bad)}
 .rail-fold .fold-body{padding:2px 10px 10px;border-top:1px solid var(--line);container-type:inline-size}
@@ -649,13 +667,15 @@ pre.raw{
 .tool-page-head{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
 .tool-page-head .mono{font-size:11px;color:var(--text-2);overflow-wrap:anywhere}
 .tool-page-head .cnt{margin-left:auto;font-size:10.5px;color:var(--muted);white-space:nowrap;flex:none}
+.tool-page-head .cnt .err{color:var(--bad);font-weight:550}
 /* 子页签与筛选同套分段控件：inset 槽承载，选中段 surface 浮起。 */
 .tool-page-tabs{display:inline-flex;gap:2px;padding:2px;border-radius:7px;background:var(--inset);margin:8px 0}
 .tool-page-tabs button{font-size:10.5px;padding:3px 9px;border-radius:5px;border:0;color:var(--muted);background:transparent}
 .tool-page-tabs button[aria-pressed="true"]{color:var(--text);background:var(--surface);box-shadow:var(--shadow);font-weight:500}
 .tool-page-tabs button:hover{color:var(--text)}
-/* 汇总条目列表：行内调用序号加右侧 mono 弱化来源；窗口外的行整行弱一档。 */
-.tool-row .call{font:10.5px var(--mono);color:var(--text-2)}
+/* 汇总条目列表：行内是调用序号与摘要，右侧 mono 弱化来源与执行窗口；窗口外整行弱一档。 */
+.tool-row .call{font:10.5px var(--mono);color:var(--text-2);flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tool-row .dur{margin-left:auto;font:10px var(--mono);color:var(--muted);white-space:nowrap;flex:none}
 .tool-row .muted.mono{margin-left:auto;font-size:10px;color:var(--muted)}
 .tool-row.dim{opacity:.55}
 /* 配对页两段的角色标：粗体角色词加 mono 弱化来源；中间弱化连接语交代因果。 */

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+后续：[方向 A 对齐修正](../bug-fix/2026-11-02-direction-a-alignment-audit.md)补充列表失败色、执行窗口与可用摘要；本记录的角色标、分段控件和证据定位继续有效。
+
 ## Problem
 
 [方向 A 重制提案](../../proposed/feature/2026-11-02-frontend-direction-a-restyle.md)第 5 步：工具列表页逐行带一枚彩色工具名 chip，同一名字在页头、每行重复 N 次；页头没有总数与失败数，要数行才知道规模。配对页两个片段靠彩色 chip 区分角色，中间一行大号「↓ 上一条请求的返回」占据视觉主线；概览/参数/配对/Schema 四个标签是松散文字按钮。
@@ -17,7 +19,7 @@ Status: implemented
 
 ## Deviation from proposal
 
-提案写行内可放「首段参数摘要」，实际 `tool_call` 表没有 input_text 列，`SummaryEntry` 不携带参数文本。决定不动数据层：行内放调用序号，参数摘要在配对页读。列表行因此更轻，但「不点开分辨不了两次同名调用」的代价存在，靠右侧请求标签缓解。
+提案写行内可放「首段参数摘要」，实际 `tool_call` 表没有 input_text 列，`SummaryEntry` 不携带参数文本。决定不动数据层：行内放调用序号，参数摘要在配对页读。列表行因此更轻，但「不点开分辨不了两次同名调用」的代价存在，靠右侧请求标签缓解。此取舍已由[汇总条目补执行段与已有参数摘要](../bug-fix/2026-11-02-summary-entry-exec-and-arg.md)部分取代：条目现在带已提取的 `arg_path`/`arg_skill` 摘要与 `exec_ms`，仍不读正文。
 
 ## Alternatives considered
 

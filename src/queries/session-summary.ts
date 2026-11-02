@@ -71,7 +71,15 @@ export type SummaryEntriesQuery =
   | { kind: 'skill'; name: string }
   | { kind: 'interrupts' };
 
-export type SummaryEntry = SummaryCallRef & { state: string };
+/**
+ * 条目附带已有的工具事实：执行段时长与参数摘要都从行上直接取，不读正文。
+ * `summary` 是已提取的 `arg_path`（优先）或 `arg_skill`，两者都没有时为 null。
+ */
+export type SummaryEntry = SummaryCallRef & {
+  state: string;
+  exec_ms: number | null;
+  summary: string | null;
+};
 
 /** 点击查询的响应：调用类条目带定位；中断类条目是请求与其事件数。 */
 export type SummaryEntries =
@@ -86,7 +94,7 @@ export type SummaryEntries =
 const EFFECTIVE_TOOL_SQL = (extra: string, tail: string): string => `
   SELECT tc.call_id AS call_id, tc.req_id AS req_id, tc.ord AS ord,
          tc.tool_name AS tool_name, tc.arg_path AS arg_path, tc.arg_skill AS arg_skill,
-         tc.is_error AS is_error, tc.state AS state,
+         tc.result_req AS result_req, tc.is_error AS is_error, tc.state AS state,
          tc.algorithm_version AS algo, 0 AS source
   FROM tool_call tc
   JOIN request r ON r.req_id = tc.req_id
@@ -98,7 +106,7 @@ const EFFECTIVE_TOOL_SQL = (extra: string, tail: string): string => `
     ${extra}
   UNION ALL
   SELECT t.call_id, t.req_id, t.ord, t.tool_name, t.arg_path, t.arg_skill,
-         t.is_error, t.state, t.algorithm_version, 1 AS source
+         t.result_req, t.is_error, t.state, t.algorithm_version, 1 AS source
   FROM derive_tool_result t
   JOIN derive_queue q ON q.published_generation = t.generation
   JOIN request r ON r.req_id = t.req_id
@@ -108,7 +116,7 @@ const EFFECTIVE_TOOL_SQL = (extra: string, tail: string): string => `
 
 type EffectiveToolRow = {
   call_id: string; req_id: number; ord: number; tool_name: string | null;
-  arg_path: string | null; arg_skill: string | null;
+  arg_path: string | null; arg_skill: string | null; result_req: number | null;
   is_error: number | null; state: string; algo: number | null; source: number;
 };
 
@@ -272,13 +280,29 @@ export function getSummaryEntries(store: Store, key: string, query: SummaryEntri
           ? "AND LOWER(COALESCE(tool_name, '')) = 'read' AND arg_path = ?"
           : 'AND arg_skill = ?';
     const param = query.kind === 'tool' || query.kind === 'skill' ? query.name : query.path;
+    // 只在点击查询里补两笔时长：外层按主键回查调用方与结果请求，窗口不超过
+    // LIMIT+1 行；exec_ms 与 `getRequest` 同一条公式，只看调用方 ms 与结果请求
+    // started_ms，负值留空；state 不另设门控，异常 result_req 沿用既有位置语义。
+    // summary 只复用行上已提取的参数事实，Bash 等没有摘要的调用如实为 null。
+    type EntryRow = {
+      req_id: number; ord: number; tool_name: string | null; state: string;
+      exec_ms: number | null; summary: string | null;
+    };
     // extra 拼进 UNION 的两个分支，参数按占位符顺序各绑一次：conv_key、筛选值、conv_key、筛选值。
-    const rows = store.read.query<EffectiveToolRow, [string, string, string, string]>(
-      EFFECTIVE_TOOL_SQL(extra, `ORDER BY req_id, ord LIMIT ${LIMIT + 1}`),
-    ).all(key, param, key, param);
+    const rows = store.read.query<EntryRow, [string, string, string, string]>(`
+      SELECT e.req_id, e.ord, e.tool_name, e.state,
+             CASE WHEN rr.started_ms IS NOT NULL AND o.ms IS NOT NULL
+                       AND rr.started_ms >= o.started_ms + o.ms
+                  THEN rr.started_ms - (o.started_ms + o.ms) END AS exec_ms,
+             COALESCE(e.arg_path, e.arg_skill) AS summary
+      FROM (${EFFECTIVE_TOOL_SQL(extra, `ORDER BY req_id, ord LIMIT ${LIMIT + 1}`)}) e
+      JOIN request o ON o.req_id = e.req_id
+      LEFT JOIN request rr ON rr.req_id = e.result_req
+      ORDER BY e.req_id, e.ord`).all(key, param, key, param);
     return {
       items: rows.slice(0, LIMIT).map(row => ({
         req_id: row.req_id, ord: row.ord, tool_name: row.tool_name, state: row.state,
+        exec_ms: row.exec_ms, summary: row.summary,
       })),
       truncated: rows.length > LIMIT,
     };

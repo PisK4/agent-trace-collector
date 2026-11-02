@@ -453,6 +453,29 @@ test('空消息与超长消息都不撑破预览', () => {
   expect(html).toContain('还有 1 条未显示');
 });
 
+test('请求结构行按序号、角色、预览排列，纯工具结果预览弱化为 mono', () => {
+  const entries = messageEntries(page({
+    messages: [
+      { ord: 0, value: { role: 'user', content: [{ type: 'text', text: '看结果' }] } },
+      { ord: 1, value: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] } },
+    ],
+    interpretations: [
+      {
+        ord: 0, role: 'user', role_state: 'known', is_input: true,
+        input: { state: 'text', kind: 'plain', text: '看结果', original: '看结果', removed: [], agent: null, rule: 'generic' },
+      },
+      { ord: 1, role: 'user', role_state: 'known', input: null, is_input: false },
+    ],
+  }));
+  const html = renderMessages(entries, { delta: null });
+  const first = html.slice(html.indexOf('data-ord="0"'), html.indexOf('data-ord="1"'));
+  expect(first.indexOf('class="msg-ord"')).toBeLessThan(first.indexOf('class="kind'));
+  expect(first.indexOf('class="kind')).toBeLessThan(first.indexOf('class="msg-preview'));
+  // 仅纯结果块加弱化类；工具调用与普通消息保持正文色。
+  expect(html).toContain('class="msg-preview result">Tool result · ');
+  expect(html.match(/msg-preview result/g)?.length).toBe(1);
+});
+
 test('工具结果消息不算用户输入，纯调用回复保留推理块', () => {
   const entries = messageEntries(page({
     messages: [

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+后续：[方向 A 对齐修正](../bug-fix/2026-11-02-direction-a-alignment-audit.md)补回写入／读取短前缀，修正三行顺序与可见性；其余标签降噪、Skill 直出与异常入口决策继续有效。
+
 ## Problem
 
 [方向 A 重制提案](../../proposed/feature/2026-11-02-frontend-direction-a-restyle.md)第 4 步：会话头双列分组板（cue-board）每组带一枚 14px 图标加短标签，七个标签与七个图标占掉两列每行的头部宽度；组级「⚠ N 失败」入口与 Skill 独立分组让右列行数虚增。两栏分工本身保留（[会话头两栏](2026-11-01-session-header-two-column.md)的交付与 Pis 的既有决定），本步只收噪。

@@ -276,12 +276,16 @@ export function starSessionData(): StarData {
           args = { command: BASH_COMMANDS[planned.length % BASH_COMMANDS.length] };
         }
         planned.push({ call: { call_id: `call_star_${id}_${planned.length}`, ord: planned.length, tool_name: tool,
-          result_req: null, result_ord: null, result_path: null, state: 'resolved' }, args });
+          result_req: null, result_ord: null, result_path: null, state: 'resolved',
+          arg_path: typeof args.path === 'string' ? args.path
+            : typeof args.file_path === 'string' ? args.file_path : null,
+          arg_skill: typeof args.skill === 'string' ? args.skill : null }, args });
       }
     }
     if (spec.skill !== undefined) {
       planned.push({ call: { call_id: `call_star_${id}_s`, ord: planned.length, tool_name: 'Skill',
-        result_req: null, result_ord: null, result_path: null, state: 'resolved' }, args: { skill: spec.skill } });
+        result_req: null, result_ord: null, result_path: null, state: 'resolved',
+        arg_path: null, arg_skill: spec.skill }, args: { skill: spec.skill } });
     }
     if (isMain && pendingCalls.length > 0 && lastMain !== null) {
       // 上一主链笔的调用结果落在本笔 tool_result 消息，回填每个调用的定位。

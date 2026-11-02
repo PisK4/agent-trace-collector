@@ -182,8 +182,10 @@ export function structureFoldHtml(input) {
   const { button, note: errorNote } = structureMoreParts(structure, reqId, total);
   // 按钮与失败说明放在列表上方，与「向前读更早」的方向一致。
   const more = unread && canLoad ? button : '';
+  const newCount = delta === null ? 0 : delta.size;
+  const newLabel = newCount > 0 ? `<span class="fold-count new">新增 ${newCount}</span>` : '';
   return `<details class="rail-fold" data-structure-fold="${reqId}" data-fold="structure:${reqId}"${open ? ' open' : ''}>
-    <summary>请求结构<span class="fold-count">${esc(count)}</span></summary>
+    <summary>请求结构<span class="fold-count">${esc(count)}</span>${newLabel}</summary>
     <div class="fold-body">${errorNote}${more}${body}</div>
   </details>`;
 }

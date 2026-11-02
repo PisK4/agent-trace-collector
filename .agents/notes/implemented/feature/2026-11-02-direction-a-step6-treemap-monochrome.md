@@ -2,6 +2,8 @@
 
 Status: implemented
 
+后续：[方向 A 对齐修正](../bug-fix/2026-11-02-direction-a-alignment-audit.md)补充树图数值展示预算，并将新增计数放进结构头部；单色份额档位、横幅退役与行级蓝缘决策继续有效。
+
 ## Problem
 
 [方向 A 重制提案](../../proposed/feature/2026-11-02-frontend-direction-a-restyle.md)第 6 步：用量树图七个类别各占一个色相（`--p1..p7`），同屏红橙绿蓝紫齐出；「新增 N 条消息」在右栏以纯计数横幅占一行，消息列表里又逐行「新增」文字标签，同一事实说三遍。

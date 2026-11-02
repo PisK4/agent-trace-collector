@@ -2,6 +2,8 @@
 
 Status: implemented
 
+后续：[方向 A 对齐修正](../bug-fix/2026-11-02-direction-a-alignment-audit.md)部分取代本记录的会话笔数位置、logo 节点与面包屑顺序；其余导航降噪决策继续有效。
+
 ## Problem
 
 [方向 A 重制提案](../../proposed/feature/2026-11-02-frontend-direction-a-restyle.md)第 3 步：会话栏与顶栏的导航层此前沿用内容层的强调语言（选中会话用 accent 左缘加阴影、筛选 chip 逐个描边），与「导航中性、内容区才用蓝」的层级目标相悖；顶栏 52px 偏高，三个图标按钮带框，logo 三枚实心圆过重。
