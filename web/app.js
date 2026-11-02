@@ -16,6 +16,7 @@ import {
 import {
   deltaOrdinals, messageCopyText, messagePairIndexOf, messagePathOf, replyView, toolEntries,
 } from './body-model.js';
+import { agentLogoHtml } from './agent-logos.js';
 import { backendStateHtml } from './backend-state.js';
 import { esc } from './html.js';
 import { icon } from './icons.js';
@@ -436,18 +437,27 @@ if (typeof document !== 'undefined') {
     // 列表被搜索或筛选收窄时才给分母；默认只报已加载数量，不伪造全库总数。
     el('sess-count').textContent = all.length === items.length ? `已加载 ${items.length}` : `${all.length} / ${items.length}`;
     const item = (/** @type {SessionRow} */ s) => {
-      // 失败与缺正文不再只靠颜色：8px 实心 X / 空心圆，正常行仍用中性点。
+      // 身份用第一个 agent 的品牌 logo；多 Agent 行其余仍走文字。
+      const firstAgent = s.agents.length > 0 ? s.agents[0] : null;
+      // 失败与缺正文不再只靠颜色：8px 实心 X / 空心圆，挪到笔数之后做后缀；
+      // 正常行不再画中性点，把行首让给 logo。
       const failed = s.flags.includes('failed');
       const missing = !failed && s.flags.includes('missing_body');
-      const markColor = failed ? 'var(--bad)' : missing ? 'var(--muted)' : 'var(--line-strong)';
+      const markColor = failed ? 'var(--bad)' : 'var(--muted)';
       const mark = failed || missing
         ? `<span class="dot flagmark" role="img" aria-label="${failed ? '含失败' : '缺正文'}" title="${failed ? '含失败' : '缺正文'}" style="color:${markColor}">${icon(failed ? 'fail-solid' : 'missing-body', 8)}</span>`
-        : `<span class="dot" style="background:${markColor}"></span>`;
+        : '';
+      // 多 Agent 行只画第一个的名字，其余用 +N 明说还剩几个未显示。
+      const who = s.agents.length > 0
+        ? `${agentLabel(s.agents[0])}${s.agents.length > 1 ? ` +${s.agents.length - 1}` : ''}`
+        : '归属未知';
       return `<button class="sess" data-session="${esc(s.conv_key)}" aria-current="${s.conv_key === state.session}">
         <span class="sess-title">${esc(s.title || '（无标题）')}</span>
         <span class="sess-meta">
+          ${agentLogoHtml(firstAgent)}
+          <span class="who">${esc(who)}</span>
+          <span class="sess-count">· ${s.request_count} 笔</span>
           ${mark}
-          <span class="who">${esc(s.agents.length > 0 ? s.agents.map(agentLabel).join(' · ') : '归属未知')} · ${s.request_count} 笔</span>
           <span class="sess-time num">${esc(clock(s.last_ms))}</span>
         </span>
       </button>`;

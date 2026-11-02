@@ -39,6 +39,8 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.css': { file: 'app.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  '/agent-logos.js': { file: 'agent-logos.js', type: 'text/javascript; charset=utf-8' },
+  '/agent-logos.json': { file: 'agent-logos.json', type: 'application/json; charset=utf-8' },
   '/session-view.js': { file: 'session-view.js', type: 'text/javascript; charset=utf-8' },
   '/layout.js': { file: 'layout.js', type: 'text/javascript; charset=utf-8' },
   '/backend-state.js': { file: 'backend-state.js', type: 'text/javascript; charset=utf-8' },
@@ -220,7 +222,7 @@ async function serveStatic(path: string): Promise<Response> {
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff',
       // 页面样式是内联 <style> 与内联 style 属性；脚本仍只允许同源文件。
-      'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
     },
   });
 }
