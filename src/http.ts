@@ -48,6 +48,7 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/context-map.js': { file: 'context-map.js', type: 'text/javascript; charset=utf-8' },
   '/context-detail.js': { file: 'context-detail.js', type: 'text/javascript; charset=utf-8' },
   '/html.js': { file: 'html.js', type: 'text/javascript; charset=utf-8' },
+  '/icons.js': { file: 'icons.js', type: 'text/javascript; charset=utf-8' },
   '/parts.js': { file: 'parts.js', type: 'text/javascript; charset=utf-8' },
   '/rail-facts.js': { file: 'rail-facts.js', type: 'text/javascript; charset=utf-8' },
   '/reader-store.js': { file: 'reader-store.js', type: 'text/javascript; charset=utf-8' },
