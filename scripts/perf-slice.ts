@@ -57,7 +57,7 @@ try {
   const steps: number[] = [];
   for (let call = 0; call < 20000; call++) {
     const started = performance.now();
-    const result = drainDeriveEntry(store, 1, { convKey: group.convKey });
+    const result = await drainDeriveEntry(store, 1, { convKey: group.convKey });
     steps.push(performance.now() - started);
     if (result.processed + result.discarded === 0 && result.groups.length === 0 && call > 0) break;
     const queue = store.read.query<{ state: string }, [string, string]>(

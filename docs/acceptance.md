@@ -69,7 +69,7 @@
 
 同窗口其它读数：派生队列无积压（`pending_groups` 0）；事件循环 50 ms 采样 p99 273.6 ms、max 13,856 ms；消息块解码 68,060 次，未命中数同为 68,060，即每次都是冷解码；hook 摄入 `busy` 拒绝 10 次。
 
-出处、方案取舍与代价见[派生移出主线程提案](../.agents/notes/proposed/architecture/2026-11-02-derive-worker-isolation.md)。语句耗时是含代理开销的观测值，插桩自身开销未单独量化。
+出处、方案取舍与代价见[派生计算线程](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-worker.md)。语句耗时是含代理开销的观测值，插桩自身开销未单独量化。
 
 ## 派生 Worker 隔离 spike（合成，2026-11-02）
 
@@ -88,11 +88,28 @@
 
 - 计算搬出主线程后事件循环不再被占（lag max 1.4 ms 对基线 771.8 ms），只读路径读数不变；阻塞源是主线程 CPU 时间，不是 SQLite 锁。
 - 收益取决于主线程写是否等待 Worker 的写锁：等待把锁等原样转成事件循环阻塞（833.9 ms，与不隔离持平），不等待则事件循环保持毫秒级，代价是 38/40 次写被 `SQLITE_BUSY` 拒绝。
-- 因此正式实现必须同时定写锁归属与写失败的重试语义，方案与代价见[派生移出主线程提案](../.agents/notes/proposed/architecture/2026-11-02-derive-worker-isolation.md)。
+- 因此正式实现必须同时定写锁归属与写失败的重试语义，方案与代价见[派生计算线程](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-worker.md)。
 
 生产同期读数（15.6 分钟窗口）：`writer.by_name.derive` 240 次 / 495.0 s，占写事务总耗时 500.7 s 的 98.9%，单次 max 13.3 s；其余全部命名写合计 447 次 / 5.7 s。事件循环 50 ms 采样 p50 1.02 ms、p95 30.8 ms、p99 645.8 ms、max 13,777 ms。hook 摄入到达 278 次、61 次以 `busy` 429 被拒，守卫在 `src/http.ts` 的 `ingesting` 单飞位。
 
 未覆盖：Worker 崩溃恢复、WAL checkpoint 与关闭顺序、库文件被维护任务替换、真实流量下的隔离运行（本轮未部署、未启用）、并发多 Worker 的锁竞争。这些留给正式实现前的验收。
+
+## 派生计算线程落地（合成，2026-11-02）
+
+前提：worktree `atc-derive-worker-run` 的 `feat/derive-worker-run` 分支（基于 master `0749d7f`）。合成数据只进临时库；验证的是执行位置与崩溃语义，不是新算法。真实流量验收另起窗口，见 Task 7。
+
+自动化：`bun scripts/perf-derive-worker.ts --requests 800`，两场景各一次。合成 800 笔累积链，主线程 10 ms 定时器测事件循环 lag、5 ms 只读探针、20 ms 小写事务探针；Worker 场景里只读连接算计划，计划交回主线程用短写事务落库。
+
+| 场景 | 派生耗时 | 事件循环 lag max | 读探针 max | 写探针 max |
+| --- | ---: | ---: | ---: | ---: |
+| 主线程同步派生（基线） | 869.2 ms | 861.0 ms | 1.0 ms | 0.3 ms |
+| Worker 只算 + 主线程落库 | 793.0 ms | 1.8 ms | 0.0 ms | 2.8 ms |
+
+两场景处理同一组后队列都是 `state='clean'`。派生耗时差异在噪声内，说明隔离不改变计算量；事件循环 lag 从 861.0 ms 降到 1.8 ms，写探针 2.8 ms 远低于写连接 `busy_timeout=1000`。
+
+回归：`tests/derive-worker.test.ts` 两条合成用例——同一合成组在主线程与 Worker 两条路径上逐表一致（`request`、`tool_call`、`derive_queue`）；计算线程打不开库时这一组保持 `dirty`、`prev_relation` 一行未写，不半发布。
+
+未覆盖：真实流量下的隔离运行（本轮未部署）、Worker 崩溃恢复的自动重启路径、WAL checkpoint 与关闭顺序、库文件被维护任务替换、并发多 Worker 的锁竞争。
 
 ## 读取架构落地（合成，2026-11-02）
 

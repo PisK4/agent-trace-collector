@@ -204,6 +204,10 @@ span 选取按 `(service.name, 规则)` 白名单：Claude Code 按 span 名 `cl
 
 写操作全部走一个 writer，避免 SQLite 的 `database is locked`。实测第二个连接在写事务期间写会被拒绝，读不受影响。查询用独立只读连接。
 
+派生计算另起一个线程（Bun `Worker`），只开只读连接、不写库：主线程仍是唯一 writer，跨线程没有写锁归属问题。Worker 懒启动，没有积压时不起线程；在线派生同一时刻只有一个在飞计算，与 `guard` 的按任务名防重入一致，第二个请求直接拒绝而不是排队。计算产物是可结构化克隆的纯数据（落库计划与读数），落库仍在主线程的写事务里发生。
+
+落库窗口的写策略沿用单写者语义：写连接 `busy_timeout=1000`，没有新的重试层；唯一可能争锁的写来自同进程其它任务，它们与派生共用同一个 writer 排队。落库失败（锁超时或 CAS 之外的写入错误）让这一轮抛错，组保持 dirty，下一 tick 重算整组；已经提交的上一组不受影响。计算线程与主线程之间没有写锁，因此不需要忙等或放弃策略。
+
 后台任务通过 `commitUnit(store,name,prepare)` 先在只读连接准备意图，返回 null 时不打开事务，存在操作时立即交给 writer 同步提交。`write(fn,name?)` 的耗时按固定任务名累计到 `writer.by_name`，失败与回滚也计数；派生名下另记语句级拆分（读语句、写语句、事务体、事务开合四段，累计口径；接缝之后这个写事务只是落库段，读数对应落库段而非整组），其余写路径是短事务、不做语句级计时；未命名写入归 `other`，指标快照不随后续写入变化。probe 仅在结果变化时持久化，`at` 表示该结果开始被观测到的时点；pending 每轮最多提交十个合并或新歧义，稳定候选不重复写；gap 每轮最多更新一百个状态变化，raw_prune 每来源最多清理一百条候选，已记过的未关联 hook 正文保留且不反复更新 issue。费用扫描的窗口进度含页偏移、行总数、定价版本与上次全量时间，与费用观测同事务提交；失败页不改进度，已结束窗口再次得到空页时不提交。已完成的窗口下一轮从头部增量继续：usage 行按时间倒序，新行插在开头，增量轮覆盖新增行加固定回看，每 30 分钟做一次全量校准，定价版本变化时立即退回全量。
 
 ### 不做 spool
@@ -990,11 +994,11 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 组内请求的 `input_epoch` / `input_revision` 是同一套修订的请求侧。输入指正文、回复、归属与来源证据：正文保存、hook 到达或合并、账本或路由的字段级事实变化、证据过期、正文回收都会推进它；只改费用不推进，因为费用不改变用途判定与派生结果。合并把两笔请求的证据并成一笔时，存活请求换新 `input_epoch`，旧 epoch 下的用途结论不再复用。
 
-完成用比较交换而不是无条件写：同步路径先只读算完本组（`computeDeriveGroup`，产出落库计划），再由落库段（`applyDeriveGroup`）在一个事务里写回全部阶段并做交换：计划带着认领时读到的 `{group_epoch, input_revision, target_algorithm}`，交换成功才把状态改成 clean 并记下消费的修订与算法；交换失败回滚本组整轮丢弃，旧完成记录不会覆盖新输入。台账见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)。在线已提交组独立保留，重启只需继续未完成组；未发布的切片代由启动恢复丢弃，上一代发布指针保持不动。离线调用 `drainDeriveTx` 时，由调用方外层事务决定整批回滚范围。
+完成用比较交换而不是无条件写：同步路径先只读算完本组（`computeDeriveGroup`，产出落库计划），再由落库段（`applyDeriveGroup`）在一个事务里写回全部阶段并做交换：计划带着认领时读到的 `{group_epoch, input_revision, target_algorithm}`，交换成功才把状态改成 clean 并记下消费的修订与算法；交换失败回滚本组整轮丢弃，旧完成记录不会覆盖新输入。台账见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)。在线路径把计算段交给 Worker、落库段留在主线程（见[派生计算线程](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-worker.md)），维护与回填仍在主线程算。在线已提交组独立保留，重启只需继续未完成组；未发布的切片代由启动恢复丢弃，上一代发布指针保持不动。离线调用 `drainDeriveTx` 时，由调用方外层事务决定整批回滚范围。
 
 #### 两个粒度：请求用途先于组结果
 
-派生编排归 `src/derive/unit.ts`。在线用 `createDeriveUnit(store).run({budgetMs})` 返回 `{didWork,nextDueMs}`：每轮预算 400 ms、最多十个组或切片步骤，用途按十笔一批独立提交，组间检查剩余预算；空闲先只读判定，不开写事务。有积压时 `nextDueMs=0`，调度用定时器让出事件循环后续跑，空闲等待两秒。同步单组拆成只读计算与短事务落库两段：计算走只读连接、不持写锁，落库段一个事务执行计划并做队列交换；单个大组仍可能超过预算，但写锁只覆盖落库段，见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)。生产切片启用限制见[派生代际与发布指针](#派生代际与发布指针)。维护与容量实验用同模块的 `drainDeriveEntry(store, limit, scope?)`，保留完整统计；需要把多个组放进外层事务的离线调用使用 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`。
+派生编排归 `src/derive/unit.ts`。在线用 `createDeriveUnit(store).run({budgetMs})` 返回 `{didWork,nextDueMs}`：每轮预算 400 ms、最多十个组或切片步骤，用途按十笔一批独立提交，组间检查剩余预算；空闲先只读判定，不开写事务。有积压时 `nextDueMs=0`，调度用定时器让出事件循环后续跑，空闲等待两秒。同步单组拆成只读计算与短事务落库两段：计算走只读连接、不持写锁，在线路径把这一段交给 Worker（`src/derive/worker.ts` 与 `worker-entry.ts`），维护与回填留在主线程用 `store.read`，落库段一个事务执行计划并做队列交换；单个大组仍可能超过预算，但写锁只覆盖落库段，见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)。生产切片启用限制见[派生代际与发布指针](#派生代际与发布指针)。维护与容量实验用同模块的 `drainDeriveEntry(store, limit, scope?)`，保留完整统计；需要把多个组放进外层事务的离线调用使用 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`。
 
 请求阶段按 `req_id` 取 `purpose_pending=1` 的行，按 `PURPOSE_VERSION` 解释并写 `purpose_status`（`recognized`/`unrecognized`/`missing`/`retained`/`unsupported`/`error`）、`purpose_version`、`purpose_rule`、`purpose_chain`、`req_kind` 与 `model_title`，把 `purpose_pending` 清 0 并让 `purpose_revision` 追上当前 `input_revision`。规则优先级固定为 Harness 专属强指纹 > 来源 kind > 标题兼容 > 兜底。专属指纹按 agent 标签在 `src/harness/` 的静态登记里选取，登记与编排在 `harness/purpose.ts`，同 agent 多条规则按登记次序，未知与空标签不命中任何登记项：claude 分类器（`harness/claude.ts`）要求 system 文本含 `security monitor for autonomous ai coding agents`、`stop_sequences` 含 `</block>` 同时成立，消息数 2 与工具数 0 只写信号，判定取回复里最后一个 `<block>yes|no`；omp skill 压缩（`harness/omp.ts`）要求任一 user 文本块块首命中模板前缀 `Compress into one routing hint of at most 12 words:`；hermes（`harness/hermes.ts`）三条规则按次序判，system 文本含 `security reviewer for an ai coding agent` 得 `command-review`；system 文本含 `you name chat sessions` 得 `title`；单条消息、无工具声明、user 消息带图片内容块且任一文本块块首以视觉模板 `fully describe and explain everything about this image` 开头（小写前缀比较）得 `vision-analysis`。三者都排除链，回复只写判定或标题信号；图片块计数（`image`、`image_url`、`input_image` 三种内容块，取前 5 条 user 消息，与块首同一次解压）只写信号，不把图片字节交给 adapter。通用判定留在 `semantics.ts`：来源 kind 只把精确的 `title` 当标题别名并排除链，其它非空值变成 `source:<value>` 参与链；标题兼容先看严格回复形状（整段 `<title>` 或只含 `title` 键的 JSON），再看已存 `req_kind='title'`；兜底是 `unrecognized` + `chat` + `participate`。
 

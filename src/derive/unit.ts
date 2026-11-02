@@ -1,7 +1,7 @@
 import type { Store } from '../store';
 import { addBodyReadStats, emptyBodyReadStats } from '../body-cache';
 import type { BodyReadStats } from '../body-cache';
-import type { DeriveScope, DrainResult } from './sync';
+import type { DeriveGroupRound, DeriveScope, DrainResult } from './sync';
 import { applyDeriveGroup, computeDeriveGroup } from './sync';
 import { queuePendingSql } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
@@ -23,8 +23,14 @@ function remainingWork(store: Store, scope?: DeriveScope): { groups: number; pur
   return { groups, purposes };
 }
 
-function drain(store: Store, limit: number, scope: DeriveScope | undefined,
-  budgetMs: number): DrainResult {
+/**
+ * 计算段的执行位置：不传就在主线程用只读连接算（维护与脚本），传了就把
+ * 计算交出去（在线 Worker），落库始终回到主线程的写事务里。
+ */
+export type DeriveCompute = (convKey: string, actor: string) => Promise<DeriveGroupRound | null>;
+
+async function drain(store: Store, limit: number, scope: DeriveScope | undefined,
+  budgetMs: number, compute?: DeriveCompute): Promise<DrainResult> {
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid_derive_limit');
   if (scope !== undefined && (typeof scope.convKey !== 'string' || scope.convKey.length === 0)) {
     throw new Error('invalid_derive_scope');
@@ -51,9 +57,11 @@ function drain(store: Store, limit: number, scope: DeriveScope | undefined,
             AND r.actor_state='known' AND r.purpose_pending=1)
         ORDER BY q.conv_key,q.actor LIMIT 1`).get(scope?.convKey ?? null, scope?.convKey ?? null);
       if (candidate === null) break;
-      // 计算走只读连接、不持写锁；落库另起一个短写事务，CAS 挡住计算期间到达的输入。
+      // 计算不持写锁；落库另起一个短写事务，CAS 挡住计算期间到达的输入。
       // shortcut: 同步单组不可中断，需在读取与长组容量验收后启用切片。
-      const round = computeDeriveGroup(store.read, candidate.conv_key, candidate.actor);
+      const round = compute === undefined
+        ? computeDeriveGroup(store.read, candidate.conv_key, candidate.actor)
+        : await compute(candidate.conv_key, candidate.actor);
       if (round === null) break;
       const group = store.write(db => applyDeriveGroup(db, round), 'derive');
       if (group === null) break;
@@ -93,27 +101,30 @@ function drain(store: Store, limit: number, scope: DeriveScope | undefined,
 }
 
 /** 维护与容量实验的排空入口；同步每组独立提交，limit 按组或切片步骤计数。 */
-export function drainDeriveEntry(store: Store, limit = 100, scope?: DeriveScope): DrainResult {
+export async function drainDeriveEntry(store: Store, limit = 100,
+  scope?: DeriveScope): Promise<DrainResult> {
   return drain(store, limit, scope, Number.POSITIVE_INFINITY);
 }
 
 /** 在线工作单元的观测出口；计数器只增，回调不改变调度结果。 */
 export type DeriveUnitOptions = {
   onBodyRead?: (stats: BodyReadStats) => void;
+  /** 计算段的执行位置；缺省在主线程算，采集器注入 Worker。 */
+  compute?: DeriveCompute;
 };
 
 /** 启动恢复与在线调度共用一个工作单元，未发布代在起定时器前丢弃。 */
 export function createDeriveUnit(store: Store, unitOptions: DeriveUnitOptions = {}): {
-  run(options: { budgetMs: number }): { didWork: boolean; nextDueMs: number };
+  run(options: { budgetMs: number }): Promise<{ didWork: boolean; nextDueMs: number }>;
 } {
   const unfinished = store.read.query(`SELECT 1 FROM derive_queue q
     JOIN derive_generation g ON g.generation=q.compute_generation
     WHERE g.state IN ('building','ready') LIMIT 1`).get();
   if (unfinished !== null) store.write(db => recoverSlice(db, Date.now()), 'derive');
   return {
-    run({ budgetMs }) {
+    async run({ budgetMs }) {
       if (!Number.isFinite(budgetMs) || budgetMs <= 0) throw new Error('invalid_derive_budget');
-      const result = drain(store, ONLINE_LIMIT, undefined, budgetMs);
+      const result = await drain(store, ONLINE_LIMIT, undefined, budgetMs, unitOptions.compute);
       if (result.body_read.message_decodes > 0) unitOptions.onBodyRead?.(result.body_read);
       const didWork = result.purpose_processed > 0 || result.processed > 0
         || result.groups.length > 0 || result.discarded > 0;

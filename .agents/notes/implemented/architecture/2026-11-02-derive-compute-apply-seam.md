@@ -27,7 +27,7 @@ Status: implemented
 
 **只把读与计算移出写事务。** 计算留在主线程，51.4% 的纯计算继续占住事件循环；写锁短了，阻塞只是减轻。换位置与瘦身得一起做，单独瘦身不成立。
 
-**先按 Worker 隔离（W1 唯一 writer / W2 忙则不等）。** 合成长链四场景实测：Worker 派生、主线程写等待锁时事件循环 lag 833.9 ms，与不隔离持平；不等待则 40 次写里 38 次被 `SQLITE_BUSY` 拒绝。收益取决于主线程是否等 Worker 的写锁，而写库只占 8.4%，不值得为它改写者归属。计算搬进 Worker 仍是要走的下一步，接缝先交付，见[派生移出主线程提案](../../proposed/architecture/2026-11-02-derive-worker-isolation.md)。
+**先按 Worker 隔离（W1 唯一 writer / W2 忙则不等）。** 合成长链四场景实测：Worker 派生、主线程写等待锁时事件循环 lag 833.9 ms，与不隔离持平；不等待则 40 次写里 38 次被 `SQLITE_BUSY` 拒绝。收益取决于主线程是否等 Worker 的写锁，而写库只占 8.4%，不值得为它改写者归属。计算搬进 Worker 仍是要走的下一步，接缝先交付，见[派生计算线程](../../implemented/architecture/2026-11-02-derive-compute-worker.md)。
 
 **不做交换守卫，靠"单 writer 串行"保正确。** 在线路径里计算与落库之间没有让出点，今天确实不会交错。守卫随接缝一起交付，为的是下一步：计算搬进 Worker 之后，没有它就只能拿半发布的组状态换延迟。
 
@@ -44,7 +44,7 @@ Status: implemented
 
 ## Deferred
 
-- 计算段搬进 Worker，以及随之而来的主线程写策略、崩溃恢复与关闭语义，见[派生移出主线程提案](../../proposed/architecture/2026-11-02-derive-worker-isolation.md)。
+- 计算段搬进 Worker、主线程只落库，见[派生计算线程](../../implemented/architecture/2026-11-02-derive-compute-worker.md)。
 - 部署后的真实流量读数已取（476.3 秒窗口），未覆盖项留在[验收记录](../../../../docs/acceptance.md#派生算写接缝生产部署真实流量2026-11-02)：平稳负载窗口、按组单独的落库计时、hook 拒绝的同负载对照。
 - 切片路径的同形状改写。
 - 计算段里的块解码仍是一次计算段内的重复工作，与线程方案并行治理，见[派生正文重复解压修复](../../proposed/bug-fix/2026-10-26-derive-body-decompression-amplification.md)。

@@ -307,10 +307,10 @@ test('请求切片在读取窗口内输入变化时丢弃整代', () => {
  * `prepare` 在两个 fixture 上做同一件事：要构造不可读正文这类状态时，
  * 两边必须一样，否则比的不是路径差异而是输入差异。
  */
-function chainOnBothPaths(
+async function chainOnBothPaths(
   sessions: readonly ChainSeed[],
   prepare?: (f: ReturnType<typeof fixture>) => void,
-): { slice: ChainOutcome[]; sync: ChainOutcome[] } {
+): Promise<{ slice: ChainOutcome[]; sync: ChainOutcome[] }> {
   const sliced = fixture();
   const synced = fixture();
   try {
@@ -321,7 +321,7 @@ function chainOnBothPaths(
     sliced.store.deriveRuntime = sliceRuntime(sliced,
       { ...DEFAULT_DERIVE_BUDGET, maxCandidatesPerBatch: 1, maxWritesPerBatch: 2 });
     for (let index = 0; index < 5000; index++) {
-      if (drainDeriveEntry(sliced.store, 1).remaining === 0) break;
+      if ((await drainDeriveEntry(sliced.store, 1)).remaining === 0) break;
     }
     const queue = sliced.store.read.query<{ published_generation: string }, []>(
       'SELECT published_generation FROM derive_queue').get()!;
@@ -333,10 +333,10 @@ function chainOnBothPaths(
   }
 }
 
-test('线性链与分叉树的切片结果与同步路径逐行一致', () => {
+test('线性链与分叉树的切片结果与同步路径逐行一致', async () => {
   const sessions = [['S'], ['S', 'A'], ['S', 'B'], ['S', 'A', 'C'], ['S', 'B', 'D']]
     .map(texts => ({ texts }));
-  const { slice, sync } = chainOnBothPaths(sessions);
+  const { slice, sync } = await chainOnBothPaths(sessions);
   expect(slice).toEqual(sync);
   // 关系本身也逐个写清楚：整组都等价但两边一起错了的情况要能被看到。
   expect(slice).toEqual([
@@ -348,14 +348,14 @@ test('线性链与分叉树的切片结果与同步路径逐行一致', () => {
   ]);
 });
 
-test('同毫秒且来源位置不足为证时两边都判顺序未证实', () => {
+test('同毫秒且来源位置不足为证时两边都判顺序未证实', async () => {
   const sessions: ChainSeed[] = [
     { texts: ['S'], startedMs: 1000 },
     { texts: ['S', 'A'], startedMs: 2000 },
     { texts: ['S', 'B'], startedMs: 2000 },
     { texts: ['S', 'B', 'C'], startedMs: 3000 },
   ];
-  const { slice, sync } = chainOnBothPaths(sessions);
+  const { slice, sync } = await chainOnBothPaths(sessions);
   expect(slice).toEqual(sync);
   // 2 与 3 同毫秒且排序键是 `ledger|000N`（解析不出账本偏移），整桶顺序未证实：
   // 可以遍历，但谁都只能算"没法比"，也不作为后面那一笔的祖先候选。
@@ -366,7 +366,7 @@ test('同毫秒且来源位置不足为证时两边都判顺序未证实', () =>
   expect(slice.map(row => row.chain_role)).toEqual(['main', 'unknown', 'unknown', 'main']);
 });
 
-test('unknown环节切断的confirmed后继标unknown，重新锚定后记main', () => {
+test('unknown环节切断的confirmed后继标unknown，重新锚定后记main', async () => {
   const sessions: ChainSeed[] = [
     { texts: ['S'], startedMs: 1000 },
     { texts: ['S', 'A'], startedMs: 2000 },
@@ -374,7 +374,7 @@ test('unknown环节切断的confirmed后继标unknown，重新锚定后记main',
     { texts: ['X', 'Y'], startedMs: 4000 },
     { texts: ['S', 'X', 'Y', 'Z'], startedMs: 5000 },
   ];
-  const { slice, sync } = chainOnBothPaths(sessions, f => {
+  const { slice, sync } = await chainOnBothPaths(sessions, f => {
     f.store.write(db => db.run("UPDATE request SET body_state='missing' WHERE req_id=2"));
   });
   expect(slice).toEqual(sync);
@@ -392,9 +392,9 @@ test('unknown环节切断的confirmed后继标unknown，重新锚定后记main',
     ]);
 });
 
-test('不可读祖先让后续关系降为unknown并保留旧标题', () => {
+test('不可读祖先让后续关系降为unknown并保留旧标题', async () => {
   const sessions = [['S'], ['S', 'A'], ['S', 'A', 'B']].map(texts => ({ texts }));
-  const { slice, sync } = chainOnBothPaths(sessions, f => {
+  const { slice, sync } = await chainOnBothPaths(sessions, f => {
     f.store.write(db => db.run(`UPDATE request SET body_state='missing',
       title='kept title',title_source='user_delta' WHERE req_id=2`));
   });
@@ -406,12 +406,12 @@ test('不可读祖先让后续关系降为unknown并保留旧标题', () => {
   expect(slice.map(row => row.chain_role)).toEqual(['main', 'unknown', 'main']);
 });
 
-test('两个互不相接的根按遍历序选主链', () => {
+test('两个互不相接的根按遍历序选主链', async () => {
   const sessions: ChainSeed[] = [
     { texts: ['S', 'X'], startedMs: 1000 },
     { texts: ['Y', 'Z'], startedMs: 2000 },
   ];
-  const { slice, sync } = chainOnBothPaths(sessions);
+  const { slice, sync } = await chainOnBothPaths(sessions);
   expect(slice).toEqual(sync);
   expect(slice).toEqual([
     { req_id: 1, prev_req_id: null, prev_relation: 'first', delta_ordinals: '[0,1]', chain_role: 'main' },
@@ -958,7 +958,7 @@ test('组里还有待判定用途时不认领，认领时把算法号归一到�
   } finally { f.close(); }
 });
 
-test('切片入口分批推进到发布，没有运行时的库走同步路径', () => {
+test('切片入口分批推进到发布，没有运行时的库走同步路径', async () => {
   const f = fixture();
   try {
     seedToolRoundTrip(f);
@@ -969,7 +969,7 @@ test('切片入口分批推进到发布，没有运行时的库走同步路径',
       'SELECT target_algorithm FROM derive_queue').get())
       .toEqual({ target_algorithm: GROUP_ALGORITHM });
     for (let index = 0; index < 200; index++) {
-      const result = drainDeriveEntry(f.store, 1);
+      const result = await drainDeriveEntry(f.store, 1);
       expect(result).toMatchObject({ processed: 1, discarded: 0 });
       if (result.remaining === 0) break;
     }
@@ -990,7 +990,7 @@ test('切片入口分批推进到发布，没有运行时的库走同步路径',
     f.store.deriveRuntime = undefined;
     enqueueDerive(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, '');
     // 同步入口的 `processed` 是请求数，切片入口是阶段步数；两边都恒为 0 的是丢弃数。
-    expect(drainDeriveEntry(f.store, 10)).toMatchObject({
+    expect(await drainDeriveEntry(f.store, 10)).toMatchObject({
       processed: 2, remaining: 0, discarded: 0, purpose_remaining: 0, recomputed: 2,
     });
     expect(f.store.read.query<{ prev_relation: string }, [number]>(
@@ -999,7 +999,7 @@ test('切片入口分批推进到发布，没有运行时的库走同步路径',
   } finally { f.close(); }
 });
 
-test('多 choice 回复经切片派生也不发布工具行，组照常发布', () => {
+test('多 choice 回复经切片派生也不发布工具行，组照常发布', async () => {
   const f = fixture();
   try {
     seedRequest(f.store, [
@@ -1030,7 +1030,7 @@ test('多 choice 回复经切片派生也不发布工具行，组照常发布', 
     enqueueDerive(f.store, SEED_GROUP.convKey, SEED_GROUP.actor, '');
     f.store.deriveRuntime = sliceRuntime(f);
     for (let index = 0; index < 200; index++) {
-      const result = drainDeriveEntry(f.store, 1);
+      const result = await drainDeriveEntry(f.store, 1);
       if (result.remaining === 0) break;
     }
     const queue = f.store.read.query('SELECT * FROM derive_queue').get() as Record<string, unknown>;

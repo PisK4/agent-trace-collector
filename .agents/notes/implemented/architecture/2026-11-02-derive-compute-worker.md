@@ -1,6 +1,6 @@
-# Agent Note: 派生移出主线程：Worker 隔离与写锁归属
+# Agent Note: 派生移出主线程：Worker 只算与主线程落库
 
-Status: proposed
+Status: implemented
 
 ## Problem
 
@@ -19,11 +19,11 @@ Status: proposed
 
 已经试过的两条路：切片路径实现完整但容量实验否决（合成长链 300 笔 16.4×、800 笔 67.2×，每步约 250–279 ms，见[切片长组容量实验](../../../../docs/acceptance.md#切片长组容量实验合成2026-11-02)）；费用扫描的长耗时已由[头部增量](../../implemented/bug-fix/2026-11-02-cost-sync-incremental-window.md)单独治理。剩下的是执行位置与事务形状，本提案处理前者。
 
-## Proposal
+## Decision
 
 把派生的算与写分开挪位：计算（读语句与纯 JS）离开主线程与写锁，落库只保留今天的写语句与 CAS 守卫。算法与组内一致性规则不动——[组内原子性](../../implemented/bug-fix/2026-10-22-atomic-synchronous-derivation.md)与[按组提交的预算调度](../../implemented/architecture/2026-10-24-budgeted-derive-unit.md)照旧成立，改的是计算在哪个线程跑、事务包住哪一段。
 
-合成长链四场景已验证可行（`bun scripts/perf-derive-worker.ts --requests 800`，800 笔累积链，临时库）：
+先做过合成长链四场景探针（旧 `scripts/perf-derive-worker.ts`，800 笔累积链，临时库）：
 
 | 场景 | 派生耗时 | 事件循环 lag max | 读探针 max | 写探针 max | 写被拒 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -45,9 +45,13 @@ Status: proposed
 
 这个比例已用真实流量测出（`writer.by_name.derive.sql`，565.0 秒窗口、78 组，读数细节见[验收记录](../../../../docs/acceptance.md#派生写事务语句级拆分生产读数真实流量2026-11-02)）：读语句 40.2%、纯计算 51.4%、写语句 5.6%、事务开合 2.8%。写库段（写语句加事务开合）合计 8.4%，最长一组 13.35 s 里推算约 1.1 s。九成以上的时间不在写锁上，所以第三条路提为首选，W1 与 W2 降为落库段仍然过长时的备选。
 
-接缝本身已交付，见[派生算/写接缝](../../implemented/architecture/2026-11-02-derive-compute-apply-seam.md)：同步路径现在是只读计算加短事务落库，计算与落库之间的窗口由队列交换守卫收口。本提案剩下的是把计算段搬进 Worker，以及随之要定的主线程写策略与崩溃语义。
+接缝本身已交付，见[派生算/写接缝](../../implemented/architecture/2026-11-02-derive-compute-apply-seam.md)：同步路径现在是只读计算加短事务落库，计算与落库之间的窗口由队列交换守卫收口。
 
-插桩形态：`TIMED_WRITES` 只列派生名下的写事务，由语句代理累计四段耗时（`src/store.ts`）；其余短事务写路径不引入代理。
+落地选择第三条路：Worker 只算、主线程落库。`src/derive/worker-entry.ts` 在计算线程里打开同一份库的只读连接（`readonly:true`、`query_only=ON`、`busy_timeout=1000`），跑 `computeDeriveGroup` 并把 `ApplyPlan` 与读数交回；`src/derive/worker.ts` 是主线程侧客户端，懒启动、按 id 匹配回复、同一时刻只允许一个在飞请求（第二个以 `derive_worker_busy` 拒绝，与 `guard` 的防重入一致）。`createDeriveUnit` 的 `compute` 选项注入执行位置：在线注入 Worker，维护、回填与容量脚本不传，留在主线程用 `store.read`。回退开关是 `CollectorOptions.deriveComputeInWorker: false`，关闭即回到主线程计算。
+
+落库窗口的写策略不变：主线程仍是唯一 writer，写连接 `busy_timeout=1000`，没有新增重试层。落库失败让这一轮抛错、组保持 dirty，下一 tick 整组重算；上一组已提交的产物不受影响。计算线程崩溃（`onerror`）时客户端终止实例、拒绝在飞请求并置空引用，下一 tick 重建；因为计算不写库，崩溃不会留下半发布的组。`stop()` 先等在飞的那一轮把当前组落库（`deriveLanded`），再关线程与库，`service stop` 因此等得到当前组。
+
+插桩形态：`TIMED_WRITES` 只列派生名下的写事务，由语句代理累计四段耗时（`src/store.ts`）；接缝之后这个事务只覆盖落库段，其余短事务写路径不引入代理。
 
 落地步骤、文件范围与逐任务验收见[派生算/写接缝实施计划](../../../../docs/superpowers/plans/2026-11-02-derive-compute-apply-seam.md)。接缝的跨段契约是 `ApplyPlan`：链关系、角色、工具行、后台作业行与展示列值五组写操作，加上 `group_epoch` 与 `input_revision` 两个守卫字段；计算段只读，落库段一个事务执行计划并在 CAS 失败时整轮丢弃。
 
@@ -61,19 +65,28 @@ Status: proposed
 
 **主线程写继续等待锁。** 等价于没有隔离（见场景三），收益为零，弃。
 
-## Acceptance criteria
+## Consequences
 
-1. 派生运行期间事件循环不再出现派生同量级的停顿：`event_loop` 的 p99 与 13 s 级 max 与 `writer.by_name.derive` 的单次耗时解耦。
-2. 派生追平能力不退化：`derive_queue` 不出现长期 dirty 组（`oldest_dirty_age_ms` 回到秒级），目标组 `input_revision == published_revision`。
-3. 写规则落到文档并可见：被拒写的计数、重试路径、最坏情况下哪些写会作废，写进[架构设计](../../../../docs/architecture-design.md)与[运维手册](../../../../docs/operations.md)。
-4. 崩溃与关闭有定义：Worker 在事务中被终止后重启，组状态不半发布，读侧仍只读已发布代；`bun run service stop` 等当前组落盘。
-5. 合成与真实分开验收，真实验收必须覆盖一个含长组的真实流量窗口；合成读数不替代。
+合成长链两场景读数（`bun scripts/perf-derive-worker.ts --requests 800`，同一脚本改成「Worker 计算 + 主线程落库」两场景；仅计计数与毫秒，临时库）：
 
-## Risks
+| 场景 | 派生耗时 | 事件循环 lag max | 读探针 max | 写探针 max |
+| --- | ---: | ---: | ---: | ---: |
+| 主线程同步派生（基线） | 869.2 ms | 861.0 ms | 1.0 ms | 0.3 ms |
+| Worker 只算 + 主线程落库 | 793.0 ms | 1.8 ms | 0.0 ms | 2.8 ms |
 
-- **hook 摄入的确认语义是硬约束。** 落库段虽短，仍会持有写锁（每组最长约 1.1 s，推算值）。主线程写在这段时间要么等（事件循环跟着停），要么拒绝重试；契约必须先定，否则是拿丢数据换延迟。
-- **算与写的接缝是新增复杂度。** 落库要携带计算期读到的旧值（标题、摘要、配对关联、前驱关系），期间到达的新输入由 CAS 守卫挡住并重试本轮；这层边界没有现成实现，切片路径的放大效应说明改写阶段划分很容易把重复工作带进来。
-- **计算段的解码每次重来。** 窗口内 68,060 次消息块解码，命中数为 0，每次都是冷解码；[派生正文重复解压修复](../bug-fix/2026-10-26-derive-body-decompression-amplification.md)是能独立压掉的一段计算，与线程方案并行。
-- **Bun Worker 与 `bun:sqlite` 的跨线程行为覆盖极窄。** 现有证据来自本机合成库、单组、无并发摄入的 spike：Worker 崩溃恢复、WAL checkpoint 与主线程关闭顺序、维护任务替换库文件，都没覆盖。
-- **读侧代际要对齐提交边界。** 读路径按 `published_generation` 读已发布代，Worker 若在发布指针写入前后被终止，边界必须与现有恢复语义一致；这是实现时首先要写的测试。
-- **多 Worker 不承诺。** 多会话并行派生会放大写锁竞争与公平性问题；本提案只说单 Worker 串行，扩面另议。
+派生耗时差异在噪声内，事件循环 lag 从 861.0 ms 降到 1.8 ms；两场景处理同一组后队列都是 `state='clean'`。生产窗口的 p99 与 max 是否与 `writer.by_name.derive` 单次耗时解耦，按真实流量验收判，合成读数不替代。
+
+代价与未覆盖项：
+
+- 落库段仍持有写锁，最长一组推算约 1.1 s；在线路径下争这把锁的只有同进程其它写任务，它们共用同一 writer 排队。Worker 不写库，所以这条约束没有变成跨线程的等待或拒绝策略。
+- 算与写的接缝本身是新增复杂度：落库携带计算期读到的旧值（标题、摘要、配对关联、前驱关系），期间到达的新输入由 CAS 守卫挡住并重试本轮。这层边界没有现成实现，切片路径的放大效应说明改写阶段划分很容易把重复工作带进来。
+- 计算段的解码每次重来：窗口内 68,060 次消息块解码，命中数为 0，每次都是冷解码；[派生正文重复解压修复](../bug-fix/2026-10-26-derive-body-decompression-amplification.md)是能独立压掉的一段计算，与本条并行。
+- Bun Worker 与 `bun:sqlite` 的跨线程行为覆盖极窄：现有证据来自本机合成库、单组、无并发摄入；Worker 崩溃恢复、WAL checkpoint 与主线程关闭顺序、维护任务替换库文件都没覆盖。
+- 读侧代际不受影响：计算线程不写发布指针，指针写入仍在主线程的落库事务里。
+- 多 Worker 不承诺：多会话并行派生会放大写锁竞争与公平性问题；本条只说单 Worker 串行。
+
+## Testing
+
+- `tests/derive-worker.test.ts`：同一合成组在主线程与 Worker 两条路径上逐表一致（`request`、`tool_call`、`derive_queue`）；计算线程打不开库时这一组保持 `dirty`、`prev_relation` 一行未写。
+- `tests/derive-unit.test.ts`、`tests/derive-slice.test.ts`、`tests/capacity-slice.test.ts`、`tests/commit-unit.test.ts` 随入口异步化更新，覆盖预算截断、组数上限、第二组失败回滚与两条路径等价。
+- `bun scripts/perf-derive-worker.ts --requests 800` 是显式动作，不进测试套件。

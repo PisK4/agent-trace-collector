@@ -2,6 +2,7 @@
 
 import { GROUP_ALGORITHM, queuePendingSql } from '../derive/state';
 import { rebuildDerived } from '../derive/sync';
+import type { DrainResult } from '../derive/sync';
 import { drainDeriveEntry } from '../derive/unit';
 import { upgradePurposeTargetTx } from '../request-purpose';
 import type { Store } from '../store';
@@ -32,15 +33,15 @@ export type RebuildSessionReport = {
  * 会话的积压留给它自己的维护窗口。两个阶段都要排空：组没算完是积压，请求
  * 用途没判完也是——组的输入依赖用途。
  */
-export function rebuildSession(store: Store, session: string): RebuildSessionReport {
+export async function rebuildSession(store: Store, session: string): Promise<RebuildSessionReport> {
   const purposeUpgraded = store.write(db => upgradePurposeTargetTx(db, session));
   const report = rebuildDerived(store, session);
-  let drained: ReturnType<typeof drainDeriveEntry>;
+  let drained: DrainResult;
   let recomputedRequests = 0;
   let retainedRequests = 0;
   let purposeProcessed = 0;
   do {
-    drained = drainDeriveEntry(store, 100, { convKey: session });
+    drained = await drainDeriveEntry(store, 100, { convKey: session });
     recomputedRequests += drained.recomputed;
     retainedRequests += drained.retained;
     purposeProcessed += drained.purpose_processed;

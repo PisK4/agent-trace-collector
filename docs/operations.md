@@ -40,7 +40,9 @@ ln -f "$(realpath "$(command -v bun)")" ~/.local/libexec/agent-trace-collector
 
 为什么不用别的改名方式，见 [launcher 显示名](../.agents/notes/implemented/process/2026-10-27-launchd-launcher-name.md)。
 
-`stop` 之后采集器不接收新证据，magpie 与 harness 的请求照常走完，只是这段时间没有新记录。手工起停（不走 launchd）时 `SIGTERM` 或 `SIGINT` 仍然可用：收到信号后先清定时器、停 HTTP 服务、再关库；`SIGKILL` 不会走这套流程，库本身仍然一致（WAL + `synchronous=NORMAL`），只是 WAL 里可能留着未回放的已提交页，下次打开自动回放。
+`stop` 之后采集器不接收新证据，magpie 与 harness 的请求照常走完，只是这段时间没有新记录。手工起停（不走 launchd）时 `SIGTERM` 或 `SIGINT` 仍然可用：收到信号后先清定时器，等在飞的那一轮派生把当前组落盘，再终止计算线程、停 HTTP 服务、关库。`SIGKILL` 不会走这套流程，库本身仍然一致（WAL + `synchronous=NORMAL`），只是 WAL 里可能留着未回放的已提交页，下次打开自动回放；在飞组保持 dirty，重启后重算。
+
+计算线程崩溃（例如计算中抛错退出）只让在飞的那一组失败：这一轮不写库，组保持 dirty，下一次 tick 新建线程重算；已经提交的组不受影响，不会出现半发布。被拒绝的计算不动队列，重试代价就是重算这一组。
 
 ## 维护命令
 

@@ -171,7 +171,7 @@ export async function runMaintenance(argv: string[], io: {
         }
         store = openStore(dbPath);
         if (command === 'rebuild') {
-          const report = rebuildSession(store, argument);
+          const report = await rebuildSession(store, argument);
           out(JSON.stringify({ ok: true, session: argument, ...report }));
         } else {
           // 被拒绝与单独失败的行都进报告：原样保留，不把跳过写成通过。

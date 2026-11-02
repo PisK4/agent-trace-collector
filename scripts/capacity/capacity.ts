@@ -1115,7 +1115,7 @@ async function runLong(args: Args, slice?: SliceBudgetReading): Promise<Scenario
     // 排空按运行模式走各自的入口：同步入口一次一批，切片入口一次推进一步。
     // 切片丢弃的代在整个场景里累计——重排阶段丢的代同样是容量问题，不是另一回事。
     let discardedGenerations = 0;
-    const drainAll = (stuckCode: string): number => {
+    const drainAll = async (stuckCode: string): Promise<number> => {
       let polls = 0;
       for (;;) {
         polls += 1;
@@ -1125,7 +1125,7 @@ async function runLong(args: Args, slice?: SliceBudgetReading): Promise<Scenario
           if (result.processed === 0) throw new Error(stuckCode);
           continue;
         }
-        const result = drainDeriveEntry(opened, 1);
+        const result = await drainDeriveEntry(opened, 1);
         discardedGenerations += result.discarded;
         if (result.remaining === 0) return polls;
         // 切片入口一次只推进一个阶段步：既没推进也没丢代就是卡住，不能原地空转。
@@ -1133,7 +1133,7 @@ async function runLong(args: Args, slice?: SliceBudgetReading): Promise<Scenario
       }
     };
     const drainStarted = performance.now();
-    const drainPolls = drainAll('capacity_long_drain_stuck');
+    const drainPolls = await drainAll('capacity_long_drain_stuck');
     const drainMs = performance.now() - drainStarted;
     const incrementalHash = runtime === undefined
       ? derivedHash(opened, convKey)
@@ -1146,7 +1146,7 @@ async function runLong(args: Args, slice?: SliceBudgetReading): Promise<Scenario
 
     // 全量重算是各自的 oracle：重排整组后结果必须与增量排空逐字段一致。
     rebuildDerived(opened, convKey);
-    drainAll('capacity_long_rebuild_stuck');
+    await drainAll('capacity_long_rebuild_stuck');
     const fullHash = runtime === undefined
       ? derivedHash(opened, convKey)
       : derivedHashSlice(opened, convKey, actor);
