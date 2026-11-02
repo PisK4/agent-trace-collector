@@ -2,7 +2,7 @@ import type { Store } from '../store';
 import { addBodyReadStats, emptyBodyReadStats } from '../body-cache';
 import type { BodyReadStats } from '../body-cache';
 import type { DeriveScope, DrainResult } from './sync';
-import { drainDeriveGroupTx } from './sync';
+import { applyDeriveGroup, computeDeriveGroup } from './sync';
 import { queuePendingSql } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
 import { recoverSlice } from './slice/generation';
@@ -51,8 +51,11 @@ function drain(store: Store, limit: number, scope: DeriveScope | undefined,
             AND r.actor_state='known' AND r.purpose_pending=1)
         ORDER BY q.conv_key,q.actor LIMIT 1`).get(scope?.convKey ?? null, scope?.convKey ?? null);
       if (candidate === null) break;
+      // 计算走只读连接、不持写锁；落库另起一个短写事务，CAS 挡住计算期间到达的输入。
       // shortcut: 同步单组不可中断，需在读取与长组容量验收后启用切片。
-      const group = store.write(db => drainDeriveGroupTx(db, candidate.conv_key, candidate.actor), 'derive');
+      const round = computeDeriveGroup(store.read, candidate.conv_key, candidate.actor);
+      if (round === null) break;
+      const group = store.write(db => applyDeriveGroup(db, round), 'derive');
       if (group === null) break;
       result.processed += group.processed;
       result.recomputed += group.recomputed;

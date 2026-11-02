@@ -21,7 +21,7 @@ Status: proposed
 
 ## Proposal
 
-把派生的算与写分开挪位：计算（读语句与纯 JS）离开主线程与写锁，落库只保留今天的写语句与 CAS 守卫。算法与组内一致性规则不动——[组内原子性](../implemented/bug-fix/2026-10-22-atomic-synchronous-derivation.md)与[按组提交的预算调度](../implemented/architecture/2026-10-24-budgeted-derive-unit.md)照旧成立，改的是计算在哪个线程跑、事务包住哪一段。
+把派生的算与写分开挪位：计算（读语句与纯 JS）离开主线程与写锁，落库只保留今天的写语句与 CAS 守卫。算法与组内一致性规则不动——[组内原子性](../../implemented/bug-fix/2026-10-22-atomic-synchronous-derivation.md)与[按组提交的预算调度](../../implemented/architecture/2026-10-24-budgeted-derive-unit.md)照旧成立，改的是计算在哪个线程跑、事务包住哪一段。
 
 合成长链四场景已验证可行（`bun scripts/perf-derive-worker.ts --requests 800`，800 笔累积链，临时库）：
 
@@ -41,9 +41,11 @@ Status: proposed
 - **W1：Worker 成为唯一 writer。** 沿用[架构设计](../../../../docs/architecture-design.md#系统边界与进程模型)的「写操作全部走一个 writer」，主线程的写经消息投递给 Worker 执行。保留写者不变式，读连接不迁移；代价是 hook ingest 的 200 应答要等长事务结束，确认语义得重排。
 - **W2：主线程保留 writer，Worker 的写事务忙则不等。** Worker 用 `busy_timeout=0`，拿不到锁就放弃本轮，靠下一 tick 重试。derive 本来就是 tick 驱动、状态持久化的幂等轮次（dirty 组不因放弃而丢），重试代价低；但 hook 摄入不能靠 tick 重试，必须给它一条明确的「拒绝即可重试」契约，并把这个计数纳入观测。
 
-决定 W1 与 W2 谁更划算的是组事务里**计算**与**写库**的比例：写库本身短，就会出现第三条路——Worker 只算（只读连接、不持写锁），短事务落库，也就是[交互延迟第一轮](../bug-fix/2026-11-01-collection-interactive-latency.md#deferred)提到的长事务方向的落点；那时两边不争写锁，「写操作全部走一个 writer」这条不变式也不用改。
+决定 W1 与 W2 谁更划算的是组事务里**计算**与**写库**的比例：写库本身短，就会出现第三条路——Worker 只算（只读连接、不持写锁），短事务落库，也就是[交互延迟第一轮](../../implemented/bug-fix/2026-11-01-collection-interactive-latency.md#deferred)提到的长事务方向的落点；那时两边不争写锁，「写操作全部走一个 writer」这条不变式也不用改。
 
 这个比例已用真实流量测出（`writer.by_name.derive.sql`，565.0 秒窗口、78 组，读数细节见[验收记录](../../../../docs/acceptance.md#派生写事务语句级拆分生产读数真实流量2026-11-02)）：读语句 40.2%、纯计算 51.4%、写语句 5.6%、事务开合 2.8%。写库段（写语句加事务开合）合计 8.4%，最长一组 13.35 s 里推算约 1.1 s。九成以上的时间不在写锁上，所以第三条路提为首选，W1 与 W2 降为落库段仍然过长时的备选。
+
+接缝本身已交付，见[派生算/写接缝](../../implemented/architecture/2026-11-02-derive-compute-apply-seam.md)：同步路径现在是只读计算加短事务落库，计算与落库之间的窗口由队列交换守卫收口。本提案剩下的是把计算段搬进 Worker，以及随之要定的主线程写策略与崩溃语义。
 
 插桩形态：`TIMED_WRITES` 只列派生名下的写事务，由语句代理累计四段耗时（`src/store.ts`）；其余短事务写路径不引入代理。
 
