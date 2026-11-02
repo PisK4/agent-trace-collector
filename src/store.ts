@@ -140,7 +140,8 @@ const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
 const SCHEMA_V6 = readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8');
 const SCHEMA_V7 = readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8');
 const SCHEMA_V8 = readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 8;
+const SCHEMA_V9 = readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8');
+const SCHEMA_VERSION = 9;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -151,6 +152,19 @@ function tableNames(db: Database): string[] {
 function pragmaNumber(db: Database, name: string): number {
   const row = db.query(`PRAGMA ${name}`).get() as Record<string, number> | null;
   return row === null ? Number.NaN : Number(Object.values(row)[0]);
+}
+
+/**
+ * 执行 v9 的加列脚本，列已存在时跳过。
+ *
+ * SQLite 的 `ALTER TABLE ADD COLUMN` 没有 `IF NOT EXISTS`；重复执行报
+ * duplicate column。升级路径因此先查列，半迁移状态与从旧包恢复的库都能重跑，
+ * 不会因为一次失败的启动把库锁在打不开的状态。
+ */
+function execAdditiveV9(db: Database): void {
+  const columns = (db.query('PRAGMA table_info(derive_queue)').all() as { name: string }[])
+    .map(row => row.name);
+  if (!columns.includes('claim_from_sort')) db.exec(SCHEMA_V9);
 }
 
 function migrate(db: Database): void {
@@ -164,25 +178,34 @@ function migrate(db: Database): void {
       db.exec(SCHEMA_V6);
       db.exec(SCHEMA_V7);
       db.exec(SCHEMA_V8);
+      db.exec(SCHEMA_V9);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
     return;
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
-  // v6→v8 与 v7→v8 都是纯新增（OTLP 原始层表、两条部分反向索引），原地执行即可；
-  // 更低的库没有升级路径：普通启动不做 ALTER，也不搬旧数据，
-  // 旧库由运维显式删除后重建。索引在存量数据上的构建耗时随历史线性增长，
-  // 属于启动契约的一部分，见 docs/operations.md 的 schema 升级一节。
+  // v6→v9、v7→v9 与 v8→v9 都是纯新增（OTLP 原始层表、两条部分反向索引、
+  // 队列的 claim_from_sort 列），原地执行即可；更低的库没有升级路径：
+  // 普通启动不做 ALTER，也不搬旧数据，旧库由运维显式删除后重建。
+  // 索引在存量数据上的构建耗时随历史线性增长，属于启动契约的一部分，
+  // 见 docs/operations.md 的 schema 升级一节。
   if (version === 6) {
     db.transaction(() => {
       db.exec(SCHEMA_V7);
       db.exec(SCHEMA_V8);
+      execAdditiveV9(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version === 7) {
     db.transaction(() => {
       db.exec(SCHEMA_V8);
+      execAdditiveV9(db);
+      db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+    }).immediate();
+  } else if (version === 8) {
+    db.transaction(() => {
+      execAdditiveV9(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version < SCHEMA_VERSION) {

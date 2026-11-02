@@ -73,7 +73,7 @@ export function requestPositionTx(db: Database, reqId: number): string {
 }
 
 /**
- * 行级前缀判定的 SQL 片段：本行位置严格小于组的最早受影响位置。
+ * 行级前缀判定的 SQL 片段：本行位置严格小于组的已发布边界。
  *
  * 与 `prefixValid` 是同一个判据的两处实现（SQL 用于摘要列取值，JS 用于投影），
  * 只比较 `started_ms` 这一列，两边不会分叉。发布代非空的组走代际表，不参与前缀；
@@ -142,22 +142,47 @@ export function normalizeTargetAlgorithmTx(
  * clean 之后重新 dirty 才换成本次时间。容量积压年龄按它计算，
  * 不能拿请求的 `started_ms` 冒充等待时间。
  *
- * `from_sort` 是最早受影响的位置，取历史最小值：它之前的位置不受这一版输入影响，
- * 计算完才发现输入又变时，这些行仍可按本轮结果落库（前缀发布）。未知位置用
- * `POSITION_UNKNOWN`，整组都不参与前缀发布；完整完成后由落库段改成 `POSITION_ALL`。
+ * `from_sort` 是读侧边界：已发布到哪儿。它是最早受影响的位置，取历史最小值：
+ * 它之前的位置不受这一版输入影响，计算完才发现输入又变时，这些行仍可按本轮结果
+ * 落库（前缀发布）。未知位置用 `POSITION_UNKNOWN`，整组都不参与前缀发布；
+ * 完整完成后由落库段改成 `POSITION_ALL`。
+ *
+ * `claim_from_sort` 是写侧边界：本轮认领以来最早受影响的位置。认领时重置成
+ * `POSITION_ALL`，此后的脏标记取最小值；落库段按它写前缀，并把 `from_sort`
+ * 推进到它。组长期算不完时 `from_sort` 会冻在「上次发布以来」的第一笔变化上，
+ * 写侧边界每轮重新起算，前缀因此能一轮一轮前进。空串（既有行与来源没给位置
+ * 的标记）同样表示未知，那一轮整轮作废。
+ *
+ * 组从 clean 重新变脏时两列都从这次标记重新起算：上一轮的已发布边界属于
+ * 上一版输入，不能与这一轮的新边界取最小值。
  */
 export function markGroupDirtyTx(db: Database, convKey: string, actor: string, fromSort: string): void {
   const guard = fromSort === '' ? POSITION_UNKNOWN : fromSort;
   db.run(
-    `INSERT INTO derive_queue(conv_key,actor,from_sort,group_epoch,
+    `INSERT INTO derive_queue(conv_key,actor,from_sort,claim_from_sort,group_epoch,
        input_revision,published_revision,target_algorithm,state,dirty_since_ms)
-     VALUES (?,?,?,?,1,-1,?,'dirty',?) ON CONFLICT(conv_key,actor) DO UPDATE SET
+     VALUES (?,?,?,?,?,1,-1,?,'dirty',?) ON CONFLICT(conv_key,actor) DO UPDATE SET
        input_revision=derive_queue.input_revision+1,state='dirty',
        dirty_since_ms=CASE WHEN derive_queue.state='clean' THEN excluded.dirty_since_ms
          ELSE COALESCE(derive_queue.dirty_since_ms,excluded.dirty_since_ms) END,
-       from_sort=MIN(derive_queue.from_sort,excluded.from_sort)`,
-    [convKey, actor, guard, randomUUID(), GROUP_ALGORITHM, Date.now()],
+       from_sort=CASE WHEN derive_queue.state='clean' THEN excluded.from_sort
+         ELSE MIN(derive_queue.from_sort,excluded.from_sort) END,
+       claim_from_sort=CASE WHEN derive_queue.state='clean' THEN excluded.claim_from_sort
+         ELSE MIN(derive_queue.claim_from_sort,excluded.claim_from_sort) END`,
+    [convKey, actor, guard, guard, randomUUID(), GROUP_ALGORITHM, Date.now()],
   );
+}
+
+/**
+ * 认领一个组：把写侧边界重置为「无待处理」，并记下本轮读到的修订。
+ *
+ * 在计算快照之前执行，所以写侧边界比真实快照更保守——只可能少写前缀，不会写错。
+ * 组不是待办状态时不动它：认领只发生在确实要算的这一轮。
+ */
+export function claimGroupTx(db: Database, convKey: string, actor: string): void {
+  db.run(`UPDATE derive_queue SET claim_from_sort=? WHERE conv_key=? AND actor=?
+    AND ${queuePendingSql()}`,
+  [POSITION_ALL, convKey, actor]);
 }
 
 /** 请求当前归属的组；未知归属返回 null（不进队列）。 */

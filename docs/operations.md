@@ -481,7 +481,9 @@ sqlite3 "$HOME/Library/Application Support/agent-trace-collector/trace.db" \
 
 ## schema 版本
 
-当前 `user_version=8`。空数据目录首次启动直接建到 v8；v6 与 v7 库打开时在单个事务里原地升到 v8（纯新增，不动旧行），更早版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6、v7 与 v8，v6/v7 包恢复后首次打开同样原地升级。
+当前 `user_version=9`。空数据目录首次启动直接建到 v9；v6、v7 与 v8 库打开时在单个事务里原地升到 v9（纯新增，不动旧行），更早版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6、v7、v8 与 v9，旧版本包恢复后首次打开同样原地升级。
+
+v9 在 v8 之上给 `derive_queue` 加一列 `claim_from_sort`（写侧认领边界），是 `ALTER TABLE ADD COLUMN` 加常量默认值，不重写表、不建索引，存量行取空串。加列脚本自带列存在性判断：SQLite 的 `ALTER TABLE ADD COLUMN` 没有 `IF NOT EXISTS`，没有这层判断时一次失败的启动会让下次重试报 `duplicate column`，库卡在打不开的状态。
 
 v8 在 v7 之上加的两条部分索引（`i_req_prev`、`i_tool_result_req`）要在存量数据上扫描建索引。升级在启动路径里执行，属一次性成本：本机 3.1 GB 库实测约 6.2 s（扫描 `request` 全表，骨架 BLOB 使表页散布在大文件里，冷缓存占大头），同一次启动内其余步骤毫秒级。之后启动只查 `sqlite_schema` 即短路，不再扫描。接受一次秒级启动停顿换来零新增维护机制；存量规模再涨一个量级、停顿不可接受时，改为先停采集器、显式执行升级再启动，那个决定属于运维契约变更，要改这一节。建索引在单个事务里，中断即整体回滚，`user_version` 停在旧版本，索引不存在，下次启动从头重跑；升级失败时库保持原版本可打开状态，先看启动日志里的 SQLite 错误再重试。
 

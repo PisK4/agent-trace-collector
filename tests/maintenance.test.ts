@@ -653,24 +653,24 @@ test('维护命令能产出并恢复bundle', async () => {
   }
 });
 
-test('v8库备份写实际版本；v7/v6包恢复后原地升级，白名单外两侧都拒', () => {
+test('v9库备份写实际版本；v8/v7/v6包恢复后原地升级，白名单外两侧都拒', () => {
   const f = fixture();
   try {
     f.store.write(db => loadBoundSaltTx(db, f.dir));
     f.store.close();
-    const bundle = join(f.dir, 'bundle-v8');
+    const bundle = join(f.dir, 'bundle-v9');
     backupBundle(f.dir, bundle);
     const manifestPath = join(bundle, 'manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
-    expect(manifest.schema).toBe(8);
-    const restored = join(f.dir, 'restored-v8');
+    expect(manifest.schema).toBe(9);
+    const restored = join(f.dir, 'restored-v9');
     restoreBundle(bundle, restored);
     const store = openStore(join(restored, 'trace.db'));
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 8 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
     } finally { store.close(); }
 
-    // v7/v6 包仍在白名单：恢复后首次打开原地升到 v8（纯新增表与索引）。
+    // v8、v7 与 v6 包仍在白名单：恢复后首次打开原地升到 v9（纯新增表与索引）。
     const db7 = new Database(join(f.dir, 'trace.db'));
     db7.run('PRAGMA user_version=7');
     db7.close();
@@ -682,7 +682,7 @@ test('v8库备份写实际版本；v7/v6包恢复后原地升级，白名单外�
     restoreBundle(bundle7, restored7);
     const store7 = openStore(join(restored7, 'trace.db'));
     try {
-      expect(store7.read.query('PRAGMA user_version').get()).toEqual({ user_version: 8 });
+      expect(store7.read.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
     } finally { store7.close(); }
 
     const db6 = new Database(join(f.dir, 'trace.db'));
@@ -696,7 +696,7 @@ test('v8库备份写实际版本；v7/v6包恢复后原地升级，白名单外�
     restoreBundle(bundle6, restored6);
     const store6 = openStore(join(restored6, 'trace.db'));
     try {
-      expect(store6.read.query('PRAGMA user_version').get()).toEqual({ user_version: 8 });
+      expect(store6.read.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
     } finally { store6.close(); }
 
     // 白名单外的版本两侧都拒：低版本没有升级路径，搬回来也打不开。

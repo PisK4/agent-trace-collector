@@ -129,8 +129,8 @@ export function derivedStateOf(row: {
  * 完成时的输入，不是现在的。留在顶层就等于把它们当作当前结论返回。
  * 独立事实（耗时、费用、正文、模型、时间兜底标题）不受影响，照常返回。
  *
- * 组没算完不等于行没算完：`from_sort` 之前的行不受这一版输入影响，行级产物
- * 仍然成立（见 `prefixValid`）。链角色是整组产物，只有 current 才可读。
+ * 组没算完不等于行没算完：`from_sort`（已发布边界）之前的行不受这一版输入影响，
+ * 行级产物仍然成立（见 `prefixValid`）。链角色是整组产物，只有 current 才可读。
  */
 export const GROUP_READ_COLUMNS = `g.state AS group_state,g.input_revision AS group_input,
   g.published_revision AS group_published,g.target_algorithm,g.published_algorithm,
@@ -154,7 +154,7 @@ type StateColumns = {
   target_algorithm: number | null; published_algorithm: number | null;
   /** 发布代非空的组走代际表，不参与前缀发布。 */
   group_generation: string | null;
-  /** 组内最早受影响的位置；本行位置严格小于它时，行级产物不受这一版输入影响。 */
+  /** 组内已发布边界；本行位置严格小于它时，行级产物不受这一版输入影响。 */
   group_prefix_sort: string | null;
 };
 
@@ -198,12 +198,11 @@ function reasoningSpanOf(row: ProjectableRow): number | null {
 }
 
 /**
- * 前缀判定：组没算完，但这一行在最早受影响位置之前。
+ * 前缀判定：组没算完，但这一行在已发布边界之前。
  *
- * `from_sort` 是脏标记写入时记下的最早受影响位置（定宽 `started_ms`）。
+ * `from_sort` 是已发布边界：整组发布时清成 `~`，前缀轮推进到本轮写侧边界。
  * 只有位置严格小于它的行才可用：位置相等说明分不出先后，宁可退回中性值。
- * 历史行的 `from_sort` 是空串，与"位置未知"同义，比较恒不成立。
- * 用途还没判完的行自己的列也还没重算，同样排除。
+ * 空串表示位置未知，比较恒不成立。用途还没判完的行自己的列也还没重算，同样排除。
  * 与 SQL 侧的 `rowPrefixSql` 是同一个判据的两处实现。
  */
 export function prefixValid(row: ProjectableRow): boolean {

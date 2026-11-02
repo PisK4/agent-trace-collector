@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { openStore } from '../src/store';
 import { seedChain } from '../tests/fixtures';
 import { applyDeriveGroup, drainDeriveGroupTx } from '../src/derive/sync';
-import { markGroupDirtyTx } from '../src/derive/state';
+import { claimGroupTx, markGroupDirtyTx } from '../src/derive/state';
 import { createDeriveWorker } from '../src/derive/worker';
 
 function arg(name: string, fallback: number): number {
@@ -97,6 +97,7 @@ const workerProbes = startProbes();
 const workerStart = performance.now();
 let workerGroups = 0;
 for (;;) {
+  store.write(db => claimGroupTx(db, group.convKey, group.actor), 'derive-claim');
   const round = await worker.compute(group.convKey, group.actor);
   if (round === null) break;
   store.write(db => applyDeriveGroup(db, round), 'derive');

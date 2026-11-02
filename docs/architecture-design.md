@@ -991,11 +991,12 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | `published_revision` / `published_algorithm` | 完成时实际消费的修订与算法；与当前修订相等且 `state='clean'` 才表示产物最新 |
 | `state` | `dirty` 待派生，`clean` 已完成；待办查询一律 `state<>'clean'` |
 | `dirty_since_ms` | 首次未完成触发时间。重复 dirty 保留最早值，clean 后清空 |
-| `from_sort` | 最早受影响的位置：定宽 `started_ms`（16 位补零）。整组完成时置 `~`，位置未知（历史标记或来源没给位置）为空串 |
+| `from_sort` | 已发布边界：定宽 `started_ms`（16 位补零）。整组完成时置 `~`，前缀轮推进到本轮写侧边界，位置未知为空串 |
+| `claim_from_sort` | 写侧认领边界：认领时重置为 `~`，之后取本轮认领以来最早受影响的位置。前缀轮按它取可写集合，再把 `from_sort` 推进到它 |
 
 组内请求的 `input_epoch` / `input_revision` 是同一套修订的请求侧。输入指正文、回复、归属与来源证据：正文保存、hook 到达或合并、账本或路由的字段级事实变化、证据过期、正文回收都会推进它；只改费用不推进，因为费用不改变用途判定与派生结果。合并把两笔请求的证据并成一笔时，存活请求换新 `input_epoch`，旧 epoch 下的用途结论不再复用。
 
-完成用比较交换而不是无条件写：同步路径先只读算完本组（`computeDeriveGroup`，产出落库计划），再由落库段（`applyDeriveGroup`）在一个事务里写回并做交换：计划带着认领时读到的 `{group_epoch, input_revision, target_algorithm}`，交换成功才把状态改成 clean 并记下消费的修订与算法。交换不命中时按 `from_sort` 只写边界之前的行（一致前缀发布）：链关系与展示列落库，`chain_role`、工具行与后台作业留到整组完成，组保持 dirty；边界未知则整轮丢弃。可写集合按库里此刻的 `started_ms` 取，不按计划里的位置，因为迟到账本会改写开始时刻。台账见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)与[一致前缀发布](../.agents/notes/implemented/architecture/2026-11-02-derive-prefix-publish.md)。在线路径把计算段交给 Worker、落库段留在主线程（见[派生计算线程](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-worker.md)），维护与回填仍在主线程算。在线已提交组独立保留，重启只需继续未完成组；未发布的切片代由启动恢复丢弃，上一代发布指针保持不动。离线调用 `drainDeriveTx` 时，由调用方外层事务决定整批回滚范围。
+完成用比较交换而不是无条件写：同步路径先只读算完本组（`computeDeriveGroup`，产出落库计划），再由落库段（`applyDeriveGroup`）在一个事务里写回并做交换：计划带着认领时读到的 `{group_epoch, input_revision, target_algorithm}`，交换成功才把状态改成 clean 并记下消费的修订与算法。交换不命中时按 `claim_from_sort` 只写本轮认领以来边界之前的行（一致前缀发布）：链关系与展示列落库，`chain_role`、工具行与后台作业留到整组完成，组保持 dirty，`from_sort` 推进到该边界。认领发生在计算快照之前，边界因此比真实快照更保守，只会少写。边界未知或为 `~`（认领后没有变化，与修订已变自相矛盾）则整轮丢弃。可写集合按库里此刻的 `started_ms` 取，不按计划里的位置，因为迟到账本会改写开始时刻。台账见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)、[一致前缀发布](../.agents/notes/implemented/architecture/2026-11-02-derive-prefix-publish.md)与[认领边界](../.agents/notes/implemented/architecture/2026-11-03-derive-claim-boundary.md)。在线路径把计算段交给 Worker、落库段留在主线程（见[派生计算线程](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-worker.md)），维护与回填仍在主线程算。在线已提交组独立保留，重启只需继续未完成组；未发布的切片代由启动恢复丢弃，上一代发布指针保持不动。离线调用 `drainDeriveTx` 时，由调用方外层事务决定整批回滚范围。
 
 #### 两个粒度：请求用途先于组结果
 
