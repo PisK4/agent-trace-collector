@@ -10,6 +10,7 @@ import {
 } from '../body-cache';
 import type { BodyReadCache, BodyReadStats } from '../body-cache';
 import { planBackgroundJobs, writeBackgroundJobsTx } from './bg-jobs';
+import type { BgJobPlan } from './bg-jobs';
 import {
   chainRolesOf, confirmedDeltaOf, initialPairState, matchPredecessor, pairOutcome,
   presentationDecision, replyCallsOf, requestResultsOf,
@@ -281,141 +282,202 @@ export function drainDeriveTx(db: Database, options: DrainOptions): DrainResult 
 /** 组派生可注入读取上下文：受控测量可换成小预算缓存，生产调用不传。 */
 export type DeriveGroupOptions = { bodyCache?: BodyReadCache };
 
-/** 组内全部阶段与 CAS 在调用方的同一个事务内完成；失败回滚当前事务。 */
-export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
-  groupOptions: DeriveGroupOptions = {}):
-  { processed: number; recomputed: number; retained: number; body_read: BodyReadStats } | null {
+/** 组派生的落库计划：计算段只读产出它，落库段用一个事务执行它。 */
+export type ApplyPlan = {
+  /** 认领时读到的队列身份；CAS 用 `group_epoch` 与 `input_revision` 挡住期间到达的输入。 */
+  group: QueuedGroup;
+  /** 认领时把旧算法号归一：落库段先写这一行，再按新号完成。 */
+  normalize_algorithm: boolean;
+  chain: {
+    reqId: number; prevReqId: number | null; relation: string;
+    deltaJson: string | null; chainRole: string;
+  }[];
+  roles: { reqId: number; role: string }[];
+  tools: ToolPlan;
+  jobs: BgJobPlan;
+  presentations: PresentationWrite[];
+};
+
+/** 一组的读数：计算段算出来，随结果交回调度方。 */
+export type DeriveGroupOutcome = {
+  processed: number; recomputed: number; retained: number; body_read: BodyReadStats;
+};
+
+/** 计算段的产物：待执行的计划与本次读数。 */
+export type DeriveGroupRound = { plan: ApplyPlan; outcome: DeriveGroupOutcome };
+
+/**
+ * 组派生的计算段：只读，产出落库计划。
+ *
+ * 只读连接与写连接都能传：这一段读的都是本轮不改的行（正文、块、请求身份），
+ * 本轮定下的结论全部留在内存与计划里，所以两种连接算出同一个计划。
+ * 返回 `null` 表示这个组本轮不该做（不脏、还有用途未判定）。
+ */
+export function computeDeriveGroup(db: Database, convKey: string, actor: string,
+  groupOptions: DeriveGroupOptions = {}): DeriveGroupRound | null {
   const group = db.query<QueuedGroup, [string, string]>(`
     SELECT conv_key,actor,group_epoch,input_revision,target_algorithm FROM derive_queue
     WHERE conv_key=? AND actor=? AND ${queuePendingSql()}`).get(convKey, actor);
   if (group === null) return null;
   // 认领前把队列行的目标算法归一到当前同步算法号：组变脏时旧行保留旧号，
-  // 直接完成等于宣称产物是新算法算的。规则住在 derive-state，切片认领走同一个。
-  if (group.target_algorithm !== GROUP_ALGORITHM) {
-    normalizeTargetAlgorithmTx(db, convKey, actor, GROUP_ALGORITHM);
-    group.target_algorithm = GROUP_ALGORITHM;
-  }
+  // 直接完成等于宣称产物是新算法算的。规则住在 derive-state，切片认领走同一个；
+  // 这里只在计划里记下要归一，写留给落库段。
+  const normalizeAlgorithm = group.target_algorithm !== GROUP_ALGORITHM;
+  if (normalizeAlgorithm) group.target_algorithm = GROUP_ALGORITHM;
   let processed = 0;
   let recomputed = 0;
   let retained = 0;
-    // 组里还有未判定用途的请求时不能完成：把组算干净等于替它们猜了一个用途。
-    // 这是认领后的复查（TOCTOU）：选组之后、处理之前可能又有请求挂进来。
-    // 与切片选组时的外层过滤共用同一段谓词，但查询角色各自保留。
-    const waiting = db.query<{ n: number }, [string, string]>(`
-      SELECT COUNT(*) AS n FROM request
-      WHERE conv_key=? AND actor=? AND ${purposePendingSql()}`)
-      .get(group.conv_key, group.actor)!.n;
-    if (waiting > 0) return null;
-    // 一轮组派生只建立一个块级读取作用域：链、工具、后台作业与展示阶段
-    // 共享同一份解压结果，组结束或失败即随局部变量一起释放。
-    const bodyCache = groupOptions.bodyCache ?? createBodyReadCache();
-    const rows = db.query<ChainRow, [string, string]>(`
-      SELECT req_id, actor, agent, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
-             title_source, title, model_served, req_kind, model_title, purpose_chain,
-             input_preview, input_preview_kind, reply_preview, reply_shape, interrupt_count, context_event
-      FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
-    const ordered = [...rows].sort(compareTraversalOrder);
-    // 同毫秒且没有来源位置证据的请求：可以遍历，但不能用来证明先后。
-    const uncertain = uncertainOrderIds(ordered);
-    // 本组已处理过的请求，供后面每一笔在链上找前驱。按正序推进，
-    // 所以这里只会看到"早于本笔"的祖先。
-    const ancestors: { reqId: number; fingerprints: readonly string[] }[] = [];
-    // 有正文不可读的祖先时，链是断的：后面那些请求即使对不上已知祖先，
-    // 也只能算"没法比"，不能断言成"另起一支"。
-    let sawEarlier = false;
-    let unreadableEarlier = false;
-    // 链阶段只收集；工具与摘要依赖本次配对，必须等全部关系确定后再写。
-    const pairRows: PairRow[] = [];
-    const presentations: PresentationInput[] = [];
-    // 本轮结论按 req_id 留一份内存副本：角色判定消费它，不再回读刚写下的行。
-    const relationByReq = new Map<number, { parent: number | null; relation: string }>();
-    for (const row of ordered) {
-      const current = fingerprintsOf(db, row.req_id);
-      // 增量输入（Responses 的 previous_response_id）不含完整历史：
-      // 既不能拿它找前驱，也不能让它充当后面请求的祖先。
-      const incremental = incrementalInputOf(db, row.req_id);
-      const replyInfo = current === null
-        ? { preview: row.reply_preview, shape: null }
-        : replyInfoOf(db, row.req_id, bodyCache);
-      // 用途已在请求阶段定下来：组阶段只消费 purpose_chain 与 req_kind，
-      // 不再自己认一遍标题或分类器请求。两处各认一次就会出现"用途说是 chat、
-      // 关系却按 title 算"的分裂。
-      const isAux = row.purpose_chain === 'exclude';
-      const isTitle = row.req_kind === 'title';
-      const modelTitle = row.model_title;
-      let match: PredecessorMatch;
-      if (isAux) {
-        match = { parent: null, relation: 'aux', delta: null, near: null };
-      } else if (current === null) {
-        // 本笔正文不可读：没法比，但也不能把上一笔的结论照抄过来。
-        match = { parent: null, relation: 'unknown', delta: null, near: null };
-      } else if (uncertain.has(row.req_id)) {
-        // 顺序未证实：同毫秒的来源身份只够排序，不够当因果证据。
-        match = { parent: null, relation: 'unknown', delta: null, near: null };
-      } else if (incremental) {
-        // 本笔只带新增部分：共同前缀比较没有可比对象，判成 confirmed 或 branch
-        // 都是拿不完整的历史下结论。
-        match = { parent: null, relation: 'unknown', delta: null, near: null };
-      } else {
-        // 顺序未证实的行在祖先扫描里仍占位（sawEarlier/unreadableEarlier 已记账），
-        // 分支到 unknown 的降级在 settleRelation 里完成，不再由调用方修补。
-        match = matchPredecessor(ancestors, current, sawEarlier, unreadableEarlier);
-      }
-      if (!isAux) {
-        // 排除用途是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
-        sawEarlier = true;
-        // 增量输入的指纹只是本笔新增部分：链在这里断开，后面的请求对不上
-        // 已知祖先时只能算"没法比"，不能断言成"另起一支"。
-        if (current === null || uncertain.has(row.req_id) || incremental) unreadableEarlier = true;
-      }
+  // 组里还有未判定用途的请求时不能完成：把组算干净等于替它们猜了一个用途。
+  // 这是认领后的复查（TOCTOU）：选组之后、处理之前可能又有请求挂进来。
+  // 与切片选组时的外层过滤共用同一段谓词，但查询角色各自保留。
+  const waiting = db.query<{ n: number }, [string, string]>(`
+    SELECT COUNT(*) AS n FROM request
+    WHERE conv_key=? AND actor=? AND ${purposePendingSql()}`)
+    .get(group.conv_key, group.actor)!.n;
+  if (waiting > 0) return null;
+  // 一轮组派生只建立一个块级读取作用域：链、工具、后台作业与展示阶段
+  // 共享同一份解压结果，组结束或失败即随局部变量一起释放。
+  const bodyCache = groupOptions.bodyCache ?? createBodyReadCache();
+  const rows = db.query<ChainRow, [string, string]>(`
+    SELECT req_id, actor, agent, actor_state, started_ms, sort_source, sort_key, prev_req_id, prev_relation,
+           title_source, title, model_served, req_kind, model_title, purpose_chain,
+           input_preview, input_preview_kind, reply_preview, reply_shape, interrupt_count, context_event
+    FROM request WHERE conv_key=? AND actor=? AND actor_state='known'`).all(group.conv_key, group.actor);
+  const ordered = [...rows].sort(compareTraversalOrder);
+  // 同毫秒且没有来源位置证据的请求：可以遍历，但不能用来证明先后。
+  const uncertain = uncertainOrderIds(ordered);
+  // 本组已处理过的请求，供后面每一笔在链上找前驱。按正序推进，
+  // 所以这里只会看到"早于本笔"的祖先。
+  const ancestors: { reqId: number; fingerprints: readonly string[] }[] = [];
+  // 有正文不可读的祖先时，链是断的：后面那些请求即使对不上已知祖先，
+  // 也只能算"没法比"，不能断言成"另起一支"。
+  let sawEarlier = false;
+  let unreadableEarlier = false;
+  // 链阶段只收集；工具与摘要依赖本次配对，必须等全部关系确定后再写。
+  const chain: ApplyPlan['chain'] = [];
+  const pairRows: PairRow[] = [];
+  const presentations: PresentationInput[] = [];
+  // 本轮结论按 req_id 留一份内存副本：角色判定消费它，不再回读刚写下的行。
+  const relationByReq = new Map<number, { parent: number | null; relation: string }>();
+  for (const row of ordered) {
+    const current = fingerprintsOf(db, row.req_id);
+    // 增量输入（Responses 的 previous_response_id）不含完整历史：
+    // 既不能拿它找前驱，也不能让它充当后面请求的祖先。
+    const incremental = incrementalInputOf(db, row.req_id);
+    const replyInfo = current === null
+      ? { preview: row.reply_preview, shape: null }
+      : replyInfoOf(db, row.req_id, bodyCache);
+    // 用途已在请求阶段定下来：组阶段只消费 purpose_chain 与 req_kind，
+    // 不再自己认一遍标题或分类器请求。两处各认一次就会出现"用途说是 chat、
+    // 关系却按 title 算"的分裂。
+    const isAux = row.purpose_chain === 'exclude';
+    const isTitle = row.req_kind === 'title';
+    const modelTitle = row.model_title;
+    let match: PredecessorMatch;
+    if (isAux) {
+      match = { parent: null, relation: 'aux', delta: null, near: null };
+    } else if (current === null) {
+      // 本笔正文不可读：没法比，但也不能把上一笔的结论照抄过来。
+      match = { parent: null, relation: 'unknown', delta: null, near: null };
+    } else if (uncertain.has(row.req_id)) {
+      // 顺序未证实：同毫秒的来源身份只够排序，不够当因果证据。
+      match = { parent: null, relation: 'unknown', delta: null, near: null };
+    } else if (incremental) {
+      // 本笔只带新增部分：共同前缀比较没有可比对象，判成 confirmed 或 branch
+      // 都是拿不完整的历史下结论。
+      match = { parent: null, relation: 'unknown', delta: null, near: null };
+    } else {
+      // 顺序未证实的行在祖先扫描里仍占位（sawEarlier/unreadableEarlier 已记账），
+      // 分支到 unknown 的降级在 settleRelation 里完成，不再由调用方修补。
+      match = matchPredecessor(ancestors, current, sawEarlier, unreadableEarlier);
+    }
+    if (!isAux) {
+      // 排除用途是旁路，不能让后面的主请求误以为"前面还有一笔可比的请求"。
+      sawEarlier = true;
+      // 增量输入的指纹只是本笔新增部分：链在这里断开，后面的请求对不上
+      // 已知祖先时只能算"没法比"，不能断言成"另起一支"。
+      if (current === null || uncertain.has(row.req_id) || incremental) unreadableEarlier = true;
+    }
 
-      const delta = match.delta;
-      const deltaJson = delta === null ? null : JSON.stringify(delta);
-      // 关系是本阶段唯一的写入；标题、摘要与版本留到工具配对之后。
-      // req_kind/model_title 属于请求用途，不在这里覆盖。
-      db.run(`UPDATE request SET prev_req_id=?,prev_relation=?,delta_ordinals=?,
-        chain_role=? WHERE req_id=?`, [
-        match.parent, match.relation, deltaJson,
-        isAux ? 'aux' : 'main', row.req_id,
-      ]);
-      relationByReq.set(row.req_id, { parent: match.parent, relation: match.relation });
-      pairRows.push({ ...row,
-        prev_relation: match.relation, delta_ordinals: deltaJson });
-      // 中断计数：排除用途按规则贡献 0（排除是判定，不留 NULL，改判行也不带旧值）；
-      // 确定增量在手（first/confirmed，隐含正文可读且参与）时按本次增量重算；
-      // 关系未知与分支没有"新增"可言，保留旧值，不冒充 0。
-      const interrupts = isAux ? 0
-        : delta === null ? null : interruptCountTx(db, row.req_id, delta, bodyCache);
-      // 上下文事件位：排除用途判 none（标题请求不压缩）；正文可读时按关系与
-      // 增量判定，其余场合 null 保留旧值。
-      const context = current === null ? null
-        : contextEventTx(db, row.req_id, match.relation, match.delta, bodyCache);
-      presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts, context });
-      if (current === null) retained += 1;
-      else recomputed += 1;
-      if (!isAux && current !== null && !uncertain.has(row.req_id) && !incremental) {
-        ancestors.push({ reqId: row.req_id, fingerprints: current });
-      }
-      processed += 1;
+    const delta = match.delta;
+    const deltaJson = delta === null ? null : JSON.stringify(delta);
+    // 关系是本阶段唯一的写入；标题、摘要与版本留到工具配对之后。
+    // req_kind/model_title 属于请求用途，不在这里覆盖。
+    chain.push({
+      reqId: row.req_id, prevReqId: match.parent, relation: match.relation,
+      deltaJson, chainRole: isAux ? 'aux' : 'main',
+    });
+    relationByReq.set(row.req_id, { parent: match.parent, relation: match.relation });
+    pairRows.push({ ...row,
+      prev_relation: match.relation, delta_ordinals: deltaJson });
+    // 中断计数：排除用途按规则贡献 0（排除是判定，不留 NULL，改判行也不带旧值）；
+    // 确定增量在手（first/confirmed，隐含正文可读且参与）时按本次增量重算；
+    // 关系未知与分支没有"新增"可言，保留旧值，不冒充 0。
+    const interrupts = isAux ? 0
+      : delta === null ? null : interruptCountTx(db, row.req_id, delta, bodyCache);
+    // 上下文事件位：排除用途判 none（标题请求不压缩）；正文可读时按关系与
+    // 增量判定，其余场合 null 保留旧值。
+    const context = current === null ? null
+      : contextEventTx(db, row.req_id, match.relation, match.delta, bodyCache);
+    presentations.push({ row, current, replyInfo, isAux, isTitle, modelTitle, match, interrupts, context });
+    if (current === null) retained += 1;
+    else recomputed += 1;
+    if (!isAux && current !== null && !uncertain.has(row.req_id) && !incremental) {
+      ancestors.push({ reqId: row.req_id, fingerprints: current });
     }
-    writeChainRolesTx(db, planChainRoles(ordered, relationByReq));
-    const toolPlan = planToolCalls(db, group, pairRows, uncertain, bodyCache);
-    writeToolPlanTx(db, group, toolPlan);
+    processed += 1;
+  }
+  // 角色判定消费本轮的链关系；工具配对产出的关联再喂给展示阶段。
+  const tools = planToolCalls(db, group, pairRows, uncertain, bodyCache);
+  const plan: ApplyPlan = {
+    group, normalize_algorithm: normalizeAlgorithm,
+    chain, roles: planChainRoles(ordered, relationByReq),
+    tools,
     // 背景作业配对与工具配对同批：都在组完成事务里按当前可读正文重建。
-    writeBackgroundJobsTx(db, group, planBackgroundJobs(db, pairRows, bodyCache));
-    for (const input of presentations) {
-      writePresentationTx(db, presentationWrite(db, input, toolPlan.associations, group, bodyCache));
-    }
-    // CAS 失败回滚本组的全部阶段。在线已提交组保留，维护由外层事务决定整批回滚。
-    const changed = db.run(
-      `UPDATE derive_queue SET state='clean',dirty_since_ms=NULL,
-         published_revision=?,published_algorithm=?
-       WHERE conv_key=? AND actor=? AND group_epoch=? AND input_revision=? AND target_algorithm=?`,
-      [group.input_revision, group.target_algorithm, group.conv_key, group.actor,
-        group.group_epoch, group.input_revision, group.target_algorithm],
-    ).changes;
-    if (changed !== 1) throw new Error('derive_input_changed');
-    return { processed, recomputed, retained, body_read: bodyReadCounters(bodyCache.snapshot()) };
+    jobs: planBackgroundJobs(db, pairRows, bodyCache),
+    presentations: presentations.map(input =>
+      presentationWrite(db, input, tools.associations, group, bodyCache)),
+  };
+  return {
+    plan,
+    outcome: {
+      processed, recomputed, retained,
+      body_read: bodyReadCounters(bodyCache.snapshot()),
+    },
+  };
+}
+
+/** 落库段：一个事务按序执行计划，末尾 CAS 守卫；输入在计划之后变过就抛 `derive_input_changed`。 */
+export function applyDeriveGroup(db: Database, round: DeriveGroupRound): DeriveGroupOutcome {
+  const { plan } = round;
+  const group = plan.group;
+  if (plan.normalize_algorithm) normalizeTargetAlgorithmTx(db, group.conv_key, group.actor, GROUP_ALGORITHM);
+  const relation = db.prepare(`UPDATE request SET prev_req_id=?,prev_relation=?,delta_ordinals=?,
+    chain_role=? WHERE req_id=?`);
+  for (const row of plan.chain) {
+    relation.run(row.prevReqId, row.relation, row.deltaJson, row.chainRole, row.reqId);
+  }
+  writeChainRolesTx(db, plan.roles);
+  writeToolPlanTx(db, group, plan.tools);
+  writeBackgroundJobsTx(db, group, plan.jobs);
+  for (const write of plan.presentations) writePresentationTx(db, write);
+  // CAS 失败回滚本组的全部阶段。在线已提交组保留，维护由外层事务决定整批回滚。
+  const changed = db.run(
+    `UPDATE derive_queue SET state='clean',dirty_since_ms=NULL,
+       published_revision=?,published_algorithm=?
+     WHERE conv_key=? AND actor=? AND group_epoch=? AND input_revision=? AND target_algorithm=?`,
+    [group.input_revision, group.target_algorithm, group.conv_key, group.actor,
+      group.group_epoch, group.input_revision, group.target_algorithm],
+  ).changes;
+  if (changed !== 1) throw new Error('derive_input_changed');
+  return round.outcome;
+}
+
+/** 组内全部阶段与 CAS 在调用方的同一个事务内完成；失败回滚当前事务。 */
+export function drainDeriveGroupTx(db: Database, convKey: string, actor: string,
+  groupOptions: DeriveGroupOptions = {}): DeriveGroupOutcome | null {
+  const round = computeDeriveGroup(db, convKey, actor, groupOptions);
+  return round === null ? null : applyDeriveGroup(db, round);
 }
 
 /** 显式批事务入口；在线调度由 derive-unit 按组提交并检查预算。 */
