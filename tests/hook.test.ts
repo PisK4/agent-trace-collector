@@ -1030,3 +1030,54 @@ test('hook证据过期后报告expired且current为false', () => {
     f.close();
   }
 });
+
+test('OTLP 先到、同 turn 的 hook 后到：复用占位行，不新增请求', () => {
+  const f = fixture();
+  try {
+    const now = 1_700_000_000_000;
+    const conv = JSON.stringify(['session', 'thread-turn-1']);
+    const otlpReq = f.store.write(db => {
+      const result = db.run(`
+        INSERT INTO request(agent,session,conv_key,conv_source,actor,actor_state,
+          started_ms,day,via,model_requested,body_state,derive_version,have,created_at,updated_at,turn_ref)
+        VALUES ('codex','thread-turn-1',?,'session','thread-turn-1','known',
+          ?, '2026-11-03','otlp','synth-codex-model','summary',0,8,?,?,'turn-turn-1')`,
+        [conv, now, now, now]);
+      return Number(result.lastInsertRowid);
+    });
+    const accepted = acceptHook(f.store, envelope({
+      hook_id: 'hook-turn-1',
+      observed_start_ms: now + 1_000,
+      observed_finish_ms: now + 2_000,
+      protocol: 'responses',
+      path: '/v1/responses',
+      agent: 'codex',
+      session: 'thread-turn-1',
+      model: 'synth-codex-model',
+      request: {
+        client_metadata: {
+          'x-codex-turn-metadata': {
+            thread_source: 'user', turn_trigger: 'composer', turn_id: 'turn-turn-1',
+          },
+        },
+        input: [{ role: 'user', content: [{ type: 'input_text', text: '重绘 ATC 矩阵 IP' }] }],
+      },
+      reply: { id: 'resp_turn_1' },
+    }), 1, salt);
+
+    expect(accepted.req_id).toBe(otlpReq);
+    expect((f.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(1);
+    const row = f.store.read.query(`
+      SELECT via, turn_ref, response_id_norm, body_state FROM request WHERE req_id=?`,
+    ).get(otlpReq) as Record<string, unknown>;
+    expect(row).toMatchObject({
+      via: 'otlp', turn_ref: 'turn-turn-1', response_id_norm: 'turn_1', body_state: 'available',
+    });
+    const evidence = f.store.read.query(`
+      SELECT merge_state, match_rule FROM request_evidence
+      WHERE req_id=? AND source_kind='hook'`).get(otlpReq) as { merge_state: string; match_rule: string };
+    expect(evidence).toEqual({ merge_state: 'merged', match_rule: 'turn_ref.v1' });
+  } finally {
+    f.close();
+  }
+});

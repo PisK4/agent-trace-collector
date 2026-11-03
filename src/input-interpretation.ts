@@ -43,7 +43,18 @@ const DROP_TAGS = new Set([
   'system-reminder', 'transcript', 'local-command-stdout', 'local-command-caveat',
   'command-name', 'command-message', 'command-args', 'system-notice', 'recap',
   'job', 'file', 'chat',
+  // Codex 的注入块：AGENTS 正文、环境上下文都不是用户说的话。
+  'instructions', 'environment_context',
 ]);
+/**
+ * Codex 的注入块按完整结构识别：只有整段都是已知注入时才丢。
+ * `turn_aborted` 后面若还跟着用户自己的话，剥壳保留；`open_page` 只在
+ * 内层是纯 `{page_id}` 控制 JSON 时丢。
+ */
+const CONDITIONAL_DROP_TAGS = new Set(['turn_aborted', 'external_codex_apps_open_page']);
+const TURN_ABORTED_PREFIX = /^\s*The user interrupted the previous turn on purpose\./i;
+/** Codex 的 AGENTS 头行，不是标签：`# AGENTS.md instructions for <path>`。 */
+const AGENTS_PREFIX = /^\s*#\s*AGENTS\.md instructions for [^\n]*\n?/i;
 /** 粘贴标记：`<pasted_content id=…>` 独立成行，粘贴正文紧跟其后。 */
 const PASTE_MARKER = /^\s*<pasted_content(?:\s[^>]*)?>[ \t]*(?:\r?\n)?/i;
 /** 粘贴的闭合标签：常落在后续消息里，标签后可能还跟着用户自己的话。 */
@@ -72,7 +83,23 @@ const HERMES_INSTRUCTION_ANCHOR = 'The user has provided the following instructi
 type StripResult = { text: string; tag: string | null; malformed: boolean };
 
 function knownWrapper(tag: string): boolean {
-  return UNWRAP_TAGS.has(tag) || DROP_TAGS.has(tag) || /^command-[a-z-]+$/.test(tag);
+  return UNWRAP_TAGS.has(tag) || DROP_TAGS.has(tag) || CONDITIONAL_DROP_TAGS.has(tag)
+    || /^command-[a-z-]+$/.test(tag);
+}
+
+/** 条件丢弃：只有内层是已知注入形状时才丢，否则剥壳保留。 */
+function conditionalDrop(tag: string, inner: string): boolean {
+  if (tag === 'turn_aborted') return TURN_ABORTED_PREFIX.test(inner);
+  if (tag !== 'external_codex_apps_open_page') return false;
+  const trimmed = inner.trim();
+  if (!trimmed.startsWith('{')) return false;
+  try {
+    const value: unknown = JSON.parse(trimmed);
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+      && Object.keys(value).every(key => key === 'page_id');
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -82,7 +109,7 @@ function knownWrapper(tag: string): boolean {
  * 嵌套同名标签按深度扫描，未闭合返回 malformed，由调用方保留原文。
  */
 function stripLeadingTag(text: string): StripResult {
-  const opening = /^\s*<([a-z][a-z0-9-]*)(?:\s[^>]*)?>/i.exec(text);
+  const opening = /^\s*<([a-z][a-z0-9_-]*)(?:\s[^>]*)?>/i.exec(text);
   if (opening === null) return { text, tag: null, malformed: false };
   const tag = (opening[1] ?? '').toLowerCase();
   if (!knownWrapper(tag)) return { text, tag: null, malformed: false };
@@ -97,8 +124,9 @@ function stripLeadingTag(text: string): StripResult {
     if (depth === 0) {
       const inner = text.slice(cursor, hit.index);
       const rest = text.slice(hit.index + hit[0].length);
+      const drop = DROP_TAGS.has(tag) || conditionalDrop(tag, inner);
       return {
-        text: UNWRAP_TAGS.has(tag) ? `${inner}${rest}` : rest,
+        text: drop ? rest : `${inner}${rest}`,
         tag,
         malformed: false,
       };
@@ -121,6 +149,13 @@ function cleanBlock(block: string, removed: string[]): string {
   for (let round = 0; round < 8; round++) {
     let changed = false;
     for (;;) {
+      const agents = AGENTS_PREFIX.exec(current);
+      if (agents !== null) {
+        current = current.slice(agents[0].length);
+        removed.push('codex-agents-prefix');
+        changed = true;
+        continue;
+      }
       const paste = PASTE_MARKER.exec(current);
       if (paste !== null) {
         current = current.slice(paste[0].length);
@@ -211,6 +246,13 @@ function finalize(
   for (let round = 0; round < 8; round++) {
     let changed = false;
     for (;;) {
+      const agents = AGENTS_PREFIX.exec(current);
+      if (agents !== null) {
+        current = current.slice(agents[0].length);
+        removed.push('codex-agents-prefix');
+        changed = true;
+        continue;
+      }
       const result = stripLeadingTag(current);
       if (result.malformed) {
         return { ...base, state: 'unrecognized', kind: 'wrapped', text: original, removed };

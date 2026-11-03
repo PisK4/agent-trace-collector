@@ -51,6 +51,46 @@ export function spanRefKey(traceId: Uint8Array, spanId: Uint8Array): string {
   return `${idHex(traceId)}/${idHex(spanId)}`;
 }
 
+/** 兜底时间窗：magpie 行还没写 turn_ref 时，只在同一会话的 turn 窗口内找。 */
+const TURN_DEDUPE_WINDOW_MS = 60_000;
+
+/**
+ * 同一 turn 已有 magpie 行时返回它，供 OTLP 只写证据、不另建行。
+ *
+ * 主键是 `turn_ref`（Codex 请求体 turn_id 与 OTLP turn.id 同值）；magpie 侧
+ * 尚未结算指纹时退化为同会话 + turn 时间窗 + 模型。两者都拿不到才放弃，
+ * 不按相邻 span 猜。
+ */
+function magpieTurnRequestTx(
+  db: Database,
+  mapping: { agent: string; turnRef: string | null; modelRequested: string | null },
+  convKey: string | null,
+  started: number,
+  endMs: number | null,
+): number | null {
+  if (mapping.turnRef !== null) {
+    const row = db.query<{ req_id: number }, [string, string]>(
+      'SELECT req_id FROM request WHERE turn_ref=? AND agent=? ORDER BY req_id LIMIT 1',
+    ).get(mapping.turnRef, mapping.agent);
+    if (row !== null && row !== undefined) return row.req_id;
+  }
+  if (convKey === null) return null;
+  const from = started - TURN_DEDUPE_WINDOW_MS;
+  const to = (endMs ?? started) + TURN_DEDUPE_WINDOW_MS;
+  const model = mapping.modelRequested;
+  const row = model === null
+    ? db.query<{ req_id: number }, [string, string, number, number]>(`
+        SELECT req_id FROM request
+        WHERE conv_key=? AND agent=? AND via<>'otlp' AND started_ms BETWEEN ? AND ?
+        ORDER BY started_ms, req_id LIMIT 1`).get(convKey, mapping.agent, from, to)
+    : db.query<{ req_id: number }, [string, string, number, number, string, string]>(`
+        SELECT req_id FROM request
+        WHERE conv_key=? AND agent=? AND via<>'otlp' AND started_ms BETWEEN ? AND ?
+          AND (model_requested=? OR model_served=?)
+        ORDER BY started_ms, req_id LIMIT 1`).get(convKey, mapping.agent, from, to, model, model);
+  return row?.req_id ?? null;
+}
+
 export function acceptOtlpTraces(
   store: Store,
   payload: OtlpTracesPayload,
@@ -116,14 +156,22 @@ export function acceptOtlpTraces(
         const mapping = mapSpan(verdict.rule, span);
         const conv = otlpConv(mapping.session);
         const started = nanoToMs(span.startNano);
+        const endMs = span.endNano === null ? null : nanoToMs(span.endNano);
+        // 同一 thread+turn 已有 magpie 行：证据照写，但不另建行，避免重复计数。
+        const turnOwner = magpieTurnRequestTx(db, mapping, conv?.key ?? null, started, endMs);
+        if (turnOwner !== null) {
+          insertEvidenceTx(db, turnOwner, 'otlp_span', refKey, 'merged', MATCH_BY_SPAN_IDENTITY, now);
+          markRequestInputTx(db, turnOwner);
+          continue;
+        }
         const insert = db.run(
           `INSERT INTO request(
              agent,session,conv_key,conv_source,actor,actor_state,
              started_ms,day,via,stop,model_requested,model_served,
              in_tok,out_tok,cache_read,cache_write,
              body_state,derive_version,have,created_at,updated_at,title,title_source,
-             cost_state,attempt_state,sort_source,sort_key
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             cost_state,attempt_state,sort_source,sort_key,turn_ref
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [
             mapping.agent, mapping.session, conv?.key ?? null, conv?.source ?? null,
             mapping.session, conv === null ? 'unknown' : 'known',
@@ -132,7 +180,7 @@ export function acceptOtlpTraces(
             mapping.inTok, mapping.outTok, mapping.cacheRead, mapping.cacheWrite,
             'summary', 0, HAVE_OTLP, now, now,
             modelTimeTitle(mapping.modelRequested, started), 'model_time',
-            'absent', 'known', 'otlp_span', refKey,
+            'absent', 'known', 'otlp_span', refKey, mapping.turnRef,
           ],
         );
         const reqId = Number(insert.lastInsertRowid);

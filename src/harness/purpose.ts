@@ -9,6 +9,7 @@ import {
   tailTemplateDecision,
 } from './claude';
 import { hermesDecision } from './hermes';
+import { codexDecision, codexTurnFactsOf, type UpstreamTurnFacts } from './codex';
 import { skillHintDecision } from './omp';
 import {
   PURPOSE_VERSION,
@@ -38,8 +39,14 @@ export const PURPOSE_RULES: readonly HarnessPurposeRule[] = [
   { agent: 'claude', decide: compactionDecision },
   { agent: 'claude', decide: tailTemplateDecision },
   { agent: 'hermes', decide: hermesDecision },
+  { agent: 'codex', decide: codexDecision },
   { agent: 'omp', decide: skillHintDecision },
 ];
+
+/** 共享读取层取上游 turn 事实的入口：只转发，不在此比较 Harness 名称。 */
+export function upstreamTurnFactsOf(request: unknown): UpstreamTurnFacts | null {
+  return codexTurnFactsOf(request);
+}
 
 /**
  * 一条请求的用途判定。

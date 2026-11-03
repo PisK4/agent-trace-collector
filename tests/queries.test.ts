@@ -7,7 +7,7 @@ import { derivationOf, projectionMetaReading, promptReadingOf, sourceFactsReadin
 import type { ProjectionMetaReading } from '../src/queries/readings';
 import { getRequest, listRequests } from '../src/queries/requests';
 import { getStats } from '../src/queries/stats';
-import { listSessions } from '../src/queries/sessions';
+import { listSessions, titleBindingOf } from '../src/queries/sessions';
 import { persistBody } from '../src/body';
 import { drainDerive, enqueueDerive } from '../src/derive/sync';
 import { markGroupDirtyTx } from '../src/derive/state';
@@ -1276,5 +1276,142 @@ test('空库、无会话键与同毫秒并列的翻页边界', () => {
     const second = listSessions(f.store, 2, first.next_cursor!);
     expect(second.items.map(row => row.conv_key)).toEqual([JSON.stringify(['session', 'aaa'])]);
     expect(second.next_cursor).toBeNull();
+  } finally { f.close(); }
+});
+
+function setUserFingerprint(store: ReturnType<typeof fixture>['store'], reqId: number, fingerprint: string): void {
+  store.write(db => db.run('UPDATE request SET user_fingerprint=? WHERE req_id=?', [fingerprint, reqId]));
+}
+
+function codexSession(store: ReturnType<typeof fixture>['store'], key: string, options: {
+  startedMs: number; fingerprint: string; title?: string; modelTitle?: string | null;
+  kind?: string; chain?: 'participate' | 'exclude'; status?: string; pending?: number;
+}): number {
+  const reqId = seedPurposeRequest(store, {
+    convKey: JSON.stringify(['session', key]),
+    agent: 'codex',
+    startedMs: options.startedMs,
+    purposeStatus: options.status ?? 'recognized',
+    purposePending: options.pending ?? 0,
+    purposeChain: options.chain ?? 'participate',
+    reqKind: options.kind ?? 'chat',
+    modelTitle: options.modelTitle ?? null,
+    title: options.title ?? '',
+    cleanGroup: true,
+  });
+  setUserFingerprint(store, reqId, options.fingerprint);
+  return reqId;
+}
+
+test('跨组标题：标题请求与主会话指纹唯一命中时才借模型标题', () => {
+  const f = fixture();
+  try {
+    codexSession(f.store, 'main', {
+      startedMs: 1_700_000_000_000, fingerprint: 'fp-redraw', title: '用户首句',
+    });
+    codexSession(f.store, 'title-card', {
+      startedMs: 1_700_000_000_500, fingerprint: 'fp-redraw',
+      kind: 'title', chain: 'exclude', modelTitle: '重绘 ATC 矩阵 IP',
+    });
+
+    const mainKey = JSON.stringify(['session', 'main']);
+    const mainRow = listSessions(f.store, 10).items.find(row => row.conv_key === mainKey);
+    expect(mainRow?.title).toBe('重绘 ATC 矩阵 IP');
+    expect(titleBindingOf(f.store, mainKey)).toEqual({
+      status: 'bound', title: '重绘 ATC 矩阵 IP', title_matches: 1, session_matches: 1,
+    });
+
+    const titleKey = JSON.stringify(['session', 'title-card']);
+    const titleRow = listSessions(f.store, 10).items.find(row => row.conv_key === titleKey);
+    // 标题请求自身仍是旁路卡（前端折叠），不参与主链。
+    expect(titleRow?.flags).toContain('bypass');
+  } finally { f.close(); }
+});
+
+test('跨组标题：零命中不绑，退回用户标题', () => {
+  const f = fixture();
+  try {
+    const mainKey = JSON.stringify(['session', 'main-zero']);
+    codexSession(f.store, 'main-zero', {
+      startedMs: 1_700_000_000_000, fingerprint: 'fp-main-zero', title: '用户首句',
+    });
+    codexSession(f.store, 'title-zero', {
+      startedMs: 1_700_000_000_500, fingerprint: 'fp-other',
+      kind: 'title', chain: 'exclude', modelTitle: '不该出现的标题',
+    });
+    const mainRow = listSessions(f.store, 10).items.find(row => row.conv_key === mainKey);
+    expect(mainRow?.title).not.toBe('不该出现的标题');
+    expect(titleBindingOf(f.store, mainKey)).toEqual({
+      status: 'unbound', title: null, title_matches: 0, session_matches: 0,
+    });
+  } finally { f.close(); }
+});
+
+test('跨组标题：多标题或多会话命中都明确不绑', () => {
+  const f = fixture();
+  try {
+    const mainKey = JSON.stringify(['session', 'main-multi']);
+    codexSession(f.store, 'main-multi', {
+      startedMs: 1_700_000_000_000, fingerprint: 'fp-multi', title: '用户首句',
+    });
+    codexSession(f.store, 'title-multi-a', {
+      startedMs: 1_700_000_000_400, fingerprint: 'fp-multi',
+      kind: 'title', chain: 'exclude', modelTitle: '标题 A',
+    });
+    codexSession(f.store, 'title-multi-b', {
+      startedMs: 1_700_000_000_500, fingerprint: 'fp-multi',
+      kind: 'title', chain: 'exclude', modelTitle: '标题 B',
+    });
+    const mainRow = listSessions(f.store, 10).items.find(row => row.conv_key === mainKey);
+    expect(mainRow?.title).not.toBe('标题 A');
+    expect(titleBindingOf(f.store, mainKey)).toMatchObject({
+      status: 'ambiguous', title: null, title_matches: 2,
+    });
+
+    // 同一指纹命中两个主会话：即使标题唯一，也不能把标题同时挂到两张卡上。
+    const f2 = fixture();
+    try {
+      const a = JSON.stringify(['session', 'main-a']);
+      codexSession(f2.store, 'main-a', { startedMs: 1_700_000_000_000, fingerprint: 'fp-two' });
+      codexSession(f2.store, 'main-b', { startedMs: 1_700_000_000_100, fingerprint: 'fp-two' });
+      codexSession(f2.store, 'title-one', {
+        startedMs: 1_700_000_000_500, fingerprint: 'fp-two',
+        kind: 'title', chain: 'exclude', modelTitle: '唯一标题',
+      });
+      expect(titleBindingOf(f2.store, a)).toMatchObject({
+        status: 'ambiguous', title: null, session_matches: 2,
+      });
+      const aRow = listSessions(f2.store, 10).items.find(row => row.conv_key === a);
+      expect(aRow?.title).not.toBe('唯一标题');
+    } finally { f2.close(); }
+  } finally { f.close(); }
+});
+
+test('后台组标记：ambient 混入未知参与链仍是 background，出现已识别主链则解除', () => {
+  const f = fixture();
+  try {
+    const ambientKey = JSON.stringify(['session', 'ambient']);
+    codexSession(f.store, 'ambient', {
+      startedMs: 1_700_000_000_000, fingerprint: 'fp-ambient',
+      kind: 'source:ambient_suggestions', chain: 'exclude',
+    });
+    codexSession(f.store, 'ambient', {
+      startedMs: 1_700_000_000_100, fingerprint: 'fp-ambient-unknown',
+      status: 'missing', pending: 0,
+    });
+    const ambient = listSessions(f.store, 10).items.find(row => row.conv_key === ambientKey);
+    expect(ambient?.flags).toContain('background');
+    expect(ambient?.flags).not.toContain('bypass');
+
+    const mixedKey = JSON.stringify(['session', 'mixed']);
+    codexSession(f.store, 'mixed', {
+      startedMs: 1_700_000_000_000, fingerprint: 'fp-mixed',
+      kind: 'source:ambient_suggestions', chain: 'exclude',
+    });
+    codexSession(f.store, 'mixed', {
+      startedMs: 1_700_000_000_100, fingerprint: 'fp-mixed-main',
+    });
+    const mixed = listSessions(f.store, 10).items.find(row => row.conv_key === mixedKey);
+    expect(mixed?.flags).not.toContain('background');
   } finally { f.close(); }
 });

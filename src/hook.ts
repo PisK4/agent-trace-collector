@@ -15,8 +15,9 @@ import {
   resetRequestInputEpochTx,
 } from './derive/state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
-import { HAVE_BODY, MATCH_BY_RESPONSE_ID, hookConv, insertEvidenceTx, sessionIdentity } from './evidence';
+import { HAVE_BODY, MATCH_BY_RESPONSE_ID, MATCH_BY_TURN, hookConv, insertEvidenceTx, sessionIdentity } from './evidence';
 import type { ConvRef } from './evidence';
+import { codexTurnFactsOf } from './harness/codex';
 
 /**
  * hook 回调的接收与证据关联。
@@ -260,17 +261,36 @@ export function acceptHook(
     const redactedReply = envelope.reply === null ? null : redact(envelope.reply, salt);
 
     // 先决定关联对象，再写请求：已有关联时复用那一条，避免多造一行。
+    const turnRef = envelope.request === null ? null : (codexTurnFactsOf(envelope.request)?.turnRef ?? null);
     const joined = responseIdNorm === null ? { candidates: [] as number[], target: null as number | null }
       : (() => {
         const candidates = findCandidates(db, responseIdNorm);
         return { candidates, target: candidates.length === 1 ? candidates[0]! : null };
       })();
+    // OTLP 先到、magpie 后到：turn 身份唯一时复用 OTLP 占位行，不另建重复行。
+    let joinedByTurn = false;
+    if (joined.target === null && turnRef !== null) {
+      const rows = db.query<{ req_id: number }, [string]>(`
+        SELECT req_id FROM request WHERE turn_ref=? AND via='otlp' ORDER BY req_id LIMIT 2`,
+      ).all(turnRef);
+      if (rows.length === 1) {
+        joined.target = rows[0]!.req_id;
+        joinedByTurn = true;
+      }
+    }
 
     let reqId: number;
     if (joined.target !== null) {
       reqId = joined.target;
     } else {
       reqId = insertHookRequest(db, envelope, now, responseIdNorm, digestConv);
+    }
+    if (turnRef !== null) {
+      db.run('UPDATE request SET turn_ref=COALESCE(turn_ref,?) WHERE req_id=?', [turnRef, reqId]);
+    }
+    if (responseIdNorm !== null) {
+      db.run('UPDATE request SET response_id_norm=COALESCE(response_id_norm,?) WHERE req_id=?',
+        [responseIdNorm, reqId]);
     }
 
     const body: BodyInput = {
@@ -304,7 +324,8 @@ export function acceptHook(
     }
 
     insertEvidenceTx(db, reqId, 'hook', envelope.hook_id,
-      joined.target === null ? 'pending' : 'merged', MATCH_BY_RESPONSE_ID, now);
+      joined.target === null ? 'pending' : 'merged',
+      joinedByTurn ? MATCH_BY_TURN : MATCH_BY_RESPONSE_ID, now);
     db.run(
       `INSERT INTO raw_hook(hook_id,received_at,protocol,path,agent,session,cwd,origin,model,stream,success,duration_ms,
          request_z,response_z,request_bytes,response_bytes,parse_state,reply_state,miss_reason,magpie_version)
@@ -323,7 +344,7 @@ export function acceptHook(
       ],
     );
 
-    savePending(db, envelope, responseIdNorm, joined.candidates, now);
+    if (joined.target === null) savePending(db, envelope, responseIdNorm, joined.candidates, now);
     db.run(`UPDATE request SET have=have|${HAVE_BODY}, updated_at=? WHERE req_id=?`, [now, reqId]);
     projectRequestTx(db, reqId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
     // 直接命中已有请求与新建请求都要推进修订：hook 证据、正文与降级原因都是派生输入。

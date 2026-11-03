@@ -77,6 +77,9 @@ export const MATCH_BY_RESPONSE_ID = 'response_id_norm.v1';
 /** OTLP span 证据的匹配规则名：物理身份 (trace_id, span_id) 直接落位，不猜关联。 */
 export const MATCH_BY_SPAN_IDENTITY = 'trace_span.v1';
 
+/** 上游 turn 身份相同：未按 response ID 命中时，hook 证据落到 OTLP 占位行。 */
+export const MATCH_BY_TURN = 'turn_ref.v1';
+
 /**
  * 在调用方现有事务内登记一条来源证据：INSERT OR IGNORE，重复幂等。
  * 不自行开事务；merge_state 取 pending（待关联）或 merged（已落位）。

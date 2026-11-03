@@ -15,11 +15,12 @@
 
 import type { OtlpAttrs, OtlpSpan } from './decode';
 
-export const OTLP_MAPPING_VERSION = 3;
+export const OTLP_MAPPING_VERSION = 4;
 
 /** 属性键按序回退取值；空数组表示该列本版不映射（保持 NULL）。 */
 type AttrKeys = {
   session: readonly string[];
+  turn: readonly string[];
   modelRequested: readonly string[];
   modelServed: readonly string[];
   stop: readonly string[];
@@ -59,6 +60,7 @@ export const SPAN_RULES: readonly SpanRule[] = [
     matches: span => span.name === 'claude_code.llm_request',
     keys: {
       session: ['gen_ai.conversation.id', 'session.id'],
+      turn: [],
       modelRequested: ['gen_ai.request.model'],
       modelServed: [],
       stop: ['stop_reason'],
@@ -75,6 +77,7 @@ export const SPAN_RULES: readonly SpanRule[] = [
     matches: span => span.attrs['gen_ai.operation.name'] === 'chat',
     keys: {
       session: ['gen_ai.conversation.id'],
+      turn: [],
       modelRequested: ['gen_ai.request.model'],
       modelServed: ['gen_ai.response.model'],
       stop: ['gen_ai.response.finish_reasons'],
@@ -85,14 +88,21 @@ export const SPAN_RULES: readonly SpanRule[] = [
     },
   },
   {
-    // originator 家族：exec 与非交互入口是 codex_exec，交互 CLI 是 codex_cli_rs，
-    // 其余为二进制里的其他入口名。取值以实测与二进制枚举为准。
-    service: ['codex_exec', 'codex_cli_rs', 'codex_tui', 'codex_vscode', 'codex_mcp_server', 'codex_app_server'],
+    // 真实 `service.name` 是连字符形式（`codex-app-server` / `codex-exec-server`，
+    // 2026-11-03 本机实测）；下划线形式是旧导出与历史测试的写法，保留兼容。
+    service: [
+      'codex-app-server', 'codex-exec-server', 'codex-cli-rs', 'codex-tui',
+      'codex-vscode', 'codex-mcp-server',
+      'codex_app_server', 'codex_exec', 'codex_cli_rs', 'codex_tui',
+      'codex_vscode', 'codex_mcp_server',
+    ],
     agent: 'codex',
     ruleId: 'span_name',
     matches: span => span.name === 'session_task.turn',
     keys: {
       session: ['thread.id'],
+      // turn.id 是 OTLP 侧与 magpie 侧共享的去重键；一个 turn 可覆盖多笔请求。
+      turn: ['turn.id'],
       modelRequested: ['model'],
       // Codex 无回复侧模型与终止原因字段；七项用量里 non_cached/reasoning/total
       // 三项不进既有列，留原始层。
@@ -152,6 +162,7 @@ function firstCount(attrs: OtlpAttrs, keys: readonly string[]): number | null {
 export type SpanMapping = {
   agent: string;
   session: string | null;
+  turnRef: string | null;
   modelRequested: string | null;
   modelServed: string | null;
   stop: string | null;
@@ -170,6 +181,7 @@ export function mapSpan(rule: SpanRule, span: OtlpSpan): SpanMapping {
   return {
     agent: rule.agent,
     session: firstString(span.attrs, keys.session),
+    turnRef: firstString(span.attrs, keys.turn),
     modelRequested: firstString(span.attrs, keys.modelRequested),
     modelServed: firstString(span.attrs, keys.modelServed),
     stop: stopOf(span.attrs, keys.stop),

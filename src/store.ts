@@ -141,7 +141,8 @@ const SCHEMA_V6 = readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf
 const SCHEMA_V7 = readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8');
 const SCHEMA_V8 = readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8');
 const SCHEMA_V9 = readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 9;
+const SCHEMA_V10 = readFileSync(new URL('./schema-v10.sql', import.meta.url), 'utf8');
+const SCHEMA_VERSION = 10;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -167,6 +168,25 @@ function execAdditiveV9(db: Database): void {
   if (!columns.includes('claim_from_sort')) db.exec(SCHEMA_V9);
 }
 
+function execAdditiveV10(db: Database): void {
+  const columns = (db.query('PRAGMA table_info(request)').all() as { name: string }[])
+    .map(row => row.name);
+  if (!columns.includes('user_fingerprint') && !columns.includes('turn_ref')) {
+    db.exec(SCHEMA_V10);
+  } else {
+    if (!columns.includes('user_fingerprint')) {
+      db.exec('ALTER TABLE request ADD COLUMN user_fingerprint TEXT');
+    }
+    if (!columns.includes('turn_ref')) {
+      db.exec('ALTER TABLE request ADD COLUMN turn_ref TEXT');
+    }
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS i_request_user_fingerprint
+    ON request(user_fingerprint) WHERE user_fingerprint IS NOT NULL`);
+  db.exec(`CREATE INDEX IF NOT EXISTS i_request_turn_ref
+    ON request(turn_ref) WHERE turn_ref IS NOT NULL`);
+}
+
 function migrate(db: Database): void {
   const version = pragmaNumber(db, 'user_version');
   const tables = tableNames(db);
@@ -179,33 +199,42 @@ function migrate(db: Database): void {
       db.exec(SCHEMA_V7);
       db.exec(SCHEMA_V8);
       db.exec(SCHEMA_V9);
+      execAdditiveV10(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
     return;
   }
   if (version === 0) throw new Error('schema_unknown');
   if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
-  // v6→v9、v7→v9 与 v8→v9 都是纯新增（OTLP 原始层表、两条部分反向索引、
-  // 队列的 claim_from_sort 列），原地执行即可；更低的库没有升级路径：
-  // 普通启动不做 ALTER，也不搬旧数据，旧库由运维显式删除后重建。
-  // 索引在存量数据上的构建耗时随历史线性增长，属于启动契约的一部分，
-  // 见 docs/operations.md 的 schema 升级一节。
+  // v6→v10、v7→v10、v8→v10 与 v9→v10 都是纯新增（OTLP 原始层表、部分反向
+  // 索引、队列的 claim_from_sort 列、请求的内容指纹与 turn 身份），原地执行
+  // 即可；更低的库没有升级路径：普通启动不做 ALTER，也不搬旧数据，旧库由
+  // 运维显式删除后重建。索引在存量数据上的构建耗时随历史线性增长，属于启动
+  // 契约的一部分，见 docs/operations.md 的 schema 升级一节。
   if (version === 6) {
     db.transaction(() => {
       db.exec(SCHEMA_V7);
       db.exec(SCHEMA_V8);
       execAdditiveV9(db);
+      execAdditiveV10(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version === 7) {
     db.transaction(() => {
       db.exec(SCHEMA_V8);
       execAdditiveV9(db);
+      execAdditiveV10(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version === 8) {
     db.transaction(() => {
       execAdditiveV9(db);
+      execAdditiveV10(db);
+      db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+    }).immediate();
+  } else if (version === 9) {
+    db.transaction(() => {
+      execAdditiveV10(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version < SCHEMA_VERSION) {
