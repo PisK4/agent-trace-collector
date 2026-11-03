@@ -35,8 +35,7 @@ import { compact, EXEC_MS_HINT, secs } from './duration.js';
 import { summaryParts } from './tool-summary.js';
 import { bodyLabelText, bodyStateText, replyCompleteness } from './row-summary.js';
 import {
-  agentLabel, clock, dayTime, liveTimeCell, nextLiveExpiry,
-  partitionLiveSessions,
+  agentLabel, clock, createLivePartition, dayTime, liveTimeCell,
   railSummaryListHtml as railSummaryListView,
   sessionHead as sessionHeadView,
   sessionsGroupLabel, sessionsListFoldHtml,
@@ -430,17 +429,19 @@ if (typeof document !== 'undefined') {
     return [s.title, ...s.agents, ...s.agents.map(agentLabel)].join(' ').toLowerCase().includes(q);
   }
 
+  /** 分区状态跨渲染保留：保留期与「上一帧因最近活跃进区」的集合都在这里。 */
+  const livePartition = createLivePartition();
   /** @type {ReturnType<typeof setTimeout> | null} */
   let liveExpiryTimer = null;
   let liveExpiryAt = Infinity;
 
   /**
-   * 活跃集合变化时不轮询：只在最早一条“最近活跃”到期时重排一次。
-   * 到期判定用的是服务端下发的 live_until，主线程只做一次 O(可见行) 的过滤。
-   * @param {SessionRow[]} rows @param {number} now
+   * 活跃集合变化时不轮询：只在下一个沉降提交点重排一次。
+   * 提交点由 liveCommitAt 给出（过期 + 保留期，再对齐到整 30 秒），主线程只做
+   * 一次 O(可见行) 的过滤。
+   * @param {number | null} next @param {number} now
    */
-  function scheduleLiveExpiry(rows, now) {
-    const next = nextLiveExpiry(rows, now);
+  function scheduleLiveSettle(next, now) {
     if (next === liveExpiryAt) return;
     if (liveExpiryTimer !== null) clearTimeout(liveExpiryTimer);
     liveExpiryTimer = null;
@@ -465,7 +466,7 @@ if (typeof document !== 'undefined') {
           }
         }
       }
-    }, Math.max(0, next - Date.now()) + 1);
+    }, Math.max(0, next - now) + 1);
   }
 
   function renderSessions() {
@@ -480,7 +481,7 @@ if (typeof document !== 'undefined') {
     // 列表被搜索或筛选收窄时才给分母；默认只报已加载数量，不伪造全库总数。
     el('sess-count').textContent = all.length === items.length ? `已加载 ${items.length}` : `${all.length} / ${items.length}`;
     const now = Date.now();
-    const { live, rest } = partitionLiveSessions(list, now);
+    const { live, rest, nextCommitAt } = livePartition.partition(list, now);
     const item = (/** @type {SessionRow} */ s) => {
       // 身份用第一个 agent 的品牌 logo；多 Agent 行其余仍走文字。
       const firstAgent = s.agents.length > 0 ? s.agents[0] : null;
@@ -526,7 +527,7 @@ if (typeof document !== 'undefined') {
     const error = last.error === null ? ''
       : `<p class="sess-empty">${icon('empty-broken', 24)}会话列表读取失败：${esc(last.error)}。可再次点击加载更多重试。</p>`;
     el('sessions-list').innerHTML = body + more + error;
-    scheduleLiveExpiry(list, now);
+    scheduleLiveSettle(nextCommitAt, now);
   }
 
   /* ---------------- 中栏 ---------------- */
