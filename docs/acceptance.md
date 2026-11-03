@@ -24,9 +24,20 @@
 
 未覆盖：生产 `/api/metrics` 的 p95 延迟、真实流量的告警质量、launchd 作业的安装与实际通知投递。这些需要在采集器重启后由本机手动执行，见「后台监控落地（生产，待验证）」与运维手册。
 
-## 后台监控落地（生产，待验证）
+## 后台监控落地（生产，2026-11-03）
 
-尚未执行。需要用户在本机完成：重启采集器加载新代码、安装 `local.agent-trace-monitor`、观察至少一个完整窗口。验证项：`/api/metrics` 在真实负载下的响应时间；`monitor/samples/` 是否有连续样本；`check` 的告警与恢复是否成对；通知是否真的弹出；日志归档是否按上限轮转。本记录保持「待验证」，不以合成结果代替真实流量验收。
+前提：master `46240dd`（合并 `feat/background-monitoring`）。2026-11-03 14:11 重启采集器，pid 56474，端口 8320；14:12 安装并加载 `local.agent-trace-monitor`，`ProgramArguments` 指向主检出的 `scripts/monitor.ts`，运行时用 `$HOME/.local/libexec/agent-trace-collector`。
+
+| 检查 | 实测结果 |
+| --- | --- |
+| 轻量端点 | 带 `read.token` 请求 `/api/metrics` 返回 200；字段含 `instance`、`storage`、`storage_measured_at_ms`、`derive_queue`、`admission`，不含 `metadata` |
+| 首条样本 | `sample:ok:244ms`；JSONL 记录 `state=ok`、`instance=56474-…`、`metrics` 与 `stats` |
+| 定时运行 | 首轮后 300 秒再次执行，`launchctl print` 显示 `runs=3`、`last exit code=0`，样本文件 3 行，输出 `sample:ok:364ms` |
+| 检查与告警 | 手动与定时 `check` 均无事件；`alert-state.json` 为 `{"active":{}}`，alerts 目录为空 |
+| 日报 | `report --days 1` 输出样本数、失败数、p99、派生峰值、实例、存储、准入与归档时间 |
+| 已知信号 | 首轮 p99 196 ms，超过 100 ms 阈值；连续 10 分钟规则尚未满足，继续观察 |
+
+待观察：连续 6 个样本（约 25-30 分钟）、真实告警与恢复配对、通知横幅、日志达到 64 MiB 后的归档轮转、长时间真实负载下的 `/api/metrics` 往返延迟。首轮结果不代替长窗口验收。
 
 ## 方向 A 界面对齐修正（合成，2026-11-02）
 
