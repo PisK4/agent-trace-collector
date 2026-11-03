@@ -1387,6 +1387,62 @@ test('跨组标题：多标题或多会话命中都明确不绑', () => {
   } finally { f.close(); }
 });
 
+test('跨组标题短路：有指纹时绑定语义不变，闸门先于相关子查询求值', () => {
+  const f = fixture();
+  try {
+    const mainKey = JSON.stringify(['session', 'short-main']);
+    codexSession(f.store, 'short-main', {
+      startedMs: 1_700_000_000_000, fingerprint: 'fp-short', title: '用户首句',
+    });
+    codexSession(f.store, 'short-title', {
+      startedMs: 1_700_000_000_500, fingerprint: 'fp-short',
+      kind: 'title', chain: 'exclude', modelTitle: '重绘 ATC 矩阵 IP',
+    });
+
+    // 唯一命中：短路放行后照旧借到模型标题。
+    expect(listSessions(f.store, 10).items.find(row => row.conv_key === mainKey)?.title)
+      .toBe('重绘 ATC 矩阵 IP');
+
+    // 零命中：另一指纹的标题不绑。
+    codexSession(f.store, 'short-zero', {
+      startedMs: 1_700_000_001_000, fingerprint: 'fp-main-zero', title: '零命中',
+    });
+    codexSession(f.store, 'short-zero-title', {
+      startedMs: 1_700_000_001_500, fingerprint: 'fp-other',
+      kind: 'title', chain: 'exclude', modelTitle: '不该出现的标题',
+    });
+    expect(listSessions(f.store, 10).items
+      .find(row => row.conv_key === JSON.stringify(['session', 'short-zero']))?.title)
+      .not.toBe('不该出现的标题');
+
+    // 多命中：同一指纹出现第二条标题后转为歧义，不绑。
+    codexSession(f.store, 'short-title-2', {
+      startedMs: 1_700_000_000_600, fingerprint: 'fp-short',
+      kind: 'title', chain: 'exclude', modelTitle: '标题 B',
+    });
+    const mainRow = listSessions(f.store, 10).items.find(row => row.conv_key === mainKey);
+    expect(mainRow?.title).not.toBe('重绘 ATC 矩阵 IP');
+    expect(mainRow?.title).not.toBe('标题 B');
+    expect(titleBindingOf(f.store, mainKey)).toMatchObject({
+      status: 'ambiguous', title: null, title_matches: 2,
+    });
+
+    // 计划：闸门只走单会话时间索引，且排在跨组子查询之前。
+    const hook = captureReadQueries(f.store);
+    try {
+      listSessions(f.store, 10, null);
+    } finally {
+      hook.restore();
+    }
+    const detail = hook.captured.find(c => c.sql.includes('AS title,'));
+    if (detail === undefined) throw new Error('title_query_not_captured');
+    const plan = explainPlan(f.store.read, detail.sql, detail.params);
+    expect(plan).toContain('SEARCH x USING INDEX i_req_session_time');
+    expect(plan.indexOf('SEARCH x USING INDEX i_req_session_time'))
+      .toBeLessThan(plan.indexOf('i_derive_queue_dirty'));
+  } finally { f.close(); }
+});
+
 test('后台组标记：ambient 混入未知参与链仍是 background，出现已识别主链则解除', () => {
   const f = fixture();
   try {
