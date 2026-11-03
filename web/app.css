@@ -179,31 +179,33 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
   font:500 10px var(--ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
 }
 .group-label::after{content:"";flex:1;height:1px;background:var(--line)}
+/* 行高固定 44px：标题单行、第二行 meta 常驻，长标题只省略不撑高。
+   两行内容按 17 + 2 + 14 居中；padding 只留水平方向。 */
 .sess{
-  display:flex;flex-direction:column;gap:2px;width:100%;
-  padding:8px 8px 8px 9px;border-radius:6px;margin-bottom:1px;
+  display:flex;flex-direction:column;justify-content:center;gap:2px;width:100%;height:44px;
+  padding:0 8px 0 9px;border-radius:6px;margin-bottom:1px;
 }
 /* 导航选中是中性的灰底：accent 只留给内容区选中态。 */
 .sess:hover{background:var(--inset)}
 .sess[aria-current="true"]{background:var(--hover)}
-.sess-title{font-size:12.5px;font-weight:550;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sess-meta{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);min-width:0}
+.sess-title{font-size:12.5px;font-weight:550;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess-meta{display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:14px;color:var(--muted);min-width:0}
 .sess-meta .dot{width:5px;height:5px;border-radius:50%;flex:none}
 /* 失败与缺正文的形状标记：8px 是形状可辨的下限，正常行不再画点。 */
 .sess-meta .dot.flagmark{width:8px;height:8px;border-radius:0;display:inline-flex;align-items:center;justify-content:center}
 /* 身份 logo：12px，与 10.5px 文字视觉同高；尺寸由外框定，图形本身跟随文字色。 */
-.sess-meta .agent-logo{display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;flex:none;line-height:0;color:var(--text-2)}
-.sess-meta .agent-logo svg,.sess-meta .agent-logo img{display:block;width:12px;height:12px}
-.sess-meta .agent-logo.is-fallback{color:var(--muted)}
+.agent-logo{display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;flex:none;line-height:0;color:var(--text-2)}
+.agent-logo svg,.agent-logo img{display:block;width:12px;height:12px}
+.agent-logo.is-fallback{color:var(--muted)}
 /* 品牌色：浅色档按 ≥3:1 加深；深色档回原色。Codex 用单色结而不是原版白底。 */
-.sess-meta .agent-logo[data-agent="claude"]{color:#C15F3C}
-.sess-meta .agent-logo[data-agent="codex"]{color:#3941FF}
+.agent-logo[data-agent="claude"]{color:#C15F3C}
+.agent-logo[data-agent="codex"]{color:#3941FF}
 @media (prefers-color-scheme:dark){
-  :root:not([data-theme="light"]) .sess-meta .agent-logo[data-agent="claude"]{color:#D97757}
-  :root:not([data-theme="light"]) .sess-meta .agent-logo[data-agent="codex"]{color:#8FA8FF}
+  :root:not([data-theme="light"]) .agent-logo[data-agent="claude"]{color:#D97757}
+  :root:not([data-theme="light"]) .agent-logo[data-agent="codex"]{color:#8FA8FF}
 }
-:root[data-theme="dark"] .sess-meta .agent-logo[data-agent="claude"]{color:#D97757}
-:root[data-theme="dark"] .sess-meta .agent-logo[data-agent="codex"]{color:#8FA8FF}
+:root[data-theme="dark"] .agent-logo[data-agent="claude"]{color:#D97757}
+:root[data-theme="dark"] .agent-logo[data-agent="codex"]{color:#8FA8FF}
 .sess-meta .who{color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 /* 笔数固定为不截断的后缀：多 Agent 行只让名字先省略。 */
 .sess-meta .sess-count{flex:none;white-space:nowrap;color:var(--text-2);margin-left:-3px}
