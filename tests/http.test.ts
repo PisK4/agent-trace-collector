@@ -593,3 +593,49 @@ test('阅读批端点：合法批次、逐项错误与参数边界', async () =>
     f.close();
   }
 });
+
+test('同 key 并发会话列表共享一次计算；参数错误广播；完成后不缓存（F27）', async () => {
+  const f = fixture();
+  try {
+    seedRequests(f.store, JSON.stringify(['session', 'single-flight']), 2);
+    let calls = 0;
+    const live = { inflight: () => { calls += 1; return false; } } as never;
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token',
+      undefined, undefined, undefined, undefined, live);
+    const get = (query = '?limit=20') => handler(new Request(
+      `http://127.0.0.1:8320/api/sessions${query}`,
+      { headers: { host: '127.0.0.1:8320', 'sec-fetch-site': 'same-origin' } }));
+
+    const single = await get();
+    await single.text();
+    const perRun = calls;
+    expect(perRun).toBeGreaterThan(0);
+
+    // 五个同 key 请求同一 tick 进入：只有第一个真正执行聚合，等待者共享
+    // 同一个在途 Promise（同一个 Response 对象），不是各自再算一遍。
+    calls = 0;
+    const burst = await Promise.all([get(), get(), get(), get(), get()]);
+    expect(burst.every(response => response === burst[0])).toBe(true);
+    expect(burst[0]!.status).toBe(200);
+    expect(await burst[0]!.text()).toContain('single-flight');
+    expect(calls).toBe(perRun);
+
+    // 参数错误走共享 rejection：同一 key 的等待者都拿到 400，无永久挂起
+    // （rejection 各自映射成响应，不要求同一对象）。
+    calls = 0;
+    const bad = await Promise.all([get('?limit=abc'), get('?limit=abc'), get('?limit=abc')]);
+    for (const response of bad) {
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'invalid_limit' });
+    }
+    expect(calls).toBe(0);
+
+    // 响应完成即出表：新请求重新执行，能看到新写入。
+    seedRequests(f.store, JSON.stringify(['session', 'single-flight-later']), 1);
+    calls = 0;
+    const after = await get();
+    expect(((await after.json()) as { items: unknown[] }).items).toHaveLength(2);
+    // 出表后重新执行（多了一行，活跃判定随之多调一次）；若是跨请求缓存，这里仍是 0。
+    expect(calls).toBeGreaterThan(0);
+  } finally { f.close(); }
+});
