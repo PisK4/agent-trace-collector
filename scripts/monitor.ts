@@ -8,6 +8,7 @@
  *   bun scripts/monitor.ts sample [--port N]
  *   bun scripts/monitor.ts check
  *   bun scripts/monitor.ts report [--days 1|7]
+ *   bun scripts/monitor.ts inspect
  */
 import {
   appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync,
@@ -30,38 +31,57 @@ export const KEEP_DAYS = 14;
 export const LOG_MAX_BYTES = 64 * 1024 * 1024;
 export const LOG_TOTAL_BYTES = 512 * 1024 * 1024;
 export const REMIND_MS = 30 * 60_000;
+/** 恢复窗口：条件消失后连续无命中这么久才写 recovered，单样本回落不算（F10）。 */
+export const RECOVER_SPAN_MS = 15 * 60_000;
 const PROBE_TIMEOUT_MS = 15_000;
 const DAY_MS = 24 * 60 * 60_000;
 
 export type Thresholds = {
   p99Ms: number;
   p99SpanMs: number;
+  /** 事件循环单次停顿通道：max_ms 超过即告警，环形窗口自身限制存续。 */
+  maxLoopMs: number;
   backlogMs: number;
   modeSpanMs: number;
   gapSpanMs: number;
   rssSpanMs: number;
+  /** 采样连续性：窗口内出现超过 maxGapMs 的断档即提醒（F13）。 */
+  sampleGapSpanMs: number;
+  recoverSpanMs: number;
   bodyRatio: number;
   freeBytes: number;
   rssBytes: number;
   /** 相邻样本超过这个间隔就算中断，连续时长判定要重新起算。 */
   maxGapMs: number;
+  /** 告警窗口的连续性容差：断档在存活阈值内不清连续窗口（F12）。 */
+  continuityGapMs: number;
 };
 
 export const THRESHOLDS: Thresholds = {
-  p99Ms: 100,
-  p99SpanMs: 10 * 60_000,
+  // p99 阈值按 2026-11-03 全天 91 个有效样本校准（中位 198、p95 294，剔除
+  // 离群后 p95 263）：100 ms 等于常亮。330 ms 是 p75+1.5×IQR 与 p95×1.15
+  // 两个独立估计的落点；2 s 的 max 通道单独抓单次主线程停顿（F09/F22）。
+  p99Ms: 330,
+  p99SpanMs: 30 * 60_000,
+  maxLoopMs: 2_000,
   backlogMs: 10 * 60_000,
   modeSpanMs: 10 * 60_000,
   gapSpanMs: 15 * 60_000,
   rssSpanMs: 15 * 60_000,
+  sampleGapSpanMs: 15 * 60_000,
+  recoverSpanMs: RECOVER_SPAN_MS,
   bodyRatio: 0.9,
   freeBytes: 100 * 10 ** 9,
   rssBytes: 4 * 10 ** 9,
   maxGapMs: SAMPLE_INTERVAL_MS * 1.5,
+  // 断档不超过存活阈值时不算中断观察：一个漏采的样本不清掉持续窗口，
+  // 超过存活阈值才重新起算。
+  continuityGapMs: MISSING_SAMPLE_MS,
 };
 
-/** 检查窗口要覆盖最长连续判定（15 分钟）再加一次中断容差。 */
-const RULE_WINDOW_MS = Math.max(THRESHOLDS.gapSpanMs, THRESHOLDS.rssSpanMs) + MISSING_SAMPLE_MS;
+/** 检查窗口要覆盖最长连续判定（30 分钟）再加一次中断容差。 */
+const RULE_WINDOW_MS = Math.max(THRESHOLDS.p99SpanMs, THRESHOLDS.gapSpanMs, THRESHOLDS.rssSpanMs)
+  + MISSING_SAMPLE_MS;
 
 export type StorageView = {
   body_bytes: number; db_bytes: number; wal_bytes: number; total_bytes: number; free_bytes: number;
@@ -108,13 +128,17 @@ export type Sample = {
   stats: StatsView | null;
 };
 
-export type Rule = 'service_unreadable' | 'event_loop_p99' | 'derive_backlog'
-  | 'storage_mode' | 'collection_gap' | 'capacity';
+export type Rule = 'service_unreadable' | 'event_loop_p99' | 'event_loop_max' | 'derive_backlog'
+  | 'storage_mode' | 'collection_gap' | 'sample_gap' | 'capacity';
 
 export type RuleHit = { rule: Rule; detail: string };
 
 export type AlertState = {
-  active: Record<string, { since_ms: number; last_notified_ms: number }>;
+  active: Record<string, {
+    since_ms: number; last_notified_ms: number;
+    /** 第一次确认不再命中的时间；恢复窗口从这里起算。 */
+    recover_since_ms?: number;
+  }>;
 };
 
 export type AlertEvent = {
@@ -209,6 +233,7 @@ export function localDay(ms: number): string {
 export function monitorDir(dataDir: string): string { return join(dataDir, 'monitor'); }
 export function samplesDir(dataDir: string): string { return join(monitorDir(dataDir), 'samples'); }
 export function alertsDir(dataDir: string): string { return join(monitorDir(dataDir), 'alerts'); }
+export function checksDir(dataDir: string): string { return join(monitorDir(dataDir), 'checks'); }
 export function archivesDir(dataDir: string): string { return join(monitorDir(dataDir), 'logs'); }
 export function alertStatePath(dataDir: string): string {
   return join(monitorDir(dataDir), 'alert-state.json');
@@ -314,14 +339,31 @@ export function evaluateRules(samples: Sample[], ctx: RuleContext): RuleHit[] {
     hits.push({ rule: 'service_unreadable', detail:
       `job:${ctx.jobRunning === true ? 'running' : 'down'} sample:${latest?.state ?? 'missing'}` });
   }
+  // 采样连续性在 stale 判定之前评估：采样自身停摆正是它要抓的现象，
+  // 不能被 stale 短路掉（存活判据由 service_unreadable 承担）。
+  const recent = samples.filter(sample => sample.ts_ms > ctx.now - ctx.thresholds.sampleGapSpanMs);
+  let widest = 0;
+  for (let index = 1; index < recent.length; index += 1) {
+    widest = Math.max(widest, recent[index]!.ts_ms - recent[index - 1]!.ts_ms);
+  }
+  if (recent.length > 0) widest = Math.max(widest, ctx.now - recent[recent.length - 1]!.ts_ms);
+  if (widest > ctx.thresholds.maxGapMs) {
+    hits.push({ rule: 'sample_gap', detail: `gap:${Math.round(widest / 1000)}s` });
+  }
   if (ctx.stale) return hits;
   if (latest === undefined) return hits;
 
   const loopRun = trailingRun(samples, sample => (metricSample(sample)?.event_loop.p99_ms ?? 0)
-    > ctx.thresholds.p99Ms, ctx.thresholds.maxGapMs);
+    > ctx.thresholds.p99Ms, ctx.thresholds.continuityGapMs);
   if (loopRun.length > 0 && ctx.now - loopRun[0]!.ts_ms >= ctx.thresholds.p99SpanMs) {
     hits.push({ rule: 'event_loop_p99', detail:
       `p99:${Math.round(metricSample(loopRun[loopRun.length - 1]!)!.event_loop.p99_ms!)}` });
+  }
+
+  // 单次主线程停顿通道：环形窗口（约 7 分钟）自身限制存续，立即告警不设跨度。
+  const maxNow = metricSample(latest)?.event_loop.max_ms ?? 0;
+  if (maxNow > ctx.thresholds.maxLoopMs) {
+    hits.push({ rule: 'event_loop_max', detail: `max:${Math.round(maxNow)}` });
   }
 
   const pendingNow = metricSample(latest)?.derive_queue.pending_groups ?? 0;
@@ -330,7 +372,7 @@ export function evaluateRules(samples: Sample[], ctx: RuleContext): RuleHit[] {
     return metrics !== null && metrics.derive_queue.pending_groups >= pendingNow
       && metrics.derive_queue.pending_groups > 0
       && (metrics.derive_queue.oldest_dirty_age_ms ?? 0) > ctx.thresholds.backlogMs;
-  }, ctx.thresholds.maxGapMs);
+  }, ctx.thresholds.continuityGapMs);
   if (backlogRun.length > 0 && ctx.now - backlogRun[0]!.ts_ms >= ctx.thresholds.backlogMs) {
     const age = metricSample(latest)!.derive_queue.oldest_dirty_age_ms ?? 0;
     hits.push({ rule: 'derive_backlog', detail: `groups:${pendingNow} age:${Math.round(age)}` });
@@ -341,7 +383,7 @@ export function evaluateRules(samples: Sample[], ctx: RuleContext): RuleHit[] {
   const modeRun = trailingRun(samples, sample => {
     const admission = metricSample(sample)?.admission;
     return admission !== null && admission !== undefined && admission.mode !== 'normal';
-  }, ctx.thresholds.maxGapMs);
+  }, ctx.thresholds.continuityGapMs);
   if (modeRun.length > 0 && ctx.now - modeRun[0]!.ts_ms >= ctx.thresholds.modeSpanMs) {
     const mode = metricSample(modeRun[modeRun.length - 1]!)!.admission!.mode;
     hits.push({ rule: 'storage_mode', detail: `mode:${mode}` });
@@ -350,7 +392,7 @@ export function evaluateRules(samples: Sample[], ctx: RuleContext): RuleHit[] {
   const gapsNow = latest.ok ? latest.stats?.open_gaps ?? 0 : 0;
   const gapRun = trailingRun(samples, sample => sample.ok
     && (sample.stats?.open_gaps ?? 0) >= gapsNow && (sample.stats?.open_gaps ?? 0) > 0,
-  ctx.thresholds.maxGapMs);
+  ctx.thresholds.continuityGapMs);
   if (gapRun.length > 0 && ctx.now - gapRun[0]!.ts_ms >= ctx.thresholds.gapSpanMs) {
     hits.push({ rule: 'collection_gap', detail: `open:${gapsNow}` });
   }
@@ -365,7 +407,7 @@ export function evaluateRules(samples: Sample[], ctx: RuleContext): RuleHit[] {
     }
   }
   const rssRun = trailingRun(samples, sample => (metricSample(sample)?.rss_bytes ?? 0)
-    > ctx.thresholds.rssBytes, ctx.thresholds.maxGapMs);
+    > ctx.thresholds.rssBytes, ctx.thresholds.continuityGapMs);
   if (rssRun.length > 0 && ctx.now - rssRun[0]!.ts_ms >= ctx.thresholds.rssSpanMs) {
     hits.push({ rule: 'capacity', detail: `rss_bytes:${metricSample(latest)?.rss_bytes ?? 0}` });
   }
@@ -383,16 +425,29 @@ export function transitionAlerts(state: AlertState, hits: RuleHit[], ctx: RuleCo
       const since = ctx.now;
       active[rule] = { since_ms: since, last_notified_ms: ctx.now };
       events.push({ ts_ms: ctx.now, rule: hit.rule, event: 'alert', since_ms: since, detail: hit.detail });
-    } else if (ctx.now - previous.last_notified_ms >= remindMs) {
-      active[rule] = { ...previous, last_notified_ms: ctx.now };
+      continue;
+    }
+    // 条件重新命中：抖动期攒下的恢复计时作废，按 still-active 处理。
+    const next = { since_ms: previous.since_ms, last_notified_ms: previous.last_notified_ms };
+    if (ctx.now - previous.last_notified_ms >= remindMs) {
+      next.last_notified_ms = ctx.now;
       events.push({ ts_ms: ctx.now, rule: hit.rule, event: 'reminder',
         since_ms: previous.since_ms, detail: hit.detail });
     }
+    active[rule] = next;
   }
   if (!ctx.stale) {
     for (const [rule, previous] of Object.entries(active)) {
       if (hitMap.has(rule as Rule)) continue;
       if (rule === 'service_unreadable' && (ctx.jobRunning === null || ctx.jobRunning === undefined)) continue;
+      // 恢复窗口：条件消失后连续无命中这么久才写 recovered；缺样本期不计时，
+      // 也不推进窗口——缺数据不判恢复。
+      const missSince = previous.recover_since_ms ?? ctx.now;
+      if (ctx.now - missSince < ctx.thresholds.recoverSpanMs) {
+        active[rule] = { since_ms: previous.since_ms, last_notified_ms: previous.last_notified_ms,
+          recover_since_ms: missSince };
+        continue;
+      }
       delete active[rule];
       events.push({ ts_ms: ctx.now, rule: rule as Rule, event: 'recovered', since_ms: previous.since_ms });
     }
@@ -469,11 +524,11 @@ export function earliestArchivedMs(archiveDir: string): number | null {
   return earliest;
 }
 
-/** 采样与告警只留 14 天；诊断日志归档与 live 日志由 rotateLog/pruneArchives 处理。 */
+/** 采样、告警与巡检记录只留 14 天；诊断日志归档与 live 日志由 rotateLog/pruneArchives 处理。 */
 export function pruneMonitorData(dataDir: string, nowMs: number, keepDays = KEEP_DAYS): number {
   const keepFrom = localDay(nowMs - keepDays * DAY_MS);
   let removed = 0;
-  for (const dir of [samplesDir(dataDir), alertsDir(dataDir)]) {
+  for (const dir of [samplesDir(dataDir), alertsDir(dataDir), checksDir(dataDir)]) {
     if (!existsSync(dir)) continue;
     for (const name of readdirSync(dir)) {
       if (!name.endsWith('.jsonl')) continue;
@@ -627,6 +682,11 @@ async function runSample(argv: string[]): Promise<number> {
   return sample.ok ? 0 : 1;
 }
 
+/** 采样证据是否支撑本轮判定：有样本、成功、且仍在存活阈值内。 */
+export function sampleEvidenceOk(latest: Sample | undefined, now: number): boolean {
+  return latest !== undefined && latest.ok && now - latest.ts_ms <= MISSING_SAMPLE_MS;
+}
+
 async function runCheck(): Promise<number> {
   const context = serviceContext();
   const now = Date.now();
@@ -647,7 +707,92 @@ async function runCheck(): Promise<number> {
     notify(event);
     process.stdout.write(`${event.event}:${event.rule}${event.detail === undefined ? '' : `:${event.detail}`}\n`);
   }
-  return 0;
+  // 退出码对 launchd 交代采样证据：`sample; check` 里 sample 的失败由这里补报，
+  // 作业层才能看见采样失败（F08）。
+  return sampleEvidenceOk(latest, now) ? 0 : 1;
+}
+
+/** 结构化诊断日志里时间窗内的错误条数；读不到日志返回 null，不当成 0。 */
+export function countDiagnosticsErrors(path: string, sinceMs: number): number | null {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+  let count = 0;
+  for (const line of text.split('\n')) {
+    if (!line.includes('"kind":"error"')) continue;
+    try {
+      const entry = JSON.parse(line) as { ts?: string };
+      const ts = entry.ts === undefined ? Number.NaN : Date.parse(entry.ts);
+      if (Number.isFinite(ts) && ts >= sinceMs) count += 1;
+    } catch {
+      // 半行写入：跳过这一行，不让巡检整体失败。
+    }
+  }
+  return count;
+}
+
+export type InspectRecord = {
+  ts_ms: number;
+  /** 采样证据仍然新鲜；false 说明监控自身停摆或服务不可读。 */
+  ok: boolean;
+  latest_sample: { state: SampleState | null; age_ms: number | null };
+  alerts_active: number;
+  alerts_today: { alert: number; reminder: number; recovered: number };
+  sample_gaps_24h: number;
+  /** null = 诊断日志读不到，与「0 条错误」分开。 */
+  diagnostics_errors_24h: number | null;
+  job_last_exit_code: number | null;
+};
+
+/** 巡检：把判据结果落盘成 checks/<day>.jsonl，成功也写，沉默不等于正常（F17）。 */
+function runInspect(): number {
+  const context = serviceContext();
+  const now = Date.now();
+  const samples = loadSamples(context.dataDir, now, DAY_MS);
+  const latest = samples[samples.length - 1];
+  let gaps = 0;
+  for (let index = 1; index < samples.length; index += 1) {
+    if (samples[index]!.ts_ms - samples[index - 1]!.ts_ms > THRESHOLDS.maxGapMs) gaps += 1;
+  }
+  const day = localDay(now);
+  const counts = { alert: 0, reminder: 0, recovered: 0 };
+  const alertsPath = join(alertsDir(context.dataDir), `${day}.jsonl`);
+  if (existsSync(alertsPath)) {
+    for (const line of readFileSync(alertsPath, 'utf8').split('\n')) {
+      if (line.trim().length === 0) continue;
+      try {
+        const event = JSON.parse(line) as { event?: string };
+        if (event.event === 'alert') counts.alert += 1;
+        else if (event.event === 'reminder') counts.reminder += 1;
+        else if (event.event === 'recovered') counts.recovered += 1;
+      } catch {
+        // 半行写入：跳过。
+      }
+    }
+  }
+  const stdoutPath = context.entry?.stdoutPath ?? null;
+  const record: InspectRecord = {
+    ts_ms: now,
+    ok: sampleEvidenceOk(latest, now),
+    latest_sample: {
+      state: latest?.state ?? null,
+      age_ms: latest === undefined ? null : now - latest.ts_ms,
+    },
+    alerts_active: Object.keys(loadAlertState(context.dataDir).active).length,
+    alerts_today: counts,
+    sample_gaps_24h: gaps,
+    diagnostics_errors_24h: stdoutPath === null ? null : countDiagnosticsErrors(stdoutPath, now - DAY_MS),
+    job_last_exit_code: context.entry === null
+      ? null : readServiceState(context.entry.label)?.lastExitCode ?? null,
+  };
+  appendJsonl(checksDir(context.dataDir), day, record);
+  process.stdout.write(`inspect:${record.ok ? 'ok' : 'stale'} alerts:${record.alerts_active}`
+    + ` errors24h:${record.diagnostics_errors_24h ?? 'unreadable'}`
+    + ` gaps24h:${record.sample_gaps_24h}\n`);
+  return record.ok ? 0 : 1;
 }
 
 function runReport(argv: string[]): number {
@@ -668,7 +813,8 @@ export async function runMonitor(argv: string[]): Promise<number> {
   if (command === 'sample') return runSample(argv.slice(1));
   if (command === 'check') return runCheck();
   if (command === 'report') return runReport(argv.slice(1));
-  process.stderr.write('usage: monitor sample|check|report [--days 1|7] [--port N]\n');
+  if (command === 'inspect') return runInspect();
+  process.stderr.write('usage: monitor sample|check|report|inspect [--days 1|7] [--port N]\n');
   return 2;
 }
 

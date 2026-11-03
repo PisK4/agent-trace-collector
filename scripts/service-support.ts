@@ -47,13 +47,26 @@ export function agentsDir(): string {
   return join(homedir(), 'Library', 'LaunchAgents');
 }
 
+/**
+ * 同步跑一个外部命令，成功返回 stdout 文本，非零退出或无法执行（受限环境的
+ * EACCES 之类）都返回 null：探测面宁可少一项读数，不在巡检里栈崩（F14）。
+ */
+function spawnText(command: string[]): string | null {
+  try {
+    const result = Bun.spawnSync(command);
+    return result.exitCode === 0 ? result.stdout.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function readEntry(plist: string, mainPath: string): ServiceEntry | null {
   // plist 是二进制或 XML 都可能，交给 plutil 转成 JSON，不在脚本里写第二个解析器。
-  const result = Bun.spawnSync(['plutil', '-convert', 'json', '-o', '-', plist]);
-  if (result.exitCode !== 0) return null;
+  const raw = spawnText(['plutil', '-convert', 'json', '-o', '-', plist]);
+  if (raw === null) return null;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(result.stdout.toString());
+    parsed = JSON.parse(raw);
   } catch {
     return null;
   }
@@ -121,16 +134,16 @@ export function parseServicePrint(text: string, label: string): ServiceState {
 
 /** 读作业状态；条目没加载（或 label 不存在）时返回 null。 */
 export function readServiceState(label: string): ServiceState | null {
-  const result = Bun.spawnSync(['launchctl', 'print', serviceTarget(label)]);
-  if (result.exitCode !== 0) return null;
-  return parseServicePrint(result.stdout.toString(), label);
+  const output = spawnText(['launchctl', 'print', serviceTarget(label)]);
+  if (output === null) return null;
+  return parseServicePrint(output, label);
 }
 
 /** 从进程实际持有的监听套接字取端口；进程还没开始监听时返回 null。 */
 export function listeningPort(pid: number): number | null {
-  const result = Bun.spawnSync(['lsof', '-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN']);
-  if (result.exitCode !== 0) return null;
-  const found = /:(\d+) \(LISTEN\)/.exec(result.stdout.toString());
+  const output = spawnText(['lsof', '-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN']);
+  if (output === null) return null;
+  const found = /:(\d+) \(LISTEN\)/.exec(output);
   return found === null ? null : Number(found[1]);
 }
 
@@ -139,12 +152,17 @@ export function listeningPort(pid: number): number | null {
  * 固定 `LC_ALL=C` 才有 `Date.parse` 认得的英文月份。
  */
 export function processStartedAt(pid: number): number | null {
-  const result = Bun.spawnSync({
-    cmd: ['ps', '-o', 'lstart=', '-p', String(pid)],
-    env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
-  });
+  let result: ReturnType<typeof Bun.spawnSync>;
+  try {
+    result = Bun.spawnSync({
+      cmd: ['ps', '-o', 'lstart=', '-p', String(pid)],
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+    });
+  } catch {
+    return null;
+  }
   if (result.exitCode !== 0) return null;
-  const ms = Date.parse(result.stdout.toString().trim());
+  const ms = Date.parse((result.stdout ?? '').toString().trim());
   return Number.isNaN(ms) ? null : ms;
 }
 
