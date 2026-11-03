@@ -24,7 +24,8 @@ import { motion, settled } from './motion.js';
 import { partLabel } from './parts.js';
 import { createReaderStore } from './reader-store.js';
 import { createHttpReadTransport } from './read-http.js';
-import { initLayout, openRail } from './layout.js';
+import { initLayout, openRail, applyTheme, syncPanelButtons } from './layout.js';
+import { t, initLocale, htmlLang } from './i18n.js';
 import { fillContextMap, iidOf, itemLabel } from './context-map.js';
 import { createContextMenu, iidParse } from './context-detail.js';
 import {
@@ -1652,12 +1653,57 @@ if (typeof document !== 'undefined') {
     slot.innerHTML = backendStateHtml(admission);
   }
 
+  /** @type {import('./backend-state.js').Admission | null} 最近一次统计里的准入状态；语言切换时按它重画降级标签。 */
+  let lastAdmission = null;
+
   /** 启动、显式刷新与点按降级标签时各读一次；不做轮询，读取失败保留上一次显示。 */
   async function refreshBackendState() {
     try {
       const stats = await store.loadStats();
-      applyBackendState(stats.admission ?? null);
+      lastAdmission = stats.admission ?? null;
+      applyBackendState(lastAdmission);
     } catch { /* 状态未知不冒充正常，也不清掉已知降级 */ }
+  }
+
+  /**
+   * 静态 HTML 里的文案按当前语言改写：boot 与每次语言切换各跑一遍。
+   * 只认 index.html 里的固定节点；带 pulse 的占位段在列表/正文渲染后被替换，
+   * 选择器带 .pulse 保证切语言时不会误改渲染出来的同款空态段。
+   */
+  function applyStaticTexts() {
+    /** @param {string} id @param {string} name @param {string} text */
+    const setAttr = (id, name, text) => document.getElementById(id)?.setAttribute(name, text);
+    setAttr('brand-home', 'title', t('回到主页并刷新'));
+    setAttr('sess-search', 'placeholder', t('搜索已加载会话、请求或 ID'));
+    setAttr('sess-search', 'aria-label', t('搜索已加载会话'));
+    setAttr('agent-filters', 'aria-label', t('按 Agent 筛选'));
+    setAttr('rail-resize', 'aria-label', t('调整详情栏宽度'));
+    setAttr('rail-resize', 'title', t('拖动调整宽度；双击恢复默认；方向键微调'));
+    setAttr('rail-col', 'aria-label', t('请求读数与正文'));
+    const title = document.querySelector('.sessions-title h2');
+    if (title) title.textContent = t('会话');
+    const listPulse = document.querySelector('#sessions-list > p.sess-empty.pulse');
+    if (listPulse) listPulse.textContent = t('正在读取本机会话…');
+    const mainPulse = document.querySelector('#main > p.sess-empty.pulse');
+    if (mainPulse) mainPulse.textContent = t('正在读取请求…');
+    const railEmpty = document.querySelector('#rail-body .rail-empty');
+    if (railEmpty) {
+      const head = railEmpty.querySelector('b');
+      if (head) head.textContent = t('等待选择');
+      for (const node of railEmpty.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) node.textContent = t('数据到达后再显示读数。');
+      }
+    }
+  }
+
+  /** 语言切换的界面侧：静态 chrome 换文案，动态区域走既有渲染路径全量重绘。 */
+  function applyLocaleChrome() {
+    document.documentElement.lang = htmlLang();
+    applyStaticTexts();
+    applyTheme();
+    syncPanelButtons();
+    applyBackendState(lastAdmission);
+    renderAll();
   }
 
   /* ---------------- 窗口导航 ---------------- */
@@ -2459,7 +2505,10 @@ if (typeof document !== 'undefined') {
     if (e.persisted) location.reload();
   });
 
-  initLayout();
+  initLocale();
+  document.documentElement.lang = htmlLang();
+  applyStaticTexts();
+  initLayout(applyLocaleChrome);
   void (async () => {
     let listError = null;
     try {

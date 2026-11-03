@@ -99,6 +99,8 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/trace-view.js': { file: 'trace-view.js', type: 'text/javascript; charset=utf-8' },
   '/url-route.js': { file: 'url-route.js', type: 'text/javascript; charset=utf-8' },
   '/turn-band.js': { file: 'turn-band.js', type: 'text/javascript; charset=utf-8' },
+  '/i18n.js': { file: 'i18n.js', type: 'text/javascript; charset=utf-8' },
+  '/i18n-en.js': { file: 'i18n-en.js', type: 'text/javascript; charset=utf-8' },
 };
 
 export function loadReadToken(dataDir: string): string {
