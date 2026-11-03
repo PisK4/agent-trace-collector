@@ -294,3 +294,68 @@ test('有头部无锚点、指令缺失或用户引用都不清空正文', () =>
   expect(quoted.kind).toBe('plain');
   expect(quoted.text).toBe('请解释 [IMPORTANT: The user has invoked the "x" skill 这类提示的作用');
 });
+
+// —— Codex 注入块：AGENTS 头行、环境上下文、页打开控制、turn_aborted ——
+
+test('Codex AGENTS 头行 + INSTRUCTIONS + environment_context 整段是注入', () => {
+  const view = interpretUserText([
+    '# AGENTS.md instructions for /Users/synthetic/project',
+    '',
+    '<INSTRUCTIONS>',
+    '# AGENTS.md',
+    '这里是仓库规则正文。',
+    '</INSTRUCTIONS>',
+    '',
+    '<environment_context>',
+    '<cwd>/Users/synthetic/project</cwd>',
+    '</environment_context>',
+  ].join('\n'), 'codex');
+  expect(view.state).toBe('injected');
+  expect(view.text).toBe('');
+  expect(view.removed).toEqual(expect.arrayContaining([
+    'codex-agents-prefix', 'instructions', 'environment_context',
+  ]));
+});
+
+test('Codex 注入块之后仍有用户原话时必须保留', () => {
+  const view = interpretUserText([
+    '# AGENTS.md instructions for /Users/synthetic/project',
+    '<INSTRUCTIONS>仓库规则</INSTRUCTIONS>',
+    '<environment_context><cwd>/x</cwd></environment_context>',
+    '重绘 ATC 矩阵 IP',
+  ].join('\n'), 'codex');
+  expect(view.state).toBe('text');
+  expect(view.text).toBe('重绘 ATC 矩阵 IP');
+});
+
+test('Codex 页打开控制块是注入，但包装用户文本时剥壳保留', () => {
+  const control = interpretMessage({
+    role: 'user',
+    content: [{ type: 'input_text', text: '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>' }],
+  }, 'codex', 0);
+  expect(control.input?.state).toBe('injected');
+  expect(control.input?.removed).toContain('external_codex_apps_open_page');
+
+  const carriesUser = interpretMessage({
+    role: 'user',
+    content: [{ type: 'input_text', text: '<external_codex_apps_open_page>{"page_id":7,"text":"打开后继续"}</external_codex_apps_open_page>' }],
+  }, 'codex', 1);
+  expect(carriesUser.input?.state).toBe('text');
+  expect(carriesUser.input?.text).toContain('打开后继续');
+});
+
+test('Codex turn_aborted 固定句式是注入，用户自己的话剥壳保留', () => {
+  const aborted = interpretMessage({
+    role: 'user',
+    content: [{ type: 'input_text', text: '<turn_aborted>The user interrupted the previous turn on purpose. Any running unified exec processes were terminated. If any tools/commands were aborted, they may have partially executed; verify before continuing.</turn_aborted>' }],
+  }, 'codex', 16);
+  expect(aborted.input?.state).toBe('injected');
+  expect(aborted.input?.removed).toContain('turn_aborted');
+
+  const userText = interpretMessage({
+    role: 'user',
+    content: [{ type: 'input_text', text: '<turn_aborted>用户补充：继续重绘矩阵</turn_aborted>' }],
+  }, 'codex', 17);
+  expect(userText.input?.state).toBe('text');
+  expect(userText.input?.text).toBe('用户补充：继续重绘矩阵');
+});
