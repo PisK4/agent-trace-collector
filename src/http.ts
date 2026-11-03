@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Config } from './config';
 import { loadLocalSecret } from './config';
@@ -118,13 +119,12 @@ function allowedHosts(port: number): Set<string> {
   return new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 }
 
-function timingSafeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a, 'utf8');
-  const right = Buffer.from(b, 'utf8');
-  if (left.length !== right.length) return false;
-  let diff = 0;
-  for (let i = 0; i < left.length; i++) diff |= left[i]! ^ right[i]!;
-  return diff === 0;
+/** Bearer token 比较：sha256 定长后交 node:crypto；直接比较遇长度不等要么提前返回泄漏长度、要么 throw，先定长两个都不占。 */
+function tokenEquals(a: string, b: string): boolean {
+  return timingSafeEqual(
+    createHash('sha256').update(a).digest(),
+    createHash('sha256').update(b).digest(),
+  );
 }
 
 type Verdict = 'ok' | 'host' | 'origin' | 'unauthorized';
@@ -149,7 +149,7 @@ function checkAccess(req: Request, port: number, readToken: string, isNavigation
   if (origin === null) {
     const authorization = req.headers.get('authorization');
     if (authorization !== null && authorization.startsWith('Bearer ') &&
-        timingSafeEqual(authorization.slice(7), readToken)) {
+        tokenEquals(authorization.slice(7), readToken)) {
       return 'ok';
     }
     const site = req.headers.get('sec-fetch-site');
@@ -283,7 +283,7 @@ async function handleHookIngest(
   }
   const authorization = req.headers.get('authorization');
   if (authorization === null || !authorization.startsWith('Bearer ') ||
-      !timingSafeEqual(authorization.slice(7), hook.token)) {
+      !tokenEquals(authorization.slice(7), hook.token)) {
     metrics.reject('unauthorized');
     return json({ error: 'unauthorized' }, 401);
   }
@@ -406,7 +406,7 @@ async function handleOtlpIngest(
   }
   const authorization = req.headers.get('authorization');
   if (authorization === null || !authorization.startsWith('Bearer ') ||
-      !timingSafeEqual(authorization.slice(7), otlp.token)) {
+      !tokenEquals(authorization.slice(7), otlp.token)) {
     metrics.reject('unauthorized');
     return json({ error: 'unauthorized' }, 401);
   }
