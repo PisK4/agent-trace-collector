@@ -14,6 +14,7 @@
  */
 
 import { esc } from './html.js';
+import { t } from './i18n.js';
 import { motion } from './motion.js';
 import { baseNameOf, isPathKind, kk, partLabel, partRank, partShade } from './parts.js';
 
@@ -35,16 +36,17 @@ export const iidOf = (kind, it) => `${kind}\u0001${it.tag ?? ''}\u0001${it.name}
 
 /** magpie 的折叠桶与轮次有固定叫法；轮次明确标注是上游上下文轮，不是本仓结算轮。 @param {PromptItem} it */
 export function itemLabel(it) {
-  if (it.tag === 'turn') return `上下文第 ${it.name} 轮`;
-  if (it.tag === 'turns') return `更早上下文 ${it.n ?? '?'} 轮`;
-  if (it.tag === 'more') return `另外 ${it.n ?? '?'} 项`;
+  if (it.tag === 'turn') return t('上下文第 {name} 轮', { name: it.name });
+  if (it.tag === 'turns') return t('更早上下文 {n} 轮', { n: it.n ?? '?' });
+  if (it.tag === 'more') return t('另外 {n} 项', { n: it.n ?? '?' });
   return it.name;
 }
 
 /** tag 徽标文案：轮次与折叠桶自带叫法不重复挂徽标，未知 tag 原样显示。 @param {string | null} tag */
 function tagText(tag) {
   if (tag === null || tag === '' || tag === 'turn' || tag === 'turns' || tag === 'more') return '';
-  return ({ mcp: 'MCP', read: 'read', shell: 'shell', result: 'result', user: 'user', project: 'project', reminder: '提醒', skills: 'skills' })[tag] ?? tag;
+  const label = ({ mcp: 'MCP', read: 'read', shell: 'shell', result: 'result', user: 'user', project: 'project', reminder: '提醒', skills: 'skills' })[tag];
+  return label === undefined ? tag : t(label);
 }
 
 /** 路径类 item 的可见名：只留 basename；轮次与折叠桶的固定叫法、非路径名字原样。
@@ -166,7 +168,7 @@ export function tilesOf(p, W, H) {
         const unitemized = its.length === 0;
         tiles.push({
           key: `${part.kind}\u0001\u0001${unitemized ? '#unitemized' : '#rest'}`, kind: part.kind, scope: 'rest', item: null, its,
-          name: unitemized ? `${partLabel(part.kind)}其余部分` : `其余${partLabel(part.kind)} ${its.length} 项`,
+          name: unitemized ? t('{label}其余部分', { label: partLabel(part.kind) }) : t('其余{label} {n} 项', { label: partLabel(part.kind), n: its.length }),
           tokens: unitemized ? q.a.v : its.reduce((s, y) => s + y.tokens, 0),
           x: q.x, y: q.y, w: q.w, h: q.h,
         });
@@ -179,19 +181,19 @@ export function tilesOf(p, W, H) {
 /**
  * tile 的展示规格：几何（扣间隙）、文字取舍与 aria 由布局一次算好，
  * 字符串与 DOM 两条渲染路径共用同一份，避免两处各算一套。
- * @param {ReturnType<typeof tilesOf>[number]} t @param {number} sum
+ * @param {ReturnType<typeof tilesOf>[number]} tile @param {number} sum
  */
-function tileSpec(t, sum) {
+function tileSpec(tile, sum) {
   const half = MAP_GAP / 2;
-  const x = t.x + half, y = t.y + half;
-  const w = Math.max(0, t.w - MAP_GAP), h = Math.max(0, t.h - MAP_GAP);
+  const x = tile.x + half, y = tile.y + half;
+  const w = Math.max(0, tile.w - MAP_GAP), h = Math.max(0, tile.h - MAP_GAP);
   const bare = w < BOTH_MIN_W || h < NAME_MIN_H;
   const low = !bare && h < BOTH_MIN_H;
-  const its = t.its.map(it => iidOf(t.kind, it)).join('\u0002');
-  const label = t.item !== null ? `${partLabel(t.kind)} · ${itemLabel(t.item)}` : t.name;
+  const its = tile.its.map(it => iidOf(tile.kind, it)).join('\u0002');
+  const label = tile.item !== null ? `${partLabel(tile.kind)} · ${itemLabel(tile.item)}` : tile.name;
   return {
     x, y, w, h, bare, low, its,
-    aria: `${label}，${t.tokens.toLocaleString('en-US')} tokens，占提示总量 ${Math.round(t.tokens / sum * 100)}%，打开明细`,
+    aria: t('{label}，{tokens} tokens，占提示总量 {pct}%，打开明细', { label, tokens: tile.tokens.toLocaleString('en-US'), pct: Math.round(tile.tokens / sum * 100) }),
   };
 }
 
@@ -231,7 +233,7 @@ export function contextMapInnerHtml(p, W, H, reqId) {
 export function contextMapShellHtml(p, reqId) {
   if (!p.parts.some(x => x.tokens > 0)) return '';
   const n = p.parts.filter(x => x.tokens > 0).length;
-  return `<div class="ctx-map" data-ctx-map="${reqId}" role="group" aria-label="上下文构成：${kk(p.tokens)} tokens，${n} 类，面积按已用比例分配，块可点开明细"></div>`;
+  return `<div class="ctx-map" data-ctx-map="${reqId}" role="group" aria-label="${t('上下文构成：{tokens} tokens，{n} 类，面积按已用比例分配，块可点开明细', { tokens: kk(p.tokens), n })}"></div>`;
 }
 
 /** tile 节点跨渲染缓存：键 → 元素与上次布局矩形。容器随右栏重绘整体重建，
@@ -333,7 +335,7 @@ export function contextRowsHtml(p, reqId) {
   const head = rows.slice(0, 8).map(rowHtml).join('');
   const tail = rows.slice(8);
   const more = tail.length > 0
-    ? `<details class="ctx-more" data-fold="ctxmore:${reqId}"><summary><span class="when-closed">显示全部 ${rows.length} 个已保存条目</span><span class="when-open">收起</span></summary><div class="ctx-rows">${tail.map(rowHtml).join('')}</div></details>`
+    ? `<details class="ctx-more" data-fold="ctxmore:${reqId}"><summary><span class="when-closed">${t('显示全部 {n} 个已保存条目', { n: rows.length })}</span><span class="when-open">${t('收起')}</span></summary><div class="ctx-rows">${tail.map(rowHtml).join('')}</div></details>`
     : '';
   return `<div class="ctx-rows">${head}</div>${more}`;
 }

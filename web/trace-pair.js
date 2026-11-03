@@ -1,6 +1,7 @@
 // @ts-check
 import { messagesKeyOfPath } from './body-model.js';
 import { esc } from './html.js';
+import { t } from './i18n.js';
 import { icon } from './icons.js';
 
 /**
@@ -16,10 +17,10 @@ import { icon } from './icons.js';
  * @param {string} state
  */
 export function pairStateText(state) {
-  if (state === 'resolved') return '已确认配对';
-  if (state === 'pending') return '结果位置待定';
-  if (state === 'ambiguous') return '结果有多个候选，未配对';
-  return '还没有见到结果';
+  if (state === 'resolved') return t('已确认配对');
+  if (state === 'pending') return t('结果位置待定');
+  if (state === 'ambiguous') return t('结果有多个候选，未配对');
+  return t('还没有见到结果');
 }
 
 /**
@@ -29,13 +30,13 @@ export function pairStateText(state) {
  * @param {string | null} [reason]
  */
 export function loadStateText(state, reason = null) {
-  if (state === 'not_loaded') return '待读取（打开配对页自动读取一次）';
-  if (state === 'loading' || state === 'loaded') return state === 'loaded' ? '已读取' : '正在读取';
-  if (state === 'invalid_location') return '结果位置无效，不回退猜测';
-  if (state === 'available') return '已读取';
-  if (reason === 'body_evicted') return '正文已回收';
-  if (reason === 'message_missing') return '消息已缺失';
-  return '读取失败，可重试';
+  if (state === 'not_loaded') return t('待读取（打开配对页自动读取一次）');
+  if (state === 'loading' || state === 'loaded') return state === 'loaded' ? t('已读取') : t('正在读取');
+  if (state === 'invalid_location') return t('结果位置无效，不回退猜测');
+  if (state === 'available') return t('已读取');
+  if (reason === 'body_evicted') return t('正文已回收');
+  if (reason === 'message_missing') return t('消息已缺失');
+  return t('读取失败，可重试');
 }
 
 /**
@@ -43,9 +44,9 @@ export function loadStateText(state, reason = null) {
  * @param {boolean | null | undefined} isError
  */
 export function isErrorText(isError) {
-  if (isError === true) return '工具执行失败（is_error=true）';
-  if (isError === false) return '上游未标记错误（is_error=false）';
-  return '上游未报告错误标记（is_error 缺失，不等于成功）';
+  if (isError === true) return t('工具执行失败（is_error=true）');
+  if (isError === false) return t('上游未标记错误（is_error=false）');
+  return t('上游未报告错误标记（is_error 缺失，不等于成功）');
 }
 
 /**
@@ -84,7 +85,7 @@ export function editCompareHtml(name, inputText, foldKey) {
     ? `<pre class="raw" tabindex="0">${esc(JSON.stringify(rest, null, 2) ?? '')}</pre>` : '';
   const block = (/** @type {string} */ cls, /** @type {string} */ label, /** @type {string | null} */ text) =>
     text === null ? '' : `<div class="edit-block ${cls}"><span class="edit-tag">${esc(label)}</span><pre class="raw" tabindex="0">${esc(text)}</pre></div>`;
-  const fold = `<details class="rail-fold sub" data-fold="${esc(foldKey)}"><summary>原始参数 JSON</summary><div class="fold-body"><pre class="raw" tabindex="0">${esc(prettyJson(inputText))}</pre></div></details>`;
+  const fold = `<details class="rail-fold sub" data-fold="${esc(foldKey)}"><summary>${t('原始参数 JSON')}</summary><div class="fold-body"><pre class="raw" tabindex="0">${esc(prettyJson(inputText))}</pre></div></details>`;
   return `${restHtml}${block('old', 'old_string', oldS)}${block('new', 'new_string', newS)}${fold}`;
 }
 
@@ -108,13 +109,13 @@ export function renderTracePair(input) {
   const loadState = reading === null ? 'not_loaded'
     : reading.state === 'available' ? 'loaded' : reading.state;
   const carrier = pair !== null && pair.state === 'resolved' && pair.result_req !== null
-    ? input.carrierLabel ?? `请求 ${pair.result_req}` : null;
+    ? input.carrierLabel ?? t('请求 {req}', { req: pair.result_req }) : null;
   // 正常态（已配对且正文已读或待读取）不挂状态行；结果承载由结果面板的 bp-meta 承担。
   const loadAbnormal = loadState !== 'not_loaded' && loadState !== 'loaded' && loadState !== 'pending'
     && loadState !== 'ambiguous' && loadState !== 'unpaired';
   const statusBits = [
-    pairState !== 'resolved' || loadAbnormal ? `关联 ${esc(pairStateText(pairState))}` : '',
-    loadAbnormal ? `正文加载 ${esc(loadStateText(loadState, reading?.reason ?? null))}` : '',
+    pairState !== 'resolved' || loadAbnormal ? `${t('关联')} ${esc(pairStateText(pairState))}` : '',
+    loadAbnormal ? `${t('正文加载')} ${esc(loadStateText(loadState, reading?.reason ?? null))}` : '',
   ].filter(Boolean).join(' · ');
   const status = statusBits === '' ? '' : `<div class="bp-meta">${statusBits}</div>`;
   const compare = editCompareHtml(input.call.name, input.call.inputText, `edit:${input.owner}:${input.call.ord}`);
@@ -122,38 +123,38 @@ export function renderTracePair(input) {
     : `<pre class="raw" tabindex="0">${esc(prettyJson(input.call.inputText))}</pre>`;
   // 工具名只在页头出现一次：两段头部是角色标加来源（mono 弱化），不再重复名字。
   const callPanel = `<div class="body-panel">
-    <div class="frole"><b>调用</b><span>${esc(input.call.path ?? 'reply')} · 请求 ${esc(input.ownerLabel)} · 调用 #${input.call.ord}</span></div>
+    <div class="frole"><b>${t('调用')}</b><span>${esc(input.call.path ?? 'reply')} · ${t('请求 {req}', { req: esc(input.ownerLabel) })} · ${t('调用 #{ord}', { ord: input.call.ord })}</span></div>
     ${callBody}
   </div>`;
   /** @type {string} */
   let resultBody;
   if (reading === null) {
     if (pair !== null && pair.state === 'resolved' && pair.result_req !== null) {
-      resultBody = `<p class="note">结果已确认配对，正文待读取；进入配对页会自动读取一次。</p>
+      resultBody = `<p class="note">${t('结果已确认配对，正文待读取；进入配对页会自动读取一次。')}</p>
         <div class="conv-tools">
-          <button class="chip-btn" data-tool-read="${input.owner}" data-call-ord="${input.call.ord}">读取结果正文</button>
+          <button class="chip-btn" data-tool-read="${input.owner}" data-call-ord="${input.call.ord}">${t('读取结果正文')}</button>
         </div>`;
     } else {
-      resultBody = `<p class="note">${esc(pairStateText(pairState))}；没有可读取的结果正文。</p>`;
+      resultBody = `<p class="note">${esc(pairStateText(pairState))}${t('；没有可读取的结果正文。')}</p>`;
     }
   } else if (reading.state === 'available') {
     // is_error=false 是上游明确给出的正常态，静默；true 与未报告才挂标签。
     resultBody = `<pre class="raw" tabindex="0">${esc(typeof reading.content === 'string' ? reading.content : JSON.stringify(reading.content, null, 2) ?? '')}</pre>
       ${reading.is_error === false ? '' : `<p class="note">${esc(isErrorText(reading.is_error))}</p>`}`;
   } else if (reading.state === 'pending') {
-    resultBody = '<p class="note">结果位置待定：派生还没算完，不猜配对。</p>';
+    resultBody = `<p class="note">${t('结果位置待定：派生还没算完，不猜配对。')}</p>`;
   } else if (reading.state === 'ambiguous') {
-    resultBody = '<p class="note">结果有多个候选，未配对；不显示任何候选正文。</p>';
+    resultBody = `<p class="note">${t('结果有多个候选，未配对；不显示任何候选正文。')}</p>`;
   } else if (reading.state === 'unpaired') {
-    resultBody = '<p class="note">还没有见到这一调用的结果。</p>';
+    resultBody = `<p class="note">${t('还没有见到这一调用的结果。')}</p>`;
   } else if (reading.state === 'invalid_location') {
-    resultBody = `<p class="note warn">结果位置无效（${esc(reading.reason ?? '')}），不跨请求搜索或回退第一块。</p>`;
+    resultBody = `<p class="note warn">${t('结果位置无效（{reason}），不跨请求搜索或回退第一块。', { reason: esc(reading.reason ?? '') })}</p>`;
   } else {
     // body_evicted 与 message_missing 是终态：重试不会让正文回来，只给说明。
     const retryable = reading.reason !== 'body_evicted' && reading.reason !== 'message_missing';
-    resultBody = `<p class="note warn">结果正文不可读（${esc(reading.reason ?? '')}）。</p>
+    resultBody = `<p class="note warn">${t('结果正文不可读（{reason}）。', { reason: esc(reading.reason ?? '') })}</p>
       ${retryable ? `<div class="conv-tools">
-        <button class="chip-btn ico" data-tool-retry="${input.owner}" data-call-ord="${input.call.ord}" aria-label="重试读取" title="重试读取">${icon('retry', 20)}</button>
+        <button class="chip-btn ico" data-tool-retry="${input.owner}" data-call-ord="${input.call.ord}" aria-label="${t('重试读取')}" title="${t('重试读取')}">${icon('retry', 20)}</button>
       </div>` : ''}`;
   }
   const resultPath = reading !== null && reading.target !== null ? reading.target.path
@@ -161,7 +162,7 @@ export function renderTracePair(input) {
   // 位置标签按实际路径的数组键拼：Responses 是 input[N]，其余是 messages[N]。
   const resultKey = messagesKeyOfPath(resultPath);
   const metaBits = [
-    carrier !== null ? `请求 ${esc(carrier)}` : '',
+    carrier !== null ? t('请求 {req}', { req: esc(carrier) }) : '',
     pair !== null && pair.result_ord !== null ? `${resultKey}[${pair.result_ord}]` : '',
   ].filter(Boolean).join('<span>·</span>');
   // 面板头统一 tool 角色色。is_error=true 给整块 warn 软色。
@@ -169,10 +170,10 @@ export function renderTracePair(input) {
   const errorTint = reading !== null && reading.state === 'available' && reading.is_error === true
     ? ' pair-error' : '';
   const resultPanel = `<div class="body-panel${errorTint}">
-    <div class="frole"><b>结果</b><span>${esc(resultPath ?? '未定位')}${metaBits !== '' ? ` · ${metaBits}` : ''}</span></div>
+    <div class="frole"><b>${t('结果')}</b><span>${esc(resultPath ?? t('未定位'))}${metaBits !== '' ? ` · ${metaBits}` : ''}</span></div>
     ${resultBody}
   </div>`;
   // 弱化连接语只交代已确认配对的因果；未配对与待定的状态由顶部 status 行说明。
-  const arrow = resolved && carrier !== null ? '<div class="pair-arrow">下一条请求带回结果</div>' : '';
+  const arrow = resolved && carrier !== null ? `<div class="pair-arrow">${t('下一条请求带回结果')}</div>` : '';
   return `${status}${callPanel}${arrow}${resultPanel}`;
 }

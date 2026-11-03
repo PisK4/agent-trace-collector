@@ -2,6 +2,7 @@
 /**
  * 正文读取模型：协议消息与回复归一化、块视图与工具条目。
  * 只做数据转换，不产生 HTML；展示路径在 body-view，转义策略在 html。
+ * 本模块此前零 import；i18n 是唯一例外（纯数据映射，无 DOM）。
  *
  * @typedef {import('../src/protocols').BodyPage} BodyPage
  * @typedef {import('../src/queries/requests').RequestDetail} RequestDetail
@@ -13,6 +14,7 @@
  * @typedef {{state: 'ok' | 'absent' | 'invalid' | 'pending' | 'evicted' | 'unsupported' | 'summary' | 'partial', text: string, thinking: string[], calls: ToolCallView[], blocks: Block[], choiceCount: number | null, finish: string | null, model: string | null, raw: unknown}} ReplyView
  * @typedef {{call_id: string, name: string, inputText: string, ord: number, path: string, state: string, owner: number | null, result_req: number | null, result_ord: number | null, result_path: string | null, result_label?: string | null}} ToolEntry
  */
+import { t } from './i18n.js';
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
 function isRecord(value) {
@@ -53,7 +55,7 @@ export function previewOf(value) {
 
 /** @param {unknown} name @param {unknown} input */
 function callLabel(name, input) {
-  const head = typeof name === 'string' && name.length > 0 ? name : '（未命名工具）';
+  const head = typeof name === 'string' && name.length > 0 ? name : t('（未命名工具）');
   const body = typeof input === 'string' ? input : JSON.stringify(input ?? null) ?? '';
   return `${head}(${body})`;
 }
@@ -62,8 +64,8 @@ function callLabel(name, input) {
 function imageLabel(block) {
   const source = isRecord(block.source) ? block.source : {};
   const media = typeof source.media_type === 'string' ? source.media_type
-    : typeof block.media_type === 'string' ? block.media_type : '类型未报告';
-  return `图片 · ${media}（原对象保留，不内联数据）`;
+    : typeof block.media_type === 'string' ? block.media_type : t('类型未报告');
+  return t('图片 · {media}（原对象保留，不内联数据）', { media });
 }
 
 /**
@@ -84,12 +86,12 @@ function blockView(block, index, path) {
     return { kind: 'thinking', text: typeof block.thinking === 'string' ? block.thinking : previewOf(block), index, raw: block, path };
   }
   if (type === 'redacted_thinking') {
-    return { kind: 'thinking', text: '（推理内容已被上游加密，只保留占位块）', index, raw: block, path };
+    return { kind: 'thinking', text: t('（推理内容已被上游加密，只保留占位块）'), index, raw: block, path };
   }
   // Responses 的推理项只有摘要，正文不落明文；摘要缺失时如实说明。
   if (type === 'reasoning') {
     const summary = previewOf(block.summary);
-    const text = summary.length > 0 ? summary : '（上游未返回推理摘要）';
+    const text = summary.length > 0 ? summary : t('（上游未返回推理摘要）');
     return { kind: 'thinking', text, index, raw: block, path };
   }
   if (type === 'tool_use') return { kind: 'call', text: callLabel(block.name, block.input), index, raw: block, path };
@@ -310,10 +312,10 @@ export function systemPathOf(page) {
 /** @param {Block[]} blocks */
 function messagePreview(blocks) {
   for (const block of blocks) {
-    if (block.kind === 'image') return '图片';
+    if (block.kind === 'image') return t('图片');
     if (block.text.length > 0) return clip(block.text, 140);
   }
-  return '（空消息）';
+  return t('（空消息）');
 }
 
 /**

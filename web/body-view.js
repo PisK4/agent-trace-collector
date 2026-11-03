@@ -14,6 +14,7 @@
  */
 
 import { esc, mdToHtml } from './html.js';
+import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { clip, displayRoleOf } from './body-model.js';
 import { clipChars, summaryParts } from './tool-summary.js';
@@ -40,12 +41,12 @@ const ROLE_TAGS = /** @type {Record<Role, string>} */ ({
  */
 export function bodyNotice(page) {
   if (page === null) return '';
-  if (page.state === 'evicted') return `正文已回收：${page.reason ?? '原因未记录'}`;
-  if (page.state === 'pending') return page.reason === null ? '正文未到；回调可能稍后到达。' : `正文未到：${page.reason}`;
-  if (page.state === 'unsupported') return '原对象已保存，暂不支持结构化解析';
-  if (page.state === 'partial') return page.reason === null ? '正文不完整：只有部分内容可用。' : `正文不完整：${page.reason}`;
-  if (page.parse_state === 'unsupported') return '协议未适配：原对象已保存，可按原文阅读请求字段与回复，消息结构不按已知协议解释。';
-  if (page.reply_state === 'absent') return '已保存请求，上游未提供可用回复。';
+  if (page.state === 'evicted') return t('正文已回收：{reason}', { reason: page.reason ?? t('原因未记录') });
+  if (page.state === 'pending') return page.reason === null ? t('正文未到；回调可能稍后到达。') : t('正文未到：{reason}', { reason: page.reason });
+  if (page.state === 'unsupported') return t('原对象已保存，暂不支持结构化解析');
+  if (page.state === 'partial') return page.reason === null ? t('正文不完整：只有部分内容可用。') : t('正文不完整：{reason}', { reason: page.reason });
+  if (page.parse_state === 'unsupported') return t('协议未适配：原对象已保存，可按原文阅读请求字段与回复，消息结构不按已知协议解释。');
+  if (page.reply_state === 'absent') return t('已保存请求，上游未提供可用回复。');
   return '';
 }
 
@@ -60,7 +61,7 @@ export function renderMessages(entries, options) {
   const shown = entries.slice(0, limit);
   const gaps = options.gaps ?? [];
   /** @param {{from: number, to: number}} gap */
-  const gapRow = gap => `<li class="msg-gap"><span>#${gap.from}${gap.to > gap.from ? `–#${gap.to}` : ''} 未读取</span></li>`;
+  const gapRow = gap => `<li class="msg-gap"><span>${t('{ord} 未读取', { ord: `#${gap.from}${gap.to > gap.from ? `–#${gap.to}` : ''}` })}</span></li>`;
   /** @type {string[]} */
   const rows = [];
   let gapIndex = 0;
@@ -77,7 +78,7 @@ export function renderMessages(entries, options) {
     const typePrefix = toolResultOnly ? 'Tool result · '
       : entry.blocks.length > 0 && entry.blocks.every(block => block.kind === 'call') ? 'Tool call · ' : '';
     rows.push(`<li class="msg${isNew ? ' msg-new' : ''}" data-ord="${entry.ord}"${current}>
-      <button class="msg-head" data-msg="${entry.ord}" aria-label="查看消息 ${entry.ord}${isNew ? '，新增消息' : ''}">
+      <button class="msg-head" data-msg="${entry.ord}" aria-label="${t('查看消息 {ord}{tail}', { ord: entry.ord, tail: isNew ? t('，新增消息') : '' })}">
         <span class="msg-ord">#${entry.ord}</span>
         <span class="kind ${roleClass(displayRole)}">${roleTag(displayRole)}</span>
         <span class="msg-preview${toolResultOnly ? ' result' : ''}">${esc(typePrefix + entry.preview)}</span>
@@ -85,7 +86,7 @@ export function renderMessages(entries, options) {
     </li>`);
   });
   const more = entries.length > limit
-    ? `<li class="msg-more"><button class="chip-btn" data-body-more-msg="1">还有 ${entries.length - limit} 条未显示</button></li>`
+    ? `<li class="msg-more"><button class="chip-btn" data-body-more-msg="1">${t('还有 {n} 条未显示', { n: entries.length - limit })}</button></li>`
     : '';
   return `<ol class="msg-list">${rows.join('')}${more}</ol>`;
 }
@@ -110,15 +111,15 @@ export function renderMessageDetail(entry, path = '', pairOf = null) {
         : `<div class="bp-text bp-plain">${esc(block.text)}</div>`;
     }
     if (block.kind === 'thinking') {
-      return `<details class="msg-thinking" open><summary>推理块 · ${[...block.text].length} 字</summary>
+      return `<details class="msg-thinking" open><summary>${t('推理块 · {n} 字', { n: [...block.text].length })}</summary>
         <pre class="raw" tabindex="0">${esc(block.text)}</pre></details>`;
     }
     if (block.kind === 'call' || block.kind === 'result') {
       const failed = block.kind === 'result' && block.failed === true
-        ? '<span class="tool-chip miss"><span>工具结果失败</span></span>' : '';
+        ? `<span class="tool-chip miss"><span>${t('工具结果失败')}</span></span>` : '';
       const pair = pairOf === null ? null : pairOf(block, blockPath);
       const open = pair === null ? ''
-        : `<div class="conv-tools"><button class="chip-btn ico" data-tool-owner="${pair.owner}" data-call-ord="${pair.callOrd}" aria-label="配对两端" title="查看配对的调用与结果">${icon('pair', 20)}</button></div>`;
+        : `<div class="conv-tools"><button class="chip-btn ico" data-tool-owner="${pair.owner}" data-call-ord="${pair.callOrd}" aria-label="${t('配对两端')}" title="${t('查看配对的调用与结果')}">${icon('pair', 20)}</button></div>`;
       return `${failed}${open}<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(block.text)}</pre>`;
     }
     return `<pre class="raw" tabindex="0" data-block-path="${esc(block.path)}">${esc(JSON.stringify(block.raw, null, 2))}</pre>`;
@@ -127,10 +128,10 @@ export function renderMessageDetail(entry, path = '', pairOf = null) {
     <div class="bp-head">
       <span class="kind ${roleClass(displayRole)} bp-kind">${roleTag(displayRole)}</span>
       ${path === '' ? '' : `<span class="bp-path">${esc(path.replace(/^request\./, ''))}</span>`}
-      <button class="chip-btn ico" data-copy-msg="${entry.ord}" aria-label="复制原文" title="复制原文">${icon('copy', 16)}</button>
+      <button class="chip-btn ico" data-copy-msg="${entry.ord}" aria-label="${t('复制原文')}" title="${t('复制原文')}">${icon('copy', 16)}</button>
     </div>
-    <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${entry.blocks.length} 个内容块</span></div>
-    ${blocks.length > 0 ? blocks : '<p class="note">这条消息没有内容块。</p>'}
+    <div class="bp-meta"><span>role=${esc(entry.rawRole ?? displayRole)}</span><span>·</span><span>${t('{n} 个内容块', { n: entry.blocks.length })}</span></div>
+    ${blocks.length > 0 ? blocks : `<p class="note">${t('这条消息没有内容块。')}</p>`}
   </div>`;
 }
 
@@ -176,7 +177,7 @@ export function renderUnknownBlockDetail(path, raw) {
       <span class="bp-path">${esc(path)}</span>
     </div>
     <pre class="raw" tabindex="0">${esc(JSON.stringify(raw, null, 2))}</pre>
-    <p class="rail-note">这一块没有已适配的协议解释；原对象按脱敏后的 JSON 展示。</p>
+    <p class="rail-note">${t('这一块没有已适配的协议解释；原对象按脱敏后的 JSON 展示。')}</p>
   </div>`;
 }
 
@@ -190,9 +191,9 @@ export function renderUnknownBlockDetail(path, raw) {
 export function renderTools(tools) {
   if (tools.length === 0) return '';
   const rows = tools.map(tool => {
-    const open = `<button class="chip-btn ico" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}" aria-label="配对两端" title="查看配对的调用与结果">${icon('pair', 20)}</button>`;
+    const open = `<button class="chip-btn ico" data-tool-owner="${tool.owner}" data-call-ord="${tool.ord}" aria-label="${t('配对两端')}" title="${t('查看配对的调用与结果')}">${icon('pair', 20)}</button>`;
     const warn = tool.state === 'ambiguous'
-      ? '<span class="tool-chip miss"><span>结果有多个候选，未配对</span></span>' : '';
+      ? `<span class="tool-chip miss"><span>${t('结果有多个候选，未配对')}</span></span>` : '';
     const parts = summaryParts(tool.name, tool.inputText);
     const text = parts.args === '' ? parts.label : `${parts.label} · ${parts.args}`;
     return `<div class="tool-row">
@@ -227,19 +228,19 @@ export function renderReply(view, tools = [], foldKey = '') {
     return `<details class="rail-fold sub"${attr}>${inner}</details>`;
   };
   if (view.state !== 'ok' && view.state !== 'invalid') {
-    const [head, body] = EMPTY_REPLY[view.state];
+    const [head, body] = EMPTY_REPLY[view.state].map(/** @param {string} v */ v => t(v));
     return `<div class="reply-empty"><b>${head}</b><span>${body}</span></div>`;
   }
   if (view.state === 'invalid') {
-    return `<div class="reply-empty"><b>回复对象无法结构化</b>
-      <span>原对象仍保存在库里。</span></div>`;
+    return `<div class="reply-empty"><b>${t('回复对象无法结构化')}</b>
+      <span>${t('原对象仍保存在库里。')}</span></div>`;
   }
   const thinking = view.thinking.length === 0 ? '' : subFold('think',
-    `<summary>推理块<span class="fold-count">${view.thinking.length} 段</span></summary>
+    `<summary>${t('推理块')}<span class="fold-count">${t('{n} 段', { n: view.thinking.length })}</span></summary>
      <div class="fold-body"><pre class="raw" tabindex="0">${esc(view.thinking.join('\n\n'))}</pre></div>`);
   const text = view.text.length > 0
     ? `<div class="reply-text">${mdToHtml(view.text)}</div>`
-    : view.calls.length === 0 ? '<div class="reply-empty"><span>回复对象存在，但没有文本内容。</span></div>' : '';
+    : view.calls.length === 0 ? `<div class="reply-empty"><span>${t('回复对象存在，但没有文本内容。')}</span></div>` : '';
   return `${thinking}${text}${renderTools(tools)}`;
 }
 
@@ -260,7 +261,7 @@ export function renderReplyDetail(view, tools = [], foldKey = '') {
       ${view.finish !== null ? `<span>finish: ${esc(view.finish)}</span>` : ''}
     </div>
     ${renderReply(view, tools, foldKey)}
-    <p class="rail-note">工具结果不在本回复里，按 call id 指向后续请求的消息。</p>
+    <p class="rail-note">${t('工具结果不在本回复里，按 call id 指向后续请求的消息。')}</p>
   </div>`;
 }
 
@@ -323,16 +324,16 @@ export function renderCapabilities(page) {
     if (result.state === 'present' || result.state === 'empty') return '';
     // 协议未适配是解释边界，不是数据缺失：完整保存也不能推导出零技能。
     const note = result.reason === 'protocol_unsupported'
-      ? '协议未适配：保存的原文可读，但无法按已知协议判定这一笔携带的工具与技能。'
-      : text[result.state] ?? result.state;
-    const chip = result.reason === 'protocol_unsupported' ? '协议未适配' : text[result.state] ?? result.state;
+      ? t('协议未适配：保存的原文可读，但无法按已知协议判定这一笔携带的工具与技能。')
+      : t(text[result.state] ?? result.state);
+    const chip = result.reason === 'protocol_unsupported' ? t('协议未适配') : t(text[result.state] ?? result.state);
     return `<details class="rail-fold" data-fold="${key}">
       <summary>${label}<span class="fold-count warn">${esc(chip)}</span></summary>
       <div class="fold-body"><p class="note">${esc(note)}</p></div>
     </details>`;
   };
-  return row(view.tools, '工具清单', 'cap:tools',
+  return row(view.tools, t('工具清单'), 'cap:tools',
       `<ol class="cap-list">${view.tools.items.map(renderToolItem).join('')}</ol>`, TOOL_STATE_TEXT)
-    + row(view.skills, '技能清单', 'cap:skills',
+    + row(view.skills, t('技能清单'), 'cap:skills',
       `<ul class="cap-list">${view.skills.items.map(renderSkillItem).join('')}</ul>`, SKILL_STATE_TEXT);
 }

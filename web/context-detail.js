@@ -16,6 +16,7 @@
  */
 
 import { esc } from './html.js';
+import { currentLocale, t } from './i18n.js';
 import { icon } from './icons.js';
 import { motion, settled } from './motion.js';
 import { baseNameOf, isPathKind, kk, partLabel } from './parts.js';
@@ -42,8 +43,8 @@ export function contentTextOf(value) {
       const b = /** @type {Record<string, unknown>} */ (block);
       if (typeof b.text === 'string') return b.text;
       if (typeof b.output === 'string') return b.output;
-      if (b.type === 'image') return '[图片块：不以文本呈现]';
-      if (b.type === 'thinking' || b.type === 'reasoning') return '[推理内容：密封不可读]';
+      if (b.type === 'image') return t('[图片块：不以文本呈现]');
+      if (b.type === 'thinking' || b.type === 'reasoning') return t('[推理内容：密封不可读]');
       return '';
     }).filter(s => s !== '');
     return parts.length > 0 ? parts.join('\n') : null;
@@ -89,8 +90,8 @@ export function entryReadTarget(session, entry) {
 function entryMeta(entry) {
   const isResult = entry.call_ord !== null && entry.owner_req !== null;
   const where = isResult
-    ? `调用 ${entry.call_ord} · 结果在 req ${entry.owner_req}`
-    : entry.ord !== null ? `消息 ${entry.ord}` : '请求顶层字段';
+    ? t('调用 {ord} · 结果在 req {req}', { ord: entry.call_ord, req: entry.owner_req })
+    : entry.ord !== null ? t('消息 {ord}', { ord: entry.ord }) : t('请求顶层字段');
   const who = entry.tool_name ?? entry.role ?? '';
   return { isResult, where, who };
 }
@@ -113,7 +114,7 @@ export function directoryStatusHtml(data) {
     unsupported: '该类别没有正文定位规则',
   };
   const head = STATE_TEXT[data.state] === null || STATE_TEXT[data.state] === undefined ? ''
-    : `<p class="ctx-d-status">${esc(STATE_TEXT[data.state] ?? data.state)}${data.reason !== null && data.reason !== data.state ? `（${esc(data.reason)}）` : ''}</p>`;
+    : `<p class="ctx-d-status">${esc(t(STATE_TEXT[data.state] ?? data.state))}${data.reason !== null && data.reason !== data.state ? `（${esc(data.reason)}）` : ''}</p>`;
   const notes = data.notes.map(note => `<p class="ctx-d-note">${esc(note)}</p>`).join('');
   return `${head}${notes}`;
 }
@@ -132,23 +133,23 @@ export function contextDetailHtml(s, dir) {
     <span class="t"><b${nameTitle}>${esc(shown)}</b></span>
     <span class="v">${s.tokens === null ? '' : `${kk(s.tokens)} tokens`}</span>
     <span class="grow"></span>
-    <button type="button" class="x" data-ctx-close aria-label="关闭明细" title="关闭明细">${icon('close', 20)}</button>
+    <button type="button" class="x" data-ctx-close aria-label="${t('关闭明细')}" title="${t('关闭明细')}">${icon('close', 20)}</button>
   </header>`;
-  const body = dir.phase === 'loading' ? '<div class="ctx-d-body"><p class="ctx-d-status pulse">读取目录…</p></div>' : (() => {
+  const body = dir.phase === 'loading' ? `<div class="ctx-d-body"><p class="ctx-d-status pulse">${t('读取目录…')}</p></div>` : (() => {
     // 集合块的成员身份：目录按类别范围取，成员名单在此如实列出。
     // 路径类名字只显示 basename，完整名字在 title 里。
     const members = s.members !== undefined && s.members.length > 0
-      ? `<div class="ctx-d-body"><p class="ctx-d-note">成员：${
+      ? `<div class="ctx-d-body"><p class="ctx-d-note">${t('成员：{list}', { list: 
         s.members.map(m => {
           const parsed = iidParse(m);
           if (parsed === null) return '';
           if (!isPathKind(parsed.kind)) return esc(parsed.name);
           const base = baseNameOf(parsed.name);
           return base === parsed.name ? esc(base) : `<span title="${esc(parsed.name)}">${esc(base)}</span>`;
-        }).filter(x => x !== '').join('、')}</p></div>` : '';
-    const inner = dir.phase === 'error' ? `<div class="ctx-d-body"><p class="ctx-d-status">${esc(dir.error ?? '读取失败')}</p>${
-      dir.error === 'reading_changed' ? '<p class="ctx-d-note">阅读依据已变化，关闭后重新打开。</p>' : ''}</div>`
-      : dir.phase === 'loading' ? '<div class="ctx-d-body"><p class="ctx-d-status pulse">读取目录…</p></div>'
+        }).filter(x => x !== '').join(currentLocale() === 'zh' ? '、' : ', ')})}</p></div>` : '';
+    const inner = dir.phase === 'error' ? `<div class="ctx-d-body"><p class="ctx-d-status">${esc(dir.error ?? t('读取失败'))}</p>${
+      dir.error === 'reading_changed' ? `<p class="ctx-d-note">${t('阅读依据已变化，关闭后重新打开。')}</p>` : ''}</div>`
+      : dir.phase === 'loading' ? `<div class="ctx-d-body"><p class="ctx-d-status pulse">${t('读取目录…')}</p></div>`
         : (() => {
           const data = dir.data;
           const entries = data?.entries ?? [];
@@ -156,16 +157,16 @@ export function contextDetailHtml(s, dir) {
             const meta = entryMeta(entry);
             const open = entries.length === 1 && s.name !== null ? ' open' : '';
             return `<details class="ctx-d-entry"${open} data-ctx-entry="${index}">
-              <summary><span class="p ${entry.precision}">${PRECISION_TEXT[entry.precision] ?? entry.precision}</span>
+              <summary><span class="p ${entry.precision}">${t(PRECISION_TEXT[entry.precision] ?? entry.precision)}</span>
                 <span class="who">${esc(meta.who === '' ? meta.where : `${meta.who} · ${meta.where}`)}</span>
                 <code class="path">${esc(entry.path)}</code></summary>
-              <div class="ctx-d-content" data-ctx-content="${index}"><p class="ctx-d-note">未读取</p></div>
+              <div class="ctx-d-content" data-ctx-content="${index}"><p class="ctx-d-note">${t('未读取')}</p></div>
             </details>`;
           }).join('');
           const more = data?.next_cursor !== null && data?.next_cursor !== undefined && data?.next_cursor !== null
-            ? `<button type="button" class="chip-btn ico" data-ctx-more aria-label="继续扫描" title="继续扫描">${icon('retry', 20)}</button>` : '';
+            ? `<button type="button" class="chip-btn ico" data-ctx-more aria-label="${t('继续扫描')}" title="${t('继续扫描')}">${icon('retry', 20)}</button>` : '';
           const empty = entries.length === 0 && data?.state === 'available'
-            ? '<p class="ctx-d-note">本笔请求的已保存正文里没有该范围的片段。</p>' : '';
+            ? `<p class="ctx-d-note">${t('本笔请求的已保存正文里没有该范围的片段。')}</p>` : '';
           return `<div class="ctx-d-body">${directoryStatusHtml(data ?? null)}${empty}
             <div class="ctx-d-entries">${items}</div>${more}</div>`;
         })();
@@ -200,7 +201,7 @@ export function entryContentHtml(entry, data) {
       ? list[Number(match[2])]
       : list;
     if (value === undefined || value === null) {
-      const why = match === null ? '条目路径无法定位正文' : '该字段不在这笔已保存正文里';
+      const why = match === null ? t('条目路径无法定位正文') : t('该字段不在这笔已保存正文里');
       return `<p class="ctx-d-status">${esc(why)}</p>`;
     }
     const text = contentTextOf(value);
@@ -210,7 +211,7 @@ export function entryContentHtml(entry, data) {
     ? data.content
     : data?.messages?.[0]?.value ?? null;
   const text = contentTextOf(value);
-  const state = data?.is_error === true ? '<p class="ctx-d-status">工具结果标记为失败（is_error）</p>' : '';
+  const state = data?.is_error === true ? `<p class="ctx-d-status">${t('工具结果标记为失败（is_error）')}</p>` : '';
   const body = text === null ? JSON.stringify(value, null, 1) : text;
   return `${state}<pre class="ctx-d-text">${esc(body)}</pre>`;
 }
@@ -295,7 +296,7 @@ export function createContextMenu({ readDirectory, readEntry }) {
       open.dir = { phase: 'ready', data };
     } catch (error) {
       if (open === null || generation !== gen || isCancelled(error)) return;
-      open.dir = { phase: 'error', error: error instanceof Error ? error.message : '读取失败' };
+      open.dir = { phase: 'error', error: error instanceof Error ? error.message : t('读取失败') };
     }
     paint();
   }
@@ -311,7 +312,7 @@ export function createContextMenu({ readDirectory, readEntry }) {
       s.dir.data.next_cursor = data.next_cursor;
     } catch (error) {
       if (open === null || generation !== gen || isCancelled(error)) return;
-      s.dir.error = error instanceof Error ? error.message : '读取失败';
+      s.dir.error = error instanceof Error ? error.message : t('读取失败');
     }
     paint();
   }
@@ -333,13 +334,13 @@ export function createContextMenu({ readDirectory, readEntry }) {
       motion(slot, { opacity: [0, 1] }, 0.14);
       return;
     }
-    slot.innerHTML = '<p class="ctx-d-note pulse">读取正文…</p>';
+    slot.innerHTML = `<p class="ctx-d-note pulse">${t('读取正文…')}</p>`;
     const result = await sharedEntryRead(s.contents, key, () => readEntry(target, active.signal));
     if (open === null || generation !== gen) return;
     if ('error' in result) {
       slot.innerHTML = `<p class="ctx-d-status">${
         result.error instanceof Error && result.error.message === 'reading_changed'
-          ? '阅读依据已变化' : '正文读取失败'}</p>`;
+          ? t('阅读依据已变化') : t('正文读取失败')}</p>`;
       return;
     }
     slot.innerHTML = entryContentHtml(entry, result.data);
