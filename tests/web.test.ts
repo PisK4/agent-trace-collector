@@ -41,8 +41,12 @@ test('请求记录入口只列被省略的请求，按窗口序号定位', () =>
   ] as never[];
   // 没有省略就不出入口。
   expect(sessionHiddenFold(rows, [], 'k', false)).toBe('');
-  const html = sessionHiddenFold(rows, rows.slice(1), 'k', false);
-  expect(html).toContain('data-fold="hidden:k"');
+  // 收起态只给折叠条与计数，条目按需生成，不预渲染进 DOM。
+  const closed = sessionHiddenFold(rows, rows.slice(1), 'k', false);
+  expect(closed).toContain('data-fold="hidden:k"');
+  expect(closed).toContain('data-lazy="hidden"');
+  expect(closed).not.toContain('data-summary-req="7"');
+  const html = sessionHiddenFold(rows, rows.slice(1), 'k', true);
   expect(html).toContain('data-summary-req="7"');
   expect(html).toContain('data-summary-req="9"');
   // 序号是窗口内位置，不是请求号；正文状态原样说出缺口类型。
@@ -998,7 +1002,13 @@ test('无正文请求入口落在性能组，展开清单可定位', () => {
   expect(html).toContain('hidden-more');
   expect(html).toContain('data-fold="hidden:k"');
   expect(html).toContain('无正文 <b>2</b> 笔');
-  expect(html).toContain('data-summary-req="7"');
+  // 默认收纳：折叠条在，条目不在；展开态（fold 表记住的开合）才带条目。
+  expect(html).not.toContain('data-summary-req="7"');
+  const opened = sessionHead({
+    ...headBase, rows: [requestRow({ req_id: 1 })] as never, hiddenRows: hidden as never,
+    summary: null, summaryStatus: 'absent', hiddenFoldOpen: true,
+  });
+  expect(opened).toContain('data-summary-req="7"');
 });
 
 test('工具组前三直接可见，其余进 +N 展开', () => {

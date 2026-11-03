@@ -726,10 +726,14 @@ if (typeof document !== 'undefined') {
     return '';
   }
 
+  /** 折叠条展开时才取清单：闭包锁住当前窗口的 rows 与 hidden，重绘即更新。
+   *  @type {(() => string) | null} */
+  let lazyHiddenItems = null;
   /** 会话头装配：store 与选择状态在此读齐，纯展示在 session-view。
    *  @param {import('../src/queries/projection').RequestRow[]} hiddenRows 默认时间线省略的空组 */
   function sessionHead(hiddenRows) {
     const summary = store.peekSummary();
+    lazyHiddenItems = () => sessionHiddenItems(currentRows(), hiddenRows);
     return sessionHeadView({
       sessionKey: state.session,
       row: state.session === null ? null : sessionRow(state.session),
@@ -2383,6 +2387,11 @@ if (typeof document !== 'undefined') {
     if (!(target instanceof HTMLDetailsElement)) return;
     const key = target.dataset.fold;
     if (key !== undefined) folds.set(key, target.open);
+    // 折叠条只在真正展开时构建清单：收起态与首次渲染都不带子节点。
+    if (target.open && target.dataset.lazy === 'hidden') {
+      const body = target.querySelector('.more-body');
+      if (body !== null && body.childElementCount === 0) body.innerHTML = lazyHiddenItems === null ? '' : lazyHiddenItems();
+    }
     // 单行分组板：清单开合时该行临时恢复换行，收起即回单行。
     const cueData = target.closest('.cue-data');
     if (cueData !== null) cueData.classList.toggle('open-wrap', target.open);

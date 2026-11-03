@@ -403,19 +403,26 @@ export function coverageHoverText(s) {
 /** 默认对话时间线省略的请求：入口在性能组，展开清单按需打开，点条目走请求定位。
  *  这是请求记录的入口，不是第二套导航：序号与正文状态足以认出是哪一笔。
  *  @param {RequestRow[]} rows 当前窗口全部请求 @param {RequestRow[]} hidden 被省略的请求
- *  @param {string | null} sessionKey @param {boolean} open */
+ * @param {string | null} sessionKey @param {boolean} open */
 export function sessionHiddenFold(rows, hidden, sessionKey, open) {
   if (hidden.length === 0) return '';
-  const items = hidden.map(item => {
+  return `<details class="hidden-more" data-fold="hidden:${esc(sessionKey ?? '')}" data-lazy="hidden"${open ? ' open' : ''}>
+    <summary><span class="chev" aria-hidden="true"></span>${t('无正文 <b>{n}</b> 笔', { n: hidden.length })}</summary>
+    <div class="more-body">${open ? sessionHiddenItems(rows, hidden) : ''}</div>
+  </details>`;
+}
+
+/**
+ * 无正文清单的条目：只在展开时构建，收起与折叠态都不把这些节点放进 DOM。
+ * @param {RequestRow[]} rows @param {RequestRow[]} hidden @returns {string}
+ */
+export function sessionHiddenItems(rows, hidden) {
+  return hidden.map(item => {
     const ordinal = rows.findIndex(row => row.req_id === item.req_id) + 1;
     return `<button class="tool-row tool-link" data-summary-req="${item.req_id}">
       <span class="mono">${String(ordinal).padStart(2, '0')}</span><span class="muted">· ${esc(bodyStateText(item))}</span>
     </button>`;
-  });
-  return `<details class="hidden-more" data-fold="hidden:${esc(sessionKey ?? '')}"${open ? ' open' : ''}>
-    <summary><span class="chev" aria-hidden="true"></span>${t('无正文 <b>{n}</b> 笔', { n: hidden.length })}</summary>
-    <div class="more-body">${items.join('')}</div>
-  </details>`;
+  }).join('');
 }
 
 /**
