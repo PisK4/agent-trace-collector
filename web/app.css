@@ -574,7 +574,7 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .disclosures>details:last-child{border-bottom:0}
 .disclosures summary{display:flex;align-items:center;gap:7px;padding:8px 12px;font-size:11px;color:var(--text-2);cursor:pointer;list-style:none}
 .disclosures summary::-webkit-details-marker{display:none}
-.disclosures summary::before{color:var(--muted);transition:transform .12s}
+.disclosures summary::before{color:var(--muted)}
 .disclosures details[open] summary::before{transform:rotate(90deg)}
 .disclosures summary:hover{background:var(--hover)}
 .disclosures .d-body{padding:2px 12px 12px}
@@ -626,8 +626,8 @@ pre.raw{
 .ledger-chain .chain-row dd{text-align:right;font:11px/1.5 var(--mono);font-variant-numeric:tabular-nums}
 .ledger-chain .miss{color:var(--missing);font-style:normal}
 .rail-tabs{display:flex;gap:0;margin:0 -14px;padding:0 14px;background:var(--surface)}
-.rail-tabs button{font-size:11px;padding:8px 10px 7px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
-.rail-tabs button[aria-pressed="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:550}
+.rail-tabs button{position:relative;font-size:11px;padding:8px 10px 7px;color:var(--muted)}
+.rail-tabs button[aria-pressed="true"]{color:var(--accent);font-weight:550}
 .rail-tabs button:hover{color:var(--text)}
 .rail-body{flex:1;min-height:0;overflow:auto;padding:0 14px 24px}
 .rail-section{padding:13px 0;border-bottom:1px solid var(--line)}
@@ -714,7 +714,7 @@ pre.raw{
 .rail-fold{border:1px solid var(--line);border-radius:6px;background:var(--inset);margin:12px 0 0;overflow:hidden}
 .rail-fold>summary{display:flex;align-items:center;gap:7px;padding:8px 10px;font-size:11px;font-weight:550;color:var(--text-2);cursor:pointer;list-style:none}
 .rail-fold>summary::-webkit-details-marker{display:none}
-.rail-fold>summary::before{color:var(--muted);transition:transform .12s}
+.rail-fold>summary::before{color:var(--muted)}
 .rail-fold[open]>summary::before{transform:rotate(90deg)}
 .rail-fold>summary:hover{background:var(--hover)}
 .rail-fold .fold-count{margin-left:auto;font:10.5px var(--mono);color:var(--muted);font-weight:400}
@@ -732,7 +732,6 @@ pre.raw{
 .usage-more{margin:8px 0 0;border-top:1px solid var(--line)}
 .usage-more>summary{display:flex;align-items:center;gap:6px;padding:6px 0 2px;font-size:10px;color:var(--muted);cursor:pointer;list-style:none}
 .usage-more>summary::-webkit-details-marker{display:none}
-.usage-more>summary::before{transition:transform .12s}
 .usage-more[open]>summary::before{transform:rotate(90deg)}
 .usage-more>summary:hover{color:var(--text-2)}
 
@@ -817,11 +816,8 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
   .msg-ord{display:none}
   .conv-tools .mini-search{width:100%}
 }
-/* 主题切换会同时改变变量；background 过渡会把旧主题的颜色多留一帧，
-   所以只给位移类交互加过渡，背景色直接切换。 */
-@media(prefers-reduced-motion:no-preference){
-  .req-open-mark svg,.disclosures summary::before{transition:transform .12s}
-}
+/* 主题切换保持当帧完成；交互过渡集中在文件末尾的动效区，
+   由 body.theme-switching 两帧抑制保证切主题不带旧色残影。 */
 
 /* 上下文明细弹窗（web/context-detail.js）：居中面板，遮罩即宿主容器。
    打开不改右栏；关闭三途径（Esc/关闭钮/遮罩），焦点回触发控件。 */
@@ -842,7 +838,7 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 .ctx-d-entry{border:1px solid var(--line);border-radius:5px;background:var(--inset)}
 .ctx-d-entry>summary{display:flex;align-items:baseline;gap:8px;padding:6px 9px;font-size:11px;cursor:pointer;list-style:none}
 .ctx-d-entry>summary::-webkit-details-marker{display:none}
-.ctx-d-entry>summary::before{color:var(--muted);transition:transform .12s}
+.ctx-d-entry>summary::before{color:var(--muted)}
 .ctx-d-entry[open]>summary::before{transform:rotate(90deg)}
 .ctx-d-entry>summary:hover{background:var(--hover)}
 .ctx-d-entry .p{font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 4px;flex:none}
@@ -856,3 +852,86 @@ button.tool-link:hover{background:var(--hover);border-radius:4px}
 .comp-legend .name{font:inherit;border:0;background:none;padding:0;cursor:pointer;text-align:left}
 .comp-legend .name:hover{color:var(--text)}
 button.ctx-row{width:100%;font:inherit;border:0;background:none;text-align:left;cursor:pointer}
+
+/* ---------- 动效：只解释状态变化，不做装饰 ----------
+   令牌集中在这里（主题无关，不进暗色复制块）；时长 120–220ms，曲线与
+   web/motion.js 的默认 easing 是同一条 bezier。JS 驱动的动画统一走
+   web/motion.js（reduced-motion 短路）；CSS 侧由本区末尾的 media blanket
+   统一关闭。背景色过渡曾被整体禁止（切主题残留旧色一帧），现由
+   body.theme-switching 两帧抑制解除，主题本身仍然当帧切换。 */
+:root{
+  --t-fast:120ms; --t-move:200ms; --ease-out:cubic-bezier(0,0,.2,1);
+}
+/* hover 与选中的底色/描边过渡：只挂交互元素，普通容器不带。 */
+.sess,.compact-select,.icon-btn,.chip-btn,.turn-chip,.msg-head,.ctx-row,.ctx-tile,
+.rail-tabs button,.rail-fold>summary,.tool-page-tabs button,.history-button,
+.brand,.fact-copy,button.tool-link,.bp-nav button,.backend-chip,.resize-handle{
+  transition:background-color var(--t-fast),border-color var(--t-fast),color var(--t-fast),box-shadow var(--t-fast);
+}
+/* 折叠箭头统一在此过渡（原四处内联声明收编成一 home）。 */
+.chev,.disclosures summary::before,.msg-thinking summary::before,.rail-fold>summary::before,
+.usage-more>summary::before,.ctx-d-entry>summary::before,.cap-item>details>summary::before{
+  transition:transform var(--t-fast);
+}
+/* 页签下划线：选中即满宽的静态 2px 线；点击页签时 JS 加 .tab-fresh 让它从左
+   生长一次。重绘重建的按钮不带该类，store 驱动的重绘不会重播。 */
+.rail-tabs button::after{
+  content:"";position:absolute;left:10px;right:10px;bottom:0;height:2px;
+  background:var(--accent);transform:scaleX(0);transform-origin:left;
+}
+.rail-tabs button[aria-pressed="true"]::after{transform:scaleX(1)}
+.rail-tabs button.tab-fresh[aria-pressed="true"]::after{animation:underline-grow 160ms var(--ease-out)}
+@keyframes underline-grow{from{transform:scaleX(0)}}
+/* 分段控件选中段的弹起：同款瞬态类（.chip-fresh）只在用户点击时加。 */
+.filters .chip-btn.chip-fresh[aria-pressed="true"],
+.tool-page-tabs button.chip-fresh[aria-pressed="true"]{animation:chip-pop 160ms var(--ease-out)}
+@keyframes chip-pop{from{transform:scale(.85)}}
+/* 在跑的读取文案：1.4s 呼吸。只挂异步进行中的说明，静态说明不用。 */
+.pulse{animation:pulse-load 1.4s ease-in-out infinite}
+@keyframes pulse-load{50%{opacity:.45}}
+/* 读取中的占位步骤行：步骤键固定以 :preparing 结尾，文本槽整行呼吸。 */
+.compact-select[data-step-key$=":preparing"] .compact-preview{animation:pulse-load 1.4s ease-in-out infinite}
+/* 尾部追加的组一次性渐显：键控提交创建节点时由 shouldEnter 标记；
+   窗口重建与首屏填充不算追加。 */
+.trace-group[data-enter]{animation:group-in 180ms var(--ease-out)}
+@keyframes group-in{from{opacity:0}}
+/* 定位滚动的落点确认：目标组呼吸一次淡出（locate 意图触发）。 */
+.trace-group.landed{animation:land-flash 700ms var(--ease-out)}
+@keyframes land-flash{from{background-color:var(--accent-soft)}}
+/* 换会话中栏整体渐显：app.js 在会话变化后的首次提交时以 motion() 播放。 */
+/* toast：入场走 CSS（插入即播），离场由 motion() 驱动后移除。 */
+.toast{animation:toast-in 180ms var(--ease-out)}
+@keyframes toast-in{from{opacity:0;transform:translate(-50%,8px)}}
+/* 弹窗：入场走 CSS（hidden 切换即播）；离场由 motion() 驱动后再 hidden。 */
+.ctx-dialog-root{animation:fade-in 160ms var(--ease-out)}
+.ctx-dialog{animation:dialog-in 160ms var(--ease-out)}
+@keyframes fade-in{from{opacity:0}}
+@keyframes dialog-in{from{opacity:0;transform:translateY(6px) scale(.985)}}
+/* 面板折叠：列宽 200ms 收拢；折叠列的 visibility 延迟到收拢完成再退出
+   可访问树，展开时立即回到树里。窄屏 display:block 的 media 分支不受影响。 */
+.app{transition:grid-template-columns var(--t-move) var(--ease-out)}
+.col-sessions,.col-rail,.resize-handle{transition:visibility 0s}
+body.sidebar-collapsed .col-sessions{visibility:hidden;transition:visibility 0s var(--t-move)}
+body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidden;transition:visibility 0s var(--t-move)}
+/* 折叠行高度过渡（渐进增强）：interpolate-size 不支持的浏览器瞬开，行为不变。
+   行内 chip 折叠（hidden-more/path-more）会破坏换行布局、嵌套二级
+   （usage-more/ctx-more）会双层同时动画，都不参与。 */
+:root{interpolate-size:allow-keywords}
+.rail-fold::details-content,.disclosures>details::details-content,.msg-thinking::details-content,
+.cap-item>details::details-content,.ctx-d-entry::details-content{
+  block-size:0;overflow:clip;
+  transition:block-size 180ms var(--ease-out),content-visibility 180ms allow-discrete;
+}
+.rail-fold[open]::details-content,.disclosures>details[open]::details-content,.msg-thinking[open]::details-content,
+.cap-item>details[open]::details-content,.ctx-d-entry[open]::details-content{block-size:auto}
+/* 系统减少动态：CSS 侧一网打尽；JS 侧由 web/motion.js 同口径短路。 */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms!important;animation-iteration-count:1!important;
+    transition-duration:0s!important;transition-delay:0s!important;
+  }
+}
+/* 切主题两帧抑制：主题当帧完成（既有决策），交互过渡在其余时刻照常。 */
+body.theme-switching *,body.theme-switching *::before,body.theme-switching *::after{
+  animation:none!important;transition:none!important;
+}

@@ -1,5 +1,5 @@
 // @ts-check
-import { planCommit } from './trace-commit.js';
+import { planCommit, tailAppendKeys } from './trace-commit.js';
 
 /**
  * 中栏的键控提交：会话头、轮次带与步骤列表各自保留节点，请求组按 req_id、
@@ -194,9 +194,13 @@ function restoreAnchor(main, scroller, anchor) {
 
 /**
  * @param {HTMLElement} main 中栏容器
+ * @param {{shouldEnter?: () => boolean}} [options] shouldEnter 放行时，判定为
+ *   尾部追加的新建组（trace-commit.tailAppendKeys）带 data-enter 一次性渐显；
+ *   首屏填充与窗口重建不算追加，不给标记。
  * @returns {{commit: (model: MainModel, scroller: Element, preferredReq?: number | null) => 'clean' | 'selection' | 'structural', reset: () => void}}
  */
-export function createMainView(main) {
+export function createMainView(main, options = {}) {
+  const shouldEnter = options.shouldEnter ?? null;
   /** @type {Element | null} */
   let head = null;
   let headHtml = '';
@@ -274,7 +278,16 @@ export function createMainView(main) {
   /** @param {MainModel} model @param {CommitItem[]} items */
   function commitChildren(model, items) {
     if (list === null) return;
+    const existing = new Set(children.keys());
     const plan = planCommit(shownHtml(children), items);
+    // 追加判定只看组键：end/loader/empty 这类结构尾标是幸存键且总排在尾部，
+    // 不参与「新建是否都在幸存键之后」的比较，否则尾部追加永远判不成立。
+    const enterKeys = shouldEnter !== null && shouldEnter()
+      ? tailAppendKeys(
+        plan.create.filter(key => key.startsWith('group:')),
+        plan.order,
+        new Set([...existing].filter(key => key.startsWith('group:'))))
+      : [];
     /** @type {Map<string, string>} */
     const desired = new Map(items.map(item => /** @type {[string, string]} */ ([item.key, item.html])));
     const groupsByKey = new Map(model.groups.map(group => [group.key, group]));
@@ -290,6 +303,7 @@ export function createMainView(main) {
         const groupModel = groupsByKey.get(key.slice('group:'.length));
         if (groupModel === undefined) continue;
         const state = makeGroupState(groupModel);
+        if (enterKeys.includes(key)) state.node.dataset.enter = 'append';
         children.set(key, { node: state.node, html: '' });
         groupStates.set(state.key, state);
       } else {

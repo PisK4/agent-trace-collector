@@ -14,6 +14,7 @@
  */
 
 import { esc } from './html.js';
+import { motion } from './motion.js';
 import { baseNameOf, isPathKind, kk, partLabel, partRank, partShade } from './parts.js';
 
 /** px²：item 布局面积低于此值并入成员集合（≥2 块才并；并完一类无保留块时整类一块）。 */
@@ -176,6 +177,25 @@ export function tilesOf(p, W, H) {
 }
 
 /**
+ * tile 的展示规格：几何（扣间隙）、文字取舍与 aria 由布局一次算好，
+ * 字符串与 DOM 两条渲染路径共用同一份，避免两处各算一套。
+ * @param {ReturnType<typeof tilesOf>[number]} t @param {number} sum
+ */
+function tileSpec(t, sum) {
+  const half = MAP_GAP / 2;
+  const x = t.x + half, y = t.y + half;
+  const w = Math.max(0, t.w - MAP_GAP), h = Math.max(0, t.h - MAP_GAP);
+  const bare = w < BOTH_MIN_W || h < NAME_MIN_H;
+  const low = !bare && h < BOTH_MIN_H;
+  const its = t.its.map(it => iidOf(t.kind, it)).join('\u0002');
+  const label = t.item !== null ? `${partLabel(t.kind)} · ${itemLabel(t.item)}` : t.name;
+  return {
+    x, y, w, h, bare, low, its,
+    aria: `${label}，${t.tokens.toLocaleString('en-US')} tokens，占提示总量 ${Math.round(t.tokens / sum * 100)}%，打开明细`,
+  };
+}
+
+/**
  * 给定实测容器尺寸渲染 tile 层（无外壳）。tile 是 button：绝对定位占满布局矩形
  * 扣去四周间隙后的区域，名称与数值各占一行、单行省略；尺寸不足时依次只留
  * 名称、全部隐藏（信息由同页列表承担）。悬停与点击由 app.js 按 data-ctx-* 委托。
@@ -187,25 +207,15 @@ export function contextMapInnerHtml(p, W, H, reqId) {
   const tiles = tilesOf(p, W, H);
   if (tiles.length === 0) return '';
   const sum = p.parts.reduce((a, x) => a + Math.max(0, x.tokens), 0) || 1;
-  const half = MAP_GAP / 2;
-  const fmt = (/** @type {number} */ v) => v.toLocaleString('en-US');
   // 同值按稳定身份键定序，避免容器尺寸变化时前几名在并列份额间跳动。
   const topValueKeys = new Set([...tiles]
     .sort((a, b) => b.tokens - a.tokens || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
     .slice(0, VALUE_BUDGET)
     .map(t => t.key));
   return tiles.map(t => {
-    const x = t.x + half, y = t.y + half;
-    const w = Math.max(0, t.w - MAP_GAP), h = Math.max(0, t.h - MAP_GAP);
-    const bare = w < BOTH_MIN_W || h < NAME_MIN_H;
-    const low = !bare && h < BOTH_MIN_H;
-    const its = t.its.map(it => iidOf(t.kind, it)).join('\u0002');
-    const label = t.item !== null
-      ? `${partLabel(t.kind)} · ${itemLabel(t.item)}`
-      : t.name;
-    const aria = `${label}，${fmt(t.tokens)} tokens，占提示总量 ${Math.round(t.tokens / sum * 100)}%，打开明细`;
-    const showValue = topValueKeys.has(t.key) && !bare && !low;
-    return `<button type="button" class="ctx-tile${bare ? ' bare' : low ? ' low' : ''}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;--c:${partShade(t.tokens, sum)}" data-ctx-key="${esc(t.key)}" data-ctx-kind="${esc(t.kind)}" data-ctx-its="${esc(its)}" data-ctx-scope="${t.scope}" data-ctx-req="${reqId}" aria-label="${esc(aria)}" title="${esc(aria)}">` +
+    const s = tileSpec(t, sum);
+    const showValue = topValueKeys.has(t.key) && !s.bare && !s.low;
+    return `<button type="button" class="ctx-tile${s.bare ? ' bare' : s.low ? ' low' : ''}" style="left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px;--c:${partShade(t.tokens, sum)}" data-ctx-key="${esc(t.key)}" data-ctx-kind="${esc(t.kind)}" data-ctx-its="${esc(s.its)}" data-ctx-scope="${t.scope}" data-ctx-req="${reqId}" aria-label="${esc(s.aria)}" title="${esc(s.aria)}">` +
       `<span class="ctx-tname">${esc(t.name)}</span>` +
       (showValue ? `<span class="ctx-tval">${kk(t.tokens)} · ${Math.round(t.tokens / sum * 100)}%</span>` : '') +
       `</button>`;
@@ -224,14 +234,67 @@ export function contextMapShellHtml(p, reqId) {
   return `<div class="ctx-map" data-ctx-map="${reqId}" role="group" aria-label="上下文构成：${kk(p.tokens)} tokens，${n} 类，面积按已用比例分配，块可点开明细"></div>`;
 }
 
+/** tile 节点跨渲染缓存：键 → 元素与上次布局矩形。容器随右栏重绘整体重建，
+ *  节点被分离后仍可搬回新容器；键不再出现时清出缓存。 */
+/** @type {Map<string, {el: HTMLButtonElement, x: number, y: number, w: number, h: number}>} */
+const tileCache = new Map();
+/** 内容签名：parts 值变化（换请求/换版）才做矩形过渡，尺寸重排不播动画。 */
+let lastMapContent = '';
+
 /**
  * 测量容器并填充 tile 层；宽高无效（折叠、离屏）时不写，等尺寸观察触发补算。
+ * tile 节点跨渲染复用：内容签名变化时矩形做一次 FLIP 过渡，新块淡入；
+ * reduced-motion（motion 返回 null）与同内容重排都直接落位，行为不变。
  * @param {HTMLElement} container @param {PromptReading} p @param {number} reqId
  */
 export function fillContextMap(container, p, reqId) {
   const w = container.clientWidth, h = container.clientHeight;
   if (!(w > 0) || !(h > 0)) return;
-  container.innerHTML = contextMapInnerHtml(p, w, h, reqId);
+  const tiles = tilesOf(p, w, h);
+  const content = p.parts.map(x => x.tokens).join(',');
+  const morph = content !== lastMapContent;
+  lastMapContent = content;
+  if (tiles.length === 0) { tileCache.clear(); container.replaceChildren(); return; }
+  const sum = p.parts.reduce((a, x) => a + Math.max(0, x.tokens), 0) || 1;
+  const topValueKeys = new Set([...tiles]
+    .sort((a, b) => b.tokens - a.tokens || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .slice(0, VALUE_BUDGET)
+    .map(t => t.key));
+  const kept = new Set();
+  for (const t of tiles) {
+    const s = tileSpec(t, sum);
+    const showValue = topValueKeys.has(t.key) && !s.bare && !s.low;
+    const cached = tileCache.get(t.key);
+    const el = cached !== undefined ? cached.el : document.createElement('button');
+    el.type = 'button';
+    el.className = `ctx-tile${s.bare ? ' bare' : s.low ? ' low' : ''}`;
+    el.setAttribute('data-ctx-key', t.key);
+    el.setAttribute('data-ctx-kind', t.kind);
+    el.setAttribute('data-ctx-its', s.its);
+    el.setAttribute('data-ctx-scope', t.scope);
+    el.setAttribute('data-ctx-req', String(reqId));
+    el.setAttribute('aria-label', s.aria);
+    el.setAttribute('title', s.aria);
+    el.style.left = `${s.x}px`; el.style.top = `${s.y}px`;
+    el.style.width = `${s.w}px`; el.style.height = `${s.h}px`;
+    el.style.setProperty('--c', partShade(t.tokens, sum));
+    el.innerHTML = `<span class="ctx-tname">${esc(t.name)}</span>` +
+      (showValue ? `<span class="ctx-tval">${kk(t.tokens)} · ${Math.round(t.tokens / sum * 100)}%</span>` : '');
+    container.append(el);
+    if (cached === undefined) {
+      motion(el, { opacity: [0, 1] }, 0.18);
+    } else if (morph && (cached.x !== s.x || cached.y !== s.y || cached.w !== s.w || cached.h !== s.h)) {
+      motion(el, {
+        left: [`${cached.x}px`, `${s.x}px`], top: [`${cached.y}px`, `${s.y}px`],
+        width: [`${cached.w}px`, `${s.w}px`], height: [`${cached.h}px`, `${s.h}px`],
+      }, 0.22);
+    }
+    kept.add(t.key);
+    tileCache.set(t.key, { el, x: s.x, y: s.y, w: s.w, h: s.h });
+  }
+  for (const key of [...tileCache.keys()]) {
+    if (!kept.has(key)) tileCache.delete(key);
+  }
 }
 
 /**

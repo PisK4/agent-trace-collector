@@ -17,6 +17,7 @@
 
 import { esc } from './html.js';
 import { icon } from './icons.js';
+import { motion, settled } from './motion.js';
 import { baseNameOf, isPathKind, kk, partLabel } from './parts.js';
 
 /** iid → {kind, tag, name}；iid 由 kind\01tag\01name 拼成，名字段允许含分隔符。
@@ -133,7 +134,7 @@ export function contextDetailHtml(s, dir) {
     <span class="grow"></span>
     <button type="button" class="x" data-ctx-close aria-label="关闭明细" title="关闭明细">${icon('close', 20)}</button>
   </header>`;
-  const body = dir.phase === 'loading' ? '<div class="ctx-d-body"><p class="ctx-d-status">读取目录…</p></div>' : (() => {
+  const body = dir.phase === 'loading' ? '<div class="ctx-d-body"><p class="ctx-d-status pulse">读取目录…</p></div>' : (() => {
     // 集合块的成员身份：目录按类别范围取，成员名单在此如实列出。
     // 路径类名字只显示 basename，完整名字在 title 里。
     const members = s.members !== undefined && s.members.length > 0
@@ -147,7 +148,7 @@ export function contextDetailHtml(s, dir) {
         }).filter(x => x !== '').join('、')}</p></div>` : '';
     const inner = dir.phase === 'error' ? `<div class="ctx-d-body"><p class="ctx-d-status">${esc(dir.error ?? '读取失败')}</p>${
       dir.error === 'reading_changed' ? '<p class="ctx-d-note">阅读依据已变化，关闭后重新打开。</p>' : ''}</div>`
-      : dir.phase === 'loading' ? '<div class="ctx-d-body"><p class="ctx-d-status">读取目录…</p></div>'
+      : dir.phase === 'loading' ? '<div class="ctx-d-body"><p class="ctx-d-status pulse">读取目录…</p></div>'
         : (() => {
           const data = dir.data;
           const entries = data?.entries ?? [];
@@ -329,9 +330,10 @@ export function createContextMenu({ readDirectory, readEntry }) {
     const ready = s.contents.get(key);
     if (ready?.phase === 'ready') {
       slot.innerHTML = entryContentHtml(entry, ready.data);
+      motion(slot, { opacity: [0, 1] }, 0.14);
       return;
     }
-    slot.innerHTML = '<p class="ctx-d-note">读取正文…</p>';
+    slot.innerHTML = '<p class="ctx-d-note pulse">读取正文…</p>';
     const result = await sharedEntryRead(s.contents, key, () => readEntry(target, active.signal));
     if (open === null || generation !== gen) return;
     if ('error' in result) {
@@ -341,7 +343,11 @@ export function createContextMenu({ readDirectory, readEntry }) {
       return;
     }
     slot.innerHTML = entryContentHtml(entry, result.data);
+    motion(slot, { opacity: [0, 1] }, 0.14);
   }
+
+  /** 离场动画在飞时的 controls：重开即取消，播完才真正 hidden。 */
+  let exitAnims = /** @type {{finished: Promise<unknown>, cancel: () => void}[]} */ ([]);
 
   /**
    * 打开明细。label 与 tokens 由调用方从点击源给出；members 是集合块的
@@ -354,6 +360,9 @@ export function createContextMenu({ readDirectory, readEntry }) {
     generation += 1;
     controller?.abort();
     controller = new AbortController();
+    // 离场未完就重开：取消在飞的退场，遮罩与面板当场回到可见态。
+    for (const anim of exitAnims) anim.cancel();
+    exitAnims = [];
     const triggerFocus = document.activeElement;
     const container = /** @type {HTMLElement} */ (root);
     open = { s: selection, dir: { phase: 'loading' }, contents: new Map(), trigger: triggerFocus instanceof Element ? triggerFocus : trigger };
@@ -371,8 +380,24 @@ export function createContextMenu({ readDirectory, readEntry }) {
     generation += 1;
     controller?.abort();
     controller = null;
-    if (root !== null) root.hidden = true;
+    // 焦点先回触发控件再播离场：键盘用户的落点不等待动画。
     if (trigger instanceof HTMLElement) trigger.focus();
+    if (root === null) return;
+    const container = root;
+    const panel = container.firstElementChild;
+    const anims = [
+      motion(container, { opacity: [1, 0] }, 0.14),
+      panel !== null ? motion(panel, { opacity: [1, 0], transform: ['translateY(0px) scale(1)', 'translateY(4px) scale(0.99)'] }, 0.14) : null,
+    ].filter(a => a !== null);
+    if (anims.length === 0) { container.hidden = true; return; }
+    exitAnims = anims;
+    // settled 带超时兜底：动画时钟不前进的环境里 finished 永不 settle，不能等它。
+    void Promise.all(anims.map(a => settled(a, 220))).then(() => {
+      // 期间重开过（openDetail 换了新数组）就不隐藏。
+      if (exitAnims !== anims) return;
+      container.hidden = true;
+      exitAnims = [];
+    });
   }
 
   /** 切换请求或会话时调用：弹窗身份不再成立，直接关闭。 */
