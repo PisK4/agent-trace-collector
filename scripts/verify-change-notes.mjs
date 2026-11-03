@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 变更闸门：触及代码或工具路径的提交必须同时带一篇 Agent Note。
+ * 变更闸门：合并到 master 的这批改动必须带一篇 Agent Note。
  *
  * 用法：
  *   node scripts/verify-change-notes.mjs --staged
@@ -11,7 +11,9 @@
  * 信息里写 `Agent-Note: none — <reason>` 豁免；--staged 还没有提交信息，用
  * ATC_NOTE_EXEMPT=<reason> 放行，并把同样的理由写进提交信息供 range 模式核对。
  *
- * --range 逐提交检查，并跳过本脚本首次进入历史之前的提交：迁移基线。
+ * --range 按落地批次检查：range 内有 merge 时，从上一个 merge 到当前 merge 之间的
+ * 全部提交是一批；没有 merge 时整个 range 是一批。一批里至少一篇 note 即可。
+ * 跳过本脚本首次进入历史之前的提交：迁移基线。
  */
 import { execFileSync } from 'node:child_process'
 
@@ -56,7 +58,7 @@ function triggers(files) {
 }
 
 function printTriggers(files) {
-  for (const file of triggers(files).sort()) console.error(`  ${file}`)
+  for (const file of [...new Set(triggers(files))].sort()) console.error(`  ${file}`)
 }
 
 function failStaged(files) {
@@ -114,20 +116,56 @@ const afterIntro = commit => {
   }
 }
 
+const hasNote = commit => commitFiles(commit, ['--diff-filter=ACMR']).some(file => NOTE_FILE.test(file))
+const hasExempt = commit => EXEMPT.test(git(['log', '-1', '--format=%B', commit]))
+const mergeFiles = commit => git(['show', '--first-parent', '--name-only', '--format=', commit])
+  .trim().split('\n').filter(Boolean)
+
 let violations = 0
-for (const commit of commitList.reverse()) {
-  if (!afterIntro(commit)) continue
-  const files = commitFiles(commit)
-  if (triggers(files).length === 0) continue
-  if (commitFiles(commit, ['--diff-filter=ACMR']).some(file => NOTE_FILE.test(file))) continue
-  if (EXEMPT.test(git(['log', '-1', '--format=%B', commit]))) continue
-  console.error(`verify-change-notes: ${commit} 触及需要 note 的路径，但没有 Agent Note：`)
+const report = (label, files) => {
+  console.error(`verify-change-notes: ${label} 触及需要 note 的路径，但没有 Agent Note：`)
   printTriggers(files)
   violations += 1
+}
+
+// 一批落地是从上一个 merge 到当前 merge 之间的全部提交：主线上补 note 的提交、
+// 分支提交与 merge 自身都算同一批。没有 merge 时整个 range 是一批。
+const firstParent = git(['rev-list', '--first-parent', range]).trim().split('\n').filter(Boolean)
+const merges = git(['rev-list', '--merges', '--first-parent', range]).trim().split('\n').filter(Boolean).reverse()
+
+if (merges.length === 0) {
+  const relevant = commitList.filter(afterIntro)
+  const files = relevant.flatMap(commit => commitFiles(commit))
+  if (triggers(files).length > 0 && !relevant.some(hasNote) && !relevant.some(hasExempt)) {
+    report(`${range} 这一批`, files)
+  }
+} else {
+  const oldest = firstParent[firstParent.length - 1]
+  let prev = (gitQuiet(['rev-parse', `${oldest}^`]) ?? '').trim() || oldest
+  const covered = new Set()
+  for (const merge of merges) {
+    const commits = git(['rev-list', `${prev}..${merge}`]).trim().split('\n').filter(Boolean).filter(afterIntro)
+    for (const commit of commits) covered.add(commit)
+    const ownFiles = mergeFiles(merge)
+    const files = [...commits.flatMap(commit => commitFiles(commit)), ...ownFiles]
+    if (triggers(files).length > 0
+      && !commits.some(hasNote) && !commits.some(hasExempt)
+      && !hasExempt(merge) && !ownFiles.some(file => NOTE_FILE.test(file))) {
+      report(`${merge} 这一批`, files)
+    }
+    prev = merge
+  }
+  const tail = commitList.filter(commit => !covered.has(commit) && afterIntro(commit))
+  if (tail.length > 0) {
+    const files = tail.flatMap(commit => commitFiles(commit))
+    if (triggers(files).length > 0 && !tail.some(hasNote) && !tail.some(hasExempt)) {
+      report(`${merges[merges.length - 1]} 之后的改动`, files)
+    }
+  }
 }
 
 if (violations > 0) {
   console.error('写 note，或在提交信息里加 `Agent-Note: none — <为什么这是纯机械改动>`。')
   process.exit(1)
 }
-console.log(`verify-change-notes: ${range} 的提交均带 note 或显式豁免。`)
+console.log(`verify-change-notes: ${range} 的批次均带 note 或显式豁免。`)
