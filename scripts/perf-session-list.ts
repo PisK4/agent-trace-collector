@@ -117,8 +117,9 @@ try {
 
   const walk = (label: string, samples: number[]): void => {
     const sorted = [...samples].sort((a, b) => a - b);
+    const at = (ratio: number): number => sorted[Math.min(sorted.length - 1, Math.ceil(ratio * sorted.length) - 1)]!;
     const median = sorted[Math.trunc(sorted.length / 2)] ?? sorted[0]!;
-    console.log(`${label}: first ${samples[0]!.toFixed(1)} ms, min ${sorted[0]!.toFixed(1)}, median ${median.toFixed(1)}, max ${sorted[sorted.length - 1]!.toFixed(1)} (${samples.length} runs)`);
+    console.log(`${label}: first ${samples[0]!.toFixed(1)} ms, min ${sorted[0]!.toFixed(1)}, p50 ${median.toFixed(1)}, p95 ${at(0.95).toFixed(1)}, p99 ${at(0.99).toFixed(1)}, max ${sorted[sorted.length - 1]!.toFixed(1)} (${samples.length} runs)`);
   };
 
   // 严格交替：旧、新、旧、新……首遍各自单列，重复样本仍是交替顺序，
