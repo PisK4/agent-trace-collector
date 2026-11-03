@@ -403,8 +403,8 @@ if (typeof document !== 'undefined') {
     // 面包屑先给请求位置，再跟会话标题；长标题只截断自己，不挤掉「我在哪」。
     el('crumb').innerHTML = row === null ? (here === '' ? '' : `<b>${esc(here)}</b>`)
       : `${here === '' ? '' : `<b>${esc(here)}</b><span class="sep">·</span>`}<span class="crumb-title">${esc(row.title)}</span>`;
-    document.title = row ? `${here === '' ? row.title : `${here} · ${row.title}`} — Trace Collector`
-      : 'Trace Collector';
+    document.title = row ? `${here === '' ? row.title : `${here} · ${row.title}`} — Tracery`
+      : 'Tracery';
   }
 
   function renderFilters() {

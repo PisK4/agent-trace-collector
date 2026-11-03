@@ -67,6 +67,7 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/agent-logos.js': { file: 'agent-logos.js', type: 'text/javascript; charset=utf-8' },
   '/agent-logos.json': { file: 'agent-logos.json', type: 'application/json; charset=utf-8' },
+  '/tracery.svg': { file: 'tracery.svg', type: 'image/svg+xml' },
   '/session-view.js': { file: 'session-view.js', type: 'text/javascript; charset=utf-8' },
   '/layout.js': { file: 'layout.js', type: 'text/javascript; charset=utf-8' },
   '/backend-state.js': { file: 'backend-state.js', type: 'text/javascript; charset=utf-8' },

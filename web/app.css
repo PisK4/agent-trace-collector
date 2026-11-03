@@ -18,6 +18,9 @@
      档位判定在 parts.js partShade。alpha 是示意值，真实会话验证深色区分度后可调。 */
   --t1:rgba(0,122,255,.16); --t2:rgba(0,122,255,.12); --t3:rgba(0,122,255,.08); --t4:rgba(0,122,255,.05);
   --shadow:0 1px 2px rgba(0,0,0,.06);
+  /* 品牌标：蜘蛛扶着网。plate 是中调薰衣草，深浅两套都靠它承住黑色身体；
+     不参与 accent 语义，只用于 logo 与 favicon。 */
+  --brand-plate:#CFC7F4; --brand-ink:#171717; --brand-web:#FFC98A;
   --ui:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
   /* 折叠箭头：统一取 16 网格同一枚 chevron，用 mask 而不是字形，避免各系统基线偏移。 */
@@ -37,6 +40,7 @@
     --k-tool-bg:rgba(255,179,64,.12);
     --t1:rgba(10,132,255,.18); --t2:rgba(10,132,255,.13); --t3:rgba(10,132,255,.08); --t4:rgba(10,132,255,.04);
     --shadow:0 1px 2px rgba(0,0,0,.35);
+    --brand-plate:#8A7FD0; --brand-ink:#121212; --brand-web:#FFC98A;
   }
 }
 :root[data-theme="dark"]{
@@ -52,6 +56,7 @@
   --k-tool-bg:rgba(255,179,64,.12);
   --t1:rgba(10,132,255,.18); --t2:rgba(10,132,255,.13); --t3:rgba(10,132,255,.08); --t4:rgba(10,132,255,.04);
   --shadow:0 1px 2px rgba(0,0,0,.35);
+  --brand-plate:#8A7FD0; --brand-ink:#121212; --brand-web:#FFC98A;
 }
 
 *{box-sizing:border-box}
