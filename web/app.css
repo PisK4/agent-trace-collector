@@ -637,10 +637,13 @@ pre.raw{
 .note.warn{color:var(--warn)}
 
 /* ---------- 右栏：读数 / 正文 ---------- */
-.rail-head{flex:none;padding:11px 14px 0;border-bottom:1px solid var(--line);background:var(--surface)}
+/* 头部第一行是会话标题：身份行已删，顶部留白 11→15 补回节奏，页签再下移 10。 */
+.rail-head{flex:none;padding:15px 14px 0;border-bottom:1px solid var(--line);background:var(--surface)}
 .rail-id{display:flex;align-items:center;gap:7px;font:10.5px var(--mono);color:var(--muted)}
 .rail-id .grow{flex:1}
-.rail-title{font-size:13px;font-weight:600;line-height:1.4;margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rail-title-row{display:flex;align-items:flex-start;gap:8px;min-height:18px}
+.rail-title{font-size:13px;font-weight:600;line-height:1.4;margin-top:0;flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rail-state{display:flex;align-items:center;gap:6px;flex:none;margin-left:auto}
 .rail-id .strip-model{font-weight:600;color:var(--text)}
 /* 用量读数两列：复用 chain-row 的标签列与值列结构，数值列右对齐成列、等宽数字；
    只作用于读数范围，不改全局 chain-row dd 的文字详情排版。 */
@@ -648,7 +651,7 @@ pre.raw{
 .ledger-chain .chain-row{padding:3px 0}
 .ledger-chain .chain-row dd{text-align:right;font:11px/1.5 var(--mono);font-variant-numeric:tabular-nums}
 .ledger-chain .miss{color:var(--missing);font-style:normal}
-.rail-tabs{display:flex;gap:0;margin:0 -14px;padding:0 14px;background:var(--surface)}
+.rail-tabs{display:flex;gap:0;margin:10px -14px 0;padding:0 14px;background:var(--surface)}
 .rail-tabs button{position:relative;font-size:11px;padding:8px 10px 7px;color:var(--muted)}
 .rail-tabs button[aria-pressed="true"]{color:var(--accent);font-weight:550}
 .rail-tabs button:hover{color:var(--text)}

@@ -37,7 +37,7 @@ import { compact, EXEC_MS_HINT, secs } from './duration.js';
 import { summaryParts } from './tool-summary.js';
 import { bodyLabelText, bodyStateText, replyCompleteness } from './row-summary.js';
 import {
-  agentLabel, clock, createLivePartition, dayTime, liveTimeCell,
+  agentLabel, clock, createLivePartition, liveTimeCell,
   railSummaryListHtml as railSummaryListView,
   sessionHead as sessionHeadView,
   sessionsGroupLabel, sessionsListFoldHtml,
@@ -1109,12 +1109,12 @@ if (typeof document !== 'undefined') {
       }
       return `<div class="rail-id">${t('未选择请求')}</div>`;
     }
-    const model = canonicalModel(r);
-    return `<div class="rail-id"><span>req ${r.req_id}</span><span class="muted">·</span><span>${esc(dayTime(r.started_ms))}</span>
-      ${r.agent === null ? '' : `<span class="muted">·</span><span>${esc(agentLabel(r.agent))}</span>`}
-      ${model !== null ? `<span class="muted">·</span><span class="strip-model" title="${t('实际服务模型（model_served；未关联账本时为请求模型）')}">${esc(model)}</span>` : ''}
-      <span class="grow"></span>${statusDot(r)}${statusChip(r)}</div>
+    // 首行身份（req id · 时间 · Agent · 模型）整行删除：时间在会话行、Agent 在主栏、
+    // 模型在「用量与上下文」；标题成为第一行，状态点并入标题右端。
+    return `<div class="rail-title-row">
       ${contentTitle(r)}
+      <span class="rail-state">${statusDot(r)}${statusChip(r)}</span>
+    </div>
       <div class="rail-tabs" role="tablist">
         <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">${t('读数')}</button>
         <button role="tab" data-rail="body" aria-pressed="${state.railTab === 'body'}">${t('正文')}</button>
