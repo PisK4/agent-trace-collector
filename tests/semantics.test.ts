@@ -90,7 +90,7 @@ test('已存 title 在回复不再是标题时保持兼容', () => {
   });
 });
 
-test('来源 kind 只对 title 别名排除，其它值保持参与', () => {
+test('来源 kind 对 title 与 web_search 排除，其它值保持参与', () => {
   const title = classifyPurpose(view({
     replyText: null, source: { state: 'single', value: 'title' },
   }));
@@ -101,6 +101,38 @@ test('来源 kind 只对 title 别名排除，其它值保持参与', () => {
   expect(other).toMatchObject({
     kind: 'source:compaction', chain: 'participate', status: 'recognized',
   });
+});
+
+test('来源 kind=web_search 无正文也排除链，与尾部模板同一结论', () => {
+  // 无正文、无旧解释：来源值是唯一判据，hook_absent 的检索子事件在这里被收走。
+  const bodyless = classifyPurpose(view({
+    parse: 'missing', replyText: null,
+    source: { state: 'single', value: 'web_search' },
+  }));
+  expect(bodyless).toMatchObject({
+    status: 'recognized', version: PURPOSE_VERSION, kind: 'web_search',
+    chain: 'exclude', rule: 'source.kind.v1', modelTitle: null,
+  });
+  expect(bodyless.signals).toContain('source.kind.web_search');
+  // 有正文时 Claude 尾部模板先判，两条规则结论一致，不因判据先后漂移。
+  const templated = classifyPurpose(view({
+    agent: 'claude',
+    tailUserBlockHeads: ['Perform a web search for the query: synthetic query'],
+    source: { state: 'single', value: 'web_search' },
+  }));
+  expect(templated).toMatchObject({
+    status: 'recognized', kind: 'web_search', chain: 'exclude', rule: 'claude.web-search.v1',
+  });
+  // 来源冲突不猜：web_search 值本身不可靠时回落标题兼容，保持参与。
+  const conflict = classifyPurpose(view({
+    source: { state: 'conflict', value: 'web_search' },
+  }));
+  expect(conflict.chain).toBe('participate');
+  // 近似拼写不收：封闭值精确匹配，模糊值仍按未知来源参与。
+  const nearMiss = classifyPurpose(view({
+    source: { state: 'single', value: 'web_search_extra' },
+  }));
+  expect(nearMiss).toMatchObject({ kind: 'source:web_search_extra', chain: 'participate' });
 });
 
 test('来源冲突不参与判定，回落到标题兼容', () => {
