@@ -21,7 +21,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 | F26 | P0 | `/api/sessions` 跨组标题绑定是相关标量子查询，O(页内会话数 × request 行数) | 实测 | 待修 | 无；F27 容量来源 |
 | F27 | P0 | 会话列表在主线程同步计算，服务端零并发保护 | 实测 | 待修 | 排 F26 之后评估 |
 | F28 | P0 | `user_fingerprint` / `turn_ref` 存量全空；title 指纹通道断 | 实测+代码 | 待修（title 通道） | 独立；先于 F24 回填验收 |
-| F32 | P0 | unknown-actor 的 `["request",…]` 组从不进派生队列，标题恒空 | 实测 | 待修 | 与 F31 同批；需 rebuild/回填 |
+| F32 | P0 | unknown-actor 的 `["request",…]` 组从不进派生队列，标题恒空 | 实测 | 待修（P2） | 展示已由 tool_event 折叠兜住；另立批次 |
 | F07 | P1 | 探针 5066 ms 尖峰；17:20–17:24 有 7.8–10.8 s 停顿未被捕获 | 实测+推断 | 待修 | 与 F06/F09 合并 |
 | F08 | P1 | `check` 恒 `return 0`，作业层看不见 `sample` 失败 | 实测 | 待修 | 无 |
 | F09 | P1 | `event_loop_p99` 阈值 100 ms 未校准，告警常亮 | 实测 | 待修 | 采纳 F22 的 330 ms |
@@ -36,7 +36,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 | F24 | P1 | 仅重启不会让四条 Codex 会话收敛，需显式 rebuild | 实测 | 待修 | 依赖 F28 |
 | F25 | P1 | 运维语义：重启 ≠ Codex 集成生效 | 实测 | 待修（文档） | 依赖 F24 |
 | F29 | P1 | 前端 `sessionsLoading` 是布尔闸门，不共享 Promise | 实测（代码） | 待修（可选） | 放大 F27 |
-| F31 | P1 | `source:web_search` 被判成主链参与（实为辅助） | 实测+代码推断 | 待修 | F32（单独改规则不收敛） |
+| F31 | P1 | `source:web_search` 被判成主链参与（实为辅助） | 实测+代码推断 | 已修（判据+折叠） | 存量行 retained 不翻判，见收起方案 note |
 | F01 | P2 | `schema_rebuild_required` 13 段崩溃栈 + 10-12 至 10-24 数据缺口 | 实测+待查 | 待修 | 无 |
 | F02 | P2 | `derive_failed:database is locked` 1 条 | 实测 | 待修 | 无 |
 | F03 | P2 | `hook_absent_marked` 5,114 批次 / 7,420 行 | 实测+推断 | 待修 | 与 F04 |
@@ -519,7 +519,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
   2. 或在 `sourceDecision` 名单里补 `source:web_search` → `exclude`。
   - **单独改规则无收敛效果**：这些卡没有派生组（见 F32），列表读的是原始列回退；必须与 F32 同批。
 - **严重度**：P1。
-- **状态**：待修（与 F32 同批）。
+- **状态**：展示与判据已修（2026-11-03，见[收起方案](../../implemented/bug-fix/2026-11-03-websearch-subevent-cards.md)）：读侧 `tool_event` 折叠全族 136 张；`source.kind.v1` 增加无正文 web_search 判据（PURPOSE_VERSION 11），对存量无正文行因 retained 保留不翻判，只对新增行生效。数据层自描述随 F32 的 P2 批次。
 
 ### F32 unknown-actor 的 `["request",…]` 组从不进入派生队列，导致无法收敛
 
@@ -534,7 +534,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 - **修复方向（未采纳，待用户拍板）**：让 unknown-actor 组以独立键进派生队列（或对前缀组做一次性归并/回填），并把 `sessions.ts` 的 guard/候选从 `JOIN derive_queue` 改为可回退原始列；需补多 actor / unknown-actor 用例与回填脚本。
   - **改动面比 F26 大**（派生键、队列基数、回填与读侧回退都要动），需单独评估风险，不要写成顺手能修。
 - **严重度**：P0。
-- **状态**：待修（与 F31 同批；需单独评估风险）。
+- **状态**：待修（P2 另立批次，需单独评估风险）；展示缺口已由 `tool_event` 折叠兜住（见[收起方案](../../implemented/bug-fix/2026-11-03-websearch-subevent-cards.md)）。
 
 ### 主页卡片核查结论（F31/F32 的定性，非独立 finding）
 
