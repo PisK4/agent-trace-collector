@@ -1,7 +1,7 @@
 {
-  "name": "agent-trace-collector",
+  "name": "tracery",
   "private": true,
-  "description": "Local LLM request trace collector: converges gateway hook, usage ledger and routing history into one SQLite read model, with a single-timeline reader.",
+  "description": "Tracery gathers Agent requests and weaves scattered calls into one readable trace.",
   "license": "MIT",
   "type": "module",
   "scripts": {

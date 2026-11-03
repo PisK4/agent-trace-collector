@@ -83,7 +83,7 @@ code,pre,.mono{font-family:var(--mono)}
 /* 品牌是回主页的按钮：内距与负外距让 hover 底色外扩一圈，不挤动相邻元素。 */
 .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;white-space:nowrap;border-radius:4px;padding:4px 7px;margin:-4px -7px}
 .brand:hover{background:var(--hover)}
-.brand svg{color:var(--text-2);flex:none}
+.brand-mark{width:20px;height:20px;display:block;flex:none}
 .crumb{display:flex;align-items:center;gap:7px;min-width:0;font-size:12px;color:var(--text-2)}
 .crumb b{font-weight:550;color:var(--text);white-space:nowrap;flex:none}
 .crumb-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
