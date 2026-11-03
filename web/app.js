@@ -1696,13 +1696,15 @@ if (typeof document !== 'undefined') {
     }
   }
 
-  /** 语言切换的界面侧：静态 chrome 换文案，动态区域走既有渲染路径全量重绘。 */
+  /** 语言切换的界面侧：静态 chrome 换文案，动态区域走既有渲染路径全量重绘。
+   * 投影与准备结论缓存里存着上一语言的步骤短语，切换时一并重置，重绘按当前语言重投影。 */
   function applyLocaleChrome() {
     document.documentElement.lang = htmlLang();
     applyStaticTexts();
     applyTheme();
     syncPanelButtons();
     applyBackendState(lastAdmission);
+    resetReading();
     renderAll();
   }
 

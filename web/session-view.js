@@ -10,15 +10,18 @@
 
 import { esc } from './html.js';
 import { icon } from './icons.js';
+import { currentLocale, t } from './i18n.js';
 import { kk } from './rail-facts.js';
 import { bodyStateText } from './row-summary.js';
 import { compact, EXEC_MS_HINT, secs } from './duration.js';
 import { pairStateText } from './trace-pair.js';
 
+/** 日期格式化的 locale 标签随当前界面语言；调用点在渲染时求值，切换语言即生效。 */
+const localeTag = () => (currentLocale() === 'zh' ? 'zh-CN' : 'en-US');
 /** @param {number} ms */
-export const clock = (ms) => new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+export const clock = (ms) => new Date(ms).toLocaleTimeString(localeTag(), { hour: '2-digit', minute: '2-digit' });
 /** @param {number} ms */
-export const dayTime = (ms) => new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+export const dayTime = (ms) => new Date(ms).toLocaleString(localeTag(), { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 
 /**
  * 活跃判定只看服务端快照：在途，或 `live_until` 还没到。渲染层不自己算 60 秒。
@@ -112,7 +115,7 @@ export function createLivePartition() {
  */
 export function liveTimeCell(s, formatMs) {
   return s.inflight === true
-    ? { text: '请求中', cls: 'is-live' }
+    ? { text: t('请求中'), cls: 'is-live' }
     : { text: formatMs(s.last_ms), cls: 'num' };
 }
 
@@ -167,10 +170,11 @@ export function sessionsListFoldHtml(items, showFolded) {
   const toolCost = tool.reduce((a, s) => a + (s.cost_usd ?? 0), 0);
   if (probe === 0 && bypass === 0 && tool.length === 0) return '';
   const parts = [];
-  if (probe > 0) parts.push(`${probe} 条探针记录`);
-  if (bypass > 0) parts.push(`${bypass} 条旁路会话`);
-  if (tool.length > 0) parts.push(`${tool.length} 条工具子事件${toolCost > 0 ? ` · $${toolCost.toFixed(4)}` : ''}`);
-  const label = showFolded ? `收起 ${parts.join(' · ')}` : `已折叠 ${parts.join(' · ')}（已加载页）`;
+  if (probe > 0) parts.push(t('{n} 条探针记录', { n: probe }));
+  if (bypass > 0) parts.push(t('{n} 条旁路会话', { n: bypass }));
+  if (tool.length > 0) parts.push(t('{n} 条工具子事件{tail}', { n: tool.length, tail: toolCost > 0 ? ` · $${toolCost.toFixed(4)}` : '' }));
+  const joined = parts.join(' · ');
+  const label = showFolded ? t('收起 {parts}', { parts: joined }) : t('已折叠 {parts}（已加载页）', { parts: joined });
   return `<div class="sess-fold"><button class="chip-btn" data-fold-toggle="1">${icon(showFolded ? 'caret-up' : 'caret-down', 16)}<span>${esc(label)}</span></button></div>`;
 }
 
@@ -225,19 +229,19 @@ function cueRow(desc, data, extraClass = '') {
  */
 function resourceGroup(s, status, rows) {
   if (s !== null) {
-    const t = s.totals;
-    if (t.in_tok === null && t.out_tok === null && t.cost === null) return null;
+    const totals = s.totals;
+    if (totals.in_tok === null && totals.out_tok === null && totals.cost === null) return null;
     const desc = [
-      '整个会话的读数，含旁路与子代理',
-      t.cost_absent !== null && t.cost_absent > 0 ? `${t.cost_absent} 笔未取得费用` : null,
-      '缓存命中＝Σcache_read ÷ Σ(in_tok + cache_read)，只计两个读数都在的请求',
-      t.cache_hit === null ? '本次没有可用分母，不给数' : null,
+      t('整个会话的读数，含旁路与子代理'),
+      totals.cost_absent !== null && totals.cost_absent > 0 ? t('{n} 笔未取得费用', { n: totals.cost_absent }) : null,
+      t('缓存命中＝Σcache_read ÷ Σ(in_tok + cache_read)，只计两个读数都在的请求'),
+      totals.cache_hit === null ? t('本次没有可用分母，不给数') : null,
     ].filter(Boolean).join('；');
     const data = `<span class="cue-line">${[
-      t.in_tok !== null ? `<i>提示</i> <b>${kk(t.in_tok)}</b>` : '',
-      t.out_tok !== null ? `<i>输出</i> <b>${kk(t.out_tok)}</b>` : '',
-      t.cost !== null ? `<i>费用</i> <b>$${t.cost.toFixed(4)}</b>` : '',
-      t.cache_hit !== null ? `<i>缓存</i> <b>${Math.round(t.cache_hit * 100)}%</b>` : '',
+      totals.in_tok !== null ? t('<i>提示</i> <b>{v}</b>', { v: kk(totals.in_tok) }) : '',
+      totals.out_tok !== null ? t('<i>输出</i> <b>{v}</b>', { v: kk(totals.out_tok) }) : '',
+      totals.cost !== null ? t('<i>费用</i> <b>{v}</b>', { v: `$${totals.cost.toFixed(4)}` }) : '',
+      totals.cache_hit !== null ? t('<i>缓存</i> <b>{v}%</b>', { v: Math.round(totals.cache_hit * 100) }) : '',
     ].filter(Boolean).join(' · ')}</span>`;
     return { desc, data };
   }
@@ -248,15 +252,15 @@ function resourceGroup(s, status, rows) {
   const priced = rows.filter(r => r.cost_state === 'priced' || r.cost_state === 'zero');
   const totalCost = priced.reduce((a, r) => a + (r.cost ?? 0), 0);
   const desc = [
-    status === 'absent' ? '汇总快照不可用（端点缺失或读取失败）' : '汇总快照读取中',
-    '这是已加载窗口的相加，不是会话口径',
-    priced.length < rows.length ? `${rows.length - priced.length} 笔未取得费用` : null,
+    status === 'absent' ? t('汇总快照不可用（端点缺失或读取失败）') : t('汇总快照读取中'),
+    t('这是已加载窗口的相加，不是会话口径'),
+    priced.length < rows.length ? t('{n} 笔未取得费用', { n: rows.length - priced.length }) : null,
   ].filter(Boolean).join('；');
   const data = `<span class="cue-line">${[
-    `<i>提示</i> <b>${kk(totalIn)}</b>`,
-    `<i>输出</i> <b>${kk(totalOut)}</b>`,
-    `<i>费用</i> <b>$${totalCost.toFixed(4)}</b>`,
-  ].join(' · ')}</span><span class="scope-tag">已加载窗口</span>`;
+    t('<i>提示</i> <b>{v}</b>', { v: kk(totalIn) }),
+    t('<i>输出</i> <b>{v}</b>', { v: kk(totalOut) }),
+    t('<i>费用</i> <b>{v}</b>', { v: `$${totalCost.toFixed(4)}` }),
+  ].join(' · ')}</span><span class="scope-tag">${t('已加载窗口')}</span>`;
   return { desc, data };
 }
 
@@ -268,18 +272,18 @@ function resourceGroup(s, status, rows) {
 function structureGroup(s) {
   const st = s.structure;
   const data = [
-    st.main !== null ? `<i>主链</i> <b>${st.main}</b> · <i>旁路</i> <b>${st.bypass}</b>` : '',
-    st.context_peak_pct !== null ? `<i>峰值</i> <b>${st.context_peak_pct}%</b>` : '',
-    st.subagent_actors > 0 ? `<i>子代理</i> <b>${st.subagent_actors}</b> 个 · <b>${st.subagent_requests}</b> 笔` : '',
-    st.retries !== null && st.retries > 0 ? `<i>重试</i> <b>${st.retries}</b> 笔` : '',
-    st.models.length > 1 ? `<i>模型</i> <b>${st.models.length}</b>` : '',
+    st.main !== null ? t('<i>主链</i> <b>{main}</b> · <i>旁路</i> <b>{bypass}</b>', { main: st.main, bypass: st.bypass }) : '',
+    st.context_peak_pct !== null ? t('<i>峰值</i> <b>{v}%</b>', { v: st.context_peak_pct }) : '',
+    st.subagent_actors > 0 ? t('<i>子代理</i> <b>{actors}</b> 个 · <b>{requests}</b> 笔', { actors: st.subagent_actors, requests: st.subagent_requests }) : '',
+    st.retries !== null && st.retries > 0 ? t('<i>重试</i> <b>{n}</b> 笔', { n: st.retries }) : '',
+    st.models.length > 1 ? t('<i>模型</i> <b>{n}</b>', { n: st.models.length }) : '',
   ].filter(Boolean).join(' · ');
   if (data === '') return null;
   const desc = [
-    '整个会话',
-    '旁路＝分类器与标题生成等排除请求',
-    st.context_peak_pct !== null ? '上下文峰值＝max(prompt_tokens ÷ prompt_window)' : '上下文峰值没有可用分母，不给数',
-    st.models.length > 1 ? `模型＝${st.models.map(m => `${m.name} ×${m.count}`).join(' · ')}` : null,
+    t('整个会话'),
+    t('旁路＝分类器与标题生成等排除请求'),
+    st.context_peak_pct !== null ? t('上下文峰值＝max(prompt_tokens ÷ prompt_window)') : t('上下文峰值没有可用分母，不给数'),
+    st.models.length > 1 ? t('模型＝{list}', { list: st.models.map(m => `${m.name} ×${m.count}`).join(' · ') }) : null,
   ].filter(Boolean).join('；');
   return { desc, data: `<span class="cue-line">${data}</span>` };
 }
@@ -288,8 +292,8 @@ function structureGroup(s) {
 function performanceData(rows) {
   const timing = timingSummary(rows);
   const parts = [
-    timing.median !== null ? `<i>首字</i> <b>${secs(timing.median)}</b>` : '',
-    timing.average !== null ? `<i>平均</i> <b>${secs(timing.average)}</b>` : '',
+    timing.median !== null ? t('<i>首字</i> <b>{v}</b>', { v: secs(timing.median) }) : '',
+    timing.average !== null ? t('<i>平均</i> <b>{v}</b>', { v: secs(timing.average) }) : '',
     timing.speed !== null ? `<b>${timing.speed}</b> tok/s` : '',
   ].filter(Boolean);
   return parts.length === 0 ? '' : `<span class="cue-line">${parts.join(' · ')}</span>`;
@@ -302,33 +306,33 @@ function performanceData(rows) {
  *  @returns {GroupCue | null}
  */
 function toolsGroup(s, sessionKey) {
-  const chip = (/** @type {{name: string, count: number, errors: number, paired: number, error_known: number}} */ t) => {
-    const warn = t.errors > 0 ? `<span class="err">${t.errors} 失败</span>` : '';
-    const unknown = t.count - t.error_known;
+  const chip = (/** @type {{name: string, count: number, errors: number, paired: number, error_known: number}} */ entry) => {
+    const warn = entry.errors > 0 ? `<span class="err">${t('{n} 失败', { n: entry.errors })}</span>` : '';
+    const unknown = entry.count - entry.error_known;
     const title = [
-      `点击定位 ${t.name} 的 ${t.count} 次调用`,
-      t.count - t.paired > 0 ? `${t.count - t.paired} 次未配对` : null,
-      unknown > 0 ? `${unknown} 次结果未判定（不计入失败）` : null,
+      t('点击定位 {name} 的 {n} 次调用', { name: entry.name, n: entry.count }),
+      entry.count - entry.paired > 0 ? t('{n} 次未配对', { n: entry.count - entry.paired }) : null,
+      unknown > 0 ? t('{n} 次结果未判定（不计入失败）', { n: unknown }) : null,
     ].filter(Boolean).join(' · ');
-    return `<button class="tool-chip" data-summary-tool="${esc(t.name)}" title="${esc(title)}"><span class="nm">${esc(t.name)}</span><span class="n">${t.count}</span>${warn}</button>`;
+    return `<button class="tool-chip" data-summary-tool="${esc(entry.name)}" title="${esc(title)}"><span class="nm">${esc(entry.name)}</span><span class="n">${entry.count}</span>${warn}</button>`;
   };
   const skillChip = (/** @type {{name: string, count: number}} */ k) =>
-    `<button class="tool-chip" data-summary-skill="${esc(k.name)}" title="点击定位该 Skill 的 ${k.count} 次调用"><span class="nm">${esc(k.name)}</span><span class="n">${k.count}</span></button>`;
+    `<button class="tool-chip" data-summary-skill="${esc(k.name)}" title="${t('点击定位该 Skill 的 {n} 次调用', { n: k.count })}"><span class="nm">${esc(k.name)}</span><span class="n">${k.count}</span></button>`;
   const head = s.tools.slice(0, 3).map(chip).join('');
   const rest = s.tools.slice(3);
   const more = rest.length > 0
-    ? `<details class="path-more t" data-fold="headmore:tool:${esc(sessionKey ?? '')}"><summary title="工具共 ${s.tools.length} 把">+${rest.length}</summary><div class="more-body">${rest.map(chip).join('')}</div></details>`
+    ? `<details class="path-more t" data-fold="headmore:tool:${esc(sessionKey ?? '')}"><summary title="${t('工具共 {n} 把', { n: s.tools.length })}">+${rest.length}</summary><div class="more-body">${rest.map(chip).join('')}</div></details>`
     : '';
   const data = [
     head + more,
     s.skills.map(skillChip).join(''),
-    s.interrupts.count > 0 ? `<span class="interrupt">已识别用户中断 <b>${s.interrupts.count}</b></span>` : '',
+    s.interrupts.count > 0 ? `<span class="interrupt">${t('已识别用户中断 <b>{n}</b>', { n: s.interrupts.count })}</span>` : '',
   ].filter(Boolean).join('');
   if (data === '') return null;
   const skillDesc = s.skills.length > 0
-    ? `；Skill 为显式调用限定，共 ${s.skills.length} 个显式 Skill 调用，技能经 system 声明进入上下文而未发生调用时不计`
+    ? t('；Skill 为显式调用限定，共 {n} 个显式 Skill 调用，技能经 system 声明进入上下文而未发生调用时不计', { n: s.skills.length })
     : '';
-  return { desc: `整个会话：${coverageHoverText(s)}${skillDesc}`, data };
+  return { desc: t('整个会话：{coverage}{skillDesc}', { coverage: coverageHoverText(s), skillDesc }), data };
 }
 
 /** @param {string} path @param {string[]} all 同组全部路径：同名 basename 并列时补上一段。 */
@@ -349,19 +353,19 @@ export function pathLabel(path, all) {
  */
 function pathGroup(list, side, sessionKey) {
   if (list.length === 0) return null;
-  const label = side === 'w' ? '写入尝试' : '读取请求';
-  const short = side === 'w' ? '写入' : '读取';
+  const label = side === 'w' ? t('写入尝试') : t('读取请求');
+  const short = side === 'w' ? t('写入') : t('读取');
   const names = list.map(p => p.path);
   const chip = (/** @type {{path: string, count: number}} */ p) =>
     `<button class="path-chip ${side}" data-summary-path="${esc(p.path)}" data-summary-side="${side}"
-      title="${esc(p.path)} · ${label} ${p.count} 次"><span class="nm">${esc(pathLabel(p.path, names))}</span><span class="c">${p.count}</span></button>`;
+      title="${esc(p.path)} · ${t('{label} {n} 次', { label, n: p.count })}"><span class="nm">${esc(pathLabel(p.path, names))}</span><span class="c">${p.count}</span></button>`;
   const head = list.slice(0, 3).map(chip).join('');
   const more = list.length > 3
-    ? `<details class="path-more ${side}" data-fold="headmore:${side}:${esc(sessionKey ?? '')}"><summary title="${label}共 ${list.length} 条路径">+${list.length - 3}</summary>
+    ? `<details class="path-more ${side}" data-fold="headmore:${side}:${esc(sessionKey ?? '')}"><summary title="${t('{label}共 {n} 条路径', { label, n: list.length })}">+${list.length - 3}</summary>
       <div class="more-body">${list.slice(3).map(chip).join('')}</div></details>`
     : '';
   return {
-    desc: `${label}共 ${list.length} 条路径；按调用参数的原始值分组，发出的调用不表示执行或产物成功`,
+    desc: t('{label}共 {n} 条路径；按调用参数的原始值分组，发出的调用不表示执行或产物成功', { label, n: list.length }),
     data: `<span class="path-lab">${short}</span>` + head + more,
   };
 }
@@ -369,12 +373,14 @@ function pathGroup(list, side, sessionKey) {
 /** 覆盖度按需说明：缺口如实列出，不计入失败。 @param {SessionSummary} s */
 export function coverageHoverText(s) {
   const c = s.coverage;
-  const parts = [`调用 ${c.calls_total} 次：已配对 ${c.calls_paired}，失败位已知 ${c.calls_error_known}，参数事实已知 ${c.calls_fact_known}`];
+  const parts = [t('调用 {total} 次：已配对 {paired}，失败位已知 {errorKnown}，参数事实已知 {factKnown}',
+    { total: c.calls_total, paired: c.calls_paired, errorKnown: c.calls_error_known, factKnown: c.calls_fact_known })];
   if (c.calls_total - c.calls_fact_known > 0) {
-    parts.push(`${c.calls_total - c.calls_fact_known} 次调用的参数与失败位从未提取（正文已回收或派生先于本列），路径与 Skill 明细不含它们`);
+    parts.push(t('{n} 次调用的参数与失败位从未提取（正文已回收或派生先于本列），路径与 Skill 明细不含它们',
+      { n: c.calls_total - c.calls_fact_known }));
   }
   if (s.interrupts.unknown > 0) {
-    parts.push(`${s.interrupts.unknown} 笔请求的中断判定缺失`);
+    parts.push(t('{n} 笔请求的中断判定缺失', { n: s.interrupts.unknown }));
   }
   return parts.join('；');
 }
@@ -392,7 +398,7 @@ export function sessionHiddenFold(rows, hidden, sessionKey, open) {
     </button>`;
   });
   return `<details class="hidden-more" data-fold="hidden:${esc(sessionKey ?? '')}"${open ? ' open' : ''}>
-    <summary><span class="chev" aria-hidden="true"></span>无正文 <b>${hidden.length}</b> 笔</summary>
+    <summary><span class="chev" aria-hidden="true"></span>${t('无正文 <b>{n}</b> 笔', { n: hidden.length })}</summary>
     <div class="more-body">${items.join('')}</div>
   </details>`;
 }
@@ -453,28 +459,28 @@ export function sessionHead(input) {
   const latest = rows[rows.length - 1] ?? null;
   return `<header class="session-head">
     <div class="head-top">
-      <h1>${esc(row ? row.title || '（无标题）' : unknown ? '这个会话不在已加载列表里' : '未选择会话')}</h1>
+      <h1>${esc(row ? row.title || t('（无标题）') : unknown ? t('这个会话不在已加载列表里') : t('未选择会话'))}</h1>
       <div class="head-actions">
-        ${refreshedAt !== null ? `<span class="muted">刷新于 ${esc(clock(refreshedAt))}</span>` : ''}
-        <button class="chip-btn ghost ico" id="refresh-window" aria-label="刷新" title="重新读取当前窗口；输入变化会换发阅读版本">${icon('refresh', 20)}</button>
+        ${refreshedAt !== null ? `<span class="muted">${t('刷新于 {time}', { time: esc(clock(refreshedAt)) })}</span>` : ''}
+        <button class="chip-btn ghost ico" id="refresh-window" aria-label="${t('刷新')}" title="${t('重新读取当前窗口；输入变化会换发阅读版本')}">${icon('refresh', 20)}</button>
         ${windowAnchor === 'latest'
-          ? `<button class="chip-btn ghost ico" id="jump-opposite" aria-label="回到开头" title="重建为会话最早一页，从头阅读">${icon('jump-start', 20)}</button>`
-          : `<button class="chip-btn ghost ico" id="jump-opposite" aria-label="回到最新" title="重建为会话最新一页，选中最新一笔">${icon('jump-end', 20)}</button>`}
+          ? `<button class="chip-btn ghost ico" id="jump-opposite" aria-label="${t('回到开头')}" title="${t('重建为会话最早一页，从头阅读')}">${icon('jump-start', 20)}</button>`
+          : `<button class="chip-btn ghost ico" id="jump-opposite" aria-label="${t('回到最新')}" title="${t('重建为会话最新一页，选中最新一笔')}">${icon('jump-end', 20)}</button>`}
       </div>
     </div>
     <div class="session-facts">
-      ${row && row.agents.length > 0 ? row.agents.map((/** @type {string} */ a) => `<span><b title="${esc(a)}">${esc(agentLabel(a))}</b></span>`).join('') : '<span class="muted">归属未知</span>'}
+      ${row && row.agents.length > 0 ? row.agents.map((/** @type {string} */ a) => `<span><b title="${esc(a)}">${esc(agentLabel(a))}</b></span>`).join('') : `<span class="muted">${t('归属未知')}</span>`}
       <span class="mono" title="${esc(sessionKey ?? '')}">${esc(sessionKey === null ? '' : sessionKeyLabel(sessionKey))}</span>
-      ${sessionKey !== null ? `<button class="fact-copy" id="copy-session" aria-label="复制当前会话 ID" title="复制当前会话 ID">${icon('copy', 14)}</button>` : ''}
-      <span>已加载 <b>${rows.length}</b> 笔 Request</span>
+      ${sessionKey !== null ? `<button class="fact-copy" id="copy-session" aria-label="${t('复制当前会话 ID')}" title="${t('复制当前会话 ID')}">${icon('copy', 14)}</button>` : ''}
+      <span>${t('已加载 <b>{n}</b> 笔 Request', { n: rows.length })}</span>
       ${first && latest ? `<span>${esc(dayTime(first.started_ms))}–${esc(clock(latest.started_ms))}</span>` : ''}
     </div>
-    ${summary !== null && summary.dirty ? '<div class="session-note warn"><span>部分组的派生还没追上输入：这里是上一次完成的结果。</span></div>' : ''}
+    ${summary !== null && summary.dirty ? `<div class="session-note warn"><span>${t('部分组的派生还没追上输入：这里是上一次完成的结果。')}</span></div>` : ''}
     ${sessionBoard(summary, summaryStatus, rows, hidden, sessionKey, input.hiddenFoldOpen === true)}
-    ${unknown ? `<div class="session-note warn"><span>↳</span><span>链接里的会话 key 不在已加载的会话里：可能是已淘汰、从未记录，或者还在后面的会话页。下面没有用别的会话顶替。</span></div>` : ''}
-    ${missingReqId !== null ? `<div class="session-note warn"><span>↳</span><span>链接里的 Request ${missingReqId} 在当前库里不存在，也没有别名指向它。下面显示的是本会话的请求，不是那一笔。</span></div>` : ''}
-    ${offPageReqId !== null ? `<div class="session-note"><span>↳</span><span>链接里的 Request ${offPageReqId} 存在，但不在当前载入窗口，右栏已显示它的详情。不自动扫描全部历史。<button class="chip-btn" id="switch-window">${windowAnchor === 'latest' ? '回到开头窗口' : '切到最新窗口'}</button></span></div>` : ''}
-    ${windowError !== null ? `<div class="session-note warn"><span>↳</span><span>请求窗口读取失败：${esc(windowError)}。已加载内容保持不变，可重试。</span></div>` : ''}
+    ${unknown ? `<div class="session-note warn"><span>↳</span><span>${t('链接里的会话 key 不在已加载的会话里：可能是已淘汰、从未记录，或者还在后面的会话页。下面没有用别的会话顶替。')}</span></div>` : ''}
+    ${missingReqId !== null ? `<div class="session-note warn"><span>↳</span><span>${t('链接里的 Request {id} 在当前库里不存在，也没有别名指向它。下面显示的是本会话的请求，不是那一笔。', { id: missingReqId })}</span></div>` : ''}
+    ${offPageReqId !== null ? `<div class="session-note"><span>↳</span><span>${t('链接里的 Request {id} 存在，但不在当前载入窗口，右栏已显示它的详情。不自动扫描全部历史。', { id: offPageReqId })}<button class="chip-btn" id="switch-window">${windowAnchor === 'latest' ? t('回到开头窗口') : t('切到最新窗口')}</button></span></div>` : ''}
+    ${windowError !== null ? `<div class="session-note warn"><span>↳</span><span>${t('请求窗口读取失败：{error}。已加载内容保持不变，可重试。', { error: esc(windowError) })}</span></div>` : ''}
   </header>`;
 }
 
@@ -493,46 +499,46 @@ export function railSummaryListHtml(list, labelOf, meta = { count: null, errors:
   if (list === null) return '';
   let body;
   if (list.loading) {
-    body = '<p class="note">正在读取条目…</p>';
+    body = `<p class="note">${t('正在读取条目…')}</p>`;
   } else if (list.error !== null) {
-    body = `<p class="note warn with-ico">${icon('empty-broken', 24)}<span>读取失败：${esc(list.error)}。重新点击条目可重试。</span></p>`;
+    body = `<p class="note warn with-ico">${icon('empty-broken', 24)}<span>${t('读取失败：{error}。重新点击条目可重试。', { error: esc(list.error) })}</span></p>`;
   } else if (list.data !== null && 'requests' in list.data) {
     const rows = list.data.requests.map(item => {
       const label = labelOf(item.req_id);
       return `<button class="tool-row tool-link${label.dim ? ' dim' : ''}" data-summary-req="${item.req_id}">
-        <span>${esc(label.text)}</span><span class="muted mono">· ${item.count} 次中断</span>
+        <span>${esc(label.text)}</span><span class="muted mono">· ${t('{n} 次中断', { n: item.count })}</span>
       </button>`;
     });
-    body = rows.length > 0 ? rows.join('') : '<p class="note">没有支撑记录。</p>';
+    body = rows.length > 0 ? rows.join('') : `<p class="note">${t('没有支撑记录。')}</p>`;
   } else if (list.data !== null && 'items' in list.data) {
     const rows = list.data.items.map(item => {
       const warn = item.state !== 'resolved'
         ? `<span class="tool-chip miss"><span>${esc(pairStateText(item.state))}</span></span>` : '';
       const label = labelOf(item.req_id);
       const summary = summaryOf(item);
-      const call = `调用 #${item.ord}${summary === null || summary === '' ? '' : ` · ${esc(summary)}`}`;
+      const call = `${t('调用 #{ord}', { ord: item.ord })}${summary === null || summary === '' ? '' : ` · ${esc(summary)}`}`;
       const dur = item.exec_ms === null || item.exec_ms === undefined
-        ? '' : `<span class="dur" title="${esc(EXEC_MS_HINT)}"> · ${esc(compact(item.exec_ms))}</span>`;
+        ? '' : `<span class="dur" title="${esc(t(EXEC_MS_HINT))}"> · ${esc(compact(item.exec_ms))}</span>`;
       return `<button class="tool-row tool-link${label.dim ? ' dim' : ''}" data-summary-pair="1" data-owner="${item.req_id}" data-ord="${item.ord}">
         <span class="call">${call}</span>${warn}
         <span class="muted mono">${esc(label.text)}${dur}</span>
       </button>`;
     });
-    body = rows.length > 0 ? rows.join('') : '<p class="note">没有支撑记录。</p>';
+    body = rows.length > 0 ? rows.join('') : `<p class="note">${t('没有支撑记录。')}</p>`;
   } else {
-    body = '<p class="note">没有支撑记录。</p>';
+    body = `<p class="note">${t('没有支撑记录。')}</p>`;
   }
-  const count = meta.count !== null ? `${meta.count} 次` : '';
+  const count = meta.count !== null ? t('{n} 次', { n: meta.count }) : '';
   const errors = meta.errors > 0
-    ? `${count === '' ? '' : ' · '}<span class="err">${meta.errors} 次失败</span>` : '';
+    ? `${count === '' ? '' : ' · '}<span class="err">${t('{n} 次失败', { n: meta.errors })}</span>` : '';
   return `<section class="rail-section">
     <div class="tool-page-head">
-      <button class="chip-btn ghost" data-summary-back="1">← 返回会话</button>
+      <button class="chip-btn ghost" data-summary-back="1">${t('← 返回会话')}</button>
       <span class="mono">${esc(list.label)}</span>
       ${count !== '' || errors !== '' ? `<span class="cnt mono">${count}${errors}</span>` : ''}
     </div>
     ${body}
     ${list.data !== null && 'items' in list.data && list.data.truncated
-      ? '<p class="rail-note">条目超过上限，只列出前 1000 条。</p>' : ''}
+      ? `<p class="rail-note">${t('条目超过上限，只列出前 1000 条。')}</p>` : ''}
   </section>`;
 }
