@@ -29,30 +29,50 @@ export type LiveActivity = {
 
 export function createLiveActivity(): LiveActivity {
   const inflightByConv = new Map<string, Set<number>>();
+  // 账本先落请求、路由后升级归属时，req_id 会换 conv_key；记住旧归属，避免
+  // 在请求级会话里留下永远撤不掉的「请求中」。
+  const convByReq = new Map<number, string>();
+  const CHUNK = 500;
 
   function mark(row: ActivityRow): void {
     const key = row.conv_key;
     if (key === null) return;
+    const previous = convByReq.get(row.req_id);
+    if (previous !== undefined && previous !== key) {
+      const old = inflightByConv.get(previous);
+      if (old !== undefined) {
+        old.delete(row.req_id);
+        if (old.size === 0) inflightByConv.delete(previous);
+      }
+    }
     const ids = inflightByConv.get(key);
     if (row.done === 0) {
       if (ids === undefined) inflightByConv.set(key, new Set([row.req_id]));
       else ids.add(row.req_id);
-    } else if (row.done === 1 && ids !== undefined) {
-      ids.delete(row.req_id);
-      if (ids.size === 0) inflightByConv.delete(key);
+      convByReq.set(row.req_id, key);
+    } else if (row.done === 1) {
+      if (ids !== undefined) {
+        ids.delete(row.req_id);
+        if (ids.size === 0) inflightByConv.delete(key);
+      }
+      convByReq.delete(row.req_id);
     }
   }
 
   return {
     observe(store, reqIds) {
       if (reqIds.length === 0) return;
-      const rows = store.read.query<ActivityRow, number[]>(`
-        SELECT r.req_id, r.conv_key, r.started_ms, rr.done
-        FROM request r
-        LEFT JOIN raw_route rr ON rr.route_id = r.route_id
-        WHERE r.req_id IN (${reqIds.map(() => '?').join(',')})`)
-        .all(...reqIds) as ActivityRow[];
-      for (const row of rows) mark(row);
+      // 大批次按 500 分块，避免首轮导入撑爆 SQLite 的变量上限。
+      for (let start = 0; start < reqIds.length; start += CHUNK) {
+        const chunk = reqIds.slice(start, start + CHUNK);
+        const rows = store.read.query<ActivityRow, number[]>(`
+          SELECT r.req_id, r.conv_key, r.started_ms, rr.done
+          FROM request r
+          LEFT JOIN raw_route rr ON rr.route_id = r.route_id
+          WHERE r.req_id IN (${chunk.map(() => '?').join(',')})`)
+          .all(...chunk) as ActivityRow[];
+        for (const row of rows) mark(row);
+      }
     },
     bootstrap(store, now = Date.now()) {
       // 有界窗口 + 时间索引：只恢复最近 60 秒的在途请求，不扫会话历史。

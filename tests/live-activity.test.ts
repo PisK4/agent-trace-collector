@@ -82,6 +82,25 @@ test('在途跟踪：完成记录到达后从集合撤下', () => {
   }
 });
 
+test('归属升级时在途标记跟着 req_id 走，不在请求级会话里残留', () => {
+  const f = fixture();
+  try {
+    const requestConv = JSON.stringify(['request', 'r1']);
+    const sessionConv = JSON.stringify(['session', 's1']);
+    seedRoute(f.store, 1, 0, NOW - 1_000);
+    const reqId = seedSession(f.store, requestConv, NOW - 1_000, 1);
+    const activity = createLiveActivity();
+    activity.observe(f.store, [reqId]);
+    expect(activity.inflight(requestConv)).toBe(true);
+    f.store.write(db => db.run('UPDATE request SET conv_key=? WHERE req_id=?', [sessionConv, reqId]));
+    activity.observe(f.store, [reqId]);
+    expect(activity.inflight(requestConv)).toBe(false);
+    expect(activity.inflight(sessionConv)).toBe(true);
+  } finally {
+    f.close();
+  }
+});
+
 test('启动恢复只认 60 秒窗口：窗口外在途不再宣称请求中', () => {
   const f = fixture();
   try {
