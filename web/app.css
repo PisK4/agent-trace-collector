@@ -189,7 +189,11 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .sess-meta .who{color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 /* 笔数固定为不截断的后缀：多 Agent 行只让名字先省略。 */
 .sess-meta .sess-count{flex:none;white-space:nowrap;color:var(--text-2);margin-left:-3px}
-.sess-time{font:10.5px var(--mono);color:var(--muted);margin-left:auto;flex:none}
+/* 右下时间格宽度固定：出现「请求中」时字变、格不挪，标题也不被挤掉。 */
+.sess-time{font:10.5px var(--mono);color:var(--muted);margin-left:auto;flex:none;min-width:44px;text-align:right;white-space:nowrap}
+/* 在途标记复用同一个格子，只换字体与文字；不加点、不加角标。 */
+.sess-time.is-live{font-family:var(--ui);font-weight:550;letter-spacing:.02em;color:var(--text-2)}
+.group-label .grp-n{font:10.5px var(--mono);color:var(--muted);letter-spacing:0;text-transform:none}
 .sess-more{display:flex;justify-content:center;padding:10px 0 4px}
 .sess-empty{padding:16px 8px;font-size:12px;color:var(--muted)}
 .sess-fold{padding:8px 10px;border-top:1px dashed var(--line)}
