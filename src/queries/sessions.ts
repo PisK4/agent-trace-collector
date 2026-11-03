@@ -116,6 +116,17 @@ const CROSS_GROUP_TITLE_SQL = `(SELECT t.model_title FROM request t
   ORDER BY t.started_ms DESC, t.req_id DESC LIMIT 1)`;
 
 /**
+ * 跨组绑定的入口闸门：本会话没有任何非空指纹时，绑定注定落空。
+ *
+ * 没有这道闸门时，相关标量子查询对页内每个会话各求值一次，每次都要从
+ * derive_queue 驱动反查全部 current 组请求；全库指纹为空时纯属空转。
+ * `EXISTS` 只走 `i_req_session_time` 的单会话区间，成本与会话长度脱钩；
+ * 有指纹的会话仍走完整绑定逻辑（唯一命中才绑，零命中/多命中不绑）。
+ */
+const HAS_USER_FINGERPRINT_SQL = `EXISTS (SELECT 1 FROM request x
+  WHERE x.conv_key = request.conv_key AND x.user_fingerprint IS NOT NULL)`;
+
+/**
  * 会话标题只取已经结算的当前结果：排除用途提供模型标题，参与链提供用户标题。
  *
  * 四个候选都要求请求用途已判定且所属组已完成；dirty 组或待判定用途的旧标题
@@ -132,7 +143,7 @@ const SESSION_TITLE_SQL = `COALESCE(
      AND r1.model_title IS NOT NULL AND r1.purpose_pending = 0
      AND ${groupCurrentSql('q1')}
    ORDER BY r1.started_ms DESC, r1.req_id DESC LIMIT 1),
-  ${CROSS_GROUP_TITLE_SQL},
+  CASE WHEN ${HAS_USER_FINGERPRINT_SQL} THEN ${CROSS_GROUP_TITLE_SQL} END,
   (SELECT ${derivedColSql('q2', 'e2', 'r2', 'title')} FROM request r2
    JOIN derive_queue q2 ON q2.conv_key = r2.conv_key AND q2.actor = r2.actor
    LEFT JOIN derive_request_result e2 ON e2.generation = q2.published_generation AND e2.req_id = r2.req_id
