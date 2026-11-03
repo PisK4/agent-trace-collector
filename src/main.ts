@@ -1,8 +1,11 @@
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Config } from './config';
 import { loadBoundSaltTx, loadLocalSecret } from './config';
 import { openStore } from './store';
 import { createCapacityMetrics } from './capacity';
+import { createDiagnosticLog, DEFAULT_SLOW_THRESHOLDS } from './monitoring';
+import type { DiagnosticLog } from './monitoring';
 import { intervalOf } from './config';
 import type { Store } from './store';
 import { readBatch, readRouteFiles } from './sources/files';
@@ -18,6 +21,7 @@ import { createDeriveWorker } from './derive/worker';
 import {
   RAW_TTL_MS,
   createAdmissionGate,
+  type AdmissionGate,
   enforceBodyBudget,
   pruneRaw,
   resumeSourceGaps,
@@ -43,12 +47,35 @@ const RAW_PRUNE_INTERVAL_MS = 60 * 60_000;
 export type CollectorOptions = {
   capacityExperiment?: boolean;
   deriveComputeInWorker?: boolean;
+  /** 测试注入的日志出口；缺省按启动时刻建一个写 stdout 的实例。 */
+  diagnostics?: DiagnosticLog;
 };
+
+/** 当前检出的代码版本；读不到 git 时退回环境变量，再退回 unknown（不编造版本）。 */
+export function codeVersion(): string {
+  try {
+    const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+    const result = Bun.spawnSync(['git', '-C', root, 'rev-parse', '--short', 'HEAD']);
+    if (result.exitCode === 0) {
+      const version = result.stdout.toString().trim();
+      if (version.length > 0) return version;
+    }
+  } catch {
+    // 没有 git 或不在检出里：继续用环境变量兜底。
+  }
+  return process.env.ATC_CODE_VERSION?.trim() || 'unknown';
+}
 
 export async function startCollector(
   config: Config,
   options?: CollectorOptions,
 ): Promise<{ port: number; stop(): Promise<void> }> {
+  const startedAt = Date.now();
+  const diagnostics = options?.diagnostics ?? createDiagnosticLog({
+    instance: `${process.pid}-${startedAt.toString(36)}`,
+    version: codeVersion(),
+  });
+  diagnostics.lifecycle('service.start', { phase: 'boot' });
   // 维护命令运行时不允许采集器起来：两边同时写会得到自相矛盾的快照。
   // 陈旧锁不在这里自动清：把路径原样报出来，由操作者确认后删除。
   const heldLock = maintenanceLockPresent(config.dataDir);
@@ -57,9 +84,15 @@ export async function startCollector(
     throw new Error('slice_read_unmigrated');
   }
   const dbPath = join(config.dataDir, 'trace.db');
-  const store = openStore(dbPath);
+  const store = openStore(dbPath, {
+    // 具名写事务的耗时由调用方定阈值；这里只负责把名字与毫秒交出去。
+    onWrite: (name, ms) => diagnostics.slow('write', { phase: name, dur_ms: ms }),
+  });
   // 计算线程要等库的 WAL 文件落下来才打得开只读连接；openStore 已经做过那一步。
-  const deriveWorker = options?.deriveComputeInWorker === false ? null : createDeriveWorker(store.path);
+  const deriveWorker = options?.deriveComputeInWorker === false ? null
+    : createDeriveWorker(store.path, {
+      onFailure: code => diagnostics.error('derive.worker', { code }),
+    });
   // 派生路径按配置定下来，定时器之前就设好：一旦有派生任务进来，模式和预算都
   // 必须是已确定的，不能"先按同步跑一会儿再切"。
   if (config.deriveBudget !== undefined) {
@@ -83,19 +116,39 @@ export async function startCollector(
   // OTLP 令牌与 hook 令牌各自独立：一份密钥不进两份上游配置。
   const otlpToken = Buffer.from(loadLocalSecret(config.dataDir, 'otlp.token')).toString('base64url');
   // 观测只依赖进程：拒绝计数、写事务、事件循环样本与派生读取计数都从启动时刻重新开始。
-  const metrics = createCapacityMetrics(store, config.dataDir, Date.now());
+  let gate: AdmissionGate;
+  const metrics = createCapacityMetrics(store, config.dataDir, startedAt, {
+    instance: diagnostics.instance,
+    // 轻量指标里的存储值直接复用闸门最近一次量测，避免每次采样都全表求和。
+    admission: () => gate.last(),
+  });
   metrics.eventLoop.start();
   const deriveUnit = createDeriveUnit(store, {
     onBodyRead: stats => metrics.bodyRead.record(stats),
     // 计算段交给 Worker：主线程只跑落库段，事件循环不再被长组的读与计算占住。
     compute: deriveWorker === null ? undefined : deriveWorker.compute,
+    // 计算与落库用同一个关联编号；空闲 tick 不进这里。
+    onRound: event => {
+      diagnostics.derive({
+        corr: event.corr, result: event.result, phase: event.phase, dur_ms: event.stage_ms,
+        compute_ms: event.compute_ms, apply_ms: event.apply_ms, code: event.code,
+      });
+      if (event.compute_ms !== undefined) {
+        diagnostics.slow('derive.compute', {
+          corr: event.corr, phase: 'compute', dur_ms: event.compute_ms,
+        }, DEFAULT_SLOW_THRESHOLDS.workerMs);
+      }
+    },
   });
   // 准入闸门在每个写入点共用：模式变了才落库，量测按 TTL 缓存。
-  const gate = createAdmissionGate(store, config.dataDir, {
+  gate = createAdmissionGate(store, config.dataDir, {
     bodyBudget: config.bodyBudget,
     diskLimit: config.diskLimit,
   }, {
-    onMeasure: ms => metrics.storage.measure.record(ms),
+    onMeasure: ms => {
+      metrics.storage.measure.record(ms);
+      diagnostics.slow('storage.measure', { dur_ms: ms });
+    },
   });
   let handler: (req: Request) => Promise<Response> = () => Promise.resolve(new Response('starting', { status: 503 }));
 
@@ -119,8 +172,7 @@ export async function startCollector(
     } catch (error) {
       // 停止过程中关闭数据库会让在途的异步任务失败；那不是采集故障，不该写进日志。
       if (stopped) return;
-      const code = error instanceof Error ? error.message : 'unknown';
-      process.stderr.write(`${name}_failed:${code}\n`);
+      diagnostics.error(name, { code: error, phase: 'task', dur_ms: performance.now() - started });
     } finally {
       metrics.jobs.record(name, performance.now() - started);
       running.delete(name);
@@ -158,7 +210,7 @@ export async function startCollector(
     });
     for (const file of files) {
       if (file.state !== 'decoded') {
-        if (file.state === 'error') process.stderr.write(`route_file_error:${file.name}:${file.error}\n`);
+        if (file.state === 'error') diagnostics.error('route.file', { code: 'route_file_error', phase: 'decode' });
         continue;
       }
       ingestSource(store, file, salt, Date.now());
@@ -234,7 +286,7 @@ export async function startCollector(
     token: otlpToken,
     salt,
     admission: () => gate.check(0),
-  });
+  }, diagnostics);
 
   timers.push(setInterval(ledgerTick, intervalOf(config, 'ledger', LEDGER_INTERVAL_MS)));
   timers.push(setInterval(routeTick, intervalOf(config, 'route', ROUTE_INTERVAL_MS)));
@@ -256,6 +308,7 @@ export async function startCollector(
   const stop = async (): Promise<void> => {
     if (stopped) return;
     stopped = true;
+    const stopStarted = performance.now();
     for (const timer of timers) clearInterval(timer);
     clearTimeout(deriveTimer);
     metrics.eventLoop.stop();
@@ -267,6 +320,9 @@ export async function startCollector(
     deriveWorker?.close();
     await server.stop(true);
     store.close();
+    diagnostics.lifecycle('service.stop', {
+      phase: 'shutdown', dur_ms: performance.now() - stopStarted,
+    });
   };
 
   const onSignal = () => {

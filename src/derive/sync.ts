@@ -494,7 +494,8 @@ export function computeDeriveGroup(db: Database, convKey: string, actor: string,
  * 边界按库里此刻的 `started_ms` 取，不按计划算时的位置：迟到账本会改写开始时刻，
  * 计划里的位置可能已经过期。`started_ms` 只用于取可写集合，结论本身来自计划。
  */
-export function applyDeriveGroup(db: Database, round: DeriveGroupRound): DeriveGroupOutcome {
+export function applyDeriveGroup(db: Database, round: DeriveGroupRound,
+  onApplied?: (publish: 'whole' | 'prefix') => void): DeriveGroupOutcome {
   const { plan } = round;
   const group = plan.group;
   if (plan.normalize_algorithm) normalizeTargetAlgorithmTx(db, group.conv_key, group.actor, GROUP_ALGORITHM);
@@ -566,6 +567,7 @@ export function applyDeriveGroup(db: Database, round: DeriveGroupRound): DeriveG
       AND state<>'clean' AND from_sort<>?`,
     [boundary, group.conv_key, group.actor, POSITION_ALL]);
   }
+  onApplied?.(full ? 'whole' : 'prefix');
   return round.outcome;
 }
 

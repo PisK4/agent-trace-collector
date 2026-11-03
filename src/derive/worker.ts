@@ -22,7 +22,12 @@ export type DeriveWorker = {
  * Worker 出错或退出时拒绝在飞请求并丢弃实例：下一轮重起一个，组仍是 dirty，
  * 不会半发布。
  */
-export function createDeriveWorker(dbPath: string): DeriveWorker {
+export type DeriveWorkerOptions = {
+  /** 线程出错或退出时上报原因码；正常 close 不报。 */
+  onFailure?: (code: string) => void;
+};
+
+export function createDeriveWorker(dbPath: string, options: DeriveWorkerOptions = {}): DeriveWorker {
   let worker: Worker | null = null;
   let pending: {
     id: number; resolve: (round: DeriveGroupRound | null) => void; reject: (error: Error) => void;
@@ -30,13 +35,15 @@ export function createDeriveWorker(dbPath: string): DeriveWorker {
   let nextId = 1;
   let closed = false;
 
-  function drop(error: Error): void {
+  function drop(error: Error, failure = false): void {
     const current = pending;
     pending = null;
     if (worker !== null) {
       worker.terminate();
       worker = null;
     }
+    // 线程消息可能夹带自由文本，只上报固定分类。
+    if (failure) options.onFailure?.('derive_worker_error');
     current?.reject(error);
   }
 
@@ -51,7 +58,7 @@ export function createDeriveWorker(dbPath: string): DeriveWorker {
       if (reply.kind === 'error') current.reject(new Error(reply.message));
       else current.resolve(reply.round);
     };
-    created.onerror = event => drop(new Error(String(event.message ?? 'derive_worker_error')));
+    created.onerror = event => drop(new Error(String(event.message ?? 'derive_worker_error')), true);
     return created;
   }
 

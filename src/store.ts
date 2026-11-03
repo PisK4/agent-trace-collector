@@ -214,7 +214,12 @@ function migrate(db: Database): void {
   if (pragmaNumber(db, 'auto_vacuum') !== 2) throw new Error('auto_vacuum_requires_migration');
 }
 
-export function openStore(path: string): Store {
+export type StoreOptions = {
+  /** 每次具名写事务结束后回调（含失败与回滚），阈值判断归调用方。 */
+  onWrite?: (name: string, ms: number) => void;
+};
+
+export function openStore(path: string, options: StoreOptions = {}): Store {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
@@ -294,6 +299,7 @@ export function openStore(path: string): Store {
         named.sql = sums;
       }
       writeStats.by_name[name] = named;
+      options.onWrite?.(name, elapsed);
     }
   };
 

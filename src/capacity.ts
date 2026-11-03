@@ -105,6 +105,15 @@ export type StorageMeasure = {
   snapshot(): { count: number; total_ms: number; max_ms: number };
 };
 
+export type CapacityMetricsOptions = {
+  /** 进程实例标识；与诊断日志同源，采样器据此不跨重启做差。 */
+  instance?: string;
+  /** 准入闸门最近一次量测；轻量端点用它代替全量存储求和。 */
+  admission?: () => {
+    mode: string; reason: string | null; usage: StorageUsage | null; at_ms: number | null;
+  };
+};
+
 export type CapacityMetrics = {
   startedAt: number;
   ingest: IngestMetrics;
@@ -129,6 +138,11 @@ export type CapacityMetrics = {
     snapshot(): DurationSummary & { interval_ms: number };
   };
   snapshot(store: Store, dataDir: string): Record<string, unknown>;
+  /**
+   * 轻量快照：只读进程内计数与队列待办，不执行存储全表求和、也不做元数据求和。
+   * 存储值取准入闸门最近一次量测并附量测时间；没有值时返回 null。
+   */
+  lightSnapshot(): Record<string, unknown>;
 };
 
 function tableColumns(db: Database, table: string): string[] {
@@ -139,10 +153,9 @@ function tableColumns(db: Database, table: string): string[] {
  * 未发布组的积压。组数只数队列行；JOIN request 后的 COUNT 会变成请求数。
  * `oldest_dirty_age_ms` 是排队年龄，`oldest_request_age_ms` 只是最老请求年龄。
  */
-export function queueSnapshot(store: Store): {
+export function queueBacklog(store: Store): {
   pending_groups: number;
   oldest_dirty_since_ms: number | null; oldest_dirty_age_ms: number | null;
-  oldest_request_started_ms: number | null; oldest_request_age_ms: number | null;
 } {
   const columns = tableColumns(store.read, 'derive_queue');
   const hasState = columns.includes('state');
@@ -155,17 +168,27 @@ export function queueSnapshot(store: Store): {
     ? store.read.query<{ oldest: number | null }, []>(
       `SELECT MIN(dirty_since_ms) AS oldest FROM derive_queue ${filter}`).get()?.oldest ?? null
     : null;
-  const request = store.read.query<{ oldest: number | null }, []>(`
-    SELECT MIN(r.started_ms) AS oldest
-    FROM derive_queue q JOIN request r ON r.conv_key=q.conv_key AND r.actor=q.actor
-    ${hasState ? `WHERE ${queuePendingSql('q')}` : ''}`).get()?.oldest ?? null;
   const now = Date.now();
   return {
     pending_groups: pending,
     oldest_dirty_since_ms: dirty,
     oldest_dirty_age_ms: dirty === null ? null : now - dirty,
+  };
+}
+
+export function queueSnapshot(store: Store): ReturnType<typeof queueBacklog> & {
+  oldest_request_started_ms: number | null; oldest_request_age_ms: number | null;
+} {
+  const columns = tableColumns(store.read, 'derive_queue');
+  const hasState = columns.includes('state');
+  const request = store.read.query<{ oldest: number | null }, []>(`
+    SELECT MIN(r.started_ms) AS oldest
+    FROM derive_queue q JOIN request r ON r.conv_key=q.conv_key AND r.actor=q.actor
+    ${hasState ? `WHERE ${queuePendingSql('q')}` : ''}`).get()?.oldest ?? null;
+  return {
+    ...queueBacklog(store),
     oldest_request_started_ms: request,
-    oldest_request_age_ms: request === null ? null : now - request,
+    oldest_request_age_ms: request === null ? null : Date.now() - request,
   };
 }
 
@@ -239,7 +262,8 @@ function eventLoopValues(ring: Float64Array, ringIndex: number, ringCount: numbe
   return values;
 }
 
-export function createCapacityMetrics(store: Store, dataDir: string, startedAt = Date.now()): CapacityMetrics {
+export function createCapacityMetrics(store: Store, dataDir: string, startedAt = Date.now(),
+  options: CapacityMetricsOptions = {}): CapacityMetrics {
   const ingest = createIngestMetrics(startedAt);
   const route = { polls: 0, files_seen: 0, decoded: 0, unchanged: 0, errors: 0 };
   const jobs = new Map<string, { count: number; total_ms: number; max_ms: number }>();
@@ -252,6 +276,10 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
   };
   const storageMeasureSnapshot = () => ({ ...storageMeasure });
   const bodyRead = emptyBodyReadStats();
+  const writerSnapshot = () => ({ ...store.writeStats,
+    by_name: Object.fromEntries(Object.entries(store.writeStats.by_name)
+      .map(([name, stats]) => [name, { ...stats }])),
+  });
   const intervalMs = 50;
   const limit = 8192;
   const ring = new Float64Array(limit);
@@ -332,16 +360,36 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
         route: { ...route },
         jobs: Object.fromEntries(jobs),
         body_read: { ...bodyRead },
-        writer: { ...target.writeStats,
-          by_name: Object.fromEntries(Object.entries(target.writeStats.by_name)
-            .map(([name, stats]) => [name, { ...stats }])),
-        } satisfies Store['writeStats'],
+        writer: writerSnapshot(),
         event_loop: eventLoop(),
         rss_bytes: process.memoryUsage().rss,
         storage,
         storage_measure: storageMeasureSnapshot(),
         metadata: metadataSnapshot(target),
         derive_queue: queueSnapshot(target),
+      };
+    },
+    lightSnapshot() {
+      const now = Date.now();
+      const last = options.admission?.() ?? null;
+      return {
+        instance: options.instance ?? null,
+        started_at_ms: startedAt,
+        now_ms: now,
+        uptime_ms: now - startedAt,
+        ingest: ingest.snapshot(),
+        route: { ...route },
+        jobs: Object.fromEntries(jobs),
+        body_read: { ...bodyRead },
+        writer: writerSnapshot(),
+        event_loop: eventLoop(),
+        rss_bytes: process.memoryUsage().rss,
+        storage: last?.usage ?? null,
+        storage_measured_at_ms: last?.at_ms ?? null,
+        storage_measure: storageMeasureSnapshot(),
+        // 只取组级待办与最老 dirty 时间，不 JOIN 历史请求。
+        derive_queue: queueBacklog(store),
+        admission: last === null ? null : { mode: last.mode, reason: last.reason, at_ms: last.at_ms },
       };
     },
   };

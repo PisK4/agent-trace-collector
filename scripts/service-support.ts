@@ -161,20 +161,24 @@ export type ProbeResult =
   | { state: 'ok'; stats: Stats; elapsedMs: number }
   | { state: 'timeout' | 'unreachable' | 'http_error'; detail: string; elapsedMs: number };
 
+export type JsonProbeResult<T> =
+  | { state: 'ok'; body: T; elapsedMs: number }
+  | { state: 'timeout' | 'unreachable' | 'http_error'; detail: string; elapsedMs: number };
+
 /**
- * 探 `/api/stats`，并把失败分类与耗时带出来。
+ * 探一个受令牌保护的 JSON 端点，并把失败分类与耗时带出来。
  *
  * 超时不是「没起来」：派生与费用作业在同一个事件循环里同步跑，单次任务可占用数秒，
  * 这时端口连得上、响应要到几秒后才回来。把超时和连不上分成两种结果，调用方才不会
  * 把一个忙着的采集器报成挂了。
  */
-export async function probeStats(port: number, token: string,
-  timeoutMs = 15_000): Promise<ProbeResult> {
+export async function probeJson<T>(pathname: string, port: number, token: string,
+  timeoutMs = 15_000): Promise<JsonProbeResult<T>> {
   const startedAt = performance.now();
   const elapsed = (): number => Math.round(performance.now() - startedAt);
   let response: Response;
   try {
-    response = await fetch(`http://127.0.0.1:${port}/api/stats`, {
+    response = await fetch(`http://127.0.0.1:${port}${pathname}`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -193,7 +197,7 @@ export async function probeStats(port: number, token: string,
     return { state: 'http_error', detail: `http ${response.status}`, elapsedMs: elapsed() };
   }
   try {
-    return { state: 'ok', stats: await response.json() as Stats, elapsedMs: elapsed() };
+    return { state: 'ok', body: await response.json() as T, elapsedMs: elapsed() };
   } catch (error) {
     return {
       state: 'http_error',
@@ -201,6 +205,14 @@ export async function probeStats(port: number, token: string,
       elapsedMs: elapsed(),
     };
   }
+}
+
+export async function probeStats(port: number, token: string,
+  timeoutMs = 15_000): Promise<ProbeResult> {
+  const result = await probeJson<Stats>('/api/stats', port, token, timeoutMs);
+  return result.state === 'ok'
+    ? { state: 'ok', stats: result.body, elapsedMs: result.elapsedMs }
+    : result;
 }
 
 /** 取日志尾部若干非空行；文件不存在时返回空数组。 */

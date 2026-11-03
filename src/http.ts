@@ -25,11 +25,37 @@ import { OtlpDecodeError } from './sources/otlp/decode';
 import { decodeLogsBody, decodeTracesBody } from './sources/otlp/decode';
 import { acceptOtlpLogs, acceptOtlpTraces } from './sources/otlp/ingest';
 import { createIngestMetrics, type CapacityMetrics, type IngestMetrics } from './capacity';
+import type { DiagnosticLog } from './monitoring';
 
 const WEB_ROOT = new URL('../web/', import.meta.url);
 const MAX_ENVELOPE_BYTES = 64 * 1024 * 1024;
 /** 同时只接收一份大 envelope；模块级计数在单进程 collector 内有效。 */
 let ingesting = false;
+
+/** 慢请求日志只用品名或路由模板，动态 id 不进日志。 */
+export function routeTemplate(pathname: string): string {
+  if (pathname === '/hook/ingest') return 'hook.ingest';
+  if (pathname === '/v1/traces') return 'otlp.traces';
+  if (pathname === '/v1/logs') return 'otlp.logs';
+  if (pathname === '/api/ingest-metrics' || pathname === '/api/metrics'
+    || pathname === '/api/stats' || pathname === '/api/sessions') return pathname;
+  if (pathname.startsWith('/api/sessions/')) {
+    for (const suffix of ['requests', 'turns', 'bg-jobs', 'summary/entries', 'summary',
+      'readings', 'reading-ranges']) {
+      if (pathname.endsWith(`/${suffix}`)) return `/api/sessions/:key/${suffix}`;
+    }
+  }
+  if (/^\/api\/requests\/\d+$/.test(pathname)) return '/api/requests/:id';
+  if (/^\/api\/requests\/\d+\/tools\/\d+\/result$/.test(pathname)) {
+    return '/api/requests/:id/tools/:ord/result';
+  }
+  if (/^\/api\/requests\/\d+\/context-item$/.test(pathname)) {
+    return '/api/requests/:id/context-item';
+  }
+  if (/^\/api\/requests\/\d+\/route$/.test(pathname)) return '/api/requests/:id/route';
+  if (/^\/api\/requests\/\d+\/body$/.test(pathname)) return '/api/requests/:id/body';
+  return pathname.startsWith('/api/') ? '/api/unknown' : 'static';
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -445,10 +471,11 @@ export function createHandler(
   hook?: { token: string; salt: Uint8Array; admission?: () => HookAdmission },
   metrics?: CapacityMetrics,
   otlp?: { token: string; salt: Uint8Array; admission?: () => HookAdmission },
+  diagnostics?: DiagnosticLog,
 ): (req: Request) => Promise<Response> {
   // hook 计数在未注入观测运行时也保留，只是没有对外入口。
   const ingestMetrics = metrics?.ingest ?? createIngestMetrics();
-  return async (req: Request): Promise<Response> => {
+  const handle = async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     if (url.pathname === '/hook/ingest') {
       return await handleHookIngest(req, store, config, hook, ingestMetrics);
@@ -472,6 +499,11 @@ export function createHandler(
     if (!path.startsWith('/api/')) return await serveStatic(path);
 
     try {
+      if (path === '/api/metrics') {
+        if (metrics === undefined) return json({ error: 'metrics_unavailable' }, 404);
+        return json(metrics.lightSnapshot());
+      }
+
       if (path === '/api/ingest-metrics') {
         if (metrics === undefined) return json({ error: 'metrics_unavailable' }, 404);
         return json(metrics.snapshot(store, config.dataDir));
@@ -618,6 +650,21 @@ export function createHandler(
       if (error instanceof QueryInputError) return json({ error: error.message }, 400);
       if (error instanceof ReadingConflictError) return json({ error: 'reading_changed' }, 409);
       return json({ error: 'internal_error' }, 500);
+    }
+  };
+  if (diagnostics === undefined) return handle;
+  // 慢请求只在读取路径记录；hook 与 OTLP 的写入耗时归后台任务与写事务日志。
+  return async (req: Request): Promise<Response> => {
+    const started = performance.now();
+    const pathname = new URL(req.url).pathname;
+    try {
+      return await handle(req);
+    } finally {
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        diagnostics.slow('http.read', {
+          phase: routeTemplate(pathname), dur_ms: performance.now() - started,
+        });
+      }
     }
   };
 }
