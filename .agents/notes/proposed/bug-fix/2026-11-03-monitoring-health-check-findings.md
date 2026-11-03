@@ -18,7 +18,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 | --- | --- | --- | --- | --- | --- |
 | F18 | P0 | Codex 集成的 schema 9→10 半成品改动（已补完并合并上线） | 实测 | 已修 | — |
 | F23 | P0 | 迁移失败即停机，且无自动重建、无自动备份 | 实测 | 待修 | 先于任何重启 |
-| F26 | P0 | `/api/sessions` 跨组标题绑定是相关标量子查询，O(页内会话数 × request 行数) | 实测 | 待修 | 无；F27 容量来源 |
+| F26 | P0 | `/api/sessions` 跨组标题绑定是相关标量子查询，O(页内会话数 × request 行数) | 实测 | 已修 | 已落地（`396342b`）；绑定未验证，依赖 F28 |
 | F27 | P0 | 会话列表在主线程同步计算，服务端零并发保护 | 实测 | 待修 | 排 F26 之后评估 |
 | F28 | P0 | `user_fingerprint` / `turn_ref` 存量全空；title 指纹通道断 | 实测+代码 | 待修（title 通道） | 独立；先于 F24 回填验收 |
 | F32 | P0 | unknown-actor 的 `["request",…]` 组从不进派生队列，标题恒空 | 实测 | 待修（P2） | 展示已由 tool_event 折叠兜住；另立批次 |
@@ -330,6 +330,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 - **复现**：代码路径见上；可在 /tmp 副本上把目录设为只读或写满后 `openStore`，观察抛错与 `user_version` 保持 9。本次未做破坏性注入，只做代码与文档取证。
 - **严重度**：P0（迁移失败即停机；无自动重建、无自动备份）。
 - **建议**：重启顺序改为：停服 → `bun run maintain bundle --db … --out <外部路径>`（或至少 `backup`，预留 ≥4.43 GB）→ 启新代码 → 只读核对 `user_version=10`、索引、`integrity_check`；失败时保留库与 WAL，不要删除 `-wal/-shm`，按错误码处理后在低峰重试。注意备份要求停服，不能边跑边备。
+- **修复方案**：边界与状态机见 [迁移失败即停机：自动重建的边界设计（F23）](./2026-11-03-migration-failure-autorebuild.md)。结论是默认 A（快速失败 + 打印自救指令），只有显式开关（`--auto-rebuild` / `ATC_AUTO_REBUILD=1`）且唯一命中 `schema_rebuild_required` 时才允许 C（同卷改名备份后重建空库、不回填），B（自动备份 + 重建 + 回填）因 R1 之后无数据可填而否决。该篇只出设计，实现与验收未开始。
 - **状态**：待修（只读记录；本次未停服、未备份、未重启）。
 
 ### F24 重启本身不会让存量 Codex 会话收敛/改标题；验收需显式 rebuild
@@ -423,8 +424,39 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
      - 风险：标题优先级链与游标/翻页语义要逐条对齐；多 actor、同毫秒、迟到旧请求用例需重跑；比 ① 更容易引入回归。
      - 依赖：与 ① 互斥（同处）。
 - **复现**：见附录 A.2（快照命令、两段 SQL、计时方法、不依赖 `/tmp` 脚本）。
+- **修复记录（2026-11-03，候选 ① 已落地）**：
+  - **代码**：`fix/session-cross-group-title-shortcircuit`（commit `7d0983c`），`git merge --no-ff` 进 master（merge commit **`396342b`**）。改动 `src/queries/sessions.ts` +12/-1：新增常量 `HAS_USER_FINGERPRINT_SQL`（`EXISTS (SELECT 1 FROM request x WHERE x.conv_key = request.conv_key AND x.user_fingerprint IS NOT NULL)`），并把 `SESSION_TITLE_SQL` 里的 `${CROSS_GROUP_TITLE_SQL},` 换成 `CASE WHEN ${HAS_USER_FINGERPRINT_SQL} THEN ${CROSS_GROUP_TITLE_SQL} END,`。未做候选 ③、未做 F27/F29，未改 `web/`，未动 `scripts/monitor.ts`。
+  - **修复后实测**（同一份 23:24 只读快照，旧码 = master `29e33f3`，新码 = merge 后；`listSessions` 预热 5 次取中位，单位 ms）：
+
+    | limit | 旧码首跑 | 旧码预热中位 | 新码首跑 | 新码预热中位 | 新码 min–max |
+    | ---: | ---: | ---: | ---: | ---: | ---: |
+    | 20 | 62.4 | 59.9 | 5.4 | **2.4** | 2.3–2.5 |
+    | 50 | 592.7 | 566.2 | 7.3 | **7.5** | 6.9–8.6 |
+    | 100 | 1,160.0 | 1,187.4 | 7.6 | **8.0** | 7.4–8.4 |
+
+    - 与写笔记时的 300/795/1,285 ms 不同，是因为快照时点不同（现在库里有 126 条 participate 指纹、页内组合也不同）；**同一快照新旧码对比才是本条修复的验收口径**。三档全部远低于 40 ms 目标。
+  - **执行计划原文**（新码，limit=20）：
+    ```
+    SEARCH request USING INDEX i_req_session_time (conv_key=?)
+    CORRELATED SCALAR SUBQUERY 1
+      SEARCH g USING PRIMARY KEY (conv_key=?)
+    CORRELATED SCALAR SUBQUERY 2
+      SEARCH r1 USING INDEX i_req_session_time (conv_key=?)
+      SEARCH q1 USING PRIMARY KEY (conv_key=? AND actor=?)
+    CORRELATED SCALAR SUBQUERY 3
+      SEARCH x USING INDEX i_req_session_time (conv_key=?)
+    CORRELATED SCALAR SUBQUERY 8
+      SEARCH qt USING INDEX i_derive_queue_dirty (state=?)
+      SEARCH t USING INDEX i_req_conv (conv_key=? AND actor=?)
+      ...
+    ```
+    外层入口已从 `qt` 改为 `x`（单会话区间索引，`SUBQUERY 3` 先于 `SUBQUERY 8`）。**`SEARCH qt USING INDEX i_derive_queue_dirty` 仍作为 `CASE` 分支的静态计划保留**，但只在 guard 为真（存在非空指纹）时执行；全库 title 指纹为 0 时该分支不会被求值。旧码的计划没有 `SEARCH x`，`CORRELATED SCALAR SUBQUERY 7` 直接由 `qt` 驱动。
+  - **语义等价**：同一快照翻完 1,297 个会话，标题 + flags 逐条对比 **差异 0 条**（key 差异 0、值差异 0）。
+  - **新增测试**：`tests/queries.test.ts` 新增「跨组标题短路：有指纹时绑定语义不变，闸门先于相关子查询求值」（+56 行），覆盖唯一命中照旧绑定、零命中不绑、多命中歧义不绑，以及计划中 `SEARCH x USING INDEX i_req_session_time` 先于 `i_derive_queue_dirty`。
+  - **旧码必红证据**：把 `src/queries/sessions.ts` 的改动临时回退后单跑该用例，`0 pass / 1 fail`；失败断言是 `expect(plan).toContain('SEARCH x USING INDEX i_req_session_time')`（tests/queries.test.ts:1440）。它之前的 6 条语义断言全部通过，说明短路没有改变绑定结果。
+  - **验收口径（必须保留）**：F28 尚未定性（23:24 快照里 126 条指纹全是 `participate`/`chat`，`req_kind='title'` 指纹仍为 0，`turn_ref` 仍为 0），所以本次只能写「**耗时回到 40 ms 内、执行计划不再由跨组子查询驱动**；无指纹数据下标题行为与修复前逐条等价」。**不代表跨组标题绑定已恢复**。
 - **严重度**：P0。
-- **状态**：待修（候选 ①/③ 未选；用户倾向候选 ①，见「修复顺序与依赖」；这是建议，最终由用户决定，尚未动代码）。
+- **状态**：已修（merge `396342b`；绑定未验证，待 F28 定性后复验）。
 
 ### F27 会话列表在主线程同步计算，服务端零并发保护
 
@@ -463,7 +495,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 
 ### F28 `user_fingerprint` / `turn_ref` 存量全空；title 指纹通道断
 
-- **现象**：写笔记时（22:00 前后）`user_version=10`、`request`=53,057 行，`user_fingerprint` 与 `turn_ref` 非空均为 **0**。22:57 只读快照复核：`user_fingerprint` 已随新流量写到 **79 条 / 2 个 `["session",…]` 组**（全部 `participate`/claude，22:18 后写入），`turn_ref` 仍全库为 0。
+- **现象**：写笔记时（22:00 前后）`user_version=10`、`request`=53,057 行，`user_fingerprint` 与 `turn_ref` 非空均为 **0**。22:57 只读快照复核：`user_fingerprint` 已随新流量写到 **79 条 / 2 个 `["session",…]` 组**（全部 `participate`/claude，22:18 后写入），`turn_ref` 仍全库为 0。23:24 快照复查：`user_fingerprint` 非空 **126 条**（全部 `participate`/`chat`），`req_kind='title'` 的指纹仍为 **0**，`turn_ref` 仍为 **0**——写入侧没有整体损坏，断的是 title 通道。
 - **证据**：
   - 写入条件不是「每条走到判定的请求都写」：`src/request-purpose.ts:466-469` 只在 `decision.kind === 'title'` 或 `decision.chain === 'participate'` 时调用 `purposeUserFingerprintTx`；`turn_ref` 由 OTLP 映射写入（`mapping.turnRef`）。
   - participate 通道正常：上述 79 条指纹来自正常会话（`["session",…]`，两个组都是 known actor 且在 `derive_queue` 中）。
@@ -560,12 +592,11 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 
 ## 修复顺序与依赖（F26–F32 并入今晚清单）
 
-**用户倾向（建议，最终由用户决定，尚未动代码）**：本轮诊断倾向 **F26 候选 ① + F27 候选 A，约二十余行，语义不变，但需先确认 F28 写入侧是否损坏**。理由：① 是唯一实测把 300/795/1,285 ms 压回 **1.5/1.5/1.9 ms** 且不改语义的最小改动；A 只处理「并发排队」这一层，不改变 SQL 正确性。F28 若确认写入侧坏了，① 会让跨组绑定「快但永远不绑定」，因此 F28 的定性必须排在验收之前。
+**用户倾向（当时建议，记录于 2026-11-03 诊断阶段；候选 ① 已按此落地，F27-A 仍未动，最终由用户决定）**：本轮诊断倾向 **F26 候选 ① + F27 候选 A，约二十余行，语义不变，但需先确认 F28 写入侧是否损坏**。理由：① 是唯一实测把 300/795/1,285 ms 压回 **1.5/1.5/1.9 ms** 且不改语义的最小改动；A 只处理「并发排队」这一层，不改变 SQL 正确性。F28 若确认写入侧坏了，① 会让跨组绑定「快但永远不绑定」，因此 F28 的定性必须排在验收之前。
 
 ### 第一波（顺序固定）
 
-1. **F26（P0）**：先落候选 ① 指纹短路（`src/queries/sessions.ts` 约 4 行）。验收：预热后 `GET /api/sessions?limit=50` 中位 ≤40 ms（纯 SQL 实测 1.5 ms，允许 HTTP/JSON 开销）；`EXPLAIN QUERY PLAN` 不再出现由 `SEARCH qt USING INDEX i_derive_queue_dirty` 驱动、再 `SEARCH t USING INDEX i_req_conv` 反查的跨组子查询。
-   - 若用户改选 ③ 批量预取（40–60 行），拆成独立改动，先补 r1–r4 / 游标 / 多 actor 回归用例；不要与 ① 同时落。
+1. **F26（P0）— 已完成**：候选 ① 指纹短路已落地并合入 master（`7d0983c` + merge `396342b`）。验收结果：同一快照新旧码对比，limit 20/50/100 预热中位 **2.4 / 7.5 / 8.0 ms**（旧码 59.9 / 566.2 / 1,187.4 ms）；1,297 个会话标题与 flags 差异 0 条；计划外层入口为 `SEARCH x USING INDEX i_req_session_time`。**F28 未定性，绑定仍未验证**。候选 ③ 未采纳，不要再顺手改。
 2. **F28（P0，待查 → 必须核实写入侧）**：只读统计 `started_ms > 重启时刻` 的行里 `purpose_status='recognized'` 数与 `user_fingerprint` 非空数；若「已识别 >0 且指纹=0」，即写入侧被跳过，走 F28 的 (b)。
    - **F28 未定性前，F26 的收益只能写成「消除空转成本」，不能写成「标题绑定修好」**。
 3. **重新验证 Codex 四卡 / 标题绑定**：在允许写操作的窗口跑 `maintain rebuild` → `GET /api/sessions?limit=100`（必要时翻页）过滤 `agents=codex`，核对主卡标题「重绘 ATC 矩阵 IP」、`b4ae` 的 `background`、`d007` 折叠、标题线程 `bypass`。这一步同时覆盖 F24/F25 的「仅重启不收敛」与 F28 的回填验证。
@@ -595,7 +626,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 
 ```
 F18（已修）→ F23（重启前备份）→ 迁移/重启 → F28（写入侧核实）→ F24/F25（rebuild 验收）
-F26（①）→ F27（A，可选同批）→ F29（可选）
+F26（①，已修 `396342b`）→ F27（A，待拍板）→ F29（可选）
 F32（unknown-actor 进派生）→ F31（规则改 exclude 才可能收敛）→ 首屏 18 张卡收走
 F30 依赖 F26 完成；F21 依赖新实例稳定运行
 ```
@@ -609,7 +640,7 @@ F30 依赖 F26 完成；F21 依赖新实例稳定运行
 - `monitor/checks/<day>.jsonl` 每次巡检都有记录，含时间与判据结果。
 - 用 1 MiB 临时阈值跑一次轮转，归档行数 + 当前行数 = 轮转前行数。
 - `node scripts/verify-agent-note-format.mjs` 通过；`bun test` 与 `tsc --noEmit` 保持绿。
-- **F26**：预热后 `GET /api/sessions?limit=50` 中位 ≤40 ms（纯 SQL 实测 1.5 ms 口径，允许 HTTP/JSON 开销）；`EXPLAIN QUERY PLAN` 里跨组标题子查询不再由 `i_derive_queue_dirty` 驱动，`limit=20/50/100` 三档都不再出现 ~300/795/1,285 ms 的线性增长。
+- **F26**：预热后 `GET /api/sessions?limit=50` 中位 ≤40 ms（纯 SQL 实测 1.5 ms 口径，允许 HTTP/JSON 开销）；`EXPLAIN QUERY PLAN` 里跨组标题子查询不再由 `i_derive_queue_dirty` 驱动，`limit=20/50/100` 三档都不再出现 ~300/795/1,285 ms 的线性增长。**已达成（2026-11-03）**：同快照 2.4 / 7.5 / 8.0 ms；计划外层入口为 `SEARCH x USING INDEX i_req_session_time`，`qt` 仅作为 CASE 分支的静态计划保留。
 - **F27-A**：同一 `limit` 的 3 个并发请求只执行 1 次 SQL，三者返回同一快照；错误广播给所有等待者，无永久挂起；live 字段（60 s 活跃窗口）不参与缓存复用。
 - **F28**：新请求的 `user_fingerprint` 非空计数随流量增长；若确认为通道跳过，必须能在诊断里看到 `skipped(reason)`，而不是继续为 0。
 - **F30**：F26 修复后按「同进程首跑 vs 预热」复测，冷加成数字重新记录，不沿用 2,721/3,287 的上界。
