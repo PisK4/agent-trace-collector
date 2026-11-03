@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
-  isLiveSession, liveTimeCell, nextLiveExpiry, partitionLiveSessions, sessionsGroupLabel,
+  createLivePartition, isLiveSession, liveTimeCell, sessionsGroupLabel,
 } from '../web/session-view.js';
 
 const NOW = 1_700_000_100_000;
@@ -14,7 +14,7 @@ test('活跃区与全部会话按服务端快照分区，且同一行只出现�
     row('b', NOW - 90_000, { live: false, inflight: false, live_until: null }),
     row('c', NOW - 120_000, { live: true, inflight: true, live_until: null }),
   ];
-  const { live, rest } = partitionLiveSessions(rows, NOW);
+  const { live, rest } = createLivePartition().partition(rows, NOW);
   expect(live.map(r => r.conv_key)).toEqual(['a', 'c']);
   expect(rest.map(r => r.conv_key)).toEqual(['b']);
   expect([...live, ...rest].map(r => r.conv_key)).toEqual(['a', 'c', 'b']);
@@ -32,17 +32,6 @@ test('活跃行右下只有「请求中」或最后更新时间，没有第三�
   expect(inflight).toEqual({ text: '请求中', cls: 'is-live' });
   expect(liveTimeCell(row('b', NOW - 90_000), () => '12:00')).toEqual({ text: '12:00', cls: 'num' });
   expect(Object.keys(inflight)).toEqual(['text', 'cls']);
-});
-
-test('到期只排最近活跃行，在途行不设到期', () => {
-  const rows = [
-    row('a', NOW, { inflight: true }),
-    row('b', NOW, { inflight: false, live_until: NOW + 20_000 }),
-    row('c', NOW, { inflight: false, live_until: NOW + 50_000 }),
-    row('d', NOW - 90_000, { live_until: null }),
-  ];
-  expect(nextLiveExpiry(rows, NOW)).toBe(NOW + 20_000);
-  expect(nextLiveExpiry(rows.slice(0, 1), NOW)).toBeNull();
 });
 
 test('分组标题复用 group-label 结构并带计数', () => {

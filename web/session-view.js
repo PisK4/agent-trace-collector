@@ -29,31 +29,81 @@ export function isLiveSession(s, now) {
   return typeof s.live_until === 'number' && s.live_until > now;
 }
 
+/** 服务端的「最近活跃」口径；只在 live_until 缺失时用来推算保留期基点。 */
+export const LIVE_RECENT_MS = 60_000;
+/** 过期后仍留在活跃区的时间：让沉降晚一个节拍发生，避免刚过期又更新的行来回跳。 */
+export const LIVE_SETTLE_MS = 60_000;
+/** 提交点粒度：按本机时钟对齐到整 30 秒，同一段内过期的会话一起沉下去。 */
+export const LIVE_COMMIT_MS = 30_000;
+
 /**
- * 活跃区与全部会话不重复：同一行只进一个区，顺序沿用读模型的 last_ms 倒序。
- * @param {SessionRow[]} rows @param {number} now
+ * 这一行最早可以在哪个提交点沉降。基点优先用服务端 live_until（它就是
+ * last_ms + 60 秒），缺失时按同一口径从 last_ms 推算，不另造时间感。
+ * @param {SessionRow} s
+ * @returns {number | null}
  */
-export function partitionLiveSessions(rows, now) {
-  /** @type {SessionRow[]} */
-  const live = [];
-  /** @type {SessionRow[]} */
-  const rest = [];
-  for (const row of rows) (isLiveSession(row, now) ? live : rest).push(row);
-  return { live, rest };
+export function liveCommitAt(s) {
+  const base = typeof s.live_until === 'number'
+    ? s.live_until
+    : (typeof s.last_ms === 'number' ? s.last_ms + LIVE_RECENT_MS : null);
+  if (base === null) return null;
+  return Math.ceil((base + LIVE_SETTLE_MS) / LIVE_COMMIT_MS) * LIVE_COMMIT_MS;
 }
 
 /**
- * 下一次需要重排的时刻：只算“最近 60 秒”行的 live_until，在途行不设到期。
- * @param {SessionRow[]} rows @param {number} now
+ * 带沉降状态的分区器：只有上一帧因「最近活跃」进区的会话才享受保留期。
+ * 在途行豁免——进区不等窗口，撤下也不等，这是硬事实不是估算。
+ * 同一行只进一个区，顺序沿用读模型的 last_ms 倒序。
  */
-export function nextLiveExpiry(rows, now) {
-  let soonest = Infinity;
-  for (const row of rows) {
-    if (row.inflight === true) continue;
-    const until = row.live_until;
-    if (typeof until === 'number' && until > now && until < soonest) soonest = until;
+export function createLivePartition() {
+  /** @type {Map<string, number>} 保留期中的会话 → 提交时刻 */
+  const held = new Map();
+  /** @type {Set<string>} 上一帧靠 live_until 进区的会话；不含在途行 */
+  let recentLive = new Set();
+
+  /**
+   * @param {SessionRow[]} rows @param {number} now
+   * @returns {{live: SessionRow[], rest: SessionRow[], nextCommitAt: number | null}}
+   */
+  function partition(rows, now) {
+    /** @type {SessionRow[]} */
+    const live = [];
+    /** @type {SessionRow[]} */
+    const rest = [];
+    /** @type {Set<string>} */
+    const stillRecent = new Set();
+    let next = Infinity;
+    for (const row of rows) {
+      const key = row.conv_key;
+      const until = typeof row.live_until === 'number' ? row.live_until : null;
+      const commitAt = liveCommitAt(row);
+      if (row.inflight === true) {
+        held.delete(key);
+        live.push(row);
+        continue;
+      }
+      if (until !== null && until > now) {
+        held.delete(key);
+        stillRecent.add(key);
+        live.push(row);
+        if (commitAt !== null && commitAt > now && commitAt < next) next = commitAt;
+        continue;
+      }
+      if (commitAt !== null && commitAt > now && recentLive.has(key)) {
+        held.set(key, commitAt);
+        live.push(row);
+        if (commitAt < next) next = commitAt;
+        continue;
+      }
+      held.delete(key);
+      rest.push(row);
+    }
+    for (const [key, at] of held) if (at <= now) held.delete(key);
+    recentLive = new Set([...stillRecent, ...held.keys()]);
+    return { live, rest, nextCommitAt: next === Infinity ? null : next };
   }
-  return soonest === Infinity ? null : soonest;
+
+  return { partition };
 }
 
 /**
