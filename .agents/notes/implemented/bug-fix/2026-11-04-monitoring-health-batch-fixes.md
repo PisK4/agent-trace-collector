@@ -69,6 +69,22 @@ Status: implemented
 
 ## Testing
 
+### 生产回归（2026-11-04 凌晨，三次重启窗口：初版部署 / 跨组修复 / rebuild）
+
+F23 顺序执行：停服 → `maintain bundle`（3.92 GB 快照，manifest schema 10、盐与哈希齐备，落 `~/atc-backups/`）→ 启动 → 只读核对 `user_version=10`、`integrity_check=ok`。
+
+- **F21 复采**（跨组修复后，15 轮 × 三端点）：metrics p50 2.1 ms、stats p50 **0.9 ms**（世代缓存生效，重启前 p50 262 ms）、sessions p50 **39.9 ms** / p95 83.7 ms；事件循环 p99 268–488 ms，主线程停顿仍在（F07 观察项保留）。
+- **F26 验收**：sessions limit=50 预热中位 39.9 ms ≤ 40 ms；原始 SQL 14.7 ms；EXPLAIN 断言钉死 t 驱动。
+- **F24**：四条 Codex 会话显式 rebuild 全成功（72 笔用途升级到当前版，b4ae 的 499 行按设计 retained/participate）。主卡标题收敛为「重绘 ATC 矩阵 IP」，`b4ae` 带 `background`，`b46a` 是 `bypass` 标题线程，`d007` `bypass+background` 折叠——**跨组标题绑定在生产端到端首次命中**：主卡借到标题线程的模型标题。
+- **F28**：`req_kind='title'` 指纹从 0 → 1（rebuild 后 title 行可提取）；参与链指纹 161 → 217 随流量增长；`turn_ref` 从 0 → 68（OTLP 通道在写，待查项有了部分答案）。
+- **F27-A**：5 并发同 key 墙钟 188 ms、响应一致、无错误。同 tick 合并只在测试的单任务形态成立；同步查询跨宏任务不合并（见 LESSONS），冷页慢查询在途时才有跨请求合并效果。
+- **F30**：冷 83.7 ms vs 预热 39.6 ms——冷加成约 44 ms，2.4 s 的旧上界是 F26 退化期的伪象，观察项关闭。
+- **F08**：受控验证退出码 0（健康）→ 1（死端口采样）→ 1（check 看到失败证据 + `service_unreadable` alert）→ 0（恢复采样）。
+- **F10**：旧阈值时代遗留的 `event_loop_p99` 告警在恢复窗口后 01:27:31 正常写 `recovered`；停机重启引发的 `service_unreadable` 同样按窗口收敛。
+- **F17**：`inspect` 落盘 `monitor/checks/2026-11-04.jsonl`（含活跃告警数、24 h 断档、诊断错误计数、作业退出码）。
+- **F04**：1,354 条孤儿（最老 2026-10-24，11 天）未达 14 天 TTL，计数稳定；清理从 11-07 起生效。
+- **F06 残余**：`/api/stats` p50 0.9 ms；`/api/ingest-metrics` 仍 1.7–2.0 s——metadata 全量求和未动，属该端点的独立成本，另记观察。
+
 - 全量 `bun test` 1151 通过（含 89 个文件），`tsc --noEmit` 绿。
 - 新增/改写：monitor 6 条（阈值校准、断档不清窗、sample_gap、恢复窗口与再命中清计时、采样证据退出码、巡检落盘与诊断错误计数）；`titlePromptText` 1 条（两形状 + 壳内清洗 + 未闭合不猜）；Claude 标题指纹 1 条（主会话与标题请求指纹一致）；pending_hook TTL 1 条（孤儿清理、带 id 保留）；stats 世代缓存 1 条；ingest-metrics 量测复用 1 条（有闸门不计measure、无闸门现算）；single-flight 1 条（5 并发同 key 只执行一次聚合、错误广播 400、完成后出表可见新写入）；reader-store 并发共享 1 条；store 迁移错误断言收紧到含版本号。守门测试「结算代码不出现 harness 品牌字面」抓到过 request-purpose 注释里的品牌词，已改写为形状描述。
 - **F16 实测（launchd fd 语义）**：临时 launchd 探针作业（KeepAlive + StandardOutPath 指向临时文件）运行后外部 truncate，写入从下一条无缝继续、文件无稀疏洞——launchd 打开 StandardOutPath 用 O_APPEND，copy+truncate 轮转对 launchd 持有的 fd 安全。对照组：Bun `FileSink`（非 append 语义）在副本上复现稀疏洞（轮转后归档恰好等于「洞 + 数据」两倍体积），那是 Bun 写入器行为，不是 launchd 的。探针作业已删除。
