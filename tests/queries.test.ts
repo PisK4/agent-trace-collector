@@ -1466,8 +1466,12 @@ test('跨组标题短路：有指纹时绑定语义不变，闸门先于相关�
     if (detail === undefined) throw new Error('title_query_not_captured');
     const plan = explainPlan(f.store.read, detail.sql, detail.params);
     expect(plan).toContain('SEARCH x USING INDEX i_req_session_time');
-    expect(plan.indexOf('SEARCH x USING INDEX i_req_session_time'))
-      .toBeLessThan(plan.indexOf('i_derive_queue_dirty'));
+    // 跨组子查询由 title 侧驱动（指纹部分索引只含非空行），qt 退为主键回查；
+    // 若回到 current 组全集驱动，成本是 O(组数)×页内指纹会话数，随会话表退化。
+    expect(plan).toContain('SEARCH t USING INDEX i_request_user_fingerprint');
+    const qtLine = /.*SEARCH qt.*/.exec(plan)?.[0];
+    expect(qtLine).toBeDefined();
+    expect(qtLine).toContain('PRIMARY KEY');
   } finally { f.close(); }
 });
 

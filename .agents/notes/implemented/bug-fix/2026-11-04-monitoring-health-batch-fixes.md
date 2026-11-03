@@ -37,6 +37,8 @@ Status: implemented
 
 **派生失败进结构化诊断（fix(derive)）。** 轮失败的错误码在 derive 边界归一：SQLite 锁冲突映射 `database_locked` / `table_locked`，其余走通用分类；`onRound` 的 failure 事件同时写 `kind:"error"`、`op:"derive.run"`（按 op+code 限流），巡检按错误计数找 Worker 失败不再漏掉整轮丢弃。
 
+**F26 后续：跨组子查询定死 title 侧驱动（fix(sessions)，同日追加）。** 部署后复采发现会话列表仍慢（原始 SQL 75 ms），归因到候选①的风险预言成真：参与链指纹随流量增长，短路守卫对每个真实会话组都放行，而跨组子查询由 qt（全部 current 组，1,310 个）驱动、按组反查 title 行——成本是 O(current 组数) × 页内指纹会话数，页内 4 组指纹即 47 ms 增量，模拟页内 50 组指纹 367 ms。修法用 SQLite 的 `CROSS JOIN`（唯一能定死连接次序的内连接写法）让 t 侧先驱动：指纹部分索引只有 161 行非空、title 行是少数，qt 退为主键回查。同状态 75 → 14.7 ms，模拟态 367 → 6.9 ms，1,310 个会话标题与 flags 逐条差异 0；成本不再随指纹覆盖增长。
+
 **会话列表并发（fix(http) + fix(web)）。** 服务端同 key（`limit`+`cursor` 的 search 串）单飞：迟来的请求 `await` 同一个在途 Promise，只付一次聚合；Promise 永不 reject——参数错误也走共享 rejection、由各请求的外层错误映射出 400，等待者不挂起；响应完成立即出表，不做跨请求缓存，live 字段（60 秒活跃窗）每次执行现算。前端 `reader-store` 的 `sessionsLoading` 布尔闸门改成 `sessionsInflight` Promise 共享：同 tab 并发调用等待同一结果而不是被静默丢弃。跨 tab 的放大只能靠服务端单飞兜住，这与核查记录 F29 的判断一致。
 
 ## Alternatives considered
@@ -70,4 +72,5 @@ Status: implemented
 - 全量 `bun test` 1151 通过（含 89 个文件），`tsc --noEmit` 绿。
 - 新增/改写：monitor 6 条（阈值校准、断档不清窗、sample_gap、恢复窗口与再命中清计时、采样证据退出码、巡检落盘与诊断错误计数）；`titlePromptText` 1 条（两形状 + 壳内清洗 + 未闭合不猜）；Claude 标题指纹 1 条（主会话与标题请求指纹一致）；pending_hook TTL 1 条（孤儿清理、带 id 保留）；stats 世代缓存 1 条；ingest-metrics 量测复用 1 条（有闸门不计measure、无闸门现算）；single-flight 1 条（5 并发同 key 只执行一次聚合、错误广播 400、完成后出表可见新写入）；reader-store 并发共享 1 条；store 迁移错误断言收紧到含版本号。守门测试「结算代码不出现 harness 品牌字面」抓到过 request-purpose 注释里的品牌词，已改写为形状描述。
 - **F16 实测（launchd fd 语义）**：临时 launchd 探针作业（KeepAlive + StandardOutPath 指向临时文件）运行后外部 truncate，写入从下一条无缝继续、文件无稀疏洞——launchd 打开 StandardOutPath 用 O_APPEND，copy+truncate 轮转对 launchd 持有的 fd 安全。对照组：Bun `FileSink`（非 append 语义）在副本上复现稀疏洞（轮转后归档恰好等于「洞 + 数据」两倍体积），那是 Bun 写入器行为，不是 launchd 的。探针作业已删除。
+- 跨组驱动修复的 A/B 与语义等价在同一份 bundle 快照与可写副本上完成：抹指纹 54 → 6.7 ms 定位增量来源；EXPLAIN 对比确认 qt 覆盖索引驱动改 t 的 `i_request_user_fingerprint` 驱动；等价性用新旧码翻完全部 1,310 个会话对比 title+flags（差异 0）。测试计划断言同步收紧：qt 行必须是主键回查，t 行必须是 `i_request_user_fingerprint`。
 - 生产回归（重启后）：F21 同脚本复采、F26 会话列表延迟、F28 新流量指纹增长、F24 显式 rebuild 后四条 Codex 会话收敛、F04 计数走势、F08 退出码、F17 inspect 落盘、F30 冷页复测——结果回填核查记录对应条目。

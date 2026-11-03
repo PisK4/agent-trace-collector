@@ -108,7 +108,7 @@ const TITLE_BIND_UNIQUE_SQL = `(
 )`;
 
 const CROSS_GROUP_TITLE_SQL = `(SELECT t.model_title FROM request t
-  JOIN derive_queue qt ON qt.conv_key = t.conv_key AND qt.actor = t.actor
+  CROSS JOIN derive_queue qt ON qt.conv_key = t.conv_key AND qt.actor = t.actor
   WHERE t.user_fingerprint IS NOT NULL
     AND t.req_kind = 'title' AND t.purpose_chain = 'exclude'
     AND t.model_title IS NOT NULL AND t.purpose_pending = 0
@@ -123,6 +123,11 @@ const CROSS_GROUP_TITLE_SQL = `(SELECT t.model_title FROM request t
         AND abs(t.started_ms - m.started_ms) <= ${TITLE_BIND_WINDOW_MS})
     AND ${TITLE_BIND_UNIQUE_SQL}
   ORDER BY t.started_ms DESC, t.req_id DESC LIMIT 1)`;
+// CROSS JOIN 是 SQLite 里唯一能定死连接次序的内连接写法：t 侧按指纹部分索引
+// 驱动（只有非空指纹行，title 行更是少数），qt 走主键回查。默认优化器会选
+// qt（全部 current 组）驱动、按组反查 title 行——这个形状的成本是
+// O(current 组数) × 页内指纹会话数，随会话表线性退化（2026-11-04 实测
+// 1,300 组时每组约 12 ms，4 组在页就是 50 ms）。
 
 /**
  * 跨组绑定的入口闸门：本会话没有任何非空指纹时，绑定注定落空。
