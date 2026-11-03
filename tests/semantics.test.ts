@@ -18,6 +18,7 @@ function view(over: Partial<PurposeView> = {}): PurposeView {
     tailUserBlockHeads: [],
     userImageBlocks: 0,
     source: { state: 'missing', value: null },
+    upstreamTurn: null,
     stored: {
       version: null, status: 'missing', rule: null, signals: [],
       chain: 'participate', kind: 'chat', modelTitle: null,

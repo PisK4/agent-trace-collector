@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import {
-  PURPOSE_RULES, classifyPurposeWithRules, type HarnessPurposeRule,
+  PURPOSE_RULES, classifyPurpose, classifyPurposeWithRules, type HarnessPurposeRule,
 } from '../src/harness/purpose';
 import { PURPOSE_VERSION, type PurposeView } from '../src/semantics';
 
@@ -18,6 +18,7 @@ function view(over: Partial<PurposeView> = {}): PurposeView {
     tailUserBlockHeads: [],
     userImageBlocks: 0,
     source: { state: 'missing', value: null },
+    upstreamTurn: null,
     stored: {
       version: null, status: 'missing', rule: null, signals: [],
       chain: 'participate', kind: 'chat', modelTitle: null,
@@ -76,7 +77,7 @@ test('规则弃权返回 null，落回通用判定', () => {
 test('生产登记只含已知品牌标签', () => {
   // claude 五条（两版分类器、suggestion、压缩、末尾模板族），次序即同 agent 内的优先级。
   expect(PURPOSE_RULES.map(rule => rule.agent))
-    .toEqual(['claude', 'claude', 'claude', 'claude', 'claude', 'hermes', 'omp']);
+    .toEqual(['claude', 'claude', 'claude', 'claude', 'claude', 'hermes', 'codex', 'omp']);
 });
 
 test('权限审查分类器的新形状：CLAUDE.md 上下文与末尾审查指令缺一不可', () => {
@@ -135,4 +136,70 @@ test('semantics 与 request-purpose 源码不出现 claude/hermes/omp 品牌字�
     const source = readFileSync(new URL(file, import.meta.url), 'utf8');
     expect(/\b(claude|hermes|omp)\b/i.test(source)).toBe(false);
   }
+});
+
+test('Codex thread_title 退出主链并解析双键标题', () => {
+  const decision = classifyPurpose(view({
+    agent: 'codex',
+    upstreamTurn: { source: 'thread_title', trigger: null, turnRef: 'turn-1' },
+    replyText: JSON.stringify({ title: '重绘 ATC 矩阵 IP', description: '把矩阵重画一遍' }),
+  }));
+  expect(decision).toMatchObject({
+    status: 'recognized', chain: 'exclude', kind: 'title', modelTitle: '重绘 ATC 矩阵 IP',
+  });
+  expect(decision.signals).toContain('codex.thread.thread_title');
+});
+
+test('Codex 双键标题之外，原有的 <title> 与单键 JSON 仍兼容', () => {
+  const tags = classifyPurpose(view({
+    agent: 'codex',
+    upstreamTurn: { source: 'thread_title', trigger: null, turnRef: 'turn-2' },
+    replyText: '<title>旧格式标题</title>',
+  }));
+  const single = classifyPurpose(view({
+    agent: 'codex',
+    upstreamTurn: { source: 'thread_title', trigger: null, turnRef: 'turn-3' },
+    replyText: JSON.stringify({ title: '单键标题' }),
+  }));
+  expect(tags.modelTitle).toBe('旧格式标题');
+  expect(single.modelTitle).toBe('单键标题');
+});
+
+test('Codex ambient 与 memory 标成后台且退出主链；普通前台不误伤', () => {
+  for (const intent of ['ambient_suggestions', 'memory_consolidation']) {
+    const decision = classifyPurpose(view({
+      agent: 'codex',
+      upstreamTurn: { source: intent, trigger: null, turnRef: `turn-${intent}` },
+      messageCount: 4,
+    }));
+    expect(decision).toMatchObject({
+      status: 'recognized', chain: 'exclude', kind: `source:${intent}`, modelTitle: null,
+    });
+    expect(decision.signals).toContain(`codex.thread.${intent}`);
+  }
+  const foreground = classifyPurpose(view({
+    agent: 'codex',
+    upstreamTurn: { source: 'user', trigger: 'composer', turnRef: 'turn-user' },
+  }));
+  // 没有可靠指纹时落回通用判定；这里至少不能因“是 Codex”就退出主链。
+  expect(foreground.chain).toBe('participate');
+});
+
+test('Codex 元数据说前台、来源 kind 说后台：保留参与链并记 source.conflict', () => {
+  const decision = classifyPurpose(view({
+    agent: 'codex',
+    upstreamTurn: { source: 'user', trigger: null, turnRef: 'turn-conflict' },
+    source: { state: 'single', value: 'ambient_suggestions' },
+  }));
+  expect(decision).toMatchObject({ chain: 'participate', kind: 'source:ambient_suggestions' });
+  expect(decision.signals).toContain('source.conflict');
+});
+
+test('无版本化元数据时，来源 kind=thread_title 仍能退出主链', () => {
+  const decision = classifyPurpose(view({
+    agent: 'codex',
+    source: { state: 'single', value: 'thread_title' },
+    replyText: JSON.stringify({ title: '来源标题', description: '来自来源 kind' }),
+  }));
+  expect(decision).toMatchObject({ chain: 'exclude', kind: 'title', modelTitle: '来源标题' });
 });

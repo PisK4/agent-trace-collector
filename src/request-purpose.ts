@@ -1,10 +1,12 @@
 import type { Database } from 'bun:sqlite';
 import { zstdDecompressSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import { readBodyMetaTx } from './body';
 import { markGroupDirtyTx, requestPositionTx } from './derive/state';
-import { classifyPurpose } from './harness/purpose';
+import { classifyPurpose, upstreamTurnFactsOf } from './harness/purpose';
 import { parseProtocol } from './protocols';
 import { readSourceFacts } from './sources/facts';
+import { interpretMessage, messageText } from './input-interpretation';
 import {
   PURPOSE_VERSION,
   replyTextsOf,
@@ -160,6 +162,7 @@ function emptyView(identity: PurposeIdentity, parse: PurposeParse, reply: unknow
     userBlockHeads: [],
     tailUserBlockHeads: [],
     userImageBlocks: 0,
+    upstreamTurn: null,
     source: identity.source,
     stored: identity.stored,
   };
@@ -237,6 +240,47 @@ function userBlockFactsOf(rows: readonly { z: Uint8Array }[]): UserBlockFacts {
 
 type UserBlockFacts = { heads: string[]; imageBlocks: number };
 
+/**
+ * 请求的内容指纹：只容忍尾部空白，跨组标题按内容身份绑定。
+ *
+ * 参与链取**首条**有效用户文本（不是最后一条）：会话首句在每笔请求里都随
+ * 历史重发，跨组标题因此只有一个稳定锚点；Codex 的首条 user 消息常是
+ * AGENTS/环境注入，解释层会把它判成 injected，继续往后找。
+ *
+ * 标题请求取标题模板里 `User prompt:` 之后的原文；模板本身与用户原话在
+ * 同一条消息里，块后可能还有 skill 注入，所以只认标记之后的正文。
+ * 正文不可读返回 null，不猜。
+ */
+function purposeUserFingerprintTx(
+  db: Database, reqId: number, agent: string | null, titleRequest: boolean,
+): string | null {
+  const rows = db.query<{ ord: number; z: Uint8Array }, [number, number]>(`
+    SELECT rb.ord AS ord, b.z AS z FROM request_block rb JOIN block b ON b.id = rb.block
+    WHERE rb.req_id=? AND rb.role=0 ORDER BY rb.ord LIMIT ?`)
+    .all(reqId, PURPOSE_USER_MESSAGES);
+  for (const row of rows) {
+    let message: unknown;
+    try {
+      message = JSON.parse(zstdDecompressSync(row.z).toString('utf8'));
+    } catch {
+      continue;
+    }
+    if (titleRequest) {
+      const text = messageText(message);
+      if (text === null) continue;
+      const marker = text.indexOf('User prompt:');
+      if (marker < 0) continue;
+      const prompt = text.slice(marker + 'User prompt:'.length).replace(/^\s+/, '');
+      return createHash('sha256').update(prompt.trimEnd()).digest('hex');
+    }
+    const view = interpretMessage(message, agent, row.ord);
+    if (view.input !== null && view.input.state === 'text') {
+      return createHash('sha256').update(view.input.text.trimEnd()).digest('hex');
+    }
+  }
+  return null;
+}
+
 /** 已知协议的图片内容块类型：chat 的 image_url、anthropic 的 image、responses 的 input_image。 */
 const IMAGE_BLOCK_TYPES = new Set(['image', 'image_url', 'input_image']);
 
@@ -303,6 +347,7 @@ export function readPurposeViewTx(db: Database, identity: PurposeIdentity): Purp
     userBlockHeads: userFacts.heads,
     userImageBlocks: userFacts.imageBlocks,
     tailUserBlockHeads: purposeTailUserBlockHeadsTx(db, identity.reqId),
+    upstreamTurn: upstreamTurnFactsOf(body.request),
     source: identity.source,
     stored: identity.stored,
   };
@@ -322,24 +367,29 @@ function markKnownGroup(db: Database, identity: PurposeIdentity): void {
   markGroupDirtyTx(db, identity.convKey, identity.actor, requestPositionTx(db, identity.reqId));
 }
 
+export type PurposeContentFacts = { userFingerprint: string | null; turnRef: string | null };
+
 /**
  * 把一笔判定写回请求行。CAS 不命中说明读到视图之后输入又变了（新正文、
  * 新修订或显式升级），返回 stale 让调用方保留 pending 重来。
  *
  * 用途只影响组派生的链归属与标题列；结论没变时不动队列，避免每轮结算
- * 都把整组标脏。
+ * 都把整组标脏。内容指纹与 turn 身份只补空，不覆盖已记录的值。
  */
 export function applyPurposeDecisionTx(
   db: Database, identity: PurposeIdentity, decision: PurposeDecision,
+  content: PurposeContentFacts = { userFingerprint: null, turnRef: null },
 ): 'applied' | 'stale' {
   const changed = db.run(`
     UPDATE request SET purpose_pending=0, purpose_retry=0,
       purpose_revision=input_revision, purpose_target=?,
       purpose_status=?, purpose_version=?, purpose_rule=?, purpose_signals=?,
-      purpose_chain=?, req_kind=?, model_title=?
+      purpose_chain=?, req_kind=?, model_title=?,
+      user_fingerprint=COALESCE(?, user_fingerprint), turn_ref=COALESCE(?, turn_ref)
     WHERE req_id=? AND input_epoch=? AND input_revision=? AND purpose_target=? AND purpose_pending=1`,
   [PURPOSE_VERSION, decision.status, decision.version, decision.rule,
     JSON.stringify(decision.signals), decision.chain, decision.kind, decision.modelTitle,
+    content.userFingerprint, content.turnRef,
     identity.reqId, identity.epoch, identity.inputRevision, identity.target]).changes;
   if (changed !== 1) return 'stale';
   if (decision.kind !== identity.stored.kind
@@ -402,15 +452,22 @@ export function drainRequestPurposesTx(
     if (identity === null) continue;
     processed += 1;
     let decision: PurposeDecision;
+    let view: PurposeView | null = null;
     try {
-      decision = classifyPurpose(readPurposeViewTx(db, identity));
+      view = readPurposeViewTx(db, identity);
+      decision = classifyPurpose(view);
     } catch {
       const outcome = applyPurposeErrorTx(db, identity);
       if (outcome.result === 'applied') failed += 1;
       else stale += 1;
       continue;
     }
-    const outcome = applyPurposeDecisionTx(db, identity, decision);
+    const needFingerprint = decision.kind === 'title' || decision.chain === 'participate';
+    const outcome = applyPurposeDecisionTx(db, identity, decision, {
+      userFingerprint: needFingerprint
+        ? purposeUserFingerprintTx(db, req_id, identity.agent, decision.kind === 'title') : null,
+      turnRef: view.upstreamTurn?.turnRef ?? null,
+    });
     if (outcome === 'stale') {
       stale += 1;
       continue;

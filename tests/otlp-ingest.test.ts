@@ -182,18 +182,20 @@ test('Codex turn span 落库：session 取 thread.id，四项用量取自有键�
   const store = fixture();
   try {
     const decoded = decodeTracesBody(tracesProtobuf([
-      { resource: { service: 'codex_exec' }, spans: [CODEX_TURN] },
+      { resource: { service: 'codex-app-server' }, spans: [CODEX_TURN] },
     ]), 'protobuf');
     const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
     expect(result.requestsCreated).toBe(1);
     const row = store.store.read.query(`
       SELECT via, have, agent, session, model_requested, model_served, stop,
-        in_tok, out_tok, cache_read, cache_write, conv_source
+        in_tok, out_tok, cache_read, cache_write, conv_source, turn_ref
       FROM request`).get() as Record<string, unknown>;
     expect(row.via).toBe('otlp');
     expect(row.have).toBe(8);
     expect(row.agent).toBe('codex');
     expect(row.session).toBe('thread-synth-0001');
+    // turn.id 是两路共享的身份，落库供 magpie 侧去重。
+    expect(row.turn_ref).toBe('turn-synth-0001');
     expect(row.model_requested).toBe('synth-codex-model');
     // Codex 无回复侧模型与终止原因字段：按缺失保持 NULL，不拿相邻字段顶替。
     expect(row.model_served).toBeNull();
@@ -217,7 +219,7 @@ test('Codex turn span 落库：session 取 thread.id，四项用量取自有键�
 test('Codex 的 compact 与 user_shell 任务 span 不建行，也不进未知桶', () => {  const store = fixture();
   try {
     const decoded = decodeTracesBody(tracesProtobuf([
-      { resource: { service: 'codex_exec' }, spans: [
+      { resource: { service: 'codex-app-server' }, spans: [
         { ...CODEX_TURN, name: 'session_task.compact', spanId: SYNTH.spanTool },
         { ...CODEX_TURN, name: 'session_task.user_shell', spanId: SYNTH.spanInteraction },
       ] },
@@ -235,7 +237,7 @@ test('Codex 的 compact 与 user_shell 任务 span 不建行，也不进未知�
 });
 
 test('Codex originator 家族各取值都命中同一条规则；家族外的服务仍走门铃', () => {
-  const family = ['codex_exec', 'codex_cli_rs', 'codex_tui', 'codex_vscode', 'codex_mcp_server', 'codex_app_server'];
+  const family = ['codex-app-server', 'codex-exec-server', 'codex-cli-rs', 'codex-tui', 'codex-vscode', 'codex-mcp-server'];
   for (const service of family) {
     const store = fixture();
     try {
@@ -370,6 +372,54 @@ test('凭证形态属性脱敏后才进原始层；映射列不受影响', () =>
     // 白名单映射列取自解码值，不含凭证。
     const row = store.store.read.query('SELECT in_tok, model_requested FROM request').get() as Record<string, unknown>;
     expect(row.in_tok).toBe(8233);
+  } finally {
+    store.close();
+  }
+});
+
+test('同一 turn 已有 magpie 行：OTLP 只写证据，不重复建行', () => {
+  const store = fixture();
+  try {
+    store.store.write(db => db.run(`
+      INSERT INTO request(agent,session,conv_key,conv_source,actor,actor_state,
+        started_ms,day,via,model_requested,body_state,derive_version,have,created_at,updated_at,turn_ref)
+      VALUES ('codex','thread-synth-0001',?,'session','thread-synth-0001','known',
+        ?, '2026-10-26','hook','synth-codex-model','missing',0,1,?,?, 'turn-synth-0001')`,
+      [JSON.stringify(['session', 'thread-synth-0001']), NOW + 1_000, NOW, NOW]));
+    const decoded = decodeTracesBody(tracesProtobuf([
+      { resource: { service: 'codex-app-server' }, spans: [CODEX_TURN] },
+    ]), 'protobuf');
+    const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
+
+    expect(result.requestsCreated).toBe(0);
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(1);
+    const evidence = store.store.read.query(
+      `SELECT merge_state, match_rule FROM request_evidence WHERE source_kind='otlp_span'`,
+    ).get() as { merge_state: string; match_rule: string };
+    expect(evidence.merge_state).toBe('merged');
+    expect(evidence.match_rule).toBe('trace_span.v1');
+    // 原始 span 仍然落库，证据不因为去重而丢。
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(1);
+  } finally {
+    store.close();
+  }
+});
+
+test('magpie 行尚未写 turn_ref 时，按同会话 + turn 时间窗 + 模型去重', () => {
+  const store = fixture();
+  try {
+    store.store.write(db => db.run(`
+      INSERT INTO request(agent,session,conv_key,conv_source,actor,actor_state,
+        started_ms,day,via,model_requested,body_state,derive_version,have,created_at,updated_at)
+      VALUES ('codex','thread-synth-0001',?,'session','thread-synth-0001','known',
+        ?, '2026-10-26','hook','synth-codex-model','missing',0,1,?,?)`,
+      [JSON.stringify(['session', 'thread-synth-0001']), 1_792_946_000_000, NOW, NOW]));
+    const decoded = decodeTracesBody(tracesProtobuf([
+      { resource: { service: 'codex-app-server' }, spans: [CODEX_TURN] },
+    ]), 'protobuf');
+    const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
+    expect(result.requestsCreated).toBe(0);
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(1);
   } finally {
     store.close();
   }

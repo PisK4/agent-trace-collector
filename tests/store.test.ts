@@ -265,7 +265,7 @@ test('过低版本库拒绝打开，空库建到当前版本', () => {
     expect(() => openStore(legacy)).toThrow('schema_rebuild_required');
     const store = openStore(join(dir, 'fresh', 'trace.db'));
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 10 });
     } finally { store.close(); }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -287,7 +287,7 @@ test('v6库原地升到当前版本：纯新增表与索引，既有数据不动
     raw.close();
     const store = openStore(path);
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 10 });
       expect((store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(1);
       // 升级是纯新增：OTLP 原始层表就位且为空，反向索引就位。
       expect((store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(0);
@@ -318,7 +318,7 @@ test('v8库原地升到当前版本：队列多一列认领边界，既有行不
     raw.close();
     const store = openStore(path);
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 10 });
       // 升级是纯新增：既有行原样保留，新列取默认空串（未知边界）。
       expect(store.read.query('SELECT from_sort,published_revision,claim_from_sort FROM derive_queue').get())
         .toEqual({ from_sort: '0000000000001000', published_revision: 3, claim_from_sort: '' });
@@ -353,7 +353,7 @@ test('v7库原地升到当前版本：引用不变，中断后的半迁移状态
     };
     const store = openStore(path);
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 10 });
       expect(indexNames(store.read)).toContain('i_req_prev');
       expect(indexNames(store.read)).toContain('i_tool_result_req');
       expect(queryAll(store.read, 'SELECT req_id, prev_req_id FROM request ORDER BY req_id')).toEqual(before.prev);

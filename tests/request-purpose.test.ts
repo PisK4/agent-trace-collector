@@ -430,3 +430,56 @@ test('suggestion 模板贴在末尾 user 消息时，前五条之外也能取到
     });
   } finally { f.close(); }
 });
+
+test('Codex 内容指纹：主会话首条有效用户文本与标题模板正文逐字一致', () => {
+  const f = fixture();
+  try {
+    const turnMeta = (threadSource: string, turnId: string) => ({
+      'x-codex-turn-metadata': {
+        thread_source: threadSource, turn_trigger: null, turn_id: turnId,
+      },
+    });
+    const main = seedPurposeRequest(f.store, {
+      convKey: JSON.stringify(['session', 'main-fingerprint']),
+      agent: 'codex', protocol: 'responses',
+      request: {
+        client_metadata: turnMeta('user', 'turn-main-fp'),
+        input: [
+          // Codex 首条 user 消息是 AGENTS + 环境注入，不是用户原话。
+          { role: 'user', content: [{ type: 'input_text', text:
+            '# AGENTS.md instructions for /synthetic\n\n<INSTRUCTIONS>仓库规则</INSTRUCTIONS>\n\n<environment_context><cwd>/synthetic</cwd></environment_context>' }] },
+          { role: 'user', content: [{ type: 'input_text', text:
+            '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>' }] },
+          { role: 'user', content: [{ type: 'input_text', text: '重绘 ATC 矩阵 IP  ' }] },
+          // 真实 Codex 在用户原话之后还会贴 skill 注入；旧实现取“最后一条”
+          // user 消息会拿到它，指纹因此与标题对不上。
+          { role: 'user', content: [{ type: 'input_text', text: '<skill>ip-as-logo</skill>' }] },
+        ],
+      },
+      reply: { id: 'resp_main_fp' },
+    });
+    const title = seedPurposeRequest(f.store, {
+      convKey: JSON.stringify(['session', 'title-fingerprint']),
+      agent: 'codex', protocol: 'responses',
+      request: {
+        client_metadata: turnMeta('thread_title', 'turn-title-fp'),
+        input: [
+          { role: 'user', content: [{ type: 'input_text', text: 'You are a helpful assistant that generates titles.\n\nUser prompt:\n重绘 ATC 矩阵 IP  ' }] },
+          { role: 'user', content: [{ type: 'input_text', text: '<skill>ip-as-logo</skill>' }] },
+        ],
+      },
+      reply: { id: 'resp_title_fp' },
+    });
+
+    drainPurposes(f.store, 10);
+    const rows = f.store.read.query<{
+      req_id: number; user_fingerprint: string | null; turn_ref: string | null;
+    }, []>(`SELECT req_id, user_fingerprint, turn_ref FROM request`).all();
+    const mainRow = rows.find(row => row.req_id === main);
+    const titleRow = rows.find(row => row.req_id === title);
+    expect(mainRow?.user_fingerprint).not.toBeNull();
+    expect(mainRow?.user_fingerprint).toBe(titleRow?.user_fingerprint);
+    expect(mainRow?.turn_ref).toBe('turn-main-fp');
+    expect(titleRow?.turn_ref).toBe('turn-title-fp');
+  } finally { f.close(); }
+});

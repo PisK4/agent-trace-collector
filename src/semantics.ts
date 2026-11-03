@@ -3,7 +3,7 @@
  * 形状解析，以及跨 Harness 复用的来源 kind、标题兼容与正文不可读保留。Harness
  * 专属强指纹及其编排归 [harness/purpose](./harness/purpose.ts)。
  */
-export const PURPOSE_VERSION = 8;
+export const PURPOSE_VERSION = 10;
 
 export type PurposeStatus =
   | 'recognized' | 'unrecognized' | 'missing' | 'retained' | 'unsupported' | 'error';
@@ -35,6 +35,8 @@ export type PurposeView = {
   tailUserBlockHeads: string[];
   /** 前 5 条 user 消息里图片内容块的个数：视觉辅助指纹的请求形状事实，不含图片字节。 */
   userImageBlocks: number;
+  /** 上游 turn 自报的来源、触发方式与 turn 身份；不认识的 Harness 为 null。 */
+  upstreamTurn: { source: string | null; trigger: string | null; turnRef: string | null } | null;
   source: PurposeSource;
   stored: PurposeStored;
 };
