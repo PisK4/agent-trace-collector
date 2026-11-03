@@ -59,6 +59,13 @@
 - 防护：报红文件先跑 `git ls-files <path>`，输出为空说明未跟踪、归并发会话；本批范围单独跑 `node scripts/verify-change-notes.mjs --range origin/master..HEAD`；历史缺口逐批看提交信息里有没有 `Agent-Note: none`。
 - Seen 1× (2026-11-03).
 
+## 依赖与命名
+
+**引入 `t` 前，先查同作用域里叫 `t` 的局部变量。**
+- 证据：2026-11-04 i18n 批次，app.js 三个事件委托的 `const t = e.target`、tileSpec/chip/resourceGroup 的参数 `t` 共六处遮蔽翻译函数；typecheck 只抓到其中两处——`t !== null` 比较与 `t instanceof HTMLDetailsElement` 静默指向错误对象，靠逐行手查才清干净。
+- 防护：web 模块 import t 前 `grep -n "const t = \|(t) =>" web/<file>.js`；对事件委托区额外核对裸 `t`（无点、无括号）引用，typecheck 不兜底这个坑。
+- Seen 1× (2026-11-04).
+
 ## 方案与回填
 
 **预测重派生/判据变更的效果前，先查存量行的 `body_state` 与 `purpose_version` 分布。**
