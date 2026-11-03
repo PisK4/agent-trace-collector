@@ -16,6 +16,14 @@
 
 活跃生命周期目录树就是工作清单：浏览其生命周期/类别文件夹，或搜索仓库即可。请勿添加集中式 `INDEX.md`——路径本身就是索引，中央清单必然失修。未来指导价值较低的已实施记录会移至下文所述、单独冻结的 [`archived/`](archived/AGENTS.md) 目录树。
 
+<a id="lessons"></a>
+
+## Lessons
+
+同目录的 [LESSONS.md](LESSONS.md) 记录 Agent 在本仓库反复踩的工作方式错误：规则、证据与可执行防护。它不是 Agent Note，不参与生命周期、分类、归档与文件格式门禁，路径也不遵循 `{lifecycle}/{class}/yyyy-mm-dd-topic-title.md`。
+
+两类文档的分工：Agent Note 回答为什么这样设计、否决了什么；LESSONS.md 回答这类错误下次怎么避免。教训稳定成测试、脚本或根 [AGENTS.md](../../AGENTS.md) 的常备约定后，从 LESSONS.md 删除并迁入对应家。单次缺陷的完整复盘仍写 [bug-fix 类别的 Agent Note](#classification)。
+
 <a id="classification"></a>
 
 ## 分类
