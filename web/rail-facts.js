@@ -545,17 +545,17 @@ export function contextStatsHtml(r, p, detail = null) {
   ].filter(Boolean).join(' · ');
   return `<div class="ctx-stats">
     <div class="ctx-stat">
-      <div class="ctx-k">已用上下文${est}${full !== '' ? `<span class="u-pill warn">${full}</span>` : ''}</div>
+      <div class="ctx-k">${icon('ctx-gauge', 16)}已用上下文${est}${full !== '' ? `<span class="u-pill warn">${full}</span>` : ''}</div>
       <div class="ctx-big"><b>${used === null ? '<i class="miss">—</i>' : used}</b>${used === null ? '' : '<span>token</span>'}</div>
       <div class="ctx-sub" title="${esc(usedTip)}">${usedSub}</div>
     </div>
     <div class="ctx-stat">
-      <div class="ctx-k">固定开销</div>
+      <div class="ctx-k">${icon('ctx-pin', 16)}固定开销</div>
       <div class="ctx-big"><b>${fixed === null ? '<i class="miss">—</i>' : kk(fixed)}</b>${fixed === null ? '' : '<span>token</span>'}</div>
       <div class="ctx-sub" title="系统提示 + 工具定义 + 技能 + 记忆：每笔请求都要背的部分，与对话无关">${fixedSub}</div>
     </div>
     <div class="ctx-stat">
-      <div class="ctx-k" title="缓存命中＝cache_read ÷（入 + cache_read）；只计两个读数都在的请求">提示词缓存</div>
+      <div class="ctx-k" title="缓存命中＝cache_read ÷（入 + cache_read）；只计两个读数都在的请求">${icon('ctx-cache', 16)}提示词缓存</div>
       <div class="ctx-big"><b>${hitPct === null ? '<i class="miss">—</i>' : hitPct + '%'}</b>${hitPct === null ? '' : '<span>命中</span>'}</div>
       ${hitPct === null ? '<div class="ctx-sub">缓存读数未上报</div>' : ''}
     </div>
