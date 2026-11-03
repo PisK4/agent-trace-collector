@@ -330,6 +330,34 @@ export function interpretUserText(text: string, agent: string | null): UserInput
 }
 
 /**
+ * 标题请求模板里的用户原话，供内容指纹绑定跨组标题。
+ *
+ * 两个已知形状：Codex 的 `User prompt:` 标记之后是原话；Claude 的模板把原话
+ * 包在首个 `<session>` 壳里，壳后跟着写标题的指令。壳内文本按同一套解释清洗，
+ * 与参与链首条用户文本的指纹同一口径（F28：只认 `User prompt:` 时 Claude
+ * 标题请求永远取不到指纹，跨组绑定通道断）。两个形状都不命中时返回 null，
+ * 不猜。
+ */
+export function titlePromptText(text: string): string | null {
+  const marker = text.indexOf('User prompt:');
+  if (marker >= 0) return text.slice(marker + 'User prompt:'.length).replace(/^\s+/, '');
+  const opening = /^\s*<session(?:\s[^>]*)?>/i.exec(text);
+  if (opening === null) return null;
+  let depth = 1;
+  const scanner = /<session(?:\s[^>]*)?>|<\/session>/gi;
+  scanner.lastIndex = opening[0].length;
+  for (;;) {
+    const hit = scanner.exec(text);
+    if (hit === null) return null;
+    depth += hit[0].startsWith('</') ? -1 : 1;
+    if (depth === 0) {
+      const view = interpretUserText(text.slice(opening[0].length, hit.index), null);
+      return view.state === 'text' ? view.text : null;
+    }
+  }
+}
+
+/**
  * 一条用户消息的解释结果；没有文本块时返回 null（例如纯工具结果）。
  *
  * 逐块清洗后再拼接：只剥整段开头会让排在用户正文之后的 system-reminder、

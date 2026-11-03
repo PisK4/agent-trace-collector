@@ -483,3 +483,35 @@ test('Codex 内容指纹：主会话首条有效用户文本与标题模板正�
     expect(titleRow?.turn_ref).toBe('turn-title-fp');
   } finally { f.close(); }
 });
+
+test('Claude 标题指纹：会话壳内文本与主会话首条用户文本一致（F28）', () => {
+  const f = fixture();
+  try {
+    const main = seedPurposeRequest(f.store, {
+      convKey: JSON.stringify(['session', 'main-fingerprint-claude']),
+      agent: 'claude', protocol: 'anthropic',
+      request: { messages: [
+        { role: 'user', content: [{ type: 'text', text: '<session>当前项目显示 title 有问题</session>' }] },
+      ] },
+    });
+    const title = seedPurposeRequest(f.store, {
+      convKey: JSON.stringify(['session', 'title-fingerprint-claude']),
+      agent: 'claude', protocol: 'anthropic',
+      sourceKind: 'title',
+      request: { messages: [
+        // Claude 的标题模板把原话包在 <session> 壳里，壳后是写标题的指令；
+        // 旧实现只认 `User prompt:`，这条通道取不到指纹。
+        { role: 'user', content: [{ type: 'text',
+          text: '<session>当前项目显示 title 有问题</session>\n\nWrite the title in 中文…' }] },
+      ] },
+    });
+    drainPurposes(f.store, 10);
+    const rows = f.store.read.query<{ req_id: number; user_fingerprint: string | null }, []>(
+      'SELECT req_id, user_fingerprint FROM request').all();
+    const mainRow = rows.find(row => row.req_id === main);
+    const titleRow = rows.find(row => row.req_id === title);
+    expect(mainRow?.user_fingerprint).not.toBeNull();
+    expect(titleRow?.user_fingerprint).not.toBeNull();
+    expect(titleRow?.user_fingerprint).toBe(mainRow?.user_fingerprint);
+  } finally { f.close(); }
+});

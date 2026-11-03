@@ -6,7 +6,7 @@ import { markGroupDirtyTx, requestPositionTx } from './derive/state';
 import { classifyPurpose, upstreamTurnFactsOf } from './harness/purpose';
 import { parseProtocol } from './protocols';
 import { readSourceFacts } from './sources/facts';
-import { interpretMessage, messageText } from './input-interpretation';
+import { interpretMessage, messageText, titlePromptText } from './input-interpretation';
 import {
   PURPOSE_VERSION,
   replyTextsOf,
@@ -247,8 +247,9 @@ type UserBlockFacts = { heads: string[]; imageBlocks: number };
  * 历史重发，跨组标题因此只有一个稳定锚点；Codex 的首条 user 消息常是
  * AGENTS/环境注入，解释层会把它判成 injected，继续往后找。
  *
- * 标题请求取标题模板里 `User prompt:` 之后的原文；模板本身与用户原话在
- * 同一条消息里，块后可能还有 skill 注入，所以只认标记之后的正文。
+ * 标题请求取标题模板里的用户原话（`User prompt:` 标记之后，或 `<session>`
+ * 会话壳内，见 `titlePromptText`）；模板本身与用户原话在同一条消息里，
+ * 块后可能还有 skill 注入，所以只认标记或壳内的正文。
  * 正文不可读返回 null，不猜。
  */
 function purposeUserFingerprintTx(
@@ -268,9 +269,8 @@ function purposeUserFingerprintTx(
     if (titleRequest) {
       const text = messageText(message);
       if (text === null) continue;
-      const marker = text.indexOf('User prompt:');
-      if (marker < 0) continue;
-      const prompt = text.slice(marker + 'User prompt:'.length).replace(/^\s+/, '');
+      const prompt = titlePromptText(text);
+      if (prompt === null) continue;
       return createHash('sha256').update(prompt.trimEnd()).digest('hex');
     }
     const view = interpretMessage(message, agent, row.ord);

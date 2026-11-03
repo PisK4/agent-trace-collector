@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   interpretMessage, interpretUserText, isOmpArchiveMessage, ompDroppedCharsOf,
+  titlePromptText,
 } from '../src/input-interpretation';
 
 test('会话外壳与系统提醒被剥掉，用户正文保留', () => {
@@ -358,4 +359,19 @@ test('Codex turn_aborted 固定句式是注入，用户自己的话剥壳保留'
   }, 'codex', 17);
   expect(userText.input?.state).toBe('text');
   expect(userText.input?.text).toBe('用户补充：继续重绘矩阵');
+});
+
+test('titlePromptText：Claude 会话壳内取原话，Codex 标记之后取原话', () => {
+  // Claude 标题模板：原话在 <session> 壳内，壳后是写标题的指令。
+  expect(titlePromptText('<session>重绘 ATC 矩阵 IP</session>\n\nWrite the title in 中文…'))
+    .toBe('重绘 ATC 矩阵 IP');
+  // 壳内的 system-reminder 与参与链同一套清洗，不进指纹。
+  expect(titlePromptText('<session><system-reminder>noise</system-reminder>修复登录</session> 后续指令'))
+    .toBe('修复登录');
+  // Codex 形状保持原语义：标记之后、先导空白剥掉。
+  expect(titlePromptText('You are a helpful assistant.\n\nUser prompt:\n重绘 ATC 矩阵 IP  '))
+    .toBe('重绘 ATC 矩阵 IP  ');
+  // 壳未闭合不猜；两个形状都不命中返回 null。
+  expect(titlePromptText('<session>没有闭合的用户输入')).toBeNull();
+  expect(titlePromptText('普通用户消息，不是标题模板')).toBeNull();
 });
