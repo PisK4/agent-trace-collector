@@ -1,5 +1,6 @@
 // @ts-check
 import { planCommit, tailAppendKeys } from './trace-commit.js';
+import { t } from './i18n.js';
 
 /**
  * 中栏的键控提交：会话头、轮次带与步骤列表各自保留节点，请求组按 req_id、
@@ -343,7 +344,7 @@ export function createMainView(main, options = {}) {
     if (state.stale !== model.stale) {
       state.stale = model.stale;
       if (model.stale === null) state.node.removeAttribute('data-stale');
-      else state.node.setAttribute('data-stale', STALE_LABELS[model.stale]);
+      else state.node.setAttribute('data-stale', t(STALE_LABELS[model.stale]));
     }
     // 准备行只是占位：组内交互（锚点、文本选择）按「还没有真实步骤」处理。
     if (state.placeholder !== model.placeholder) {

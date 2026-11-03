@@ -24,7 +24,8 @@ import { motion, settled } from './motion.js';
 import { partLabel } from './parts.js';
 import { createReaderStore } from './reader-store.js';
 import { createHttpReadTransport } from './read-http.js';
-import { initLayout, openRail } from './layout.js';
+import { initLayout, openRail, applyTheme, syncPanelButtons } from './layout.js';
+import { t, initLocale, htmlLang } from './i18n.js';
 import { fillContextMap, iidOf, itemLabel } from './context-map.js';
 import { createContextMenu, iidParse } from './context-detail.js';
 import {
@@ -476,7 +477,7 @@ if (typeof document !== 'undefined') {
    */
   function preparingStep(r) {
     return {
-      key: `${r.req_id}:preparing`, reqId: r.req_id, kind: 'record', text: '正在读取请求…',
+      key: `${r.req_id}:preparing`, reqId: r.req_id, kind: 'record', text: t('正在读取请求…'),
       messageOrd: null, callOrd: null, source: null, raw: null, unrecognized: false,
       status: r.status !== null && r.status >= 400 ? 'failed'
         : r.body_state !== 'available' && r.body_state !== 'partial' ? 'missing_body' : null,
@@ -547,8 +548,8 @@ if (typeof document !== 'undefined') {
   function renderCrumb() {
     const row = state.session === null ? null : sessionRow(state.session);
     const idx = ordinalOf(state.reqId ?? -1);
-    const here = state.missingReqId !== null ? `Request ${state.missingReqId} 未找到`
-      : state.offPageReqId !== null ? `Request ${state.offPageReqId} 未在当前窗口`
+    const here = state.missingReqId !== null ? t('Request {id} 未找到', { id: state.missingReqId })
+      : state.offPageReqId !== null ? t('Request {id} 未在当前窗口', { id: state.offPageReqId })
         : idx > 0 ? `Request ${String(idx).padStart(2, '0')}` : '';
     // 面包屑先给请求位置，再跟会话标题；长标题只截断自己，不挤掉「我在哪」。
     el('crumb').innerHTML = row === null ? (here === '' ? '' : `<b>${esc(here)}</b>`)
@@ -567,7 +568,7 @@ if (typeof document !== 'undefined') {
       .map(([agent]) => agent)
       .slice(0, 7);
     el('agent-filters').innerHTML = ['all', ...ranked].map(a =>
-      `<button class="chip-btn" data-agent="${esc(a)}" aria-pressed="${state.agent === a}" title="${esc(a)}">${a === 'all' ? '全部 Agent' : esc(agentLabel(a))}</button>`,
+      `<button class="chip-btn" data-agent="${esc(a)}" aria-pressed="${state.agent === a}" title="${esc(a)}">${a === 'all' ? t('全部 Agent') : esc(agentLabel(a))}</button>`,
     ).join('');
   }
 
@@ -629,7 +630,7 @@ if (typeof document !== 'undefined') {
     const list = state.showFolded ? all : all.filter(s => !folded(s) || s.conv_key === state.session);
     const foldable = all.filter(s => folded(s) && s.conv_key !== state.session);
     // 列表被搜索或筛选收窄时才给分母；默认只报已加载数量，不伪造全库总数。
-    el('sess-count').textContent = all.length === items.length ? `已加载 ${items.length}` : `${all.length} / ${items.length}`;
+    el('sess-count').textContent = all.length === items.length ? t('已加载 {n}', { n: items.length }) : `${all.length} / ${items.length}`;
     const now = Date.now();
     const { live, rest, nextCommitAt } = livePartition.partition(list, now);
     const item = (/** @type {SessionRow} */ s) => {
@@ -641,19 +642,19 @@ if (typeof document !== 'undefined') {
       const missing = !failed && s.flags.includes('missing_body');
       const markColor = failed ? 'var(--bad)' : 'var(--muted)';
       const mark = failed || missing
-        ? `<span class="dot flagmark" role="img" aria-label="${failed ? '含失败' : '缺正文'}" title="${failed ? '含失败' : '缺正文'}" style="color:${markColor}">${icon(failed ? 'fail-solid' : 'missing-body', 8)}</span>`
+        ? `<span class="dot flagmark" role="img" aria-label="${failed ? t('含失败') : t('缺正文')}" title="${failed ? t('含失败') : t('缺正文')}" style="color:${markColor}">${icon(failed ? 'fail-solid' : 'missing-body', 8)}</span>`
         : '';
       // 多 Agent 行只画第一个的名字，其余用 +N 明说还剩几个未显示。
       const who = s.agents.length > 0
         ? `${agentLabel(s.agents[0])}${s.agents.length > 1 ? ` +${s.agents.length - 1}` : ''}`
-        : '归属未知';
+        : t('归属未知');
       const time = liveTimeCell(s, clock);
       return `<button class="sess" data-session="${esc(s.conv_key)}" aria-current="${s.conv_key === state.session}">
-        <span class="sess-title">${esc(s.title || '（无标题）')}</span>
+        <span class="sess-title">${esc(s.title || t('（无标题）'))}</span>
         <span class="sess-meta">
           ${agentLogoHtml(firstAgent)}
           <span class="who">${esc(who)}</span>
-          <span class="sess-count">· ${s.request_count} 笔</span>
+          <span class="sess-count">· ${t('{n} 笔', { n: s.request_count })}</span>
           ${mark}
           <span class="sess-time ${time.cls}">${esc(time.text)}</span>
         </span>
@@ -664,18 +665,18 @@ if (typeof document !== 'undefined') {
     // 活跃区在半空时不占位：没有活跃行就退回原来的平铺列表，不常驻空标题。
     const body = list.length
       ? (live.length > 0
-        ? sessionsGroupLabel('活跃', live.length) + rowsHtml(live)
-          + (rest.length > 0 ? sessionsGroupLabel('全部会话', rest.length) + rowsHtml(rest) : '')
+        ? sessionsGroupLabel(t('活跃'), live.length) + rowsHtml(live)
+          + (rest.length > 0 ? sessionsGroupLabel(t('全部会话'), rest.length) + rowsHtml(rest) : '')
         : rowsHtml(rest)) + foldHtml
       : (foldHtml !== ''
         ? foldHtml
-        : `<p class="sess-empty">${icon('empty-tray', 24)}当前已加载的会话里没有符合条件的项。搜索与筛选只覆盖已加载范围。</p>`);
+        : `<p class="sess-empty">${icon('empty-tray', 24)}${t('当前已加载的会话里没有符合条件的项。搜索与筛选只覆盖已加载范围。')}</p>`);
     // 加载更多是列表尾部入口：保留 id 与分页游标条件，错误时可再次点击重试。
     const last = store.getSessions();
     const more = last.cursor === null
-      ? '' : `<div class="sess-more"><button class="chip-btn ghost ico" id="load-more-sessions" aria-label="加载更多会话" title="加载更多会话">${icon('load-more', 20)}</button></div>`;
+      ? '' : `<div class="sess-more"><button class="chip-btn ghost ico" id="load-more-sessions" aria-label="${t('加载更多会话')}" title="${t('加载更多会话')}">${icon('load-more', 20)}</button></div>`;
     const error = last.error === null ? ''
-      : `<p class="sess-empty">${icon('empty-broken', 24)}会话列表读取失败：${esc(last.error)}。可再次点击加载更多重试。</p>`;
+      : `<p class="sess-empty">${icon('empty-broken', 24)}${t('会话列表读取失败：{error}。可再次点击加载更多重试。', { error: esc(last.error) })}</p>`;
     el('sessions-list').innerHTML = body + more + error;
     scheduleLiveSettle(nextCommitAt, now);
   }
@@ -683,7 +684,7 @@ if (typeof document !== 'undefined') {
   /* ---------------- 中栏 ---------------- */
   /** @param {RequestRow} r */
   function statusOf(r) {
-    if (r.status === null) return { cls: 'mute', label: '状态待确认', title: '上游没有报告状态码' };
+    if (r.status === null) return { cls: 'mute', label: t('状态待确认'), title: t('上游没有报告状态码') };
     if (r.status >= 400) return { cls: 'bad', label: `HTTP ${r.status}`, title: `HTTP ${r.status}` };
     return { cls: 'ok', label: '', title: `HTTP ${r.status}` };
   }
@@ -701,10 +702,10 @@ if (typeof document !== 'undefined') {
   }
   /** @param {RequestRow} r */
   function viaText(r) {
-    if (r.via === 'otlp') return 'OTLP 通道';
-    if (!(r.have & HAVE_LEDGER)) return '仅回调，未关联账本';
-    if (!(r.have & HAVE_BODY)) return '仅账本，没有回调';
-    return '账本 + 回调';
+    if (r.via === 'otlp') return t('OTLP 通道');
+    if (!(r.have & HAVE_LEDGER)) return t('仅回调，未关联账本');
+    if (!(r.have & HAVE_BODY)) return t('仅账本，没有回调');
+    return t('账本 + 回调');
   }
   /** @param {number|null} reqId */
   function relationTextOf(reqId) {
@@ -712,16 +713,16 @@ if (typeof document !== 'undefined') {
     if (detail === null) return '';
     const chainState = detail.derivation === undefined ? null : detail.derivation.chain_state;
     if (chainState !== 'current' && chainState !== 'prefix') {
-      return '关系待重建或为旧结果，不标记新增';
+      return t('关系待重建或为旧结果，不标记新增');
     }
-    if (detail.purpose_chain === 'exclude' || detail.chain_role === 'aux') return '辅助请求，不在主链上';
-    if (detail.prev_relation === 'first') return '会话首笔';
-    if (detail.prev_relation === 'confirmed') return '续自上一笔';
+    if (detail.purpose_chain === 'exclude' || detail.chain_role === 'aux') return t('辅助请求，不在主链上');
+    if (detail.prev_relation === 'first') return t('会话首笔');
+    if (detail.prev_relation === 'confirmed') return t('续自上一笔');
     if (detail.prev_relation === 'branch') {
       return detail.context_event === 'omp_compaction'
-        ? '另起一支 · 压缩归档改写了上下文前缀' : '另起一支';
+        ? t('另起一支 · 压缩归档改写了上下文前缀') : t('另起一支');
     }
-    if (detail.prev_relation === 'unknown') return '前驱正文不可读，无法比对';
+    if (detail.prev_relation === 'unknown') return t('前驱正文不可读，无法比对');
     return '';
   }
 
@@ -782,13 +783,13 @@ if (typeof document !== 'undefined') {
     if (route === null) {
       // 路由页签在导航完成处自动读取：这里只剩读取中或上次失败两种状态，
       // 不冒充「无路由」；再次进入页签可重试。
-      return `<p class="note">${esc(viaText(r))}。路由信息尚未读到：正在读取或上次读取失败；再次进入路由页签可重试。</p>`;
+      return `<p class="note">${esc(viaText(r))}${t('。路由信息尚未读到：正在读取或上次读取失败；再次进入路由页签可重试。')}</p>`;
     }
     if (route.state === 'absent') {
-      return '<p class="note">这笔记录没有网关路由：它可能没有经过 magpie 路由器，或尚未与路由文件关联。</p>';
+      return `<p class="note">${t('这笔记录没有网关路由：它可能没有经过 magpie 路由器，或尚未与路由文件关联。')}</p>`;
     }
     if (route.state === 'expired') {
-      return '<p class="note">原始路由已过期，长期摘要也没有留下。这里不返回空对象冒充已取得。</p>';
+      return `<p class="note">${t('原始路由已过期，长期摘要也没有留下。这里不返回空对象冒充已取得。')}</p>`;
     }
     const s = /** @type {Record<string, unknown>} */ (route.summary);
     const order = Array.isArray(s.order) ? s.order : [];
@@ -802,12 +803,12 @@ if (typeof document !== 'undefined') {
       && (attempts.items.length > 1 || attempts.items.some(item =>
         item.fail !== null || item.done === false || (item.status !== null && item.status >= 400)));
     return `<dl class="chain">
-      ${order.length > 1 ? `<div class="chain-row"><dt>候选顺序</dt><dd class="mono" style="font-size:10px">${order.map(o => esc(raw(o))).join(' → ')}</dd></div>` : ''}
-      <div class="chain-row"><dt>去向</dt><dd><code>${esc(s.provider ?? 'unknown')}</code>${servedShown ? ` · <code title="实际服务模型与头部显示的不一致">${esc(served)}</code>` : ''}</dd></div>
-      <div class="chain-row"><dt>状态</dt><dd>HTTP ${esc(s.status ?? '—')} · ${secs(/** @type {number|null} */ (s.ms))}</dd></div>
-      ${attemptsAbnormal ? `<div class="chain-row"><dt>尝试链</dt><dd>${renderAttemptChain(attempts)}</dd></div>` : ''}
+      ${order.length > 1 ? `<div class="chain-row"><dt>${t('候选顺序')}</dt><dd class="mono" style="font-size:10px">${order.map(o => esc(raw(o))).join(' → ')}</dd></div>` : ''}
+      <div class="chain-row"><dt>${t('去向')}</dt><dd><code>${esc(s.provider ?? 'unknown')}</code>${servedShown ? ` · <code title="${t('实际服务模型与头部显示的不一致')}">${esc(served)}</code>` : ''}</dd></div>
+      <div class="chain-row"><dt>${t('状态')}</dt><dd>HTTP ${esc(s.status ?? '—')} · ${secs(/** @type {number|null} */ (s.ms))}</dd></div>
+      ${attemptsAbnormal ? `<div class="chain-row"><dt>${t('尝试链')}</dt><dd>${renderAttemptChain(attempts)}</dd></div>` : ''}
     </dl>
-    <p class="note" style="margin-top:8px">只显示已记录的决策与尝试。窗口过滤不保证完整留痕；用量条目数量也不等于尝试次数。</p>`;
+    <p class="note" style="margin-top:8px">${t('只显示已记录的决策与尝试。窗口过滤不保证完整留痕；用量条目数量也不等于尝试次数。')}</p>`;
   }
 
   /**
@@ -906,9 +907,9 @@ if (typeof document !== 'undefined') {
     const ordDigits = Math.max(1, String(rows.length).length);
     // 后续入口在列表尾部，只在有更晚记录或正在读取时出现；序号口径在数字本身的悬停说明里。
     const loaderHtml = window.loading
-      ? '<div class="history-loader"><span class="history-start pulse">正在读取后续记录…</span></div>'
+      ? `<div class="history-loader"><span class="history-start pulse">${t('正在读取后续记录…')}</span></div>`
       : window.newerCursor !== null
-        ? `<div class="history-loader"><button id="load-later" class="history-button ico" aria-label="加载后续记录" title="加载后续记录">${icon('load-more', 20)}</button></div>`
+        ? `<div class="history-loader"><button id="load-later" class="history-button ico" aria-label="${t('加载后续记录')}" title="${t('加载后续记录')}">${icon('load-more', 20)}</button></div>`
         : '';
     const tails = traceModel.tailEligibleIds();
     // 轮次带点得到被省略的起点时，中栏也要有这一行：选中态之外再放行轮次起点。
@@ -969,14 +970,14 @@ if (typeof document !== 'undefined') {
       loaderHtml,
       emptyHtml: rows.length === 0
         ? (state.pendingSession !== null
-          ? '<p class="sess-empty pulse">正在读取请求…</p>'
-          : `<p class="sess-empty sess-empty-art">${spiderArt(200)}<span>这个会话没有已记录的请求。</span></p>`)
+          ? `<p class="sess-empty pulse">${t('正在读取请求…')}</p>`
+          : `<p class="sess-empty sess-empty-art">${spiderArt(200)}<span>${t('这个会话没有已记录的请求。')}</span></p>`)
         : groups.length === 0
-          ? `<p class="sess-empty">${icon('empty-page', 24)}当前窗口的请求都没有可读正文，不在对话时间线里；请求记录在会话头。</p>`
+          ? `<p class="sess-empty">${icon('empty-page', 24)}${t('当前窗口的请求都没有可读正文，不在对话时间线里；请求记录在会话头。')}</p>`
           : '',
       // 「已是最新记录」只在后续游标耗尽后出现：还有更晚记录时不冒充结尾。
       endHtml: window.loading || window.newerCursor !== null ? ''
-        : '<div class="timeline-end"><span></span> 已是最新记录</div>',
+        : `<div class="timeline-end"><span></span> ${t('已是最新记录')}</div>`,
       groups,
       selectedStep: state.selectedStep,
     };
@@ -1062,7 +1063,7 @@ if (typeof document !== 'undefined') {
     }
     if (state.pendingSession !== null) {
       mainView.reset();
-      main.innerHTML = `<p class="sess-empty pulse" style="padding:24px">正在读取${esc(shortSession(state.pendingSession))}的请求…</p>`;
+      main.innerHTML = `<p class="sess-empty pulse" style="padding:24px">${t('正在读取{session}的请求…', { session: esc(shortSession(state.pendingSession)) })}</p>`;
       armSpider();
       return;
     }
@@ -1093,7 +1094,7 @@ if (typeof document !== 'undefined') {
   /** 标题只渲染内容标题；model_time 兜底标题不再显示（模型与时间已在读数条里）。 @param {RequestRow} r */
   function contentTitle(r) {
     if (r.title_source === 'model_time') return '';
-    return `<div class="rail-title">${esc(r.title || '（无标题）')}</div>`;
+    return `<div class="rail-title">${esc(r.title || t('（无标题）'))}</div>`;
   }
 
   function railHead() {
@@ -1105,21 +1106,21 @@ if (typeof document !== 'undefined') {
     const r = currentRow();
     if (r === null) {
       if (state.offPageReqId !== null) {
-        return `<div class="rail-id"><span>req ${state.offPageReqId} · 未在当前窗口</span></div>`;
+        return `<div class="rail-id"><span>${t('req {id}', { id: state.offPageReqId })} · ${t('未在当前窗口')}</span></div>`;
       }
-      return '<div class="rail-id">未选择请求</div>';
+      return `<div class="rail-id">${t('未选择请求')}</div>`;
     }
     const model = canonicalModel(r);
     return `<div class="rail-id"><span>req ${r.req_id}</span><span class="muted">·</span><span>${esc(dayTime(r.started_ms))}</span>
       ${r.agent === null ? '' : `<span class="muted">·</span><span>${esc(agentLabel(r.agent))}</span>`}
-      ${model !== null ? `<span class="muted">·</span><span class="strip-model" title="实际服务模型（model_served；未关联账本时为请求模型）">${esc(model)}</span>` : ''}
+      ${model !== null ? `<span class="muted">·</span><span class="strip-model" title="${t('实际服务模型（model_served；未关联账本时为请求模型）')}">${esc(model)}</span>` : ''}
       <span class="grow"></span>${statusDot(r)}${statusChip(r)}</div>
       ${contentTitle(r)}
       <div class="rail-tabs" role="tablist">
-        <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">读数</button>
-        <button role="tab" data-rail="body" aria-pressed="${state.railTab === 'body'}">正文</button>
-        <button role="tab" data-rail="tools" aria-pressed="${state.railTab === 'tools'}">工具</button>
-        <button role="tab" data-rail="route" aria-pressed="${state.railTab === 'route'}">路由</button>
+        <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">${t('读数')}</button>
+        <button role="tab" data-rail="body" aria-pressed="${state.railTab === 'body'}">${t('正文')}</button>
+        <button role="tab" data-rail="tools" aria-pressed="${state.railTab === 'tools'}">${t('工具')}</button>
+        <button role="tab" data-rail="route" aria-pressed="${state.railTab === 'route'}">${t('路由')}</button>
       </div>`;
   }
 
@@ -1130,15 +1131,15 @@ if (typeof document !== 'undefined') {
    */
   function completenessSection(r) {
     const rows = [
-      !(r.have & HAVE_BODY) ? ['正文回调', '未收到', 'var(--bad)'] : '',
-      !(r.have & HAVE_LEDGER) ? ['用量账本', '待关联', 'var(--warn)'] : '',
+      !(r.have & HAVE_BODY) ? [t('正文回调'), t('未收到'), 'var(--bad)'] : '',
+      !(r.have & HAVE_LEDGER) ? [t('用量账本'), t('待关联'), 'var(--warn)'] : '',
     ].filter(Boolean);
     if (rows.length === 0) return '';
     return `<section class="rail-section">
-      <h3 title="路由历史未关联是当前来源的常态，不在此提示；需要路由详情看「路由」页签。">身份完整性</h3>
+      <h3 title="${t('路由历史未关联是当前来源的常态，不在此提示；需要路由详情看「路由」页签。')}">${t('身份完整性')}</h3>
       <div class="chain">${rows.map(([k, v, color]) =>
         `<div class="chain-row"><dt>${k}</dt><dd><span style="color:${color}">${v}</span></dd></div>`).join('')}</div>
-      ${r.miss_reason ? `<p class="rail-note">缺失原因：${esc(r.miss_reason)}。</p>` : ''}
+      ${r.miss_reason ? `<p class="rail-note">${t('缺失原因：{reason}。', { reason: esc(r.miss_reason) })}</p>` : ''}
     </section>`;
   }
 
@@ -1158,7 +1159,7 @@ if (typeof document !== 'undefined') {
 
   /** 右栏三处「未选择请求」共用同一段标记：B1 吊丝插画 + 原文案（文案不动）。 */
   function railEmptySelect() {
-    return `<div class="rail-empty rail-empty-art">${spiderArt(160)}<b>未选择请求</b>在中间选择一个 Request。</div>`;
+    return `<div class="rail-empty rail-empty-art">${spiderArt(160)}<b>${t('未选择请求')}</b>${t('在中间选择一个 Request。')}</div>`;
   }
 
   function railFacts() {
@@ -1178,10 +1179,10 @@ if (typeof document !== 'undefined') {
     if (view === null) {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       replyHtml = `<details class="rail-fold" data-fold="reply:${r.req_id}">
-        <summary>本次回复${canLoad ? '' : `<span class="fold-count">${esc(bodyStateText(r))}</span>`}</summary>
+        <summary>${t('本次回复')}${canLoad ? '' : `<span class="fold-count">${esc(bodyStateText(r))}</span>`}</summary>
         <div class="fold-body"><p class="note">${esc(bodyLabelText(r))}</p>
           ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
-          ${canLoad ? `<div class="conv-tools"><button class="chip-btn ico" data-body-load="${r.req_id}" aria-label="读取正文" title="读取正文">${icon('read', 20)}</button></div>` : ''}</div>
+          ${canLoad ? `<div class="conv-tools"><button class="chip-btn ico" data-body-load="${r.req_id}" aria-label="${t('读取正文')}" title="${t('读取正文')}">${icon('read', 20)}</button></div>` : ''}</div>
       </details>`;
     } else {
       const cls = completeness.key === 'absent' ? 'bad' : 'warn';
@@ -1189,10 +1190,10 @@ if (typeof document !== 'undefined') {
         ? `<span class="fold-count ${cls}">${esc(completeness.label)}</span>`
         : view.finish !== null ? `<span class="fold-count">finish: ${esc(view.finish)}</span>` : '';
       const truncNote = completeness.key === 'truncated'
-        ? `<p class="rail-note">回复在长度上限被截断（finish=${esc(view.finish ?? '')}）。这是成功响应内的完整性状态，请求本身仍算成功。</p>`
+        ? `<p class="rail-note">${t('回复在长度上限被截断（finish={finish}）。这是成功响应内的完整性状态，请求本身仍算成功。', { finish: esc(view.finish ?? '') })}</p>`
         : '';
       replyHtml = `<details class="rail-fold" data-fold="reply:${r.req_id}" open>
-        <summary>本次回复${right}</summary>
+        <summary>${t('本次回复')}${right}</summary>
         <div class="fold-body">${renderReply(view, tools, String(r.req_id))}${truncNote}</div>
       </details>`;
     }
@@ -1233,7 +1234,7 @@ if (typeof document !== 'undefined') {
   function windowLabel(id) {
     const rows = currentRows();
     const index = rows.findIndex(row => row.req_id === id);
-    return index >= 0 ? String(index + 1).padStart(2, '0') : `req ${id}（未在窗口）`;
+    return index >= 0 ? String(index + 1).padStart(2, '0') : `${t('req {id}', { id })}${t('（未在窗口）')}`;
   }
 
   /**
@@ -1249,34 +1250,34 @@ if (typeof document !== 'undefined') {
       const canLoad = r.body_state === 'available' || r.body_state === 'partial';
       return `<div class="rail-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(r))}</b>${esc(bodyLabelText(r))}
         ${read !== null && read.status === 'invalidated' ? readingChangedNote(r.req_id) : ''}
-        ${canLoad ? `<div class="conv-tools"><button class="chip-btn ico" data-body-load="${r.req_id}" aria-label="读取正文" title="读取正文">${icon('read', 20)}</button></div>` : ''}</div>`;
+        ${canLoad ? `<div class="conv-tools"><button class="chip-btn ico" data-body-load="${r.req_id}" aria-label="${t('读取正文')}" title="${t('读取正文')}">${icon('read', 20)}</button></div>` : ''}</div>`;
     }
     const detail = read.detail;
     if (state.toolOrd === null) {
       const tools = toolEntries(detail, read.meta);
       if (tools.length === 0) {
-        return `<div class="rail-empty">${icon('empty-tray', 24)}<b>没有工具调用</b>这一笔已读回复里没有工具调用；更早分片读取后可再查。</div>`;
+        return `<div class="rail-empty">${icon('empty-tray', 24)}<b>${t('没有工具调用')}</b>${t('这一笔已读回复里没有工具调用；更早分片读取后可再查。')}</div>`;
       }
       const rows = tools.map(tool => {
         // 正常态（已配对、正文未读已读）不挂 chip；异常（多候选）才提示，详情页给完整状态。
         const warn = tool.state === 'ambiguous'
-          ? '<span class="tool-chip miss"><span>多个候选</span></span>' : '';
+          ? `<span class="tool-chip miss"><span>${t('多个候选')}</span></span>` : '';
         // 执行窗口取调用索引里已有的读数；缺值留空，不拿请求耗时替代。
         const exec = detail?.tool_calls.find(call => call.ord === tool.ord)?.exec_ms ?? null;
         const dur = exec === null ? ''
-          : `<span class="dur" title="${esc(EXEC_MS_HINT)}">${esc(compact(exec))}</span>`;
+          : `<span class="dur" title="${esc(t(EXEC_MS_HINT))}">${esc(compact(exec))}</span>`;
         return `<button class="tool-row tool-link" data-tool-select="${tool.ord}">
           <span class="tool-chip call" title="${esc(tool.name)}"><span class="nm">${esc(tool.name)}(${esc(clipText(tool.inputText, 60))})</span></span>
           ${warn}${dur}
         </button>`;
       });
-      return `<section class="rail-section"><h3>工具调用<span class="grow"></span><span class="hint">${tools.length} 次调用</span></h3>${rows.join('')}</section>`;
+      return `<section class="rail-section"><h3>${t('工具调用')}<span class="grow"></span><span class="hint">${t('{n} 次调用', { n: tools.length })}</span></h3>${rows.join('')}</section>`;
     }
     const owner = state.toolOwner ?? r.req_id;
     const ownerRead = owner === r.req_id ? read : store.peekRequest(owner);
     if (ownerRead === null || ownerRead.meta === null) {
       // 调用方读取未就绪：配对需要它的回复与配对状态；作废时自动重读在途，仍给立即重读入口。
-      return `<div class="rail-empty"><b class="pulse">正在读取调用方请求…</b>配对需要调用方的回复与配对状态，读取完成后自动展示两端。</div>
+      return `<div class="rail-empty"><b class="pulse">${t('正在读取调用方请求…')}</b>${t('配对需要调用方的回复与配对状态，读取完成后自动展示两端。')}</div>
         ${ownerRead !== null && ownerRead.status === 'invalidated' ? readingChangedNote(owner) : ''}`;
     }
     const ownerDetail = ownerRead.detail;
@@ -1289,10 +1290,10 @@ if (typeof document !== 'undefined') {
     }
     const pair = ownerDetail === null ? null : ownerDetail.tool_calls.find(item => item.ord === tool.ord) ?? null;
     const reading = store.peekToolResult(owner, tool.ord);
-    const pages = [['overview', '概览'], ['params', '参数'], ['pair', '配对'], ['schema', 'Schema']];
+    const pages = [['overview', t('概览')], ['params', t('参数')], ['pair', t('配对')], ['schema', 'Schema']];
     const pageBody = state.toolPage === 'params'
       ? `<pre class="raw" tabindex="0">${esc(tool.inputText)}</pre>
-        <div class="conv-tools"><button class="chip-btn ico" data-copy-tool="${tool.ord}" aria-label="复制参数原文" title="复制参数原文">${icon('copy', 16)}</button></div>`
+        <div class="conv-tools"><button class="chip-btn ico" data-copy-tool="${tool.ord}" aria-label="${t('复制参数原文')}" title="${t('复制参数原文')}">${icon('copy', 16)}</button></div>`
       : state.toolPage === 'pair'
         ? renderTracePair({
           owner, ownerLabel: windowLabel(owner), call: tool, pair, reading,
@@ -1305,9 +1306,9 @@ if (typeof document !== 'undefined') {
     const exec = pair === null ? null : pair.exec_ms;
     return `<section class="rail-section">
       <div class="tool-page-head">
-        <button class="chip-btn ghost ico" data-tool-back="1" aria-label="返回请求" title="返回请求">${icon('back', 20)}</button>
-        <span class="mono">${esc(tool.name)} · 调用 #${tool.ord}</span>
-        ${exec === null ? '' : `<span class="cnt mono" title="${esc(EXEC_MS_HINT)}">${esc(compact(exec))}</span>`}
+        <button class="chip-btn ghost ico" data-tool-back="1" aria-label="${t('返回请求')}" title="${t('返回请求')}">${icon('back', 20)}</button>
+        <span class="mono">${esc(tool.name)} · ${t('调用 #{ord}', { ord: tool.ord })}</span>
+        ${exec === null ? '' : `<span class="cnt mono" title="${esc(t(EXEC_MS_HINT))}">${esc(compact(exec))}</span>`}
       </div>
       <div class="tool-page-tabs">${pages.map(([key, label]) => `<button data-tool-page="${key}" aria-pressed="${state.toolPage === key}">${label}</button>`).join('')}</div>
       ${pageBody}
@@ -1363,7 +1364,7 @@ if (typeof document !== 'undefined') {
       const toolEntriesByReq = new Map();
       return railSummaryListView(list, id => {
         const text = requestLabel(id);
-        return { text, dim: text.includes('（未在窗口）') };
+      return { text, dim: text.includes(t('（未在窗口）')) };
       }, meta, item => {
         if (typeof item.summary === 'string' && item.summary !== '') return item.summary;
         if (!toolEntriesByReq.has(item.req_id)) {
@@ -1392,13 +1393,13 @@ if (typeof document !== 'undefined') {
           replyRow: currentRows().find(row => row.req_id === turn.reply_req) ?? null,
         });
       }
-      return '<div class="rail-empty">' + icon('empty-select', 24) + '<b>轮次不可用</b>重新结算后这一轮不在列表里；点击轨迹任意行返回请求态。</div>';
+      return '<div class="rail-empty">' + icon('empty-select', 24) + `<b>${t('轮次不可用')}</b>${t('重新结算后这一轮不在列表里；点击轨迹任意行返回请求态。')}</div>`;
     }
     const r = currentRow();
     if (r === null) {
       if (state.offPageReqId !== null) {
         const read = store.peekRequest(state.offPageReqId);
-        return `<section class="rail-section"><h3>窗口外请求</h3><p class="rail-note">Request ${state.offPageReqId} · ${esc(read?.detail?.title ?? '详情见读取结果')} 不在当前载入窗口。这里只读了它的详情；需要完整轨迹请调整窗口（会话头有切窗按钮），不自动扫描全部历史。</p></section>${read?.detail ? ledgerRowsHtml(read.detail, read.detail) : ''}`;
+        return `<section class="rail-section"><h3>${t('窗口外请求')}</h3><p class="rail-note">${t('Request {id} · {title} 不在当前载入窗口。这里只读了它的详情；需要完整轨迹请调整窗口（会话头有切窗按钮），不自动扫描全部历史。', { id: state.offPageReqId, title: esc(read?.detail?.title ?? t('详情见读取结果')) })}</p></section>${read?.detail ? ledgerRowsHtml(read.detail, read.detail) : ''}`;
       }
       return railEmptySelect();
     }
@@ -1409,15 +1410,15 @@ if (typeof document !== 'undefined') {
     if (state.railTab !== 'route' && (stale !== null || staleOwner !== null)) {
       const failed = stale === 'failed' || staleOwner === 'failed';
       const retryId = stale === 'failed' || staleOwner === null ? r.req_id : ownerRow?.req_id ?? r.req_id;
-      const status = failed ? '当前版本读取失败，可重试。' : '正在准备当前版本，请稍候。';
-      return `<div class="rail-empty">${failed ? icon('empty-broken', 24) : ''}<b>阅读版本已变化</b>${failed ? status : `<span class="pulse">${status}</span>`}
-        <div style="margin-top:10px"><button class="chip-btn ico" data-body-load="${retryId}" aria-label="立即重读" title="立即重读">${icon('read', 20)}</button></div></div>`;
+      const status = failed ? t('当前版本读取失败，可重试。') : t('正在准备当前版本，请稍候。');
+      return `<div class="rail-empty">${failed ? icon('empty-broken', 24) : ''}<b>${t('阅读版本已变化')}</b>${failed ? status : `<span class="pulse">${status}</span>`}
+        <div style="margin-top:10px"><button class="chip-btn ico" data-body-load="${retryId}" aria-label="${t('立即重读')}" title="${t('立即重读')}">${icon('read', 20)}</button></div></div>`;
     }
     if (state.railTab === 'tools') return railTools();
     if (state.railTab === 'facts') return railFacts();
     if (state.railTab === 'route') {
       const route = store.peekRoute(r.req_id);
-      return `<section class="rail-section"><h3>路由与尝试</h3>${routeBlock(r, route)}</section>`;
+      return `<section class="rail-section"><h3>${t('路由与尝试')}</h3>${routeBlock(r, route)}</section>`;
     }
     const read = store.peekRequest(r.req_id);
     if (read === null || read.meta === null) {
@@ -1428,7 +1429,7 @@ if (typeof document !== 'undefined') {
     }
     const page = read.meta;
     if (page.state !== 'available' && page.state !== 'partial') {
-      return `<div class="rail-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(r))}</b>${esc(bodyNotice(page) || '这一笔没有可读的正文。')}</div>`;
+      return `<div class="rail-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(r))}</b>${esc(bodyNotice(page) || t('这一笔没有可读的正文。'))}</div>`;
     }
     const view = replyView(page);
     const detail = read.detail ?? null;
@@ -1438,7 +1439,7 @@ if (typeof document !== 'undefined') {
     }));
     const completeness = replyCompleteness(r, view);
     const truncNote = completeness.key === 'truncated'
-      ? `<p class="rail-note">回复在长度上限被截断（finish=${esc(view.finish ?? '')}）；请求本身仍是成功状态。</p>` : '';
+      ? `<p class="rail-note">${t('回复在长度上限被截断（finish={finish}）；请求本身仍是成功状态。', { finish: esc(view.finish ?? '') })}</p>` : '';
     // 选中来源是右栏的唯一导航依据：System、输入消息、回复块各自定位，不回退整份回复。
     const selected = currentSelectedStep(r);
     const source = resolveSelectedSource(selected, stepsOf(r).stale === null ? state.selectedStep : null, read);
@@ -1450,7 +1451,7 @@ if (typeof document !== 'undefined') {
       const chosen = read.entries.find((/** @type {{ord: number}} */ entry) => entry.ord === source.messageOrd) ?? null;
       const path = messagePathOf(page, source.messageOrd);
       body = chosen !== null ? renderMessageDetail(chosen, path, messagePairIndexOf(detail, prevDetailOf(detail)))
-        : `<div class="rail-empty">${icon('empty-page', 24)}<b>消息未读取</b>${path === '' ? `消息 #${source.messageOrd}` : esc(path.replace(/^request\./, ''))} 不在已加载的分片里；读取完成后回到这一步。</div>`;
+        : `<div class="rail-empty">${icon('empty-page', 24)}<b>${t('消息未读取')}</b>${t('{what} 不在已加载的分片里；读取完成后回到这一步。', { what: path === '' ? t('消息 #{ord}', { ord: source.messageOrd }) : esc(path.replace(/^request\./, '')) })}</div>`;
     } else if (source.side === 'reply' && source.target === 'text') {
       body = `${truncNote}${renderReplyBlockDetail(source.path, source.text)}`;
     } else if (source.side === 'reply' && source.target === 'block') {
@@ -1458,7 +1459,7 @@ if (typeof document !== 'undefined') {
     } else if (view.state === 'ok') {
       body = `${truncNote}${renderReplyDetail(view, tools, String(r.req_id))}`;
     } else {
-      body = `<div class="rail-empty">${icon('empty-tray', 24)}<b>没有可读的回复</b>${esc(bodyNotice(page) || '这一笔只有请求。')}</div>`;
+      body = `<div class="rail-empty">${icon('empty-tray', 24)}<b>${t('没有可读的回复')}</b>${esc(bodyNotice(page) || t('这一笔只有请求。'))}</div>`;
     }
     const structure = read.structure;
     // 结构总数未读时用元信息页的 total 判断；未读口径与读数页折叠共用一份。
@@ -1468,13 +1469,13 @@ if (typeof document !== 'undefined') {
     return `${bodyNotice(page) ? `<p class="rail-note" style="margin-bottom:8px">${esc(bodyNotice(page))}</p>` : ''}
       ${body}
       <div class="conv-tools" style="padding:10px 0 0">
-        <span class="label">请求消息</span>
-        <button class="chip-btn" data-rail-reply="1" aria-pressed="${source.side === 'none'}">本次回复</button>
+        <span class="label">${t('请求消息')}</span>
+        <button class="chip-btn" data-rail-reply="1" aria-pressed="${source.side === 'none'}">${t('本次回复')}</button>
         ${read.entries.length > 0
-        ? `<select class="mini-search" data-rail-msg="${r.req_id}" aria-label="选择消息">
+        ? `<select class="mini-search" data-rail-msg="${r.req_id}" aria-label="${t('选择消息')}">
               ${read.entries.slice(0, 300).map((/** @type {{ord: number, role: 'user'|'assistant'|'system'|'tool'|'unknown', preview: string}} */ entry) => `<option value="${entry.ord}" ${source.side === 'request' && source.target === 'message' && source.messageOrd === entry.ord ? 'selected' : ''}>#${entry.ord} ${roleTag(entry.role)} · ${esc(clipText(entry.preview, 40))}</option>`).join('')}
             </select>`
-        : '<span class="muted" style="font-size:10.5px">这一笔没有消息正文</span>'}
+        : `<span class="muted" style="font-size:10.5px">${t('这一笔没有消息正文')}</span>`}
       </div>
       ${unread ? `<div style="margin-top:8px">${moreButton}</div>${structureError}` : ''}`;
   }
@@ -1652,12 +1653,59 @@ if (typeof document !== 'undefined') {
     slot.innerHTML = backendStateHtml(admission);
   }
 
+  /** @type {import('./backend-state.js').Admission | null} 最近一次统计里的准入状态；语言切换时按它重画降级标签。 */
+  let lastAdmission = null;
+
   /** 启动、显式刷新与点按降级标签时各读一次；不做轮询，读取失败保留上一次显示。 */
   async function refreshBackendState() {
     try {
       const stats = await store.loadStats();
-      applyBackendState(stats.admission ?? null);
+      lastAdmission = stats.admission ?? null;
+      applyBackendState(lastAdmission);
     } catch { /* 状态未知不冒充正常，也不清掉已知降级 */ }
+  }
+
+  /**
+   * 静态 HTML 里的文案按当前语言改写：boot 与每次语言切换各跑一遍。
+   * 只认 index.html 里的固定节点；带 pulse 的占位段在列表/正文渲染后被替换，
+   * 选择器带 .pulse 保证切语言时不会误改渲染出来的同款空态段。
+   */
+  function applyStaticTexts() {
+    /** @param {string} id @param {string} name @param {string} text */
+    const setAttr = (id, name, text) => document.getElementById(id)?.setAttribute(name, text);
+    setAttr('brand-home', 'title', t('回到主页并刷新'));
+    setAttr('sess-search', 'placeholder', t('搜索已加载会话、请求或 ID'));
+    setAttr('sess-search', 'aria-label', t('搜索已加载会话'));
+    setAttr('agent-filters', 'aria-label', t('按 Agent 筛选'));
+    setAttr('rail-resize', 'aria-label', t('调整详情栏宽度'));
+    setAttr('rail-resize', 'title', t('拖动调整宽度；双击恢复默认；方向键微调'));
+    setAttr('rail-col', 'aria-label', t('请求读数与正文'));
+    const title = document.querySelector('.sessions-title h2');
+    if (title) title.textContent = t('会话');
+    const listPulse = document.querySelector('#sessions-list > p.sess-empty.pulse');
+    if (listPulse) listPulse.textContent = t('正在读取本机会话…');
+    const mainPulse = document.querySelector('#main > p.sess-empty.pulse');
+    if (mainPulse) mainPulse.textContent = t('正在读取请求…');
+    const railEmpty = document.querySelector('#rail-body .rail-empty');
+    if (railEmpty) {
+      const head = railEmpty.querySelector('b');
+      if (head) head.textContent = t('等待选择');
+      for (const node of railEmpty.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) node.textContent = t('数据到达后再显示读数。');
+      }
+    }
+  }
+
+  /** 语言切换的界面侧：静态 chrome 换文案，动态区域走既有渲染路径全量重绘。
+   * 投影与准备结论缓存里存着上一语言的步骤短语，切换时一并重置，重绘按当前语言重投影。 */
+  function applyLocaleChrome() {
+    document.documentElement.lang = htmlLang();
+    applyStaticTexts();
+    applyTheme();
+    syncPanelButtons();
+    applyBackendState(lastAdmission);
+    resetReading();
+    renderAll();
   }
 
   /* ---------------- 窗口导航 ---------------- */
@@ -1871,18 +1919,18 @@ if (typeof document !== 'undefined') {
     const byCount = (/** @type {{count: number}} */ a, /** @type {{count: number}} */ b) => b.count - a.count;
     if (kind === 'tool') {
       const group = [...d.tools].sort(byCount)[0] ?? null;
-      if (group !== null) void openSummaryList({ kind: 'tool', name: group.name }, `${group.name} 的调用`);
+      if (group !== null) void openSummaryList({ kind: 'tool', name: group.name }, t('{name} 的调用', { name: group.name }));
     } else if (kind === 'read') {
       const group = [...d.paths.read].sort(byCount)[0] ?? null;
-      if (group !== null) void openSummaryList({ kind: 'read', path: group.path }, `读取请求 · ${group.path.split('/').pop() ?? group.path}`);
+      if (group !== null) void openSummaryList({ kind: 'read', path: group.path }, `${t('读取请求')} · ${group.path.split('/').pop() ?? group.path}`);
     } else if (kind === 'written') {
       const group = [...d.paths.written].sort(byCount)[0] ?? null;
-      if (group !== null) void openSummaryList({ kind: 'written', path: group.path }, `写入尝试 · ${group.path.split('/').pop() ?? group.path}`);
+      if (group !== null) void openSummaryList({ kind: 'written', path: group.path }, `${t('写入尝试')} · ${group.path.split('/').pop() ?? group.path}`);
     } else if (kind === 'skill') {
       const group = [...d.skills].sort(byCount)[0] ?? null;
       if (group !== null) void openSummaryList({ kind: 'skill', name: group.name }, `Skill ${group.name}`);
     } else {
-      void openSummaryList({ kind: 'interrupts' }, '中断的请求');
+      void openSummaryList({ kind: 'interrupts' }, t('中断的请求'));
     }
   }
 
@@ -2040,12 +2088,12 @@ if (typeof document !== 'undefined') {
   }
 
   document.addEventListener('click', (e) => {
-    const t = /** @type {HTMLElement} */ (e.target);
+    const target = /** @type {HTMLElement} */ (e.target);
     // 降级标签本身是重新读取入口，标签随读取重建，统一走委托。
-    if (t.closest('#backend-state')) { void refreshBackendState(); return; }
+    if (target.closest('#backend-state')) { void refreshBackendState(); return; }
     // 上下文明细：tile、图例与列表行带同一组 data-ctx-*，统一从这里解析范围。
     // 范围以统计为准（kind + item 身份），集合块与整类按类别取目录。
-    const ctxSource = /** @type {HTMLElement | null} */ (t.closest('[data-ctx-kind]'));
+    const ctxSource = /** @type {HTMLElement | null} */ (target.closest('[data-ctx-kind]'));
     if (ctxSource !== null) {
       const detail = currentRead()?.detail ?? null;
       // reading_token 在 ReadingDetail 上；页面侧按未知字段读取，缺 token 不响应。
@@ -2084,34 +2132,34 @@ if (typeof document !== 'undefined') {
       return;
     }
     // 会话 ID 复制钮在会话头 facts 行里，随重绘重建，走委托。
-    if (t.closest('#copy-session')) { void copySessionId(); return; }
-    if (t.closest('summary')) return;
-    if (t.closest('#load-later')) { void loadLater(); return; }
-    if (t.closest('#refresh-window')) { void refreshWindow(); return; }
-    if (t.closest('#jump-opposite')) {
-      const button = /** @type {HTMLButtonElement} */ (t.closest('#jump-opposite'));
+    if (target.closest('#copy-session')) { void copySessionId(); return; }
+    if (target.closest('summary')) return;
+    if (target.closest('#load-later')) { void loadLater(); return; }
+    if (target.closest('#refresh-window')) { void refreshWindow(); return; }
+    if (target.closest('#jump-opposite')) {
+      const button = /** @type {HTMLButtonElement} */ (target.closest('#jump-opposite'));
       if (state.windowJumping) return;
       state.windowJumping = true;
       button.disabled = true;
-      button.textContent = '正在重建窗口…';
+      button.textContent = t('正在重建窗口…');
       button.classList.add('pulse');
       void (state.windowAnchor === 'latest' ? jumpStart() : jumpLatest())
         .finally(() => { state.windowJumping = false; button.classList.remove('pulse'); renderAll(); });
       return;
     }
-    if (t.closest('#switch-window')) { void switchWindowFor(state.offPageReqId); return; }
+    if (target.closest('#switch-window')) { void switchWindowFor(state.offPageReqId); return; }
     // 轮次带点选：轮次行随意图带入，转换层不做查找。
-    const turnChip = /** @type {HTMLElement | null} */ (t.closest('[data-turn]'));
+    const turnChip = /** @type {HTMLElement | null} */ (target.closest('[data-turn]'));
     if (turnChip !== null) {
       const turn = turnOf(Number(turnChip.dataset.turn));
       if (turn !== null) dispatch({ kind: 'select-turn', row: turn });
       return;
     }
-    const structureMore = /** @type {HTMLElement | null} */ (t.closest('[data-structure-more]'));
+    const structureMore = /** @type {HTMLElement | null} */ (target.closest('[data-structure-more]'));
     if (structureMore !== null) { void loadStructure(Number(structureMore.dataset.structureMore)); return; }
-    const deltaMore = /** @type {HTMLElement | null} */ (t.closest('[data-delta-more]'));
+    const deltaMore = /** @type {HTMLElement | null} */ (target.closest('[data-delta-more]'));
     if (deltaMore !== null) { void resumeDelta(Number(deltaMore.dataset.deltaMore)); return; }
-    const structureBack = /** @type {HTMLElement | null} */ (t.closest('[data-structure-back]'));
+    const structureBack = /** @type {HTMLElement | null} */ (target.closest('[data-structure-back]'));
     if (structureBack !== null) {
       // 返回列表只清结构自己的选择。步骤选择不再把折叠钉在详情上（它只给列表
       // 里的这一行高亮），所以不必连带清掉中栏选择。
@@ -2120,27 +2168,27 @@ if (typeof document !== 'undefined') {
       return;
     }
     // 会话汇总折叠区的条目点击：先开右栏条目列表，逐项跳配对页或定位请求。
-    const summaryTool = /** @type {HTMLElement | null} */ (t.closest('[data-summary-tool]'));
+    const summaryTool = /** @type {HTMLElement | null} */ (target.closest('[data-summary-tool]'));
     if (summaryTool !== null) {
       const name = summaryTool.dataset.summaryTool ?? '';
-      void openSummaryList({ kind: 'tool', name }, `${name} 的调用`);
+      void openSummaryList({ kind: 'tool', name }, t('{name} 的调用', { name }));
       return;
     }
-    const summaryPath = /** @type {HTMLElement | null} */ (t.closest('[data-summary-path]'));
+    const summaryPath = /** @type {HTMLElement | null} */ (target.closest('[data-summary-path]'));
     if (summaryPath !== null) {
       const path = summaryPath.dataset.summaryPath ?? '';
       const side = summaryPath.dataset.summarySide === 'r' ? 'read' : 'written';
-      void openSummaryList({ kind: side, path }, `${side === 'read' ? '读取请求' : '写入尝试'} · ${path.split('/').pop() ?? path}`);
+      void openSummaryList({ kind: side, path }, `${side === 'read' ? t('读取请求') : t('写入尝试')} · ${path.split('/').pop() ?? path}`);
       return;
     }
-    const summarySkill = /** @type {HTMLElement | null} */ (t.closest('[data-summary-skill]'));
+    const summarySkill = /** @type {HTMLElement | null} */ (target.closest('[data-summary-skill]'));
     if (summarySkill !== null) {
       const name = summarySkill.dataset.summarySkill ?? '';
       void openSummaryList({ kind: 'skill', name }, `Skill ${name}`);
       return;
     }
-    if (t.closest('[data-summary-back]') !== null) { summaryList = null; renderRail(); return; }
-    const summaryPair = /** @type {HTMLElement | null} */ (t.closest('[data-summary-pair]'));
+    if (target.closest('[data-summary-back]') !== null) { summaryList = null; renderRail(); return; }
+    const summaryPair = /** @type {HTMLElement | null} */ (target.closest('[data-summary-pair]'));
     if (summaryPair !== null) {
       summaryList = null;
       dispatch({
@@ -2150,7 +2198,7 @@ if (typeof document !== 'undefined') {
       });
       return;
     }
-    const summaryReq = /** @type {HTMLElement | null} */ (t.closest('[data-summary-req]'));
+    const summaryReq = /** @type {HTMLElement | null} */ (target.closest('[data-summary-req]'));
     if (summaryReq !== null) {
       summaryList = null;
       const id = Number(summaryReq.dataset.summaryReq);
@@ -2158,21 +2206,21 @@ if (typeof document !== 'undefined') {
       dispatch(inWindow ? { kind: 'locate', reqId: id } : { kind: 'open-offpage', reqId: id });
       return;
     }
-    const bodyLoad = /** @type {HTMLElement | null} */ (t.closest('[data-body-load]'));
+    const bodyLoad = /** @type {HTMLElement | null} */ (target.closest('[data-body-load]'));
     if (bodyLoad !== null) { void ensureRead(Number(bodyLoad.dataset.bodyLoad)); return; }
     // 工具四页导航：所有身份都只用 owner/callOrd；选中同步到调用步骤，中栏高亮一致。
-    const toolSelect = /** @type {HTMLElement | null} */ (t.closest('[data-tool-select]'));
+    const toolSelect = /** @type {HTMLElement | null} */ (target.closest('[data-tool-select]'));
     if (toolSelect !== null) {
       if (state.reqId !== null) {
         dispatch({ kind: 'open-tool', reqId: state.reqId, callOrd: Number(toolSelect.dataset.toolSelect) });
       }
       return;
     }
-    if (t.closest('[data-tool-back]') !== null) {
+    if (target.closest('[data-tool-back]') !== null) {
       dispatch({ kind: 'close-tool', andTab: false });
       return;
     }
-    const toolPageBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-page]'));
+    const toolPageBtn = /** @type {HTMLElement | null} */ (target.closest('[data-tool-page]'));
     if (toolPageBtn !== null) {
       dispatch({ kind: 'select-tool-page', page: toolPageBtn.dataset.toolPage ?? 'pair' });
       // 选中段弹起：只挂用户点击，store 重绘重建的按钮不带瞬态类。
@@ -2181,19 +2229,19 @@ if (typeof document !== 'undefined') {
       return;
     }
     // 工具往返行的配对入口：在右栏打开配对页就地阅读，不跳转中栏选择。
-    const toolOwnerBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-owner]'));
+    const toolOwnerBtn = /** @type {HTMLElement | null} */ (target.closest('[data-tool-owner]'));
     if (toolOwnerBtn !== null) {
       dispatch({ kind: 'open-pair', owner: Number(toolOwnerBtn.dataset.toolOwner), callOrd: Number(toolOwnerBtn.dataset.callOrd) });
       return;
     }
-    const toolRead = /** @type {HTMLElement | null} */ (t.closest('[data-tool-read]'));
+    const toolRead = /** @type {HTMLElement | null} */ (target.closest('[data-tool-read]'));
     if (toolRead !== null) { void readToolResult(Number(toolRead.dataset.toolRead), Number(toolRead.dataset.callOrd)); return; }
-    const toolRetry = /** @type {HTMLElement | null} */ (t.closest('[data-tool-retry]'));
+    const toolRetry = /** @type {HTMLElement | null} */ (target.closest('[data-tool-retry]'));
     if (toolRetry !== null) {
       void readToolResult(Number(toolRetry.dataset.toolRetry), Number(toolRetry.dataset.callOrd), true);
       return;
     }
-    const copyTool = /** @type {HTMLElement | null} */ (t.closest('[data-copy-tool]'));
+    const copyTool = /** @type {HTMLElement | null} */ (target.closest('[data-copy-tool]'));
     if (copyTool !== null) {
       // 参数页可能与配对页一样描述窗口外 owner 的调用：复制走 owner 的读取。
       const ownerOfTool = state.toolOwner ?? state.reqId;
@@ -2211,9 +2259,9 @@ if (typeof document !== 'undefined') {
       }
       return;
     }
-    const railReply = t.closest('[data-rail-reply]');
+    const railReply = target.closest('[data-rail-reply]');
     if (railReply !== null) { dispatch({ kind: 'clear-step' }); return; }
-    const copyMsg = /** @type {HTMLElement | null} */ (t.closest('[data-copy-msg]'));
+    const copyMsg = /** @type {HTMLElement | null} */ (target.closest('[data-copy-msg]'));
     if (copyMsg !== null) {
       const ord = Number(copyMsg.dataset.copyMsg);
       // 轮次态的命令面板带 owner：复制走起点请求的读取，不用当前选中请求。
@@ -2231,7 +2279,7 @@ if (typeof document !== 'undefined') {
     }
     // 消息行有两个语境：右栏结构折叠里只改该请求的选中消息（structureSelected）；
     // 主栏内联清单里选中消息并在右栏正文页打开。
-    const msg = /** @type {HTMLElement | null} */ (t.closest('[data-msg]'));
+    const msg = /** @type {HTMLElement | null} */ (target.closest('[data-msg]'));
     if (msg !== null) {
       const fold = msg.closest('[data-structure-fold]');
       if (fold !== null) {
@@ -2250,14 +2298,14 @@ if (typeof document !== 'undefined') {
       }
       return;
     }
-    const sess = /** @type {HTMLElement | null} */ (t.closest('[data-session]'));
+    const sess = /** @type {HTMLElement | null} */ (target.closest('[data-session]'));
     if (sess) { void selectSession(sess.dataset.session ?? ''); return; }
-    if (t.closest('[data-fold-toggle]')) {
+    if (target.closest('[data-fold-toggle]')) {
       state.showFolded = !state.showFolded;
       renderSessions();
       return;
     }
-    const agent = /** @type {HTMLElement | null} */ (t.closest('[data-agent]'));
+    const agent = /** @type {HTMLElement | null} */ (target.closest('[data-agent]'));
     if (agent) {
       state.agent = agent.dataset.agent ?? 'all';
       renderFilters(); renderSessions();
@@ -2267,7 +2315,7 @@ if (typeof document !== 'undefined') {
       motion(el('sessions-list'), { opacity: [0.35, 1] }, 0.14);
       return;
     }
-    const select = /** @type {HTMLElement | null} */ (t.closest('[data-step-key]'));
+    const select = /** @type {HTMLElement | null} */ (target.closest('[data-step-key]'));
     if (select !== null) {
       const group = /** @type {HTMLElement | null} */ (select.closest('.trace-group'));
       const id = group !== null ? Number(group.dataset.req) : state.reqId;
@@ -2276,7 +2324,7 @@ if (typeof document !== 'undefined') {
       }
       return;
     }
-    const rail = /** @type {HTMLElement | null} */ (t.closest('[data-rail]'));
+    const rail = /** @type {HTMLElement | null} */ (target.closest('[data-rail]'));
     if (rail) {
       // 页签点击是明确的阅读动作：路由读取经转换统一发出，失败保留未读可重试。
       dispatch({ kind: 'select-tab', tab: String(rail.dataset.rail ?? '') });
@@ -2285,7 +2333,7 @@ if (typeof document !== 'undefined') {
       if (active !== null) active.classList.add('tab-fresh');
       return;
     }
-    if (t.closest('#load-more-sessions')) {
+    if (target.closest('#load-more-sessions')) {
       void store.loadSessions(store.getSessions().cursor ?? undefined).then(() => { renderSessions(); renderFilters(); });
     }
   });
@@ -2307,18 +2355,18 @@ if (typeof document !== 'undefined') {
 
   // toggle 不冒泡，用捕获阶段收；开合按稳定键保存，重绘后由 open 属性恢复。
   document.addEventListener('toggle', (e) => {
-    const t = /** @type {HTMLDetailsElement} */ (e.target);
-    if (!(t instanceof HTMLDetailsElement)) return;
-    const key = t.dataset.fold;
-    if (key !== undefined) folds.set(key, t.open);
+    const target = /** @type {HTMLDetailsElement} */ (e.target);
+    if (!(target instanceof HTMLDetailsElement)) return;
+    const key = target.dataset.fold;
+    if (key !== undefined) folds.set(key, target.open);
     // 单行分组板：清单开合时该行临时恢复换行，收起即回单行。
-    const cueData = t.closest('.cue-data');
-    if (cueData !== null) cueData.classList.toggle('open-wrap', t.open);
+    const cueData = target.closest('.cue-data');
+    if (cueData !== null) cueData.classList.toggle('open-wrap', target.open);
     // 会话头里的清单开合改变头部高度：轮次带吸顶位置与滚动让位随后同步。
-    if (t.closest('.session-head') !== null) syncBandTop();
-    if (!t.open) return;
-    if (t.dataset.structureFold !== undefined) {
-      const id = Number(t.dataset.structureFold);
+    if (target.closest('.session-head') !== null) syncBandTop();
+    if (!target.open) return;
+    if (target.dataset.structureFold !== undefined) {
+      const id = Number(target.dataset.structureFold);
       const read = store.peekRequest(id);
       // 首次展开才读取结构；已读或不完整读取中不重复发起。
       if (read !== null && read.structure.total === null && !read.structure.loading) void loadStructure(id);
@@ -2336,16 +2384,16 @@ if (typeof document !== 'undefined') {
   };
   document.addEventListener('pointerover', (e) => {
     if (!(e.target instanceof Element)) return;
-    const t = /** @type {HTMLElement | null} */ (e.target.closest('[data-ctx-key]'));
-    if (t === ctxLit) return;
+    const target = /** @type {HTMLElement | null} */ (e.target.closest('[data-ctx-key]'));
+    if (target === ctxLit) return;
     unlitCtx();
-    if (t === null) return;
-    ctxLit = t;
-    const key = t.getAttribute('data-ctx-key') ?? '';
-    const its = (t.getAttribute('data-ctx-its') ?? '').split('\u0002').filter(s => s !== '');
-    t.classList.add('ctx-hl');
+    if (target === null) return;
+    ctxLit = target;
+    const key = target.getAttribute('data-ctx-key') ?? '';
+    const its = (target.getAttribute('data-ctx-its') ?? '').split('\u0002').filter(s => s !== '');
+    target.classList.add('ctx-hl');
     for (const el of document.querySelectorAll('[data-ctx-key]')) {
-      if (el === t) continue;
+      if (el === target) continue;
       if (el.classList.contains('ctx-row')) {
         // 行被点亮：悬停的是 tile，且 tile 的成员身份里有这一行。
         if (its.includes(el.getAttribute('data-ctx-key') ?? '')) el.classList.add('ctx-hl');
@@ -2406,9 +2454,9 @@ if (typeof document !== 'undefined') {
    */
   async function copySessionId() {
     const key = state.session;
-    if (key === null) { toast('当前没有选中的会话'); return; }
+    if (key === null) { toast(t('当前没有选中的会话')); return; }
     let text = key;
-    let label = '会话键';
+    let label = t('会话键');
     try {
       const parsed = JSON.parse(key);
       if (Array.isArray(parsed) && parsed.length >= 2 && parsed[0] === 'session') {
@@ -2418,7 +2466,7 @@ if (typeof document !== 'undefined') {
     } catch { /* conv 身份：复制完整 conv_key */ }
     try {
       await navigator.clipboard.writeText(text);
-      toast(`已复制${label}`);
+      toast(t('已复制{label}', { label }));
     } catch {
       const field = document.createElement('textarea');
       field.value = text;
@@ -2428,7 +2476,7 @@ if (typeof document !== 'undefined') {
       document.body.append(field);
       field.focus();
       field.select();
-      toast(`复制受限：已选中${label}，按 ⌘C / Ctrl+C 复制`);
+      toast(t('复制受限：已选中{label}，按 ⌘C / Ctrl+C 复制', { label }));
       field.addEventListener('blur', () => field.remove(), { once: true });
     }
   }
@@ -2459,7 +2507,10 @@ if (typeof document !== 'undefined') {
     if (e.persisted) location.reload();
   });
 
-  initLayout();
+  initLocale();
+  document.documentElement.lang = htmlLang();
+  applyStaticTexts();
+  initLayout(applyLocaleChrome);
   void (async () => {
     let listError = null;
     try {
@@ -2470,7 +2521,7 @@ if (typeof document !== 'undefined') {
     // 统计读取排在列表之后：不再与 /api/sessions 竞争首屏的服务端时间窗。
     void refreshBackendState();
     if (listError !== null) {
-      el('sessions-list').innerHTML = `<p class="sess-empty">会话列表加载失败:${esc(listError instanceof Error ? listError.message : 'unknown')}</p>`;
+      el('sessions-list').innerHTML = `<p class="sess-empty">${t('会话列表加载失败:{error}', { error: esc(listError instanceof Error ? listError.message : 'unknown') })}</p>`;
       return;
     }
     if (state.session === null) {

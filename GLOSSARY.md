@@ -4,7 +4,7 @@
 
 ## 基础名词
 
-**请求**：
+**请求（request）**：
 本项目的主记录单位，表示来源报告的一笔调用；网关请求可包含多次上游尝试。magpie 与 harness OTLP 都可提供请求记录，同一调用经两条通道分别记录时，请求行数不等于去重后的调用数。
 
 **session**：
@@ -33,7 +33,7 @@ _Avoid_: via
 创建本地请求记录的通路，对应 request.via；后续证据汇入不使它变成证据来源的完整集合。hook 暂存请求可被折叠进账本请求，OTLP 请求独立保留，具体规则见[合并规则](docs/architecture-design.md#合并规则)。
 _Avoid_: 当作流量种类或全部证据通道读
 
-**关联**：
+**关联（association）**：
 证据记录与请求记录的挂接关系；关联状态与多候选歧义分别记录，字段约定见[请求与证据的关联](docs/architecture-design.md#请求与证据的关联)。
 _Avoid_: 请求折叠
 
@@ -105,20 +105,57 @@ _Avoid_: 与工具自身运行时间混用
 
 ## 上下文读数
 
-**已用上下文**：本笔请求的 `prompt_tokens`，与上下文矩阵面积同源；不是厂商计费输入（`in_tok + cache_read + cache_write`），两者多数相等但不是同一事实。
+**已用上下文（used context）**：本笔请求的 `prompt_tokens`，与上下文矩阵面积同源；不是厂商计费输入（`in_tok + cache_read + cache_write`），两者多数相等但不是同一事实。
 _Avoid_: 当作会话累计或计费用量
 
-**总上下文**：本笔回答模型的上下文窗口 `prompt_window`，由路由记录报告；窗口未知时只写未知，不给分母。
+**总上下文（context window）**：本笔回答模型的上下文窗口 `prompt_window`，由路由记录报告；窗口未知时只写未知，不给分母。
 _Avoid_: 与本仓的读取窗口（列表分页）、执行窗口混用
 
 **窗口进度**：`prompt_tokens ÷ prompt_window` 的整百分点，写在「已用上下文」副行（如 `总 1.0M · 已用 5%`），不再单独成格；只在结果重算且窗口为正时给出，旧结果与缺分母不补数。
 _Avoid_: 与会话头的上下文峰值混用（后者是全会话 max）
 
-**固定开销**：系统提示、工具定义、技能与记忆四类的 token 和，与对话无关、每笔请求都要背的部分；右栏以占已用上下文的整百分点呈现，没有构成分类时不给数。
+**固定开销（fixed overhead）**：系统提示、工具定义、技能与记忆四类的 token 和，与对话无关、每笔请求都要背的部分；右栏以占已用上下文的整百分点呈现，没有构成分类时不给数。
 _Avoid_: 与缓存写入、工具结果混用；把所有非对话类别都算进来
 
-**提示词缓存命中**：请求级 `cache_read ÷ (in_tok + cache_read)`，与会话头合计行同口径；缺读数不给数，合法 0 照常显示。
+**提示词缓存命中（cache hit）**：请求级 `cache_read ÷ (in_tok + cache_read)`，与会话头合计行同口径；缺读数不给数，合法 0 照常显示。
 _Avoid_: 与缓存写入混用；把 0 当缺失
 
-**耗时（请求耗时）**：本笔请求从发出到回复结束的时长，右栏合成一个读数；副行依次是首 token、首个文本与速度，缺项不写。
+**耗时（请求耗时；duration）**：本笔请求从发出到回复结束的时长，右栏合成一个读数；副行依次是首 token、首个文本与速度，缺项不写。
 _Avoid_: 与推理段、执行段混用；把速度分母当成整笔时长
+
+## 界面英文定名
+
+界面 i18n（中英双语）按本表定名，与代码内部命名保持一致；新增界面文案不得另起译名。纯 UI 惯用语（collapse、load more、retry 等）不在此列，进 i18n 字典文件。英文文案遵守与中文相同的落笔风格。
+
+| 中文 | 英文 | 边界 |
+|---|---|---|
+| 正文 | body | 四态：readable（可读）、not yet arrived（未到）、incomplete（不完整）、evicted（已回收） |
+| 回复 | reply | _Avoid_: response（指 HTTP 或上游响应）；工具侧的另一端叫 result |
+| 调用 / 结果 | call / result | 工具配对的两端，`calls_paired`、`result_req` 同名 |
+| 配对 | pairing | 调用与结果的挂接判定 |
+| 轮次 | turn | 时间线标签「轮 N」作 turn N，`turn_ref` 同名 |
+| 主链 | main chain | `chain_role` 同名 |
+| 旁路 | bypass | `sessions.ts` 的 bypass 标志同名 |
+| 辅助请求 | auxiliary request | 「辅助请求，不在主链上」的行级称呼；汇总字段 `aux` |
+| 探针 | probe | `probe_kind` 同名 |
+| 子代理 | subagent | `subagent_actors` 同名 |
+| 采集 | ingest | `/hook/ingest` 同名；「采集暂停」作 ingestion paused |
+| 尝试 / 尝试链 | attempt / attempt chain | `attempts` 同名 |
+| 账本 / 路由 | ledger / routing | `raw_ledger` 与路由记录同名 |
+| 回调 | callback | 全表唯一没有代码锚点的定名；指正文与账本证据的回调到达 |
+| 汇总 | totals | 会话头合计口径；_Avoid_: 与摘要（summary）混用 |
+| 摘要 | summary | OTLP 摘要保持上游叫法 OTLP summary |
+| 首 token / 首个文本 / 首个推理 | first token / first text / first reasoning | 耗时副行的三个里程碑，`ttft_ms` 等字段同名 |
+| 思考 / 执行 | reasoning / execution | 时间线两段，与推理段、执行段同源；_Avoid_: thinking（见推理段的口径） |
+| 归属 | attribution | 「归属未知」作 attribution unknown；_Avoid_: ownership |
+| 目录 | index | context-detail 的已存正文分段目录；_Avoid_: TOC |
+| 片段 | fragment | 已存正文的一段；_Avoid_: excerpt |
+| 压缩归档 / 归档消息 | compaction archive / archive message | 上游 Claude Code 术语 |
+| 标题生成 | title generation | 旁路请求的一种，生成会话标题 |
+| 服务模型 | served model | `model_served` 同名 |
+| 承载（请求） | carrier | 结果正文所在的那笔请求 |
+| 分片 | slice | `derive-slice` 同名；_Avoid_: chunk、shard |
+| 工具子事件 | tool subevent | 会话行里默认折叠的工具调用组 |
+| 错误标记 | error flag | `is_error` 的界面称呼 |
+| 缺口 | gap | 时间线上证据缺失的空档 |
+| 明细 | details | context-detail 的下钻面板；_Avoid_: inspector |

@@ -7,6 +7,8 @@
  * 视觉口径：类别不再分色（方向 A 第 6 步），构成面积按份额落 --t1..t4 四档单色。
  */
 
+import { t } from './i18n.js';
+
 const PARTS = [
   { kind: 'system', label: '系统提示' },
   { kind: 'tools', label: '工具定义' },
@@ -20,7 +22,8 @@ const PARTS = [
 
 /** 未知 kind 原样显示，不折叠成"其它"。 @param {string} kind */
 export function partLabel(kind) {
-  return PARTS.find(part => part.kind === kind)?.label ?? String(kind);
+  const label = PARTS.find(part => part.kind === kind)?.label;
+  return label === undefined ? String(kind) : t(label);
 }
 
 /**

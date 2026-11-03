@@ -6,6 +6,7 @@
  */
 
 import { icon } from './icons.js';
+import { t, otherLocale, changeLocale } from './i18n.js';
 
 /** @param {string} id */
 function el(id) {
@@ -26,19 +27,23 @@ export function applyTheme() {
   const dark = themePref === 'dark'
     || (themePref === 'system' && window.matchMedia?.('(prefers-color-scheme: dark)').matches === true);
   btn.innerHTML = icon(dark ? 'moon' : 'sun', 20);
-  const label = `主题：${themePref === 'system' ? `跟随系统（${dark ? '深色' : '浅色'}）` : themePref === 'dark' ? '深色' : '浅色'}（点击切换）`;
+  const state = themePref === 'system'
+    ? t('跟随系统（{mode}）', { mode: dark ? t('深色') : t('浅色') })
+    : t(dark ? '深色' : '浅色');
+  const label = t('主题：{state}（点击切换）', { state });
   btn.title = label;
   btn.setAttribute('aria-label', label);
 }
 
 /** 折叠按钮的 aria 状态与 body 类同步。 */
 export function syncPanelButtons() {
-  for (const [id, cls, name] of [['sidebar-toggle', 'sidebar-collapsed', '会话栏'], ['rail-toggle', 'rail-collapsed', '详情栏']]) {
+  for (const [id, cls, name] of [['sidebar-toggle', 'sidebar-collapsed', t('会话栏')], ['rail-toggle', 'rail-collapsed', t('详情栏')]]) {
     const button = el(id);
     const closed = document.body.classList.contains(cls);
     button.setAttribute('aria-expanded', String(!closed));
-    button.setAttribute('aria-label', `${closed ? '展开' : '收起'}${name}`);
-    button.title = button.getAttribute('aria-label') ?? '';
+    const label = t('{action}{name}', { action: closed ? t('展开') : t('收起'), name });
+    button.setAttribute('aria-label', label);
+    button.title = label;
   }
 }
 
@@ -46,6 +51,16 @@ export function syncPanelButtons() {
 export function openRail() {
   document.body.classList.remove('rail-collapsed');
   syncPanelButtons();
+}
+
+/** 语言切换钮：图形用目标语言的称呼，title/aria 走 t；boot 与切换后各刷一次。 */
+export function applyLangButton() {
+  const btn = el('lang-toggle');
+  const next = otherLocale();
+  btn.textContent = next === 'en' ? 'EN' : '中文';
+  const label = t('切换界面语言');
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
 }
 
 const RAIL_MIN = 280, RAIL_MAX = 640, MAIN_MIN = 320;
@@ -78,8 +93,15 @@ function fitRail() {
   if (window.innerWidth > 1000) resizeRail(preferredRailWidth);
 }
 
-/** 装配布局交互：主题按钮、面板折叠、详情栏拖拽与键盘调宽。启动时调用一次。 */
-export function initLayout() {
+/** 装配布局交互：主题按钮、语言按钮、面板折叠、详情栏拖拽与键盘调宽。启动时调用一次。
+ * @param {(() => void) | null} [onLocaleChange] 语言切换后的界面重绘，归控制器。 */
+export function initLayout(onLocaleChange) {
+  el('lang-toggle').addEventListener('click', () => {
+    changeLocale(otherLocale());
+    applyLangButton();
+    onLocaleChange?.();
+  });
+
   el('theme-toggle').addEventListener('click', () => {
     const order = ['system', 'light', 'dark'];
     const next = order[(order.indexOf(themePref) + 1) % order.length] ?? 'system';
@@ -128,4 +150,5 @@ export function initLayout() {
   el('rail-toggle').addEventListener('click', () => { document.body.classList.toggle('rail-collapsed'); syncPanelButtons(); });
 
   applyTheme();
+  applyLangButton();
 }

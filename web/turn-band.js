@@ -2,6 +2,7 @@
 import { bodyNotice, renderReplyDetail } from './body-view.js';
 import { messagePathOf, replyView } from './body-model.js';
 import { esc } from './html.js';
+import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { bodyLabelText, bodyStateText } from './row-summary.js';
 
@@ -44,7 +45,7 @@ export function renderTurnBand(items, selected, rows) {
     chips.push(`<button class="turn-chip" data-turn="${turn.turn}" aria-pressed="${selected === turn.turn}" title="${esc(preview)}"><b>${turn.turn}</b><span>${esc(clip(preview, 32))}</span></button>`);
   }
   if (chips.length === 0) return '';
-  return `<nav class="turn-band" id="turn-band" aria-label="轮次">${chips.join('')}</nav>`;
+  return `<nav class="turn-band" id="turn-band" aria-label="${t('轮次')}">${chips.join('')}</nav>`;
 }
 
 /**
@@ -53,7 +54,7 @@ export function renderTurnBand(items, selected, rows) {
  * @param {TurnPairRow} turn
  */
 export function renderTurnRailHead(turn) {
-  return `<div class="rail-id"><span>轮 ${turn.turn}</span></div>`;
+  return `<div class="rail-id"><span>${t('轮 {n}', { n: turn.turn })}</span></div>`;
 }
 
 /**
@@ -70,13 +71,13 @@ function commandPanel(entry, ord, ownerId, ownerRow, path) {
   const head = `<div class="bp-head">
     <span class="kind user bp-kind">User</span>
     ${path === '' ? '' : `<span class="bp-path">${esc(path)}</span>`}
-    ${entry !== null ? `<button class="chip-btn ico" data-copy-msg="${ord}" data-copy-owner="${ownerId}" aria-label="复制原文" title="复制原文">${icon('copy', 16)}</button>` : ''}
+    ${entry !== null ? `<button class="chip-btn ico" data-copy-msg="${ord}" data-copy-owner="${ownerId}" aria-label="${t('复制原文')}" title="${t('复制原文')}">${icon('copy', 16)}</button>` : ''}
   </div>`;
   if (entry === null) {
     if (ownerRow !== null && ownerRow.body_state !== 'available' && ownerRow.body_state !== 'partial') {
       return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(ownerRow))}</b>${esc(bodyLabelText(ownerRow))}</div></div>`;
     }
-    return `<div class="body-panel">${head}<p class="note">正在读取这条消息…</p></div>`;
+    return `<div class="body-panel">${head}<p class="note">${t('正在读取这条消息…')}</p></div>`;
   }
   const text = entry.input !== null && entry.input.state === 'text' ? entry.input.text
     : entry.blocks.map(block => block.text).filter(part => part.length > 0).join('\n\n');
@@ -91,12 +92,12 @@ function missingCommandPanel(read, row) {
     return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty">${icon('empty-page', 24)}<b>${esc(bodyStateText(row))}</b>${esc(bodyLabelText(row))}</div></div>`;
   }
   if (page === null) {
-    return `<div class="body-panel">${head}<p class="note">正在读取命令正文…</p></div>`;
+    return `<div class="body-panel">${head}<p class="note">${t('正在读取命令正文…')}</p></div>`;
   }
   if (page !== null && page.state !== 'available' && page.state !== 'partial') {
-    return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty">${icon('empty-page', 24)}<b>${esc(bodyNotice(page) || '正文不可读')}</b></div></div>`;
+    return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty">${icon('empty-page', 24)}<b>${esc(bodyNotice(page) || t('正文不可读'))}</b></div></div>`;
   }
-  return `<div class="body-panel">${head}<p class="note">命令位置不可用，无法读取命令正文。</p></div>`;
+  return `<div class="body-panel">${head}<p class="note">${t('命令位置不可用，无法读取命令正文。')}</p></div>`;
 }
 
 /**
@@ -110,16 +111,16 @@ function replyPanel(read, row, foldKey) {
   const head = '<div class="bp-head"><span class="kind REPLY bp-kind">REPLY</span><span class="bp-path">reply</span></div>';
   const page = read?.meta ?? null;
   if (page === null) {
-    return `<div class="body-panel">${head}<p class="note">正在读取回复正文…</p></div>`;
+    return `<div class="body-panel">${head}<p class="note">${t('正在读取回复正文…')}</p></div>`;
   }
   if (page.state !== 'available' && page.state !== 'partial') {
-    const title = bodyNotice(page) || (row !== null ? bodyStateText(row) : '正文不可读');
+    const title = bodyNotice(page) || (row !== null ? bodyStateText(row) : t('正文不可读'));
     const label = row !== null ? bodyLabelText(row) : '';
     return `<div class="body-panel">${head}<div class="rail-empty turn-panel-empty"><b>${esc(title)}</b>${esc(label)}</div></div>`;
   }
   const view = replyView(page);
   if (view.state === 'invalid') {
-    return `<div class="body-panel">${head}<div class="reply-empty"><b>回复对象无法结构化</b><span>原对象仍保存在库里。</span></div></div>`;
+    return `<div class="body-panel">${head}<div class="reply-empty"><b>${t('回复对象无法结构化')}</b><span>${t('原对象仍保存在库里。')}</span></div></div>`;
   }
   return renderReplyDetail(view, [], foldKey);
 }

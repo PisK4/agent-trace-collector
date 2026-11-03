@@ -5,6 +5,7 @@
  */
 import { esc } from './html.js';
 import { icon } from './icons.js';
+import { t } from './i18n.js';
 
 /**
  * @typedef {{mode: string, reason: string | null, at_ms: number | null}} Admission
@@ -14,19 +15,19 @@ import { icon } from './icons.js';
 export function backendStateText(admission) {
   if (admission === null || admission === undefined) return null;
   if (admission.mode === 'metadata_only') {
-    const why = admission.reason === 'body_budget' ? '正文预算已满' : '磁盘预算已满';
+    const why = admission.reason === 'body_budget' ? t('正文预算已满') : t('磁盘预算已满');
     return {
       level: 'warn',
-      label: '存储降级 · 正文暂停',
-      detail: `${why}：只收元数据，新请求的正文不再保存；账本、路由与请求元数据仍在接收。点按重新读取。`,
+      label: t('存储降级 · 正文暂停'),
+      detail: t('{why}：只收元数据，新请求的正文不再保存；账本、路由与请求元数据仍在接收。点按重新读取。', { why }),
     };
   }
   if (admission.mode === 'paused') {
-    const why = admission.reason === 'disk_free' ? '磁盘剩余空间不足' : '磁盘预算已满';
+    const why = admission.reason === 'disk_free' ? t('磁盘剩余空间不足') : t('磁盘预算已满');
     return {
       level: 'bad',
-      label: '存储降级 · 采集暂停',
-      detail: `${why}：写入被拒绝，新的请求证据不会入库。点按重新读取。`,
+      label: t('存储降级 · 采集暂停'),
+      detail: t('{why}：写入被拒绝，新的请求证据不会入库。点按重新读取。', { why }),
     };
   }
   return null;

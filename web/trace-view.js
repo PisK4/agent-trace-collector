@@ -2,9 +2,13 @@
 import { deltaOrdinals, messagePathOf, replyView, systemPathOf, toolCallOfBlock } from './body-model.js';
 import { compact, secs, tierOf, TIER_LIMITS, toolCategory } from './duration.js';
 import { esc } from './html.js';
+import { currentLocale, t } from './i18n.js';
 import { icon, rolePill } from './icons.js';
 import { bodyStateText } from './row-summary.js';
 import { clipChars, summaryParts, toolSummary } from './tool-summary.js';
+
+/** 步骤短语列表的分隔符：中文用全角，英文退回半角。 */
+const listJoin = () => (currentLocale() === 'zh' ? '；' : '; ');
 
 // 摘要分派住在叶子模块（body-view.js 也要用）；这里继续转发，既有消费者不用改。
 export { toolSummary };
@@ -82,9 +86,9 @@ function droppedCharsOf(basis) {
  * @param {import('../src/queries/bg-jobs').BgJobRow} job
  */
 function bgJobNote(job) {
-  if (job.state !== 'resolved' || job.notice_req === null) return `${job.job_id} 等待完成通知`;
-  if (job.spawn_req === job.notice_req) return `${job.job_id} 已配对 · 同一请求内`;
-  return `${job.job_id} 已配对 · ${secs((job.notice_ms ?? 0) - (job.spawn_ms ?? 0))}`;
+  if (job.state !== 'resolved' || job.notice_req === null) return t('{id} 等待完成通知', { id: job.job_id });
+  if (job.spawn_req === job.notice_req) return t('{id} 已配对 · 同一请求内', { id: job.job_id });
+  return t('{id} 已配对 · {v}', { id: job.job_id, v: secs((job.notice_ms ?? 0) - (job.spawn_ms ?? 0)) });
 }
 
 /**
@@ -181,7 +185,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
   // 辅助请求一笔一条辅助记录：分类器输入不画成用户消息。
   if (row.purpose_chain === 'exclude' || row.chain_role === 'aux') {
     steps.push({ key:`${row.req_id}:aux`, reqId: row.req_id, kind: 'aux',
-      text: `辅助请求 · ${row.req_kind === 'title' ? '标题生成' : row.req_kind}`,
+      text: `${t('辅助请求')} · ${row.req_kind === 'title' ? t('标题生成') : row.req_kind}`,
       messageOrd: null, callOrd: null, source: null, raw: null, unrecognized: false,
       status: null, result: null, pairOwner: null });
     return steps;
@@ -191,7 +195,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
     steps.push({
       key: `${row.req_id}:system`, reqId: row.req_id, kind: 'system',
       text: systemContext.changed === true
-        ? `System 与已确认前驱不同 · ${systemContext.text}` : systemContext.text,
+        ? t('System 与已确认前驱不同 · {text}', { text: systemContext.text }) : systemContext.text,
       messageOrd: null, callOrd: null,
       source: { side: 'request', path: systemPathOf(read?.meta ?? null), messageOrd: null, blockIndex: null },
       raw: systemContext.text, unrecognized: false, status: null, result: null, pairOwner: null,
@@ -202,21 +206,21 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
   if (detail !== null && detail.context_event === 'omp_compaction') {
     const dropped = droppedCharsOf(detail.summary_basis);
     record('compaction', null, dropped !== null
-      ? `上下文压缩归档 · 旧史进归档消息，丢弃约 ${dropped.toLocaleString('en-US')} 字符（字符数，非 token）`
-      : '上下文压缩归档 · 归档消息在本笔新增');
+      ? t('上下文压缩归档 · 旧史进归档消息，丢弃约 {n} 字符（字符数，非 token）', { n: dropped.toLocaleString('en-US') })
+      : t('上下文压缩归档 · 归档消息在本笔新增'));
   }
   // 读取未完成时是加载/状态记录，不能把请求级 input_preview 拆成确定用户步骤。
   // 作废与失败不是读取中：缺口原因来自快照 status，文案如实区分；点击行是
   // 自动重读之外的立即重读入口，仍走普通读取。
   if (read === null || detail === null) {
     const gapText = read !== null && read.status === 'invalidated'
-      ? '阅读版本已变化 · 自动重读中，点击立即重读'
+      ? t('阅读版本已变化 · 自动重读中，点击立即重读')
       : read !== null && read.status === 'failed'
-        ? `详情读取失败 · ${read.detailError ?? '读取失败'}`
+        ? `${t('详情读取失败')} · ${read.detailError ?? t('读取失败')}`
         : null;
     record('loading', row.status !== null && row.status >= 400 ? 'failed'
       : row.body_state !== 'available' && row.body_state !== 'partial' ? 'missing_body' : null,
-    gapText ?? '读取中');
+    gapText ?? t('读取中'));
     return steps;
   }
   // 可信新增只认 delta；归属未知时按请求展示原文，不推断会话关系。
@@ -226,7 +230,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
   if (trusted === null) {
     // 归属与新增是同一件事的两面：归属未知时不猜会话关系，只说明按原文展示的范围。
     const chainState = detail.derivation === undefined ? null : detail.derivation.chain_state;
-    gap('attribution', unassigned ? '归属未确认' : '新增未确认',
+    gap('attribution', unassigned ? t('归属未确认') : t('新增未确认'),
       detail.prev_relation === 'unknown' || (chainState !== 'current' && chainState !== 'prefix')
         ? 'unknown' : null);
   }
@@ -257,11 +261,11 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
         steps.push({
           key: `${row.req_id}:message:${entry.ord}:result:${block.index}`, reqId: row.req_id,
           kind: 'tool_result',
-          text: block.text.length > 0 ? block.text : '（空工具结果）',
+          text: block.text.length > 0 ? block.text : t('（空工具结果）'),
           toolName: indexed !== null ? indexed.tool_name : null,
           isError: block.failed === true ? true : block.failed === false ? false : null,
           bgNote: bgSpawn.length > 0
-            ? bgSpawn.map(bgJobNote).join('；') : undefined,
+            ? bgSpawn.map(bgJobNote).join(listJoin()) : undefined,
           messageOrd: entry.ord, callOrd: null,
           source: { side: 'request', path, messageOrd: entry.ord, blockIndex: block.index },
           raw: block.raw, unrecognized: false, status: null, result: null,
@@ -274,8 +278,8 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
       if (bgNotice.length > 0) {
         steps.push({
           key: `${row.req_id}:message:${entry.ord}:bg`, reqId: row.req_id, kind: 'record',
-          text: `后台作业完成 · ${bgNotice.map(job => job.job_id).join('、')}`,
-          bgNote: bgNotice.map(bgJobNote).join('；'),
+          text: t('后台作业完成 · {list}', { list: bgNotice.map(job => job.job_id).join(currentLocale() === 'zh' ? '、' : ', ') }),
+          bgNote: bgNotice.map(bgJobNote).join(listJoin()),
           messageOrd: entry.ord, callOrd: null,
           source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
           raw: entry.blocks.map(block => block.text).join('\n\n'),
@@ -341,7 +345,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
           const role = entry.role === 'assistant' ? 'Assistant' : entry.rawRole ?? 'Unknown';
           steps.push({ key: `${row.req_id}:message:${entry.ord}`, reqId: row.req_id,
             kind: entry.role === 'assistant' ? 'assistant' : 'record',
-            text: `请求中的 ${role} · ${entry.preview}`, messageOrd: entry.ord, callOrd: null,
+            text: t('请求中的 {role} · {preview}', { role, preview: entry.preview }), messageOrd: entry.ord, callOrd: null,
             source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
             raw: entry.blocks.map(block => block.text).join('\n\n'), unrecognized: false,
             status: null, result: null, pairOwner: null });
@@ -357,7 +361,7 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
       } else {
         // 未识别的输入占一行，原文进详情；是否为新增由可信增量决定。
         steps.push({ key:`${row.req_id}:message:${entry.ord}`, reqId: row.req_id, kind: 'user',
-          text: entry.input?.text ?? '未识别的用户输入', messageOrd: entry.ord, callOrd: null,
+          text: entry.input?.text ?? t('未识别的用户输入'), messageOrd: entry.ord, callOrd: null,
           source: { side: 'request', path: msgBase, messageOrd: entry.ord, blockIndex: null },
           raw: entry.input?.original ?? null, unrecognized: true,
           status: null, result: null, pairOwner: null });
@@ -368,9 +372,9 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
     const { back, total, loading, error } = read.structure;
     const count = total ?? read.meta?.total ?? null;
     if (error !== null) {
-      record('unassigned-more', 'unknown', `请求消息读取失败 · ${error} · 点击重试`);
+      record('unassigned-more', 'unknown', t('请求消息读取失败 · {error} · 点击重试', { error }));
     } else if (count !== null && back > 0) {
-      record('unassigned-more', null, loading ? '正在读取请求消息' : `还有 ${back} 条更早的请求消息未读取 · 点击续读`);
+      record('unassigned-more', null, loading ? t('正在读取请求消息') : t('还有 {n} 条更早的请求消息未读取 · 点击续读', { n: back }));
     }
   }
   // 增量读取未完成或失败：一条事件记录显示剩余与失败，点击续读两片；完成时不出现。
@@ -378,8 +382,8 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
   if (deltaState !== null && !deltaState.done && trusted !== null) {
     const total = trusted.size;
     record('delta', deltaState.error !== null ? 'unknown' : null, deltaState.error !== null
-      ? `新增读取失败 · 已消费 ${Math.min(deltaState.next, total)} / ${total} · ${deltaState.error}`
-      : `还有 ${total - deltaState.next} 条新增未读取 · 点击续读`);
+      ? t('新增读取失败 · 已消费 {consumed} / {total} · {error}', { consumed: Math.min(deltaState.next, total), total, error: deltaState.error })
+      : t('还有 {n} 条新增未读取 · 点击续读', { n: total - deltaState.next }));
   }
   // 回复状态只做事实记录：回复的内容块不在承载请求的组里出步骤，它们作为下一笔
   // 承载请求的 assistant 消息出现；没有承载请求的回复由 projectTailReply 单独成组。
@@ -391,19 +395,19 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
   if (!bodyReadable) {
     // 正文缺口由下面的 body 槽位负责，这里不补回复。
   } else if (view === null && unknownBody) {
-    record('body-metadata', 'unknown', '正文信息未读到 · 点击重试');
+    record('body-metadata', 'unknown', t('正文信息未读到 · 点击重试'));
   } else if (unknownBody && (meta === null || (meta.state !== 'available' && meta.state !== 'partial'))
     && detail.reply_state !== 'absent') {
-    gap('reply', '回复未读到', 'unknown');
+    gap('reply', t('回复未读到'), 'unknown');
   } else if (view === null || view.state === 'absent') {
-    gap('reply', '无回复', 'missing_reply');
+    gap('reply', t('无回复'), 'missing_reply');
   } else if (view.choiceCount !== null && view.choiceCount > 1) {
     // 多 choice 是回复对象的形状事实，先于状态分支：结构损坏时仍保留原始对象。
-    record('choices', null, `多 choice 回复（${view.choiceCount} 项）：保留原始对象，不按冲突序号提供工具定位`);
+    record('choices', null, t('多 choice 回复（{n} 项）：保留原始对象，不按冲突序号提供工具定位', { n: view.choiceCount }));
   } else if (view.state === 'partial') {
-    gap('reply', '回复不完整', 'unknown');
+    gap('reply', t('回复不完整'), 'unknown');
   } else if (view.state === 'invalid') {
-    gap('reply', '回复无法解析', 'unknown');
+    gap('reply', t('回复无法解析'), 'unknown');
   } else if (view.state !== 'ok') {
     // pending / evicted / unsupported / summary：正文状态已经说明，回复不单独成短语。
   }
@@ -412,23 +416,23 @@ export function projectSteps(row, read, systemContext = null, bgJobs = [], prevI
   // 正文本身是缺口时更不叠；失败与成功并存是渠道内冲突，保留一条记录行。
   const hookReports = detail.source_facts?.hook?.successes ?? [];
   if (hookReports.includes('failure') && hookReports.includes('success')) {
-    record('hook', 'unknown', '回调的成功与失败报告冲突');
+    record('hook', 'unknown', t('回调的成功与失败报告冲突'));
   }
   const ledgerError = detail.source_facts?.selected?.error;
   // 请求级失败是这一组最强的一档：状态行跟着变红，读者不必逐行比对。
   const requestFailed = Boolean(ledgerError) || (row.status !== null && row.status >= 400);
   if (ledgerError) {
     // 账本错误与 HTTP 失败是同一件事的两路证据，同屏只留一条。
-    record('upstream', 'failed', `上游报错 · ${ledgerError}`);
+    record('upstream', 'failed', t('上游报错 · {error}', { error: ledgerError }));
   } else if (row.status !== null && row.status >= 400) {
-    record('upstream', 'failed', `请求失败 · HTTP ${row.status}`);
+    record('upstream', 'failed', t('请求失败 · HTTP {status}', { status: row.status }));
   }
-  if (row.status === null) gap('ledger', '无账本', 'unknown');
+  if (row.status === null) gap('ledger', t('无账本'), 'unknown');
   if (view !== null && view.state === 'ok') {
     if (LENGTH_FINISH.has(view.finish ?? '')) {
-      record('truncated', 'truncated', `回复因长度上限结束（finish=${view.finish}）；请求仍为 HTTP 成功`);
+      record('truncated', 'truncated', t('回复因长度上限结束（finish={finish}）；请求仍为 HTTP 成功', { finish: view.finish }));
     } else if (view.finish !== null && !NORMAL_FINISH.has(view.finish)) {
-      record('finish', 'unknown', `停止原因未知 · ${view.finish}（按原值显示，不判失败）`);
+      record('finish', 'unknown', t('停止原因未知 · {finish}（按原值显示，不判失败）', { finish: view.finish }));
     }
   }
   if (row.body_state !== 'available' && row.body_state !== 'partial') {
@@ -529,7 +533,7 @@ export function projectTailReply(row, read) {
     } else if (block.kind !== 'thinking') {
       // 未知块给记录入口，不做语义推测；来源仍指向协议位置，右栏可读转义 JSON。
       steps.push({ key: `${row.req_id}:reply:block:${index}`, reqId: row.req_id, kind: 'record',
-        text: `未知回复块 kind=${block.kind}`, messageOrd: null, callOrd: null,
+        text: t('未知回复块 kind={kind}', { kind: block.kind }), messageOrd: null, callOrd: null,
         source: { side: 'reply', path: block.path, messageOrd: null, blockIndex: index },
         raw: block.raw, unrecognized: true, status: null, result: null, pairOwner: null });
     }
@@ -556,7 +560,7 @@ function toolRowParts(step, callOf) {
   const unnamed = (/** @type {string} */ label) => `<span class="row-tint ico" role="img" aria-label="${label}" title="${label}">${icon('role-tool', 16)}</span>`;
   if (step.kind === 'tool') {
     const name = step.toolName ?? '';
-    const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed('未命名工具');
+    const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed(t('未命名工具'));
     return { chip, args: step.toolArgs ?? '', arrow: false };
   }
   if (step.kind === 'tool_result') {
@@ -566,7 +570,7 @@ function toolRowParts(step, callOf) {
       return { chip: unnamed('Tool result'), args: '', arrow: false };
     }
     const name = call !== null ? call.name : /** @type {string} */ (step.toolName);
-    const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed('未命名工具');
+    const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed(t('未命名工具'));
     const args = call !== null ? summaryParts(call.name, call.inputText).args : '';
     return { chip, args, arrow: true };
   }
@@ -590,7 +594,7 @@ function readingChip(reading, step) {
   const limits = reason ? TIER_LIMITS.reason : TIER_LIMITS[toolCategory(step.toolName)];
   const tier = limits === undefined ? '' : ` t-${tierOf(reading.ms, limits)}`;
   return `<span class="row-reading ${reason ? 'reason' : 'exec'}${limits === undefined ? ' wait' : ''}">`
-    + `<span class="k" role="img" aria-label="${reason ? '思考' : '执行'}" title="${reason ? '思考' : '执行'}">${icon(reason ? 'reason' : 'exec', 16)}</span>`
+    + `<span class="k" role="img" aria-label="${reason ? t('思考') : t('执行')}" title="${reason ? t('思考') : t('执行')}">${icon(reason ? 'reason' : 'exec', 16)}</span>`
     + `<b class="v${tier}">${compact(reading.ms)}</b></span>`;
 }
 
@@ -611,7 +615,7 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
   const label = KIND_LABEL[step.kind] ?? 'Event';
   // 组级状态行的标签位只放形状：失败是裸 X、其余缺口是三角；事实句子仍在行内说明。
   const labelHtml = step.kind === 'flag'
-    ? `<span class="row-label flag" role="img" aria-label="${step.status === 'failed' ? '失败' : '缺口'}" title="${step.status === 'failed' ? '失败' : '缺口'}">${icon(step.status === 'failed' ? 'failure' : 'gap')}</span>`
+    ? `<span class="row-label flag" role="img" aria-label="${step.status === 'failed' ? t('失败') : t('缺口')}" title="${step.status === 'failed' ? t('失败') : t('缺口')}">${icon(step.status === 'failed' ? 'failure' : 'gap')}</span>`
     : rolePill(label, KIND_CLASS[step.kind] ?? 'aux');
   const { chip, args, arrow } = toolRowParts(step, callOf);
   const isTool = step.kind === 'tool' || step.kind === 'tool_result';
@@ -639,7 +643,7 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
   return `<div class="compact-step" data-request-ordinal="${ordinal}" data-req-id="${row.req_id}">
 <div class="compact-row${step.isError === true ? ' step-error' : ''}${step.kind === 'flag' ? ' step-flag' : ''}"${statusAttr}>
   <button class="compact-select" data-step-key="${esc(step.key)}" data-kind="${step.kind}"${step.callOrd === null ? '' : ` data-call-ord="${step.callOrd}"`} aria-current="${selected}">
-    <span class="compact-meta" title="序号表示当前窗口内的请求 · 请求 ${ordinal}"><b>${ordinal}</b></span>
+    <span class="compact-meta" title="${t('序号表示当前窗口内的请求 · 请求 {ordinal}', { ordinal })}"><b>${ordinal}</b></span>
     ${labelHtml}
     ${chip}
     <span class="compact-preview"${titleAttr}>${previewHtml}</span>${bgNoteHtml}<span class="compact-reading">${readingHtml}</span>
