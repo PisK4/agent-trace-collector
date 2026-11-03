@@ -645,6 +645,8 @@ pre.raw{
 .ctx-tile.bare{padding:0;border-radius:3px}
 .ctx-tile.bare .ctx-tname,.ctx-tile.bare .ctx-tval{display:none}
 .ctx-rows{display:flex;flex-direction:column;gap:1px;margin:0 0 6px}
+/* 图例与内容列表之间的分隔线；展开区（.ctx-more 内）的 .ctx-rows 不套这条。 */
+.comp-legend + .ctx-rows{border-top:1px solid var(--line);padding-top:6px;margin-top:6px}
 .ctx-row{display:flex;align-items:center;gap:7px;padding:2.5px 6px;border-radius:4px;font-size:11px}
 .ctx-row:hover,.ctx-row.ctx-hl{background:var(--hover)}
 .ctx-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
