@@ -13,17 +13,17 @@ bun install
 bun run start          # 127.0.0.1:8320
 bun test
 bun run typecheck
-bun run verify:notes   # 提交前
+bun run verify:notes   # 合并到 master 前
 ```
 
 - 每个行为变更只跑能对该回归失败的最窄测试，提交前不重复已经通过的检查；全量套件与平台矩阵留给显式动作。
 - `bun run service`、`bun run maintain` 与 `bun run verify-cutover` 必须带子命令，裸调用只打印 usage 并退出 2；命令与恢复步骤见[运维手册](docs/operations.md)。
 - 生产采集器由 launchd（`KeepAlive`）托管：起停走 `bun run service restart|stop|start`，不要 `kill`，也不要再手动起一个。见[起停与状态](docs/operations.md#起停与状态)。
-- `verify:notes` 检查活跃 note 格式、归档封印与本次改动是否带 note。纯机械改动豁免：提交信息写 `Agent-Note: none — <reason>`，暂存阶段用 `ATC_NOTE_EXEMPT=<reason>` 放行。来由见[变更闸门](.agents/notes/implemented/process/2026-10-21-change-note-gate.md)。
+- `verify:notes` 检查活跃 note 格式、归档封印，以及合并到 master 的这批改动是否带 note；range 按合并批次判定，一批至少一篇。纯机械改动豁免：提交信息写 `Agent-Note: none — <reason>`，暂存阶段用 `ATC_NOTE_EXEMPT=<reason>` 放行。来由见[变更闸门](.agents/notes/implemented/process/2026-10-21-change-note-gate.md)。
 
 ## 常备约定
 
-- **非平凡变更必须在同一提交里带至少一篇 Agent Note**，判据见 [Agent Note 规则](.agents/notes/README.md)；纯机械或局部编辑豁免，bug-fix note 可以写短。
+- **非平凡变更必须在合并到 master 之前带至少一篇 Agent Note**，判据见 [Agent Note 规则](.agents/notes/README.md)；纯机械或局部编辑豁免，bug-fix note 可以写短。
 - **落地实现代码先加载 `ponytail` Skill**：写、修、重构代码的任务动笔前先加载，按最小完整改动解决问题；纯文档改动不在此列。
 - **落地方案走 worktree 分支。** 跨文件或需多步验证的实现，在 `../../.codex-worktrees/atc-<topic>` 建 `feat/`|`fix/` 分支，提交只落分支，`master` 只以 `--no-ff` 合并前进，合并后移除 worktree 目录、分支名保留；文档与单文件修正留在主检出。见[实现走 worktree](.agents/notes/implemented/process/2026-10-28-implementation-worktree.md)。
 - **报告忠实**：不把重试、跳过、未执行描述为通过；合成数据验收与真实流量验收分开写。
