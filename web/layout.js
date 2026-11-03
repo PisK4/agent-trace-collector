@@ -85,7 +85,10 @@ export function initLayout() {
     const next = order[(order.indexOf(themePref) + 1) % order.length] ?? 'system';
     try { localStorage.setItem('tc.theme', next); } catch { /* storage may be blocked */ }
     themePref = next;
+    // 两帧内禁用全部过渡：主题当帧完成（既有决策），交互底色过渡在其余时刻照常。
+    document.body.classList.add('theme-switching');
     applyTheme();
+    requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.remove('theme-switching')));
   });
 
   const resizer = el('rail-resize');

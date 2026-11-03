@@ -20,6 +20,7 @@ import { agentLogoHtml, setAgentLogoFetcher } from './agent-logos.js';
 import { backendStateHtml } from './backend-state.js';
 import { esc } from './html.js';
 import { icon } from './icons.js';
+import { motion } from './motion.js';
 import { partLabel } from './parts.js';
 import { createReaderStore } from './reader-store.js';
 import { createHttpReadTransport } from './read-http.js';
@@ -257,7 +258,7 @@ if (typeof document !== 'undefined') {
   /** @type {{kind: string, param: string, label: string, loading: boolean, error: string | null, data: import('../src/queries/session-summary').SummaryEntries | null} | null} 会话汇总条目列表：点开条目后右栏的支撑记录清单。 */
   let summaryList = null;
   /** 中栏键控提交：节点身份、选择高亮与滚动锚点都在视图内维护，装配层只给模型。 */
-  const mainView = createMainView(el('main'));
+  const mainView = createMainView(el('main'), { shouldEnter: () => state.revealed });
 
   const qp = new URLSearchParams(location.search);
   // 拍摄直达参数：demo 静默、cue-board 展开、summary 组清单与轮锚点都只消费一次；
@@ -355,8 +356,10 @@ if (typeof document !== 'undefined') {
           requestAnimationFrame(() => {
             if (nav !== navEpoch || selection !== selectionEpoch || viewport !== scroller() || viewport.scrollTop !== top) return;
             // 同号可能相邻出现末尾回复组，按组键定位承载组。
-            document.querySelector(`.trace-group[data-group-key="req:${CSS.escape(String(fx.reqId))}"]`)
-              ?.scrollIntoView({ block: 'center', behavior: state.revealed && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'instant' });
+            const group = /** @type {HTMLElement | null} */ (document.querySelector(`.trace-group[data-group-key="req:${CSS.escape(String(fx.reqId))}"]`));
+            // 落点确认：目标组呼吸一次淡出，让定位滚动有「到了」的反馈。
+            if (group !== null) { group.classList.remove('landed'); void group.offsetWidth; group.classList.add('landed'); }
+            group?.scrollIntoView({ block: 'center', behavior: state.revealed && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'instant' });
           });
           break;
         }
@@ -903,7 +906,7 @@ if (typeof document !== 'undefined') {
     const ordDigits = Math.max(1, String(rows.length).length);
     // 后续入口在列表尾部，只在有更晚记录或正在读取时出现；序号口径在数字本身的悬停说明里。
     const loaderHtml = window.loading
-      ? '<div class="history-loader"><span class="history-start">正在读取后续记录…</span></div>'
+      ? '<div class="history-loader"><span class="history-start pulse">正在读取后续记录…</span></div>'
       : window.newerCursor !== null
         ? `<div class="history-loader"><button id="load-later" class="history-button ico" aria-label="加载后续记录" title="加载后续记录">${icon('load-more', 20)}</button></div>`
         : '';
@@ -966,7 +969,7 @@ if (typeof document !== 'undefined') {
       loaderHtml,
       emptyHtml: rows.length === 0
         ? (state.pendingSession !== null
-          ? '<p class="sess-empty">正在读取请求…</p>'
+          ? '<p class="sess-empty pulse">正在读取请求…</p>'
           : `<p class="sess-empty sess-empty-art">${spiderArt(200)}<span>这个会话没有已记录的请求。</span></p>`)
         : groups.length === 0
           ? `<p class="sess-empty">${icon('empty-page', 24)}当前窗口的请求都没有可读正文，不在对话时间线里；请求记录在会话头。</p>`
@@ -1049,11 +1052,17 @@ if (typeof document !== 'undefined') {
     }
   }
 
+  /** 换会话的一次性渐显以会话键为闸：同会话内的重绘与流式到位不重播。 */
+  let lastRenderedSession = /** @type {string | null} */ (null);
   function renderMain() {
     const main = el('main');
+    if (state.session !== lastRenderedSession) {
+      lastRenderedSession = state.session;
+      motion(main, { opacity: [0, 1] }, 0.15);
+    }
     if (state.pendingSession !== null) {
       mainView.reset();
-      main.innerHTML = `<p class="sess-empty" style="padding:24px">正在读取${esc(shortSession(state.pendingSession))}的请求…</p>`;
+      main.innerHTML = `<p class="sess-empty pulse" style="padding:24px">正在读取${esc(shortSession(state.pendingSession))}的请求…</p>`;
       armSpider();
       return;
     }
@@ -1267,7 +1276,7 @@ if (typeof document !== 'undefined') {
     const ownerRead = owner === r.req_id ? read : store.peekRequest(owner);
     if (ownerRead === null || ownerRead.meta === null) {
       // 调用方读取未就绪：配对需要它的回复与配对状态；作废时自动重读在途，仍给立即重读入口。
-      return `<div class="rail-empty"><b>正在读取调用方请求…</b>配对需要调用方的回复与配对状态，读取完成后自动展示两端。</div>
+      return `<div class="rail-empty"><b class="pulse">正在读取调用方请求…</b>配对需要调用方的回复与配对状态，读取完成后自动展示两端。</div>
         ${ownerRead !== null && ownerRead.status === 'invalidated' ? readingChangedNote(owner) : ''}`;
     }
     const ownerDetail = ownerRead.detail;
@@ -1401,7 +1410,7 @@ if (typeof document !== 'undefined') {
       const failed = stale === 'failed' || staleOwner === 'failed';
       const retryId = stale === 'failed' || staleOwner === null ? r.req_id : ownerRow?.req_id ?? r.req_id;
       const status = failed ? '当前版本读取失败，可重试。' : '正在准备当前版本，请稍候。';
-      return `<div class="rail-empty">${failed ? icon('empty-broken', 24) : ''}<b>阅读版本已变化</b>${status}
+      return `<div class="rail-empty">${failed ? icon('empty-broken', 24) : ''}<b>阅读版本已变化</b>${failed ? status : `<span class="pulse">${status}</span>`}
         <div style="margin-top:10px"><button class="chip-btn ico" data-body-load="${retryId}" aria-label="立即重读" title="立即重读">${icon('read', 20)}</button></div></div>`;
     }
     if (state.railTab === 'tools') return railTools();
@@ -1472,6 +1481,25 @@ if (typeof document !== 'undefined') {
 
   /** @type {string | null} */
   let lastRailKey = null;
+  /** 进场判定的伴随状态：换请求/换轮淡头部，页签切换按方向滑，正文到达按相位。 */
+  let lastRailReq = /** @type {number | null} */ (null);
+  let lastRailTurn = /** @type {number | null} */ (null);
+  let lastRailTab = 'facts';
+  let lastRailPhase = '';
+  /** 页签序即滑动方向：往右切，新内容从右来。 */
+  const TAB_ORDER = ['facts', 'body', 'tools', 'route'];
+  /** 右栏当前键的内容相位：主读取在手为 ready，否则 loading。 */
+  function railPhase() {
+    if (state.turn !== null) {
+      const turn = turnOf(state.turn);
+      if (turn === null) return 'loading';
+      const start = store.peekRequest(turn.start_req);
+      const reply = store.peekRequest(turn.reply_req);
+      return start !== null && start.detail !== null && reply !== null && reply.detail !== null ? 'ready' : 'loading';
+    }
+    const read = state.reqId === null ? null : store.peekRequest(state.reqId);
+    return read !== null && read.detail !== null ? 'ready' : 'loading';
+  }
   /* 上下文矩阵：读数页渲染外壳，这里测量容器填充 tile，并按尺寸变化重排。
      通知经 rAF 合并，只在有效尺寸变化后重绘，不触发任何正文读取；
      重绘替换容器后先解除旧观察再观察新容器，避免残留观察离屏节点。 */
@@ -1532,7 +1560,27 @@ if (typeof document !== 'undefined') {
     // 结构列表是独立滚动区：重绘按首条可见消息归位，首次到达落到最新一条。
     restoreMsgList(rail, listAnchor);
     restoreScroll(rail, keep);
+    // 右栏进场：换请求/换轮连头部一起淡入；页签切换按页签方向滑入、头部不动；
+    // 同键下正文从未读到已读（相位跳变）再渐显一次。store 驱动的常规重绘不播。
+    const phase = railPhase();
+    if (!sameRail) {
+      if (state.reqId !== lastRailReq || state.turn !== lastRailTurn) {
+        motion(el('rail-head'), { opacity: [0, 1] }, 0.12);
+      }
+      const dir = state.turn !== lastRailTurn && state.turn !== null && lastRailTurn !== null
+        ? Math.sign(state.turn - lastRailTurn)
+        : Math.sign(TAB_ORDER.indexOf(state.railTab) - TAB_ORDER.indexOf(lastRailTab));
+      motion(rail, dir !== 0
+        ? { opacity: [0, 1], transform: [`translateX(${dir * 12}px)`, 'translateX(0px)'] }
+        : { opacity: [0, 1] }, dir !== 0 ? 0.16 : 0.15);
+    } else if (phase !== lastRailPhase) {
+      motion(rail, { opacity: [0, 1] }, 0.15);
+    }
     lastRailKey = key;
+    lastRailReq = state.reqId;
+    lastRailTurn = state.turn;
+    lastRailTab = state.railTab;
+    lastRailPhase = phase;
     wireContextMap();
     armSpider();
   }
@@ -2046,8 +2094,9 @@ if (typeof document !== 'undefined') {
       state.windowJumping = true;
       button.disabled = true;
       button.textContent = '正在重建窗口…';
+      button.classList.add('pulse');
       void (state.windowAnchor === 'latest' ? jumpStart() : jumpLatest())
-        .finally(() => { state.windowJumping = false; renderAll(); });
+        .finally(() => { state.windowJumping = false; button.classList.remove('pulse'); renderAll(); });
       return;
     }
     if (t.closest('#switch-window')) { void switchWindowFor(state.offPageReqId); return; }
@@ -2124,7 +2173,13 @@ if (typeof document !== 'undefined') {
       return;
     }
     const toolPageBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-page]'));
-    if (toolPageBtn !== null) { dispatch({ kind: 'select-tool-page', page: toolPageBtn.dataset.toolPage ?? 'pair' }); return; }
+    if (toolPageBtn !== null) {
+      dispatch({ kind: 'select-tool-page', page: toolPageBtn.dataset.toolPage ?? 'pair' });
+      // 选中段弹起：只挂用户点击，store 重绘重建的按钮不带瞬态类。
+      const active = document.querySelector('.tool-page-tabs button[aria-pressed="true"]');
+      if (active !== null) active.classList.add('chip-fresh');
+      return;
+    }
     // 工具往返行的配对入口：在右栏打开配对页就地阅读，不跳转中栏选择。
     const toolOwnerBtn = /** @type {HTMLElement | null} */ (t.closest('[data-tool-owner]'));
     if (toolOwnerBtn !== null) {
@@ -2150,7 +2205,8 @@ if (typeof document !== 'undefined') {
       if (tool !== null && navigator.clipboard !== undefined) {
         void navigator.clipboard.writeText(tool.inputText).then(() => {
           copyTool.innerHTML = icon('check', 16);
-          setTimeout(() => { copyTool.innerHTML = icon('copy', 16); }, 300);
+          copyTool.classList.add('copied');
+          setTimeout(() => { copyTool.classList.remove('copied'); copyTool.innerHTML = icon('copy', 16); }, 300);
         }).catch(() => {});
       }
       return;
@@ -2167,7 +2223,8 @@ if (typeof document !== 'undefined') {
       if (entry !== null && navigator.clipboard !== undefined) {
         void navigator.clipboard.writeText(messageCopyText(entry)).then(() => {
           copyMsg.innerHTML = icon('check', 16);
-          setTimeout(() => { copyMsg.innerHTML = icon('copy', 16); }, 300);
+          copyMsg.classList.add('copied');
+          setTimeout(() => { copyMsg.classList.remove('copied'); copyMsg.innerHTML = icon('copy', 16); }, 300);
         }).catch(() => {});
       }
       return;
@@ -2201,7 +2258,15 @@ if (typeof document !== 'undefined') {
       return;
     }
     const agent = /** @type {HTMLElement | null} */ (t.closest('[data-agent]'));
-    if (agent) { state.agent = agent.dataset.agent ?? 'all'; renderFilters(); renderSessions(); return; }
+    if (agent) {
+      state.agent = agent.dataset.agent ?? 'all';
+      renderFilters(); renderSessions();
+      // 选中段弹起 + 列表快速刷新渐显：只挂在用户点击上，搜索逐键不播。
+      const pressed = /** @type {HTMLElement | null} */ (document.querySelector('#agent-filters .chip-btn[aria-pressed="true"]'));
+      if (pressed !== null) { pressed.classList.remove('chip-fresh'); void pressed.offsetWidth; pressed.classList.add('chip-fresh'); }
+      motion(el('sessions-list'), { opacity: [0.35, 1] }, 0.14);
+      return;
+    }
     const select = /** @type {HTMLElement | null} */ (t.closest('[data-step-key]'));
     if (select !== null) {
       const group = /** @type {HTMLElement | null} */ (select.closest('.trace-group'));
@@ -2215,6 +2280,9 @@ if (typeof document !== 'undefined') {
     if (rail) {
       // 页签点击是明确的阅读动作：路由读取经转换统一发出，失败保留未读可重试。
       dispatch({ kind: 'select-tab', tab: String(rail.dataset.rail ?? '') });
+      // 下划线从左生长一次：瞬态类只挂用户点击，重绘重建的按钮不重播。
+      const active = document.querySelector('.rail-tabs button[aria-pressed="true"]');
+      if (active !== null) active.classList.add('tab-fresh');
       return;
     }
     if (t.closest('#load-more-sessions')) {
@@ -2314,13 +2382,23 @@ if (typeof document !== 'undefined') {
   window.addEventListener('resize', syncBandTop);
 
   /* ---------------- Session ID 复制 ---------------- */
-  /** @param {string} text */
+  /**
+   * 替换式 toast：新 toast 顶掉旧的，不叠放。入场走 CSS（插入即播），
+   * 离场由 motion() 驱动、结束后移除；reduced-motion 下直接移除。
+   * @param {string} text
+   */
   function toast(text) {
+    document.querySelector('.toast')?.remove();
     const chip = document.createElement('div');
     chip.className = 'toast';
     chip.textContent = text;
     document.body.append(chip);
-    setTimeout(() => chip.remove(), 2400);
+    setTimeout(() => {
+      if (!chip.isConnected) return;
+      const out = motion(chip, { opacity: [1, 0], transform: ['translate(-50%, 0)', 'translate(-50%, 6px)'] }, 0.22);
+      if (out === null) { chip.remove(); return; }
+      out.finished.then(() => chip.remove()).catch(() => {});
+    }, 2200);
   }
   /**
    * 复制当前会话身份：JSON 数组的 session 复制第二项原始 ID，conv 身份复制完整 conv_key；

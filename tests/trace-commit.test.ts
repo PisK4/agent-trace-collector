@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { planCommit } from '../web/trace-commit.js';
+import { planCommit, tailAppendKeys } from '../web/trace-commit.js';
 
 const item = (key: string, html = `<div>${key}</div>`) => ({ key, html });
 
@@ -43,4 +43,26 @@ test('重复键只认第一次出现，不在计划里重复落位', () => {
   const plan = planCommit(new Map(), [item('a'), item('a', '<div>other</div>')]);
   expect(plan.order).toEqual(['a']);
   expect(plan.create).toEqual(['a']);
+});
+
+test('尾部追加：新建组键全部在幸存组键之后，整批放行', () => {
+  expect(tailAppendKeys(['g:3'], ['g:1', 'g:2', 'g:3', 'end'], new Set(['g:1', 'g:2'])))
+    .toEqual(['g:3']);
+});
+
+test('首屏填充没有幸存旧键，不算追加', () => {
+  expect(tailAppendKeys(['g:1'], ['g:1', 'end'], new Set())).toEqual([]);
+});
+
+test('中段插入与 prepend 都不算追加', () => {
+  expect(tailAppendKeys(['g:2'], ['g:1', 'g:2', 'g:3'], new Set(['g:1', 'g:3']))).toEqual([]);
+  expect(tailAppendKeys(['g:0'], ['g:0', 'g:1'], new Set(['g:1']))).toEqual([]);
+});
+
+test('窗口重建（旧组键全部换掉）不算追加', () => {
+  expect(tailAppendKeys(['g:9'], ['g:9', 'end'], new Set(['g:1']))).toEqual([]);
+});
+
+test('没有新建键时返回空，不抛错', () => {
+  expect(tailAppendKeys([], ['g:1'], new Set(['g:1']))).toEqual([]);
 });

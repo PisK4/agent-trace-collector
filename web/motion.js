@@ -4,10 +4,11 @@
  * 缺 WAAPI 时短路返回 null，调用方按 null 跳过等待。CSS 侧的 transition 与
  * keyframes 由 app.css 动效区的 media blanket 统一关闭，两边口径一致。
  * 时长单位是秒；easing 默认取 app.css --ease-out 同一条 bezier。
+ * 模块可在 bun test 无 DOM 环境导入（与 app.js 的 spider 守卫同口径）。
  */
 import { animate } from './motion.vendor.js';
 
-const REDUCE = matchMedia('(prefers-reduced-motion: reduce)');
+const REDUCE = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 const EASE = [0, 0, 0.2, 1];
 
 /**
@@ -17,6 +18,8 @@ const EASE = [0, 0, 0.2, 1];
  * @returns {{ finished: Promise<unknown>, cancel: () => void } | null}
  */
 export function motion(el, keyframes, duration = 0.15) {
-  if (REDUCE.matches || typeof el.animate !== 'function') return null;
-  return animate(el, keyframes, { duration, easing: EASE });
+  if (REDUCE !== null && REDUCE.matches) return null;
+  if (typeof el.animate !== 'function') return null;
+  const run = /** @type {(target: Element, frames: Record<string, (string | number)[]>, options: {duration: number, easing: number[]}) => {finished: Promise<unknown>, cancel: () => void}} */ (animate);
+  return run(el, keyframes, { duration, easing: EASE });
 }

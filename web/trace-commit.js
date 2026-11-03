@@ -46,3 +46,25 @@ export function planCommit(shown, desired) {
   }
   return { remove, create, replace, order };
 }
+
+/**
+ * 尾部追加判定：本次新建的键全部严格位于幸存旧键之后，才整批算「尾部追加」，
+ * 供调用方做一次性入场动效。首屏填充（没有幸存旧键）与窗口重建（旧键全部
+ * 换掉）都不算；新建键散插在中段也不算。纯函数，单测直接断言。
+ * 调用方先过滤掉不参与比较的键（如 end/loader 这类总排在尾部的结构标记）。
+ * @param {string[]} create 本次新建的键（已过滤）
+ * @param {string[]} order 期望的完整键序
+ * @param {Set<string>} existing 提交前已存在的键（已过滤）
+ * @returns {string[]} 判定为尾部追加的新建键（保持 create 原序）
+ */
+export function tailAppendKeys(create, order, existing) {
+  if (create.length === 0) return [];
+  let lastOld = -1;
+  for (let index = order.length - 1; index >= 0; index -= 1) {
+    if (existing.has(/** @type {string} */ (order[index]))) { lastOld = index; break; }
+  }
+  if (lastOld < 0) return [];
+  const created = new Set(create);
+  const firstNew = order.findIndex(key => created.has(key));
+  return firstNew > lastOld ? create : [];
+}
