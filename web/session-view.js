@@ -19,6 +19,60 @@ import { pairStateText } from './trace-pair.js';
 export const clock = (ms) => new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 /** @param {number} ms */
 export const dayTime = (ms) => new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+/**
+ * 活跃判定只看服务端快照：在途，或 `live_until` 还没到。渲染层不自己算 60 秒。
+ * @param {SessionRow} s @param {number} now
+ */
+export function isLiveSession(s, now) {
+  if (s.inflight === true) return true;
+  return typeof s.live_until === 'number' && s.live_until > now;
+}
+
+/**
+ * 活跃区与全部会话不重复：同一行只进一个区，顺序沿用读模型的 last_ms 倒序。
+ * @param {SessionRow[]} rows @param {number} now
+ */
+export function partitionLiveSessions(rows, now) {
+  /** @type {SessionRow[]} */
+  const live = [];
+  /** @type {SessionRow[]} */
+  const rest = [];
+  for (const row of rows) (isLiveSession(row, now) ? live : rest).push(row);
+  return { live, rest };
+}
+
+/**
+ * 下一次需要重排的时刻：只算“最近 60 秒”行的 live_until，在途行不设到期。
+ * @param {SessionRow[]} rows @param {number} now
+ */
+export function nextLiveExpiry(rows, now) {
+  let soonest = Infinity;
+  for (const row of rows) {
+    if (row.inflight === true) continue;
+    const until = row.live_until;
+    if (typeof until === 'number' && until > now && until < soonest) soonest = until;
+  }
+  return soonest === Infinity ? null : soonest;
+}
+
+/**
+ * 活跃行右下那一格只有两种内容：在途写「请求中」，否则照旧写最后更新时间。
+ * @param {SessionRow} s @param {(ms: number) => string} formatMs
+ */
+export function liveTimeCell(s, formatMs) {
+  return s.inflight === true
+    ? { text: '请求中', cls: 'is-live' }
+    : { text: formatMs(s.last_ms), cls: 'num' };
+}
+
+/**
+ * 复用既有 .group-label，只为分区加计数；不另造卡片。
+ * @param {string} label @param {number} count
+ */
+export function sessionsGroupLabel(label, count) {
+  return `<div class="group-label"><span>${esc(label)}</span><span class="grp-n">${count}</span></div>`;
+}
 /** Magpie 注册表里的 69 个显示名；未登记的第三方 agent 才回退到原始 id。 */
 const AGENT_LABELS = /** @type {Record<string, string>} */ ({
   claude: 'Claude Code', 'claude-desktop': 'Claude Desktop', 'claude-science': 'Claude Science',
