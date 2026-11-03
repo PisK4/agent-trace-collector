@@ -20,6 +20,7 @@ import { messagePathOf, replyView, topSystemText } from './body-model.js';
 import { isErrorText, loadStateText, pairStateText } from './trace-pair.js';
 import { bodyLabelText, bodyStateText } from './row-summary.js';
 import { secs, secsValue, tierOf, TIER_LIMITS } from './duration.js';
+import { t } from './i18n.js';
 
 // 类别口径与 token 缩写的定义在 parts.js（与 context-map 共用），这里转发既有消费者。
 export { kk, partLabel };
@@ -32,19 +33,19 @@ export { kk, partLabel };
  */
 export function renderAttemptChain(chain) {
   if (chain === null || chain === undefined || chain.state !== 'present') {
-    return '<p class="note">没有可读取的尝试记录。</p>';
+    return `<p class="note">${t('没有可读取的尝试记录。')}</p>`;
   }
   const rows = chain.items.map(item => {
     /** @type {string[]} 已转义的片段；只有尝试时长按档位换成 HTML。 */
-    const bits = [esc(item.model ?? '模型未报告')];
+    const bits = [esc(item.model ?? t('模型未报告'))];
     const text = (/** @type {string} */ v) => bits.push(esc(v));
     if (item.served !== null && item.served !== item.model) text(`served ${item.served}`);
     if (item.status !== null) text(`HTTP ${item.status}`);
     if (item.fail !== null) text(`fail ${item.fail}`);
     if (item.effort !== null) text(`effort ${item.effort}`);
     if (item.tier_served !== null) text(`tier ${item.tier_served}`);
-    if (item.reasoning_hidden === true) text('推理隐藏');
-    if (item.done === false) text('未结束');
+    if (item.reasoning_hidden === true) text(t('推理隐藏'));
+    if (item.done === false) text(t('未结束'));
     if (item.start_ms !== null) {
       const started = new Date(item.start_ms);
       if (!Number.isNaN(started.getTime())) text(started.toISOString());
@@ -54,9 +55,9 @@ export function renderAttemptChain(chain) {
       const value = esc(`${item.ms} ms`);
       bits.push(tier === 'good' ? value : `<b class="t-${tier}">${value}</b>`);
     }
-    if (item.ttft_ms !== null) text(`首 token ${item.ttft_ms} ms`);
-    if (item.first_reasoning_ms !== null) text(`首个推理 ${item.first_reasoning_ms} ms`);
-    if (item.first_text_ms !== null) text(`首个文本 ${item.first_text_ms} ms`);
+    if (item.ttft_ms !== null) text(t('首 token {ms} ms', { ms: item.ttft_ms }));
+    if (item.first_reasoning_ms !== null) text(t('首个推理 {ms} ms', { ms: item.first_reasoning_ms }));
+    if (item.first_text_ms !== null) text(t('首个文本 {ms} ms', { ms: item.first_text_ms }));
     return `<span class="attempt-name">${item.index + 1}. ${bits.join(' · ')}</span>`;
   }).join('<br>');
   const note = chain.timing.state === 'partial'
@@ -103,12 +104,12 @@ export function structureUnread(structure, total) {
  * @returns {{button: string, note: string}}
  */
 export function structureMoreParts(structure, reqId, total) {
-  const label = structure.error !== null ? '重试读取'
-    : structure.total === null ? `从末尾读取（共 ${total} 条）`
-      : `加载更早（已读 ${structure.back}–${structure.next} / ${total}）`;
+  const label = structure.error !== null ? t('重试读取')
+    : structure.total === null ? t('从末尾读取（共 {total} 条）', { total })
+      : t('加载更早（已读 {back}–{next} / {total}）', { back: structure.back, next: structure.next, total });
   return {
     button: `<button class="chip-btn" data-structure-more="${reqId}"${structure.loading ? ' disabled' : ''}>${label}</button>`,
-    note: structure.error ? `<p class="note warn">结构读取失败：${esc(structure.error)}</p>` : '',
+    note: structure.error ? `<p class="note warn">${t('结构读取失败：{error}', { error: esc(structure.error) })}</p>` : '',
   };
 }
 
@@ -139,7 +140,7 @@ export function structureMoreParts(structure, reqId, total) {
 export function structureFoldHtml(input) {
   const { reqId, row, meta, entries, structure, delta, deltaState = null, parseState = null, relation, open = false, selected = null, highlight = null, pairOf = null } = input;
   const total = structure.total ?? (meta ? meta.total : null);
-  const count = total === null || total === undefined ? '消息总数未读取' : `${total} 条消息`;
+  const count = total === null || total === undefined ? t('消息总数未读取') : t('{n} 条消息', { n: total });
   const canLoad = row.body_state === 'available' || row.body_state === 'partial';
   // 未读判定与正文页签同一口径：从未读过按总数，读过后看已读下界。
   const unread = structureUnread(structure, total);
@@ -149,25 +150,25 @@ export function structureFoldHtml(input) {
   if (chosen !== null) {
     // 返回入口在详情上方：长消息的正文可以把页脚推到视口外，返回就不该跟着正文
     // 一起沉底。位置与「加载更早」一致，都在列表／详情的上方。
-    body = `<div class="conv-tools"><button class="chip-btn ico" data-structure-back="${reqId}" aria-label="返回消息列表" title="返回消息列表">${icon('back', 20)}</button></div>
+    body = `<div class="conv-tools"><button class="chip-btn ico" data-structure-back="${reqId}" aria-label="${t('返回消息列表')}" title="${t('返回消息列表')}">${icon('back', 20)}</button></div>
       ${renderMessageDetail(chosen, messagePathOf(meta, chosen.ord), pairOf)}`;
   } else if (entries.length === 0 && !canLoad) {
     body = `<p class="note">${esc(bodyLabelText(row))}</p>`;
   } else if (entries.length === 0 && parseState === 'unsupported') {
     // 协议未适配是解释边界：原文完整也不按已知协议展开消息结构。
-    body = '<p class="note">协议未适配：原对象已保存，但不按已知协议解释消息结构；请求字段与回复按原文阅读。</p>';
+    body = `<p class="note">${t('协议未适配：原对象已保存，但不按已知协议解释消息结构；请求字段与回复按原文阅读。')}</p>`;
   } else if (entries.length === 0) {
-    body = `<p class="note">${structure.loading ? '正在读取消息结构…' : '尚未读取消息正文；展开后从末尾读取最近 40 条。'}</p>`;
+    body = `<p class="note">${structure.loading ? t('正在读取消息结构…') : t('尚未读取消息正文；展开后从末尾读取最近 40 条。')}</p>`;
   } else {
     const consumed = deltaState === null ? delta?.size ?? 0 : Math.min(deltaState.next, delta?.size ?? 0);
     // 新增的标识交给列表内蓝缘（msg-new 行）；全部消费完的纯计数行不再占一行，
     // 未消费完与失败态保留——它们带交互与错误语义。
     const deltaNote = delta === null
-      ? relation ? `<p class="note">${esc(relation)}：不标记新增消息，按原顺序列出。</p>` : ''
+      ? relation ? `<p class="note">${t('{relation}：不标记新增消息，按原顺序列出。', { relation: esc(relation) })}</p>` : ''
       : deltaState !== null && deltaState.error !== null
-        ? `<p class="note warn">新增读取失败（${esc(deltaState.error)}）：已消费 ${consumed} / ${delta.size}，未读位置保留，不吞掉剩余输入。<button class="chip-btn ico" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''} aria-label="重试续读" title="重试续读">${icon('retry', 20)}</button></p>`
+        ? `<p class="note warn">${t('新增读取失败（{error}）：已消费 {consumed} / {size}，未读位置保留，不吞掉剩余输入。', { error: esc(deltaState.error), consumed, size: delta.size })}<button class="chip-btn ico" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''} aria-label="${t('重试续读')}" title="${t('重试续读')}">${icon('retry', 20)}</button></p>`
         : deltaState !== null && !deltaState.done
-          ? `<p class="note">新增 ${delta.size} 条消息 · 已消费 ${consumed} / ${delta.size}。<button class="chip-btn ico" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''} aria-label="继续读取" title="继续读取">${icon('read', 20)}</button></p>`
+          ? `<p class="note">${t('新增 {size} 条消息 · 已消费 {consumed} / {size}。', { size: delta.size, consumed })}<button class="chip-btn ico" data-delta-more="${reqId}"${deltaState.loading ? ' disabled' : ''} aria-label="${t('继续读取')}" title="${t('继续读取')}">${icon('read', 20)}</button></p>`
           : '';
     // 已缓存消息的有序并集；相邻序号的空洞是未读区间，不用连续游标删掉缓存尾部。
     const listEntries = [...entries].sort((a, b) => a.ord - b.ord);
@@ -184,9 +185,9 @@ export function structureFoldHtml(input) {
   // 按钮与失败说明放在列表上方，与「向前读更早」的方向一致。
   const more = unread && canLoad ? button : '';
   const newCount = delta === null ? 0 : delta.size;
-  const newLabel = newCount > 0 ? `<span class="fold-count new">新增 ${newCount}</span>` : '';
+  const newLabel = newCount > 0 ? `<span class="fold-count new">${t('新增 {n}', { n: newCount })}</span>` : '';
   return `<details class="rail-fold" data-structure-fold="${reqId}" data-fold="structure:${reqId}"${open ? ' open' : ''}>
-    <summary>请求结构<span class="fold-count">${esc(count)}</span>${newLabel}</summary>
+    <summary>${t('请求结构')}<span class="fold-count">${esc(count)}</span>${newLabel}</summary>
     <div class="fold-body">${errorNote}${more}${body}</div>
   </details>`;
 }
@@ -210,14 +211,14 @@ export function toolOverviewHtml(ownerReq, pair, reading) {
   const row = (/** @type {string} */ k, /** @type {string} */ v) =>
     `<div class="chain-row"><dt>${k}</dt><dd>${v}</dd></div>`;
   return `<div class="chain">
-    ${row('调用方', `请求 ${ownerReq}${pair?.ord !== undefined ? ` · 调用 #${pair.ord}` : ''}`)}
-    ${row('配对状态', esc(pairStateText(pairState)))}
+    ${row(t('调用方'), `${t('请求 {req}', { req: ownerReq })}${pair?.ord !== undefined ? ` · ${t('调用 #{ord}', { ord: pair.ord })}` : ''}`)}
+    ${row(t('配对状态'), esc(pairStateText(pairState)))}
     ${pair !== null && pair.state === 'resolved' && pair.result_req !== null
-    ? row('结果位置', `请求 ${pair.result_req} · 消息 #${pair.result_ord}`) : ''}
-    ${row('正文加载', esc(loadStateText(loadState, reading?.reason ?? null)))}
-    ${reading !== null && reading.state === 'available' ? row('错误标记', esc(isErrorText(reading.is_error))) : ''}
+    ? row(t('结果位置'), `${t('请求 {req}', { req: pair.result_req })} · ${t('消息 #{ord}', { ord: pair.result_ord })}`) : ''}
+    ${row(t('正文加载'), esc(loadStateText(loadState, reading?.reason ?? null)))}
+    ${reading !== null && reading.state === 'available' ? row(t('错误标记'), esc(isErrorText(reading.is_error))) : ''}
   </div>
-  <p class="rail-note">模型响应时长归属承载它的请求；执行段按结果请求开始减调用请求结束推算，含客户端处理与人工确认，是上界。</p>`;
+  <p class="rail-note">${t('模型响应时长归属承载它的请求；执行段按结果请求开始减调用请求结束推算，含客户端处理与人工确认，是上界。')}</p>`;
 }
 
 /**
@@ -229,29 +230,29 @@ export function toolOverviewHtml(ownerReq, pair, reading) {
  */
 export function toolSchemaSection(capabilities, toolName) {
   if (capabilities === null || capabilities === undefined) {
-    return '<p class="note">能力视图不可读，无法取得工具定义。</p>';
+    return `<p class="note">${t('能力视图不可读，无法取得工具定义。')}</p>`;
   }
   const tools = capabilities.tools;
   const matches = tools.state === 'present' ? tools.items.filter(item => item.name === toolName) : [];
   if (matches.length === 1) {
     const schema = matches[0]?.schema;
     return schema === null || schema === undefined
-      ? '<p class="note">这个工具没有随请求携带输入 Schema。</p>'
+      ? `<p class="note">${t('这个工具没有随请求携带输入 Schema。')}</p>`
       : `<pre class="raw" tabindex="0">${esc(JSON.stringify(schema, null, 2))}</pre>`;
   }
   if (matches.length > 1) {
-    return `<p class="note warn">能力清单里有 ${matches.length} 个同名工具，无法唯一选择，逐项列出：</p>${
-      matches.map(item => `<div class="schema-item"><div class="label">来源 ${esc(String(item.source ?? 'tools'))}</div><pre class="raw" tabindex="0">${
-        item.schema === null || item.schema === undefined ? '（无 Schema）' : esc(JSON.stringify(item.schema, null, 2))
+    return `<p class="note warn">${t('能力清单里有 {n} 个同名工具，无法唯一选择，逐项列出：', { n: matches.length })}</p>${
+      matches.map(item => `<div class="schema-item"><div class="label">${t('来源 {source}', { source: esc(String(item.source ?? 'tools')) })}</div><pre class="raw" tabindex="0">${
+        item.schema === null || item.schema === undefined ? t('（无 Schema）') : esc(JSON.stringify(item.schema, null, 2))
       }</pre></div>`).join('')}`;
   }
-  if (tools.state === 'present') return `<p class="note">本请求未声明工具 ${esc(toolName)}：能力清单里没有这个名字。</p>`;
-  if (tools.state === 'empty') return '<p class="note">这一笔请求没有携带工具定义，查不到它的 Schema。</p>';
-  if (tools.state === 'unrecognized') return `<p class="note warn">工具字段存在但格式未识别，无法取得 ${esc(toolName)} 的定义。</p>`;
+  if (tools.state === 'present') return `<p class="note">${t('本请求未声明工具 {name}：能力清单里没有这个名字。', { name: esc(toolName) })}</p>`;
+  if (tools.state === 'empty') return `<p class="note">${t('这一笔请求没有携带工具定义，查不到它的 Schema。')}</p>`;
+  if (tools.state === 'unrecognized') return `<p class="note warn">${t('工具字段存在但格式未识别，无法取得 {name} 的定义。', { name: esc(toolName) })}</p>`;
   if (tools.state === 'partial') {
-    return `<p class="note warn">工具定义未读完（${esc(tools.reason ?? '原因未记录')}），${esc(toolName)} 的定义可能不完整。</p>`;
+    return `<p class="note warn">${t('工具定义未读完（{reason}），{name} 的定义可能不完整。', { reason: esc(tools.reason ?? t('原因未记录')), name: esc(toolName) })}</p>`;
   }
-  return `<p class="note warn">工具定义缺失（${esc(tools.reason ?? '原因未记录')}），无法取得 ${esc(toolName)} 的定义。</p>`;
+  return `<p class="note warn">${t('工具定义缺失（{reason}），无法取得 {name} 的定义。', { reason: esc(tools.reason ?? t('原因未记录')), name: esc(toolName) })}</p>`;
 }
 
 /**
@@ -259,8 +260,8 @@ export function toolSchemaSection(capabilities, toolName) {
  * @param {number} reqId
  */
 export function readingChangedNote(reqId) {
-  return `<p class="note warn">阅读版本已变化：这一笔的详情与正文缓存已作废，正在自动重读。</p>
-    <div class="conv-tools"><button class="chip-btn ico" data-body-load="${reqId}" aria-label="立即重读" title="立即重读">${icon('read', 20)}</button></div>`;
+  return `<p class="note warn">${t('阅读版本已变化：这一笔的详情与正文缓存已作废，正在自动重读。')}</p>
+    <div class="conv-tools"><button class="chip-btn ico" data-body-load="${reqId}" aria-label="${t('立即重读')}" title="${t('立即重读')}">${icon('read', 20)}</button></div>`;
 }
 
 /**
@@ -303,34 +304,34 @@ export function evidenceFoldHtml(row, detail, meta) {
     `<div class="chain-row"><dt><span class="ev ${state}" aria-hidden="true">${icon(state === 'ok' ? 'check' : state === 'miss' ? 'failure' : 'question', 16)}</span></dt><dd>${text}</dd></div>`;
   const ledger = row.status !== null
     ? rowHtml('ok', `HTTP ${row.status}${error !== null ? ` · ${esc(error)}` : ''}`)
-    : rowHtml('miss', '没有关联到账本行');
+    : rowHtml('miss', t('没有关联到账本行'));
   const callback = hook.includes('success')
-    ? rowHtml('ok', hook.includes('failure') ? '已收到 · 成功与失败报告并存' : '已收到')
+    ? rowHtml('ok', hook.includes('failure') ? t('已收到 · 成功与失败报告并存') : t('已收到'))
     : hook.includes('failure')
-      ? rowHtml('ok', '已收到 · 报告失败')
+      ? rowHtml('ok', t('已收到 · 报告失败'))
       : rowHtml('miss', row.miss_reason === 'hook_absent'
-        ? '无关联证据 · 等满 1 小时仍没有回调关联到本笔' : '无关联证据');
+        ? t('无关联证据 · 等满 1 小时仍没有回调关联到本笔') : t('无关联证据'));
   const body = row.body_state === 'available' || row.body_state === 'partial'
     ? rowHtml('ok', esc(bodyStateText(row)))
     : rowHtml('miss', `${esc(bodyStateText(row))}${row.miss_reason !== null ? ` · ${esc(row.miss_reason)}` : ''}`);
   const reply = view === null
-    ? rowHtml('wait', '依赖正文')
+    ? rowHtml('wait', t('依赖正文'))
     : view.state === 'ok'
-      ? rowHtml('ok', '已收到')
+      ? rowHtml('ok', t('已收到'))
       : view.state === 'absent'
-        ? rowHtml('miss', '无回复')
-        : rowHtml('wait', `依赖正文 · ${esc(view.state)}`);
+        ? rowHtml('miss', t('无回复'))
+        : rowHtml('wait', `${t('依赖正文')} · ${esc(view.state)}`);
   // 结论句：整表没有一条 ok 时，读者需要一句话说明这一笔是什么，而不是一张空表。
   const arrived = [ledger, callback, body, reply].filter(html => html.includes('class="ev ok"')).length;
   const conclusion = arrived === 0
-    ? '<p class="note warn">这一笔只有一条孤立记录：账本、回调与正文都没有到达本库。</p>'
+    ? `<p class="note warn">${t('这一笔只有一条孤立记录：账本、回调与正文都没有到达本库。')}</p>`
     : callback.includes('class="ev miss"') && ledger.includes('class="ev ok"')
-      ? '<p class="note">本库没有这笔的回调证据。这不等于上游没有回调过：投递超时或宿主中止都会静默放弃。</p>'
+      ? `<p class="note">${t('本库没有这笔的回调证据。这不等于上游没有回调过：投递超时或宿主中止都会静默放弃。')}</p>`
       : ledger.includes('class="ev miss"')
-        ? '<p class="note">本库没有这笔的账本证据：回调没有携带可核验的 response ID，两边各自成行，不按时间近邻合并。</p>'
+        ? `<p class="note">${t('本库没有这笔的账本证据：回调没有携带可核验的 response ID，两边各自成行，不按时间近邻合并。')}</p>`
         : '';
   return `<details class="rail-fold" data-fold="evidence:${row.req_id}" open>
-    <summary>证据</summary>
+    <summary>${t('证据')}</summary>
     <div class="fold-body">
       <dl class="chain evidence-chain">${ledger}${callback}${body}${reply}</dl>
       ${conclusion}
@@ -420,21 +421,21 @@ export function ledgerParts(r, detail = null) {
   const row = (label, v, tip) =>
     `<div class="chain-row"><dt>${label}</dt><dd title="${esc(tip)}">${v === null ? '<i class="miss">—</i>' : v}</dd></div>`;
   const timing = [
-    ttft !== null ? row('首 token', secs(ttft), 'TTFT：到第一个内容；第一个内容可能是文本、推理或工具调用') : '',
-    ms !== null ? row('总', secs(ms), '从请求到回复结束') : '',
-    speed !== null && speed > 0 ? row('速度', `${n(speed)} tok/s`, '输出 token ÷（总 − 首 token）') : '',
-    firstText !== null ? row('首个文本', secs(firstText), '第一个文本块到达的时刻') : '',
+    ttft !== null ? row(t('首 token'), secs(ttft), t('TTFT：到第一个内容；第一个内容可能是文本、推理或工具调用')) : '',
+    ms !== null ? row(t('总'), secs(ms), t('从请求到回复结束')) : '',
+    speed !== null && speed > 0 ? row(t('速度'), `${n(speed)} tok/s`, t('输出 token ÷（总 − 首 token）')) : '',
+    firstText !== null ? row(t('首个文本'), secs(firstText), t('第一个文本块到达的时刻')) : '',
   ].filter(Boolean).join('');
   const anyUsage = r.in_tok !== null || r.out_tok !== null || r.cache_read !== null || r.cache_write !== null;
   let usage = '';
   if (anyUsage) {
     usage = [
-      row('入', r.in_tok === null ? null : n(r.in_tok), '输入 token，不含缓存读取与写入'),
-      row('出', r.out_tok === null ? null : n(r.out_tok), '输出 token'),
-      row('缓读', r.cache_read === null ? null : n(r.cache_read), '缓存读取 token；请求级命中见构成区「提示词缓存」，会话级命中见会话头合计行'),
-      row('缓写', r.cache_write === null ? null : n(r.cache_write), '缓存写入 token'),
-      r.cost_state === 'priced' && r.cost !== null ? row('费用', `$${fmtCost(r.cost)}`, '费用（上游报告）') : '',
-      r.cost_state === 'zero' ? row('费用', '$0', '费用（上游报告）') : '',
+      row(t('入'), r.in_tok === null ? null : n(r.in_tok), t('输入 token，不含缓存读取与写入')),
+      row(t('出'), r.out_tok === null ? null : n(r.out_tok), t('输出 token')),
+      row(t('缓读'), r.cache_read === null ? null : n(r.cache_read), t('缓存读取 token；请求级命中见构成区「提示词缓存」，会话级命中见会话头合计行')),
+      row(t('缓写'), r.cache_write === null ? null : n(r.cache_write), t('缓存写入 token')),
+      r.cost_state === 'priced' && r.cost !== null ? row(t('费用'), `$${fmtCost(r.cost)}`, t('费用（上游报告）')) : '',
+      r.cost_state === 'zero' ? row(t('费用'), '$0', t('费用（上游报告）')) : '',
     ].join('');
   }
   return {
@@ -516,53 +517,53 @@ export function contextStatsHtml(r, p, detail = null) {
   const window = p !== null && p.window !== null && p.window > 0 ? p.window : null;
   const pct = pctOf(p?.ratio ?? null);
   const est = p !== null && p.counted === false
-    ? '<span class="u-pill" title="分类按请求正文估算，未经本次回复的实测 token 校准">本地估计</span>' : '';
-  const full = p === null || p.ratio === null ? '' : p.ratio >= 0.9 ? '占满' : p.ratio >= 0.75 ? '接近占满' : '';
-  const usedSub = p === null ? '没有路由侧的 prompt 分析'
-    : used === null ? '没有可用 token 读数'
-      : window === null ? '模型的窗口大小未知'
-        : pct === null ? `总 ${kk(window)} · 不计算进度` : `总 ${kk(window)} · 已用 ${pct}%`;
+    ? `<span class="u-pill" title="${t('分类按请求正文估算，未经本次回复的实测 token 校准')}">${t('本地估计')}</span>` : '';
+  const full = p === null || p.ratio === null ? '' : p.ratio >= 0.9 ? t('占满') : p.ratio >= 0.75 ? t('接近占满') : '';
+  const usedSub = p === null ? t('没有路由侧的 prompt 分析')
+    : used === null ? t('没有可用 token 读数')
+      : window === null ? t('模型的窗口大小未知')
+        : pct === null ? t('总 {total} · 不计算进度', { total: kk(window) }) : t('总 {total} · 已用 {pct}%', { total: kk(window), pct });
   const usedTip = p === null
-    ? '路由侧没有这份请求的 prompt 分析'
+    ? t('路由侧没有这份请求的 prompt 分析')
     : window === null
-      ? '路由侧没有报告回答模型的上下文窗口'
+      ? t('路由侧没有报告回答模型的上下文窗口')
       : pct !== null
-        ? '已用上下文 ÷ 总上下文，取整百分点'
+        ? t('已用上下文 ÷ 总上下文，取整百分点')
         : p.state === 'recomputed'
-          ? '没有可用 token 读数'
-          : ({ retained: '旧结果，不计算进度', missing: '结果缺失，不计算进度' }[p.state] ?? '不计算进度');
+          ? t('没有可用 token 读数')
+          : t(({ retained: '旧结果，不计算进度', missing: '结果缺失，不计算进度' })[p.state] ?? '不计算进度');
   const fixed = fixedOverheadOf(list);
   const fixedSub = fixed === null
-    ? '没有构成分类'
-    : p !== null && p.tokens !== null && p.tokens > 0 ? `占已用 ${Math.round(fixed / p.tokens * 100)}%` : '没有可用分母';
+    ? t('没有构成分类')
+    : p !== null && p.tokens !== null && p.tokens > 0 ? t('占已用 {pct}%', { pct: Math.round(fixed / p.tokens * 100) }) : t('没有可用分母');
   const cache = cacheHitOf(r);
   const hitPct = pctOf(cache.hit);
   const { ttft, ms, speed, firstText } = timingReadingsOf(r, detail);
   const timeSub = [
-    ttft !== null ? `首 token ${secs(ttft)}` : '',
-    firstText !== null ? `首个文本 ${secs(firstText)}` : '',
+    ttft !== null ? t('首 token {v}', { v: secs(ttft) }) : '',
+    firstText !== null ? t('首个文本 {v}', { v: secs(firstText) }) : '',
     speed !== null && speed > 0 ? `${n(speed)} tok/s` : '',
   ].filter(Boolean).join(' · ');
   return `<div class="ctx-stats">
     <div class="ctx-stat">
-      <div class="ctx-k">${icon('ctx-gauge', 16)}已用上下文${est}${full !== '' ? `<span class="u-pill warn">${full}</span>` : ''}</div>
+      <div class="ctx-k">${icon('ctx-gauge', 16)}${t('已用上下文')}${est}${full !== '' ? `<span class="u-pill warn">${full}</span>` : ''}</div>
       <div class="ctx-big"><b>${used === null ? '<i class="miss">—</i>' : used}</b>${used === null ? '' : '<span>token</span>'}</div>
       <div class="ctx-sub" title="${esc(usedTip)}">${usedSub}</div>
     </div>
     <div class="ctx-stat">
-      <div class="ctx-k">${icon('ctx-pin', 16)}固定开销</div>
+      <div class="ctx-k">${icon('ctx-pin', 16)}${t('固定开销')}</div>
       <div class="ctx-big"><b>${fixed === null ? '<i class="miss">—</i>' : kk(fixed)}</b>${fixed === null ? '' : '<span>token</span>'}</div>
-      <div class="ctx-sub" title="系统提示 + 工具定义 + 技能 + 记忆：每笔请求都要背的部分，与对话无关">${fixedSub}</div>
+      <div class="ctx-sub" title="${t('系统提示 + 工具定义 + 技能 + 记忆：每笔请求都要背的部分，与对话无关')}">${fixedSub}</div>
     </div>
     <div class="ctx-stat">
-      <div class="ctx-k" title="缓存命中＝cache_read ÷（入 + cache_read）；只计两个读数都在的请求">${icon('ctx-cache', 16)}提示词缓存</div>
-      <div class="ctx-big"><b>${hitPct === null ? '<i class="miss">—</i>' : hitPct + '%'}</b>${hitPct === null ? '' : '<span>命中</span>'}</div>
-      ${hitPct === null ? '<div class="ctx-sub">缓存读数未上报</div>' : ''}
+      <div class="ctx-k" title="${t('缓存命中＝cache_read ÷（入 + cache_read）；只计两个读数都在的请求')}">${icon('ctx-cache', 16)}${t('提示词缓存')}</div>
+      <div class="ctx-big"><b>${hitPct === null ? '<i class="miss">—</i>' : hitPct + '%'}</b>${hitPct === null ? '' : `<span>${t('命中')}</span>`}</div>
+      ${hitPct === null ? `<div class="ctx-sub">${t('缓存读数未上报')}</div>` : ''}
     </div>
     <div class="ctx-stat ctx-stat-time">
-      <div class="ctx-k" role="img" aria-label="耗时" title="耗时">${icon('stopwatch', 16)}</div>
+      <div class="ctx-k" role="img" aria-label="${t('耗时')}" title="${t('耗时')}">${icon('stopwatch', 16)}</div>
       <div class="ctx-big"><b>${ms === null ? '<i class="miss">—</i>' : secsValue(ms)}</b>${ms === null ? '' : '<span>s</span>'}</div>
-      <div class="ctx-sub" title="总时长；首 token 到第一个内容，首个文本到第一个文本块，速度＝输出 ÷（总 − 首 token）">${ms === null ? '没有计时读数' : timeSub}</div>
+      <div class="ctx-sub" title="${t('总时长；首 token 到第一个内容，首个文本到第一个文本块，速度＝输出 ÷（总 − 首 token）')}">${ms === null ? t('没有计时读数') : timeSub}</div>
     </div>
   </div>`;
 }
@@ -593,29 +594,29 @@ export function usageFoldHtml(r, detail, meta = null) {
     const mapHtml = positive.length > 0 ? contextMapShellHtml(p, r.req_id) : '';
     const rowsHtml = positive.length > 0 ? contextRowsHtml(p, r.req_id) : '';
     const legend = positive.length > 0
-      ? `<div class="comp-legend">${[...positive].sort((a, b) => b.tokens - a.tokens).map(x => `<button type="button" class="name" data-ctx-kind="${esc(String(x.kind))}" data-ctx-req="${r.req_id}" aria-label="${esc(partLabel(String(x.kind)))}，打开明细"><span>${esc(partLabel(String(x.kind)))}</span></button>
+      ? `<div class="comp-legend">${[...positive].sort((a, b) => b.tokens - a.tokens).map(x => `<button type="button" class="name" data-ctx-kind="${esc(String(x.kind))}" data-ctx-req="${r.req_id}" aria-label="${t('{label}，打开明细', { label: esc(partLabel(String(x.kind))) })}"><span>${esc(partLabel(String(x.kind)))}</span></button>
         <span class="val">${kk(x.tokens)}</span><span class="pct">${Math.round(x.tokens / sum * 100)}%</span>`).join('')}</div>`
       : '';
     comp += `${mapHtml}${legend}${rowsHtml}`;
   }
   const hint = p === null || p.state === 'recomputed' ? '' : [
-    ({ recomputed: '当前结果', retained: '旧结果', missing: '缺失' }[p.state] ?? p.state),
+    t(({ recomputed: '当前结果', retained: '旧结果', missing: '缺失' })[p.state] ?? p.state),
   ].filter(Boolean).join(' · ');
   const note = hasComp
-    ? (p?.note ?? '分类是估计分配，不是逐类精确计数。')
-    : (p?.note ?? '没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。');
+    ? (p?.note ?? t('分类是估计分配，不是逐类精确计数。'))
+    : (p?.note ?? t('没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。'));
   const effort = requestEffortOf(meta);
   const effortHtml = effort === null ? ''
-    : `<dl class="chain ledger-chain"><div class="chain-row"><dt>effort</dt><dd title="客户端随请求声明的 reasoning_effort">${esc(effort)}</dd></div></dl>`;
+    : `<dl class="chain ledger-chain"><div class="chain-row"><dt>effort</dt><dd title="${t('客户端随请求声明的 reasoning_effort')}">${esc(effort)}</dd></div></dl>`;
   const usageRows = ledgerParts(r, detail).usage;
   const more = usageRows === '' && effortHtml === ''
     ? ''
     : `<details class="usage-more" data-fold="usage:${r.req_id}">
-        <summary>用量明细</summary>
+        <summary>${t('用量明细')}</summary>
         ${usageRows}${effortHtml}
       </details>`;
   return `<details class="rail-fold" data-fold="prompt:${r.req_id}" open>
-    <summary>用量与上下文</summary>
+    <summary>${t('用量与上下文')}</summary>
     <div class="fold-body">
       ${hint !== '' ? `<p class="note">${esc(hint)}</p>` : ''}
       ${comp}

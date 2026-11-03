@@ -11,7 +11,8 @@ import { dict } from './i18n-en.js';
 /**
  * 字典值：字符串走 {name} 占位替换；函数收原始 params，处理单复数等
  * 表达差异，返回最终文案。两种取值都不做 HTML 转义，转义归调用点的 esc。
- * @typedef {Record<string, string | ((params: Record<string, string | number>) => string)>} Dict
+ * params 值与模板插值同语义：null 输出 'null'，undefined 保留占位符原样。
+ * @typedef {Record<string, string | ((params: Record<string, string | number | null>) => string)>} Dict
  */
 
 /** @type {'zh' | 'en'} */
@@ -19,7 +20,7 @@ let locale = 'zh';
 
 /**
  * @param {string} text
- * @param {Record<string, string | number> | undefined} params
+ * @param {Record<string, string | number | null> | undefined} params
  */
 function fill(text, params) {
   if (params === undefined) return text;
@@ -31,7 +32,7 @@ function fill(text, params) {
 
 /**
  * @param {string} key
- * @param {Record<string, string | number>} [params]
+ * @param {Record<string, string | number | null>} [params]
  */
 export function t(key, params) {
   if (locale !== 'zh') {
