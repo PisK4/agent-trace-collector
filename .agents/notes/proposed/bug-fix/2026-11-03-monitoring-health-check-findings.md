@@ -1,4 +1,4 @@
-# Agent Note: 后台监控体检发现的缺陷清单（暂不修复）
+# Agent Note: 后台监控体检发现的缺陷清单（持续记账）
 
 Status: proposed
 
@@ -17,34 +17,34 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 | 编号 | 严重度 | 一句话现象 | 证据等级 | 状态 | 修复依赖 |
 | --- | --- | --- | --- | --- | --- |
 | F18 | P0 | Codex 集成的 schema 9→10 半成品改动（已补完并合并上线） | 实测 | 已修 | — |
-| F23 | P0 | 迁移失败即停机，且无自动重建、无自动备份 | 实测 | 待修 | 先于任何重启 |
+| F23 | P0 | 迁移失败即停机，且无自动重建、无自动备份 | 实测 | 已修（流程入 operations.md；执行随 11-04 回归窗口） | 先于任何重启 |
 | F26 | P0 | `/api/sessions` 跨组标题绑定是相关标量子查询，O(页内会话数 × request 行数) | 实测 | 已修 | 已落地（`396342b`）；绑定未验证，依赖 F28 |
-| F27 | P0 | 会话列表在主线程同步计算，服务端零并发保护 | 实测 | 待修 | 排 F26 之后评估 |
-| F28 | P0 | `user_fingerprint` / `turn_ref` 存量全空；title 指纹通道断 | 实测+代码 | 待修（title 通道） | 独立；先于 F24 回填验收 |
+| F27 | P0 | 会话列表在主线程同步计算，服务端零并发保护 | 实测 | 已修（A 单飞） | 排 F26 之后评估 |
+| F28 | P0 | `user_fingerprint` / `turn_ref` 存量全空；title 指纹通道断 | 实测+代码 | 已修（title 通道） | 独立；先于 F24 回填验收 |
 | F32 | P0 | unknown-actor 的 `["request",…]` 组从不进派生队列，标题恒空 | 实测 | 待修（P2） | 展示已由 tool_event 折叠兜住；另立批次 |
 | F07 | P1 | 探针 5066 ms 尖峰；17:20–17:24 有 7.8–10.8 s 停顿未被捕获 | 实测+推断 | 待修 | 与 F06/F09 合并 |
-| F08 | P1 | `check` 恒 `return 0`，作业层看不见 `sample` 失败 | 实测 | 待修 | 无 |
-| F09 | P1 | `event_loop_p99` 阈值 100 ms 未校准，告警常亮 | 实测 | 待修 | 采纳 F22 的 330 ms |
-| F10 | P1 | 命中消失即写 `recovered`，无持续窗口 | 实测 | 待修 | 与 F12 同处合并 |
-| F11 | P1 | `derive_failed` 不进结构化诊断 | 实测 | 待修 | 无 |
-| F14 | P1 | `spawnSync('launchctl')` 无容错，受限环境栈崩 | 实测 | 待修 | 无 |
-| F16 | P1 | 日志轮转分支从未被真实触发 | 待查 | 待查 | 需非生产副本实测 |
-| F17 | P1 | 巡检任务自身没有执行记录 | 待查 | 待修 | 无 |
+| F08 | P1 | `check` 恒 `return 0`，作业层看不见 `sample` 失败 | 实测 | 已修 | 无 |
+| F09 | P1 | `event_loop_p99` 阈值 100 ms 未校准，告警常亮 | 实测 | 已修（330 ms/30 min + max 2 s 通道） | 采纳 F22 的 330 ms |
+| F10 | P1 | 命中消失即写 `recovered`，无持续窗口 | 实测 | 已修（15 分钟恢复窗口） | 与 F12 同处合并 |
+| F11 | P1 | `derive_failed` 不进结构化诊断 | 实测 | 已修 | 无 |
+| F14 | P1 | `spawnSync('launchctl')` 无容错，受限环境栈崩 | 实测 | 已修 | 无 |
+| F16 | P1 | 日志轮转分支从未被真实触发 | 待查 | 已验证（launchd fd 实测 O_APPEND） | 需非生产副本实测 |
+| F17 | P1 | 巡检任务自身没有执行记录 | 待查 | 已修（inspect 落盘） | 无 |
 | F19 | P1 | 活跃会话的已知偏离（排序、活跃区、降级文案） | 待查 | 待查 | 先补证据 |
 | F20 | P1 | v9→v10 迁移在 3.91 GB 副本上阻塞 2.04 s | 实测 | 已完成 | 生产已迁移 |
-| F22 | P1 | p99 阈值建议 330 ms（区间 310–350） | 实测 | 待采纳 | 并入 F09 |
-| F24 | P1 | 仅重启不会让四条 Codex 会话收敛，需显式 rebuild | 实测 | 待修 | 依赖 F28 |
-| F25 | P1 | 运维语义：重启 ≠ Codex 集成生效 | 实测 | 待修（文档） | 依赖 F24 |
-| F29 | P1 | 前端 `sessionsLoading` 是布尔闸门，不共享 Promise | 实测（代码） | 待修（可选） | 放大 F27 |
+| F22 | P1 | p99 阈值建议 330 ms（区间 310–350） | 实测 | 已采纳 | 并入 F09 |
+| F24 | P1 | 仅重启不会让四条 Codex 会话收敛，需显式 rebuild | 实测 | 执行层（11-04 回归窗口做） | 依赖 F28 |
+| F25 | P1 | 运维语义：重启 ≠ Codex 集成生效 | 实测 | 已修（operations.md 部署顺序） | 依赖 F24 |
+| F29 | P1 | 前端 `sessionsLoading` 是布尔闸门，不共享 Promise | 实测（代码） | 已修（Promise 共享） | 放大 F27 |
 | F31 | P1 | `source:web_search` 被判成主链参与（实为辅助） | 实测+代码推断 | 已修（判据+折叠） | 存量行 retained 不翻判，见收起方案 note |
-| F01 | P2 | `schema_rebuild_required` 13 段崩溃栈 + 10-12 至 10-24 数据缺口 | 实测+待查 | 待修 | 无 |
-| F02 | P2 | `derive_failed:database is locked` 1 条 | 实测 | 待修 | 无 |
+| F01 | P2 | `schema_rebuild_required` 13 段崩溃栈 + 10-12 至 10-24 数据缺口 | 实测+待查 | 已修（错误信息带版本；预检未做） | 无 |
+| F02 | P2 | `derive_failed:database is locked` 1 条 | 实测 | 已修（写连接等锁 5 s） | 无 |
 | F03 | P2 | `hook_absent_marked` 5,114 批次 / 7,420 行 | 实测+推断 | 待修 | 与 F04 |
-| F04 | P2 | `pending_hooks` 1,348 行只增不减（22:57：1,351 / 孤儿 1,349） | 实测 | 待修 | 与 F03 |
+| F04 | P2 | `pending_hooks` 1,348 行只增不减（22:57：1,351 / 孤儿 1,349） | 实测 | 已修（孤儿 14 天保留期） | 与 F03 |
 | F05 | P2 | `cost_health = null` 属正常态 | 实测 | 已作废（非缺陷） | — |
-| F06 | P2 | 慢请求 top：stats 常态 200–571 ms、ingest-metrics 2.5 s | 实测 | 待修 | 与 F09/F27 |
-| F12 | P2 | `trailingRun` 超 `maxGapMs` 截断，语义混用 | 实测 | 待修 | 与 F10 |
-| F13 | P2 | 11 分钟断档阈值与巡检时延偏松 | 实测 | 待修 | 无 |
+| F06 | P2 | 慢请求 top：stats 常态 200–571 ms、ingest-metrics 2.5 s | 实测 | 已修（世代缓存 + 量测复用） | 与 F09/F27 |
+| F12 | P2 | `trailingRun` 超 `maxGapMs` 截断，语义混用 | 实测 | 已修（连续性容差=存活阈值） | 与 F10 |
+| F13 | P2 | 11 分钟断档阈值与巡检时延偏松 | 实测 | 已修（sample_gap 提醒） | 无 |
 | F15 | P2 | `storage=null` 被当 0 参与容量比较 | 复核未复现 | 未证实（疑似误报） | — |
 | F21 | P2 | 重启前基线：stats p95 1.16 s、sessions p50 39.3 ms | 实测 | 已完成（待复采） | 重启后复采 |
 | F30 | P2 | 冷页缓存固定成本 ~2.4 s 会定期复发（F26 影响下的上界） | 实测（上界） | 待查 | 修完 F26 复测 |
@@ -315,7 +315,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 - **复现**：Python 读取上述冻结 jsonl，对 `metrics.event_loop.p50/p95/p99/max`、`elapsed_ms`、`ts_ms` 差分做分位；口径与样本路径见证据。
 - **严重度**：P1（告警可信度；非数据风险）。
 - **建议**：把 F09 的 100 ms 改为 **330 ms（310–350 可接受）**，并要求连续 30 min 超阈才告警，避免单点尖峰；另设 `event_loop.max_ms > 2,000 ms` 或探针 `elapsed_ms > 2,000 ms` 的独立通道抓 F07 类停顿；重启后重算一次样本分位再定稿。这是对 F09 的补证据，不另立重复问题。
-- **状态**：待采纳（并入 F09；重启后复核）。
+- **状态**：已采纳（330 ms 落进 `THRESHOLDS.p99Ms`，跨度 30 分钟；重启后按 F21 复采复核）。
 
 ### F23 重启风险：迁移失败不自动重建，且没有自动备份
 
@@ -331,7 +331,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 - **严重度**：P0（迁移失败即停机；无自动重建、无自动备份）。
 - **建议**：重启顺序改为：停服 → `bun run maintain bundle --db … --out <外部路径>`（或至少 `backup`，预留 ≥4.43 GB）→ 启新代码 → 只读核对 `user_version=10`、索引、`integrity_check`；失败时保留库与 WAL，不要删除 `-wal/-shm`，按错误码处理后在低峰重试。注意备份要求停服，不能边跑边备。
 - **修复方案**：边界与状态机见 [迁移失败即停机：自动重建的边界设计（F23）](./2026-11-03-migration-failure-autorebuild.md)。结论是默认 A（快速失败 + 打印自救指令），只有显式开关（`--auto-rebuild` / `ATC_AUTO_REBUILD=1`）且唯一命中 `schema_rebuild_required` 时才允许 C（同卷改名备份后重建空库、不回填），B（自动备份 + 重建 + 回填）因 R1 之后无数据可填而否决。该篇只出设计，实现与验收未开始。
-- **状态**：待修（只读记录；本次未停服、未备份、未重启）。
+- **状态**：已修（流程）：备份→重启→显式 rebuild→验证 写入 [operations.md 部署顺序](../../docs/operations.md#部署顺序重启只完成迁移不回填存量)；本次回归窗口按该顺序执行。
 
 ### F24 重启本身不会让存量 Codex 会话收敛/改标题；验收需显式 rebuild
 
@@ -346,7 +346,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 - **复现**：重启 → `GET /api/sessions?limit=100`（必要时翻页）过滤 `agents=codex`；对比标题/flags/request_count。要看到预期结果，需先对 4 个 `conv_key` 各跑一次 `maintain rebuild`（写操作，另行安排）。
 - **严重度**：P1（验收口径错误；不改变服务可用性）。
 - **建议**：把 Codex 验收拆成两步：重启后先只读确认迁移与新流量写入；再在允许写操作的窗口内对 4 个 `conv_key` 显式 rebuild，然后用上述 GET 复核。不要在重启窗口里顺手跑全量 rebuild（最大会话 4,433 行的升级已 1.76 s，完整重排更久且会占主线程）。
-- **状态**：待修（只读记录；未执行 rebuild）。
+- **状态**：执行层待办：rebuild 随 2026-11-04 回归窗口执行，验收命令见上。
 
 ### F25 运维语义缺口：重启只完成迁移，不等于 Codex 集成生效
 
@@ -366,7 +366,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
   GET /api/sessions/<urlencoded conv_key>/turns
   ```
   另建议在文档里加一条只读自检：迁移后 `user_fingerprint` 非空计数应从 0 开始增长，用于区分「迁移成功」与「回填完成」。
-- **状态**：待修（文档）。
+- **状态**：已修：部署顺序与只读自检写入 [operations.md](../../docs/operations.md#部署顺序重启只完成迁移不回填存量)，schema 节同步到 v10。
 
 ### F26 `/api/sessions` 跨组标题绑定写成相关标量子查询，复杂度 O(页内会话数 × request 行数)
 
@@ -491,7 +491,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
   **为什么 B/C/D/E 暂不需要、什么条件下重新需要**：F26 修回后单发 ≈1.5–3 ms；40 ms 口径下 3 标签页 ≈120 ms、5 并发 ≈200 ms（冷页 ×4 ≈480/800 ms），metrics 最多被推迟同样时间——不构成「主线程阻塞」级事故。只有出现以下任一情况才重新评估：① 单发生成字段回到 >50 ms（新增重列/更大数据量）；② 需要支持 10+ 并发客户端；③ 冷页成本（F30）修后仍 >1 s。
 - **复现**：见附录 A.3（并发探针与推迟测量方法）。
 - **严重度**：P0。
-- **状态**：待修（A 是否随 F26 同批，待用户拍板；用户倾向 A 跟随同批，见「修复顺序与依赖」；尚未动代码）。
+- **状态**：已修（A 单飞）：`src/http.ts` 同 key 共享在途 Promise，错误走共享 rejection 各自映射响应，完成后立即出表；`listSessions` 每页只执行一次（测试断言 inflight 调用数）。
 
 ### F28 `user_fingerprint` / `turn_ref` 存量全空；title 指纹通道断
 
@@ -508,7 +508,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
   3. 加结构化计数（`purpose.fingerprint.written` / `.skipped(reason)`）随 `/api/stats` 输出，避免以后靠猜。
 - **建议修法**：先修 title 指纹提取（Claude `<session>…</session>` 模板取 `<session>` 内文本，Codex `User prompt:` 保留），再跑 F24 的显式 rebuild 回填存量；`turn_ref` 单独核查。
 - **严重度**：P0（绑定功能仍不可用，且掩盖 F26 的修复效果）。
-- **状态**：待修（title 指纹通道已定位；`turn_ref` 待查）。
+- **状态**：title 通道已修（`titlePromptText`：`User prompt:` 标记保留原语义，`<session>` 壳内文本按同一套解释清洗；测试覆盖两形状与主/标题指纹一致）；`turn_ref` 仍待查。
 
 ### F29 前端 `sessionsLoading` 是布尔闸门，不共享 Promise
 
@@ -517,7 +517,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 - **影响**：多标签页是天然放大器，配合 F27 把排队叠起来；同 tab 的并发调用被静默丢弃，调用方拿不到结果也无从重试。
 - **建议修法**：把 `sessionsLoading` 改成 `sessionsInFlight: Promise|null`，并发调用返回同一个 Promise；跨 tab 只能靠服务端（F27-A）。改动面 `web/reader-store.js` 约 **10 行**。
 - **严重度**：P1（功能/体验缺陷，非数据风险）。
-- **状态**：待修（可选；若 F26 修后并发不再成问题，可只做同 tab 共享）。
+- **状态**：已修：`sessionsLoading` 布尔闸门改 `sessionsInflight` Promise 共享，并发调用等待同一结果而不是被丢弃。
 
 ### F30 冷页缓存固定成本 ~2.4 s 会定期复发（上界）
 
@@ -630,6 +630,36 @@ F26（①，已修 `396342b`）→ F27（A，待拍板）→ F29（可选）
 F32（unknown-actor 进派生）→ F31（规则改 exclude 才可能收敛）→ 首屏 18 张卡收走
 F30 依赖 F26 完成；F21 依赖新实例稳定运行
 ```
+
+## 修复记录（2026-11-04 凌晨批次）
+
+> 本节是批次摘要；决策、取舍与验证细节以 [批次修复 note](../implemented/bug-fix/2026-11-04-monitoring-health-batch-fixes.md) 为准。
+
+分支 `fix/monitor-health-checks`（worktree `atc-monitor-health`），七个单元提交 `--no-ff` 合并 master。全量 `bun test` 1151 通过、`tsc --noEmit` 绿。纯观察项（F03/F05/F07/F15/F19/F30）不改代码；F32 按原计划另立批次。
+
+| 单元 | 提交内容 | 覆盖 |
+| --- | --- | --- |
+| fix(monitor) | `check` 退出码交代采样证据；p99 330 ms/30 min + `event_loop.max_ms>2 s` 独立通道；`transitionAlerts` 15 分钟恢复窗口、stale 不计时；连续性容差改存活阈值（断档 ≤11 分钟不清窗口）；`sample_gap` 提醒；`inspect` 子命令落盘 `monitor/checks/<day>.jsonl`；`service-support` 三处 spawnSync 包 `spawnText` 容错 | F08/F09/F22/F10/F12/F13/F17/F14 |
+| fix(purpose) | `titlePromptText`（input-interpretation 共享导出）：`User prompt:` 标记保留原语义，`<session>` 壳内文本经同一套解释清洗后作指纹 | F28（title 通道） |
+| fix(store) | 迁移错误信息带 db/code 版本号；写连接 `busy_timeout` 1 s→5 s | F01/F02 |
+| fix(hook) | `reconcilePending` 淘汰无 `response_id` 且超 14 天的孤儿行；带 response_id 的行保留 | F04 |
+| perf(stats) | `getStats` 按写世代缓存（`store.writeStats.count` 不变即复用）；`/api/ingest-metrics` 存储复用闸门最近量测，无闸门环境退回现算 | F06 |
+| fix(derive) | 轮失败错误码归一（`database_locked`/`table_locked`），`kind:"error"` 记 `op=derive.run` | F11 |
+| fix(http) + fix(web) | `/api/sessions` 同 key 单飞（错误共享 rejection，完成即出表）；`reader-store` 布尔闸门改 Promise 共享 | F27-A/F29 |
+
+### 关键验证
+
+- **F16（轮转）**：临时 launchd 探针作业（StandardOutPath 指向临时文件）实测：外部 truncate 后写入从下一条无缝继续（`probe-line-7` 起），无稀疏洞、无丢行——launchd 打开 StandardOutPath 用 O_APPEND，`copyFileSync + truncateSync` 轮转对 launchd 持有的 fd 安全。Bun `FileSink` 非 append 语义的副本实验会出现稀疏洞（归档 2 MiB = 洞 + 数据），那是 Bun 写入器行为，不代表 launchd；探针作业已删除。
+- **F09/F22（阈值）**：330 ms 采纳为 `THRESHOLDS.p99Ms`，跨度 30 分钟；`maxLoopMs=2000` 立即通道抓 F07 类单次停顿（事件循环环形窗口约 7 分钟自身限制存续）。
+- **F12（截断）**：告警窗口的连续性容差改为 `MISSING_SAMPLE_MS`（11 分钟）：一个漏采样本与 9 分钟断档都不清窗口，超过存活阈值才重新起算；`maxGapMs`（7.5 分钟）只留给 `sample_gap` 判据与报告统计。
+- **F08（退出码）**：`check` 以最新样本判定（`sampleEvidenceOk`：有样本、成功、在存活阈值内），`sample; check` 的 shell 语义不变。
+- **测试**：新增/改写 monitor 6 条、`titlePromptText` 1 条、Claude 标题指纹 1 条、pending_hook TTL 1 条、stats 世代缓存 1 条、snapshot 复用 1 条、single-flight 1 条（含错误广播与出表）、reader-store 并发共享 1 条；store 版本断言收紧到含版本号。守门测试「结算代码不出现 harness 品牌字面」抓到过注释里的品牌词，已改写。
+
+### 遗留
+
+- F28 的 `turn_ref` 通道仍待查（OTLP `mapping.turnRef` 是否有新数据）。
+- F01 的 `verify-cutover` 只读预检未做；F03 的 claude 侧 hook 排查、F07 的探针分段计时、F32（unknown-actor 进派生）、F19 证据补全各自另立批次。
+- F24/F23 的执行层（显式 rebuild 四条 Codex 会话、停服 bundle 备份、重启）随 2026-11-04 回归窗口执行，结果回填本文。
 
 ## Acceptance criteria
 

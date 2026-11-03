@@ -52,9 +52,10 @@ ln -f "$(realpath "$(command -v bun)")" ~/.local/libexec/agent-trace-collector
 bun scripts/monitor.ts sample     # 取一次 /api/metrics 与 /api/stats，写样本并轮转日志
 bun scripts/monitor.ts check      # 读最近样本、按阈值判定、写告警并通知
 bun scripts/monitor.ts report --days 1   # 按日报告；7 天用 --days 7
+bun scripts/monitor.ts inspect    # 巡检：判据结果落盘 checks/<day>.jsonl，成功也写
 ```
 
-`sample` 的退出码：`0` 采样成功，`1` 采样失败（超时、连不上、HTTP 错误或没有令牌）。失败样本照实写入，不填 0；`check` 与 `report` 正常返回 `0`。
+`sample` 的退出码：`0` 采样成功，`1` 采样失败（超时、连不上、HTTP 错误或没有令牌）。失败样本照实写入，不填 0。`check` 的退出码对作业层交代采样证据：最新样本缺失、失败或超出存活阈值时返回 `1`——launchd 作业是 `sample; check`，shell 取末条退出码，sample 的失败由 check 补报。`inspect` 在采样证据新鲜时返回 `0`，否则 `1`。
 
 样本与告警路径（数据目录默认 `~/Library/Application Support/agent-trace-collector`）：
 
@@ -62,6 +63,7 @@ bun scripts/monitor.ts report --days 1   # 按日报告；7 天用 --days 7
 | --- | --- | --- |
 | `monitor/samples/YYYY-MM-DD.jsonl` | 每次采样的允许列表字段 | 目录 0700、文件 0600，保留 14 天 |
 | `monitor/alerts/YYYY-MM-DD.jsonl` | 告警、提醒与恢复事件 | 同上 |
+| `monitor/checks/YYYY-MM-DD.jsonl` | 每次巡检的判据结果（成功也写） | 同上 |
 | `monitor/alert-state.json` | 当前活跃规则与上次通知时间 | 0600，重启后沿用 |
 | `monitor/logs/` | 诊断日志归档 | 0700；归档保留 14 天、总量 512 MiB |
 | `monitor/monitor.log` | 监控任务自身的一行输出 | 0600，随采样轮转 |
@@ -542,10 +544,21 @@ sqlite3 "$HOME/Library/Application Support/agent-trace-collector/trace.db" \
 
 ## schema 版本
 
-当前 `user_version=9`。空数据目录首次启动直接建到 v9；v6、v7 与 v8 库打开时在单个事务里原地升到 v9（纯新增，不动旧行），更早版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6、v7、v8 与 v9，旧版本包恢复后首次打开同样原地升级。
+当前 `user_version=10`。空数据目录首次启动直接建到 v10；v6、v7、v8 与 v9 库打开时在单个事务里原地升到 v10（纯新增，不动旧行），更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6、v7、v8、v9 与 v10，旧版本包恢复后首次打开同样原地升级。
+
+v10 在 v9 之上给 `request` 加 `user_fingerprint` 与 `turn_ref` 两列（内容指纹与 turn 身份）和两条按非空值的部分索引。索引要在存量全表上扫描：本机 4.03 GB 库热缓存实测约 2.0 s，冷缓存按 8 s 规划重启窗口。迁移只加列不回填——存量行两列为 NULL，派生队列没有待办，启动路径不做任何重算。
 
 v9 在 v8 之上给 `derive_queue` 加一列 `claim_from_sort`（写侧认领边界），是 `ALTER TABLE ADD COLUMN` 加常量默认值，不重写表、不建索引，存量行取空串。加列脚本自带列存在性判断：SQLite 的 `ALTER TABLE ADD COLUMN` 没有 `IF NOT EXISTS`，没有这层判断时一次失败的启动会让下次重试报 `duplicate column`，库卡在打不开的状态。
 
 v8 在 v7 之上加的两条部分索引（`i_req_prev`、`i_tool_result_req`）要在存量数据上扫描建索引。升级在启动路径里执行，属一次性成本：本机 3.1 GB 库实测约 6.2 s（扫描 `request` 全表，骨架 BLOB 使表页散布在大文件里，冷缓存占大头），同一次启动内其余步骤毫秒级。之后启动只查 `sqlite_schema` 即短路，不再扫描。接受一次秒级启动停顿换来零新增维护机制；存量规模再涨一个量级、停顿不可接受时，改为先停采集器、显式执行升级再启动，那个决定属于运维契约变更，要改这一节。建索引在单个事务里，中断即整体回滚，`user_version` 停在旧版本，索引不存在，下次启动从头重跑；升级失败时库保持原版本可打开状态，先看启动日志里的 SQLite 错误再重试。
 
 首版发布前的破坏式替换只对 v6 之前的库：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库；旧库里的正文与派生结果一起丢弃，没有"结构已升级、数据未迁移"的中间态。重建后的历史只有元数据：账本与路由的重放不产生正文，正文只能从 hook 或 OTLP 的 body_ref 拿到，所以重建前的正文、预览与工具配对都补不回来。要留住正文就在升级前导出：正文落在旧库的 `block.z` 与 `request.skeleton_z`，`raw_hook` 里的原文在完成关联后通常已经清空，不是可靠的导出源。`scripts/backfill-fingerprint.ts` 补的是 v3/v4 时代的派生列，不是到当前版本的路径——它把 `user_version` 写成 4，当前代码打不开它。不要手改 `user_version`。
+
+### 部署顺序：重启只完成迁移，不回填存量
+
+带 schema 变更或判据变更的发布，顺序固定是**备份 → 重启 → 显式 rebuild → 验证**，不是"重启完就生效"：
+
+1. **备份**：`maintain bundle` 要求源库已停，所以先 `bun run service stop`，bundle 到数据目录之外，再启动新代码。失败时保留库与 WAL 文件，按错误码处理后在低峰重试。
+2. **重启**：`openStore` 在启动路径里完成原地迁移（一次性索引扫描停顿，见上）。重启后先只读核对：`PRAGMA user_version` 到目标版本、`integrity_check` 为 ok。
+3. **显式 rebuild**：迁移只加列，存量行的派生列全为 NULL、队列无待办；让存量会话按新规则收敛必须逐会话（或分批）跑 `bun run maintain rebuild --session '<conv_key>'`。不要在重启窗口顺手跑全量 rebuild——大会话的升级在秒级，会占主线程。
+4. **验证**：区分「迁移成功」与「回填完成」。迁移成功的只读自检是新列非空计数随新流量从 0 开始增长（`SELECT COUNT(*) FROM request WHERE user_fingerprint IS NOT NULL`）；回填完成的验收是 `GET /api/sessions` 的标题、flags 与 request_count 符合新规则预期。重启后立刻看会话列表，看到旧行为是「还没 rebuild」，不是「功能没生效」。
