@@ -8,7 +8,17 @@ import { checkLimit, decodeCursor, encodeCursor, type Page } from './cursor';
 export type SessionRow = {
   conv_key: string; title: string; last_ms: number; request_count: number;
   agents: string[]; flags: string[];
+  /** 只有传入活跃快照时才有这三个字段；旧调用方拿到的形状不变。 */
+  live?: boolean; inflight?: boolean; live_until?: number | null;
 };
+
+/** 列表读取只需要两件事：服务端当前时间与在途请求的内存态。 */
+export type SessionLive = {
+  now: number;
+  inflight: (convKey: string) => boolean;
+};
+
+export const LIVE_WINDOW_MS = 60_000;
 
 type SessionDbRow = {
   conv_key: string; last_ms: number; request_count: number; title: string | null; agents: string | null;
@@ -107,7 +117,12 @@ const SESSION_TITLE_SQL = `COALESCE(
 const SESSION_TITLE_GUARD_SQL = `EXISTS (SELECT 1 FROM derive_queue g
   WHERE g.conv_key = request.conv_key AND ${groupCurrentSql('g')})`;
 
-export function listSessions(store: Store, limit = 50, cursor: string | null = null): Page<SessionRow> {
+export function listSessions(
+  store: Store,
+  limit = 50,
+  cursor: string | null = null,
+  live: SessionLive | null = null,
+): Page<SessionRow> {
   const size = checkLimit(limit, 100);
   const bound = cursor === null
     ? null
@@ -159,7 +174,7 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
   const items: SessionRow[] = page.map(candidate => {
     const row = byKey.get(candidate.conv_key);
     if (row === undefined) throw new Error('session_page_row_missing');
-    return toSessionRow(row);
+    return toSessionRow(row, live);
   });
   const last = page[page.length - 1];
   const nextCursor = candidates.length > size && last !== undefined
@@ -168,7 +183,7 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
   return { items, next_cursor: nextCursor };
 }
 
-function toSessionRow(row: SessionDbRow): SessionRow {
+function toSessionRow(row: SessionDbRow, live: SessionLive | null): SessionRow {
   const flags: string[] = [];
   if (row.has_failed === 1) flags.push('failed');
   if (row.has_unknown === 1) flags.push('unknown');
@@ -181,12 +196,23 @@ function toSessionRow(row: SessionDbRow): SessionRow {
   // 会话归属。四个条件全满足才折叠，判定依据留在读模型里，渲染层只认标志。
   if (row.all_probe_kind === 1 && row.has_readable_body === 0
     && row.has_usage === 0 && row.has_actor === 0) flags.push('probe');
-  return {
+  const base = {
     conv_key: row.conv_key,
     title: row.title ?? '',
     last_ms: row.last_ms,
     request_count: row.request_count,
     agents: row.agents === null ? [] : row.agents.split(',').filter(value => value.length > 0),
     flags,
+  };
+  if (live === null) return base;
+  // 活跃集合由读模型判定：在途请求，或最近 60 秒内有更新。60 秒只看本行已有的
+  // last_ms，不再查库；在途状态来自摄入回调维护的内存态。
+  const inflight = live.inflight(row.conv_key);
+  const recent = live.now - row.last_ms <= LIVE_WINDOW_MS;
+  return {
+    ...base,
+    live: inflight || recent,
+    inflight,
+    live_until: recent ? row.last_ms + LIVE_WINDOW_MS : null,
   };
 }

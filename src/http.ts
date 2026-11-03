@@ -10,6 +10,7 @@ import { getRequest, listRequests } from './queries/requests';
 import { getRoute } from './queries/routes';
 import { getStats } from './queries/stats';
 import { listSessions } from './queries/sessions';
+import type { LiveActivity } from './activity';
 import { listTurns } from './queries/turns';
 import { listBgJobs } from './queries/bg-jobs';
 import { PAGE_MAX, bodyRangeError, getBodyPage } from './protocols';
@@ -478,6 +479,7 @@ export function createHandler(
   metrics?: CapacityMetrics,
   otlp?: { token: string; salt: Uint8Array; admission?: () => HookAdmission },
   diagnostics?: DiagnosticLog,
+  live?: LiveActivity,
 ): (req: Request) => Promise<Response> {
   // hook 计数在未注入观测运行时也保留，只是没有对外入口。
   const ingestMetrics = metrics?.ingest ?? createIngestMetrics();
@@ -519,7 +521,10 @@ export function createHandler(
 
       if (path === '/api/sessions') {
         const limit = parseLimit(url, 50);
-        return json(listSessions(store, limit, url.searchParams.get('cursor')));
+        const active = live === undefined
+          ? null
+          : { now: Date.now(), inflight: (key: string) => live.inflight(key) };
+        return json(listSessions(store, limit, url.searchParams.get('cursor'), active));
       }
 
       const requestsMatch = /^\/api\/sessions\/([^/]+)\/requests$/.exec(path);

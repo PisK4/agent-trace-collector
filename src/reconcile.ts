@@ -132,13 +132,16 @@ export function ingestSource(
   read: SourceRead,
   salt: Uint8Array,
   now: number,
+  onCommitted?: (reqIds: readonly number[]) => void,
 ): SourceIngestResult {
   if (read.state !== 'decoded') throw new Error(`source_not_decoded:${read.state}`);
   const adapter = read.mode === 'appendable' ? APPENDABLE_ADAPTER : SEALED_ADAPTER;
-  return store.write(db => {
+  // 改动过的请求先记在本地，事务提交后才交给活跃跟踪；回滚不会留下在途假象。
+  const changed = new Set<number>();
+  const result = store.write(db => {
     const result = read.sourceKind === 'ledger'
-      ? ingestLedgerRowsTx(db, read, salt, now)
-      : ingestRouteFileTx(db, read, salt, now, adapter);
+      ? ingestLedgerRowsTx(db, read, salt, now, changed)
+      : ingestRouteFileTx(db, read, salt, now, adapter, changed);
     upsertSourceCursorTx(db, read, now);
     if (read.sourceKind === 'ledger') {
       // 本轮提交的区间若覆盖了此前的暂停缺口，就在这里关闭它；
@@ -148,6 +151,8 @@ export function ingestSource(
     }
     return result;
   }, read.sourceKind === 'ledger' ? 'ledger' : 'route');
+  if (onCommitted !== undefined && changed.size > 0) onCommitted([...changed]);
+  return result;
 }
 
 /** 一个路由文件批次的记录级摄入；调用方负责把它放进已有事务。 */
@@ -157,6 +162,7 @@ function ingestRouteFileTx(
   salt: Uint8Array,
   now: number,
   adapter: SourceAdapter,
+  changed?: Set<number>,
 ): SourceIngestResult {
   let invalid = 0;
   for (const issue of read.issues) {
@@ -177,7 +183,7 @@ function ingestRouteFileTx(
     }
   }
   const result = ingestRouteRecordsTx(db, records, now, salt,
-    value => adapter.routeRecordIssueRef(read, value));
+    value => adapter.routeRecordIssueRef(read, value), changed);
   return {
     accepted: result.accepted,
     invalid: invalid + result.invalid,
@@ -475,7 +481,7 @@ function mergeLedgerRow(
   fields: LedgerFields,
   refKey: string,
   now: number,
-): void {
+): number {
   const via = fields.source === 'rejected' ? 'rejected' : (fields.via ?? 'through');
   const rejected = via === 'rejected';
   let reqId: number | null = null;
@@ -495,6 +501,7 @@ function mergeLedgerRow(
   // 行级事实只由投影写；投影幂等，route 挂载前后各调一次不改变结果。
   const projection = projectLedgerRequestTx(db, reqId, now, baseline);
   applyLedgerOwnershipTx(db, reqId, fields, projection, now);
+  return reqId;
 }
 
 /** 账本记录级摄入；调用方负责把它放进已有事务。 */
@@ -503,6 +510,7 @@ function ingestLedgerRowsTx(
   read: SourceRead,
   salt: Uint8Array,
   now: number,
+  changed?: Set<number>,
 ): SourceIngestResult {
   let accepted = 0;
   let invalid = 0;
@@ -564,7 +572,7 @@ function ingestLedgerRowsTx(
       duplicate += 1;
       continue;
     }
-    mergeLedgerRow(db, fields, refKey, now);
+    changed?.add(mergeLedgerRow(db, fields, refKey, now));
     accepted += 1;
   }
   return { accepted, invalid, duplicate, purged_skip };
@@ -631,6 +639,7 @@ function ingestRouteRecordsTx(
   now: number,
   salt: Uint8Array,
   issueKey: (value: number) => string,
+  changed?: Set<number>,
 ): SourceIngestResult {
   let accepted = 0;
   let invalid = 0;
@@ -669,7 +678,10 @@ function ingestRouteRecordsTx(
     const baseline = existing === null ? null : projectionBaselineTx(db, existing.req_id);
     upsertPreparedRouteTx(db, route, JSON.stringify(redacted));
     saveRouteSummary(db, route, now);
-    if (existing != null) applyRouteToRequest(db, existing.req_id, route, now, baseline);
+    if (existing != null) {
+      applyRouteToRequest(db, existing.req_id, route, now, baseline);
+      changed?.add(existing.req_id);
+    }
     accepted += 1;
   }
   return { accepted, invalid, duplicate, purged_skip: 0 };
