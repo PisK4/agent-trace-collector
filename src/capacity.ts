@@ -99,6 +99,12 @@ export function createIngestMetrics(startedAt = Date.now()): IngestMetrics {
   };
 }
 
+/** 存储量测自身的次数与耗时；用于确认同步量测在真实窗口里还占多少。 */
+export type StorageMeasure = {
+  record(ms: number): void;
+  snapshot(): { count: number; total_ms: number; max_ms: number };
+};
+
 export type CapacityMetrics = {
   startedAt: number;
   ingest: IngestMetrics;
@@ -110,6 +116,8 @@ export type CapacityMetrics = {
     record(name: string, ms: number): void;
     snapshot(): Record<string, { count: number; total_ms: number; max_ms: number }>;
   };
+  /** 存储量测计数；与 `storage` 用量并列输出为 `storage_measure`。 */
+  storage: { measure: StorageMeasure };
   /** 同步派生消息块解码的进程累计；切片路径暂不计入。 */
   bodyRead: {
     record(stats: BodyReadStats): void;
@@ -235,6 +243,14 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
   const ingest = createIngestMetrics(startedAt);
   const route = { polls: 0, files_seen: 0, decoded: 0, unchanged: 0, errors: 0 };
   const jobs = new Map<string, { count: number; total_ms: number; max_ms: number }>();
+  const storageMeasure = { count: 0, total_ms: 0, max_ms: 0 };
+  const recordStorageMeasure = (ms: number): void => {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    storageMeasure.count += 1;
+    storageMeasure.total_ms += ms;
+    storageMeasure.max_ms = Math.max(storageMeasure.max_ms, ms);
+  };
+  const storageMeasureSnapshot = () => ({ ...storageMeasure });
   const bodyRead = emptyBodyReadStats();
   const intervalMs = 50;
   const limit = 8192;
@@ -271,6 +287,12 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
       },
       snapshot() { return Object.fromEntries(jobs); },
     },
+    storage: {
+      measure: {
+        record(ms) { recordStorageMeasure(ms); },
+        snapshot() { return storageMeasureSnapshot(); },
+      },
+    },
     bodyRead: {
       record(stats) { addBodyReadStats(bodyRead, stats); },
       snapshot() { return { ...bodyRead }; },
@@ -298,7 +320,9 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
       snapshot() { return eventLoop(); },
     },
     snapshot(target, targetDir) {
+      const measureStarted = performance.now();
       const storage: StorageUsage = measureStorage(target, targetDir);
+      recordStorageMeasure(performance.now() - measureStarted);
       const now = Date.now();
       return {
         started_at_ms: startedAt,
@@ -315,6 +339,7 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
         event_loop: eventLoop(),
         rss_bytes: process.memoryUsage().rss,
         storage,
+        storage_measure: storageMeasureSnapshot(),
         metadata: metadataSnapshot(target),
         derive_queue: queueSnapshot(target),
       };

@@ -94,6 +94,8 @@ export async function startCollector(
   const gate = createAdmissionGate(store, config.dataDir, {
     bodyBudget: config.bodyBudget,
     diskLimit: config.diskLimit,
+  }, {
+    onMeasure: ms => metrics.storage.measure.record(ms),
   });
   let handler: (req: Request) => Promise<Response> = () => Promise.resolve(new Response('starting', { status: 503 }));
 
