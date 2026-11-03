@@ -5,7 +5,7 @@ import { esc } from './html.js';
 import { currentLocale, t } from './i18n.js';
 import { icon, rolePill } from './icons.js';
 import { bodyStateText } from './row-summary.js';
-import { clipChars, summaryParts, toolSummary } from './tool-summary.js';
+import { clipChars, summaryParts, summaryTargets, toolSummary } from './tool-summary.js';
 
 /** 步骤短语列表的分隔符：中文用全角，英文退回半角。 */
 const listJoin = () => (currentLocale() === 'zh' ? '；' : '; ');
@@ -553,7 +553,7 @@ const KIND_CLASS = { user: 'user', assistant: 'reply', tool: 'reply', tool_resul
  * 不在缓存时只给 `→ 结果正文`；未配对保持中性 `Tool result`，不猜归属。
  * @param {TraceStep} step
  * @param {((ownerReq: number, callOrd: number) => {name: string, inputText: string} | null) | null} callOf
- * @returns {{chip: string, args: string, arrow: boolean}}
+ * @returns {{chip: string, args: string, arrow: boolean, more: string[]}}
  */
 function toolRowParts(step, callOf) {
   // 无名工具没有名字可写：身份 chip 用一个形状表示，原名仍进 aria-label 与 title。
@@ -561,20 +561,23 @@ function toolRowParts(step, callOf) {
   if (step.kind === 'tool') {
     const name = step.toolName ?? '';
     const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed(t('未命名工具'));
-    return { chip, args: step.toolArgs ?? '', arrow: false };
+    // 一次调用带多个文件：第一个常显，其余计数交给 +N，完整清单按需展开。
+    const targets = summaryTargets(step.toolInput ?? '');
+    if (targets !== null) return { chip, args: targets[0], arrow: false, more: targets.slice(1) };
+    return { chip, args: step.toolArgs ?? '', arrow: false, more: [] };
   }
   if (step.kind === 'tool_result') {
     const owner = step.pairOwner;
     const call = owner !== null && callOf !== null ? callOf(owner.reqId, owner.callOrd) : null;
     if (call === null && (step.toolName ?? '') === '') {
-      return { chip: unnamed('Tool result'), args: '', arrow: false };
+      return { chip: unnamed('Tool result'), args: '', arrow: false, more: [] };
     }
     const name = call !== null ? call.name : /** @type {string} */ (step.toolName);
     const chip = name !== '' ? `<span class="row-tint">${esc(name)}</span>` : unnamed(t('未命名工具'));
     const args = call !== null ? summaryParts(call.name, call.inputText).args : '';
-    return { chip, args, arrow: true };
+    return { chip, args, arrow: true, more: [] };
   }
-  return { chip: '', args: '', arrow: false };
+  return { chip: '', args: '', arrow: false, more: [] };
 }
 
 /** @param {string} text @param {number} [max] */
@@ -617,8 +620,12 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
   const labelHtml = step.kind === 'flag'
     ? `<span class="row-label flag" role="img" aria-label="${step.status === 'failed' ? t('失败') : t('缺口')}" title="${step.status === 'failed' ? t('失败') : t('缺口')}">${icon(step.status === 'failed' ? 'failure' : 'gap')}</span>`
     : rolePill(label, KIND_CLASS[step.kind] ?? 'aux');
-  const { chip, args, arrow } = toolRowParts(step, callOf);
+  const { chip, args, arrow, more } = toolRowParts(step, callOf);
   const isTool = step.kind === 'tool' || step.kind === 'tool_result';
+  // 多目标只出计数：清单不落 DOM，悬浮或聚焦行时由 app 层按 key 现取现渲染。
+  const moreHtml = more.length > 0
+    ? ` <span class="row-more" data-more-key="${esc(step.key)}" aria-label="另有 ${more.length} 个目标，悬停或聚焦这一行查看" title="另有 ${more.length} 个目标">+${more.length}</span>`
+    : '';
   // 悬停给完整信息：调用行放完整参数 JSON，结果行放调用摘要与完整结果正文；属性按 TITLE_MAX 截断。
   let title = '';
   if (step.kind === 'tool') {
@@ -628,7 +635,7 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
   }
   const titleAttr = title !== '' ? ` title="${esc(title)}"` : '';
   const previewHtml = isTool
-    ? `${args !== '' ? `<code>${esc(args)}</code>` : ''}${
+    ? `${args !== '' ? `<code>${esc(args)}</code>` : ''}${moreHtml}${
       arrow ? '<span class="row-arrow" aria-hidden="true">→</span>' : ''}${
       step.kind === 'tool_result' ? `<code>${esc(step.text)}</code>` : ''}`
     : esc(clipPreview(step.text));
