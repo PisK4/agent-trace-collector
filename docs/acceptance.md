@@ -4,6 +4,30 @@
 
 验收结果描述的是当时的代码与数据。现行行为以[架构设计](architecture-design.md)与代码为准；本文件回答的是「这条路径验证过没有、怎么验的」。
 
+## 后台监控落地（合成，2026-11-03）
+
+前提：隔离 worktree `/path/to/worktrees/atc-background-monitoring`，分支 `feat/background-monitoring`，基于 master `4a4108f`。只改代码、测试与文档；没有提交、合并、push，没有重启生产采集器，没有安装或触发新的 launchd 作业。主工作区与其他 worktree 未触碰。
+
+| 检查 | 结果 |
+| --- | --- |
+| 轻量指标 | `/api/metrics` 不调用 `measureStorage`、不返回 `metadata`；存储值取闸门最近量测并带 `storage_measured_at_ms`，无值返回 null；派生队列只返回组数与最老 dirty 年龄 |
+| 慢日志与错误分类 | 快速 GET 不产生日志；超阈值记录 `op=http.read` 与路由模板，不含动态 id 与令牌；自由错误文本归一为 `unclassified` |
+| 限流 | 同一 key 60 秒内只出第一条，窗口后的第一条带 `suppressed` 次数 |
+| 派生结果 | 空闲 tick 不记录；整组发布记录关联编号与 `compute_ms`/`apply_ms`；组失败记录 `result=failure` 与固定错误码，同一轮编号可对上 |
+| 敏感内容 | 采样的允许列表不含正文、会话标题、SQL 参数；构造的 canary 不出现在样本或日志中 |
+| 阈值判定 | p99 与派生积压需连续 10 分钟；准入门槛 10 分钟；采集中断与 RSS 15 分钟；组数或 `open_gaps` 有下降则不告警 |
+| 缺数据 | 最新样本失败或缺失时保留活跃告警、不判恢复；30 分钟后提醒一次 |
+| 重启与保留 | 合成子进程两次追写同一日志文件，旧记录仍在、实例标识不同；采样按日追加不因重启丢历史；14 天清理与 64 MiB/512 MiB 归档上限生效；文件 0600、目录 0700 |
+| 清理边界 | 轮转与清理只在 `scripts/monitor.ts` 的采样路径调用，`src` 的启动与请求路径不删除文件 |
+
+自动化：新增 `tests/monitoring.test.ts`、`tests/monitor.test.ts`、`tests/metrics-light.test.ts`、`tests/derive-observability.test.ts` 共 23 pass / 0 fail；全量 `bun test` 1101 pass / 0 fail；`tsc --noEmit` 退出码 0。
+
+未覆盖：生产 `/api/metrics` 的 p95 延迟、真实流量的告警质量、launchd 作业的安装与实际通知投递。这些需要在采集器重启后由本机手动执行，见「后台监控落地（生产，待验证）」与运维手册。
+
+## 后台监控落地（生产，待验证）
+
+尚未执行。需要用户在本机完成：重启采集器加载新代码、安装 `local.agent-trace-monitor`、观察至少一个完整窗口。验证项：`/api/metrics` 在真实负载下的响应时间；`monitor/samples/` 是否有连续样本；`check` 的告警与恢复是否成对；通知是否真的弹出；日志归档是否按上限轮转。本记录保持「待验证」，不以合成结果代替真实流量验收。
+
 ## 方向 A 界面对齐修正（合成，2026-11-02）
 
 前提：隔离 worktree `atc-direction-a-alignment`，分支 `fix/direction-a-alignment`，基于 master `0749d7f`。前端与目录数据由两个 Sub-Agent 实施，主 Agent 复核与浏览器验收。合成服务器在 `127.0.0.1:8770` 加载 worktree 的同一份生产 web；没有访问真实库，没有提交、合并或部署生产。决策与走查编号见[方向 A 对齐修正](../.agents/notes/implemented/bug-fix/2026-11-02-direction-a-alignment-audit.md)，字段来源见[目录数据记录](../.agents/notes/implemented/bug-fix/2026-11-02-summary-entry-exec-and-arg.md)。

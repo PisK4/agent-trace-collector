@@ -44,6 +44,67 @@ ln -f "$(realpath "$(command -v bun)")" ~/.local/libexec/agent-trace-collector
 
 计算线程崩溃（例如计算中抛错退出）只让在飞的那一组失败：这一轮不写库，组保持 dirty，下一次 tick 新建线程重算；已经提交的组不受影响，不会出现半发布。被拒绝的计算不动队列，重试代价就是重算这一组。
 
+## 后台监控
+
+监控是独立于采集器 launchd 任务的第二个作业，label `local.agent-trace-monitor`，每 300 秒执行一次采样与检查。它只读接口和本地文件，不改库，也不重启采集器。
+
+```sh
+bun scripts/monitor.ts sample     # 取一次 /api/metrics 与 /api/stats，写样本并轮转日志
+bun scripts/monitor.ts check      # 读最近样本、按阈值判定、写告警并通知
+bun scripts/monitor.ts report --days 1   # 按日报告；7 天用 --days 7
+```
+
+`sample` 的退出码：`0` 采样成功，`1` 采样失败（超时、连不上、HTTP 错误或没有令牌）。失败样本照实写入，不填 0；`check` 与 `report` 正常返回 `0`。
+
+样本与告警路径（数据目录默认 `~/Library/Application Support/agent-trace-collector`）：
+
+| 路径 | 内容 | 权限与保留 |
+| --- | --- | --- |
+| `monitor/samples/YYYY-MM-DD.jsonl` | 每次采样的允许列表字段 | 目录 0700、文件 0600，保留 14 天 |
+| `monitor/alerts/YYYY-MM-DD.jsonl` | 告警、提醒与恢复事件 | 同上 |
+| `monitor/alert-state.json` | 当前活跃规则与上次通知时间 | 0600，重启后沿用 |
+| `monitor/logs/` | 诊断日志归档 | 0700；归档保留 14 天、总量 512 MiB |
+| `monitor/monitor.log` | 监控任务自身的一行输出 | 0600，随采样轮转 |
+
+采集器的诊断日志仍在 launchd plist 的 `StandardOutPath` / `StandardErrorPath`。live 文件达到 64 MiB 时，监控任务先复制到 `monitor/logs/` 再清空 live 文件；不删除、不改名，因为 launchd 还握着原文件描述符。
+
+安装（先确认采集器 plist 的路径与运行时入口。运行时写绝对路径，本机是 `$HOME/.local/libexec/agent-trace-collector`；不要写 `bun` 命令名，launchd 的 PATH 不含 nvm 目录）：
+
+```sh
+cat > ~/Library/LaunchAgents/local.agent-trace-monitor.plist <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.agent-trace-monitor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>cd /绝对路径/agent-trace-collector &amp;&amp; /绝对路径/agent-trace-collector-runtime scripts/monitor.ts sample; /绝对路径/agent-trace-collector-runtime scripts/monitor.ts check</string>
+  </array>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/绝对数据目录/monitor/monitor.log</string>
+  <key>StandardErrorPath</key><string>/绝对数据目录/monitor/monitor.log</string>
+</dict>
+</plist>
+PLIST
+mkdir -p "/绝对数据目录/monitor"
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.agent-trace-monitor.plist
+```
+
+`sample` 失败不影响随后的 `check` 执行（命令用 `;` 连接），失败本身会成为一条样本并参与 `service_unreadable` 判定。
+
+卸载：
+
+```sh
+launchctl bootout gui/$UID/local.agent-trace-monitor
+rm ~/Library/LaunchAgents/local.agent-trace-monitor.plist
+```
+
+`bootout` 只停监控作业，采集器不受影响。`monitor/` 下的历史数据不会自动删除，需要清空时手动处理。手工验证时先跑 `sample` 再跑 `check`；`check` 依赖最新样本，单独跑不会凭空产生告警。
+
 ## 维护命令
 
 这些命令都在 `src/maintenance/cli.ts`，通过 `bun run maintain` 调用。退出码：`0` 成功，`1` 失败，`2` 用法错误。失败时 stderr 写 `<命令>_failed:<原因码>`。
