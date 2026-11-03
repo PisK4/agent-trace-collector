@@ -15,6 +15,7 @@ import {
 import { syncCosts } from './sources/magpie/costs';
 import { probeMagpie, saveProbe } from './sources/magpie/probe';
 import { createHandler, loadReadToken } from './http';
+import { createLiveActivity } from './activity';
 import { markHookAbsent, reconcilePending } from './hook';
 import { createDeriveUnit } from './derive/unit';
 import { createDeriveWorker } from './derive/worker';
@@ -150,6 +151,9 @@ export async function startCollector(
       diagnostics.slow('storage.measure', { dur_ms: ms });
     },
   });
+  // 在途请求的内存态：启动时只恢复最近 60 秒有界窗口，之后靠摄入回调增量更新。
+  const live = createLiveActivity();
+  live.bootstrap(store);
   let handler: (req: Request) => Promise<Response> = () => Promise.resolve(new Response('starting', { status: 503 }));
 
   const timers: ReturnType<typeof setInterval>[] = [];
@@ -194,7 +198,7 @@ export async function startCollector(
       }
       return;
     }
-    const result = ingestSource(store, batch, salt, Date.now());
+    const result = ingestSource(store, batch, salt, Date.now(), ids => live.observe(store, ids));
     if (result.purged_skip > 0) process.stderr.write(`purged_skip:${result.purged_skip}\n`);
   });
 
@@ -213,7 +217,7 @@ export async function startCollector(
         if (file.state === 'error') diagnostics.error('route.file', { code: 'route_file_error', phase: 'decode' });
         continue;
       }
-      ingestSource(store, file, salt, Date.now());
+      ingestSource(store, file, salt, Date.now(), ids => live.observe(store, ids));
     }
   });
 
@@ -286,7 +290,7 @@ export async function startCollector(
     token: otlpToken,
     salt,
     admission: () => gate.check(0),
-  }, diagnostics);
+  }, diagnostics, live);
 
   timers.push(setInterval(ledgerTick, intervalOf(config, 'ledger', LEDGER_INTERVAL_MS)));
   timers.push(setInterval(routeTick, intervalOf(config, 'route', ROUTE_INTERVAL_MS)));

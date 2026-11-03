@@ -35,10 +35,11 @@ import { compact, EXEC_MS_HINT, secs } from './duration.js';
 import { summaryParts } from './tool-summary.js';
 import { bodyLabelText, bodyStateText, replyCompleteness } from './row-summary.js';
 import {
-  agentLabel, clock, dayTime,
+  agentLabel, clock, dayTime, liveTimeCell, nextLiveExpiry,
+  partitionLiveSessions,
   railSummaryListHtml as railSummaryListView,
   sessionHead as sessionHeadView,
-  sessionsListFoldHtml,
+  sessionsGroupLabel, sessionsListFoldHtml,
 } from './session-view.js';
 import { applyIntent } from './selection.js';
 import { createMainView } from './trace-dom.js';
@@ -429,6 +430,44 @@ if (typeof document !== 'undefined') {
     return [s.title, ...s.agents, ...s.agents.map(agentLabel)].join(' ').toLowerCase().includes(q);
   }
 
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let liveExpiryTimer = null;
+  let liveExpiryAt = Infinity;
+
+  /**
+   * 活跃集合变化时不轮询：只在最早一条“最近活跃”到期时重排一次。
+   * 到期判定用的是服务端下发的 live_until，主线程只做一次 O(可见行) 的过滤。
+   * @param {SessionRow[]} rows @param {number} now
+   */
+  function scheduleLiveExpiry(rows, now) {
+    const next = nextLiveExpiry(rows, now);
+    if (next === liveExpiryAt) return;
+    if (liveExpiryTimer !== null) clearTimeout(liveExpiryTimer);
+    liveExpiryTimer = null;
+    liveExpiryAt = next ?? Infinity;
+    if (next === null) return;
+    liveExpiryTimer = setTimeout(() => {
+      liveExpiryTimer = null;
+      liveExpiryAt = Infinity;
+      const list = el('sessions-list');
+      const top = list.scrollTop;
+      const active = document.activeElement;
+      const focusedKey = active && typeof active.closest === 'function'
+        ? (active.closest('[data-session]')?.getAttribute('data-session') ?? null)
+        : null;
+      renderSessions();
+      list.scrollTop = top;
+      if (focusedKey !== null) {
+        for (const node of list.querySelectorAll('[data-session]')) {
+          if (node.getAttribute('data-session') === focusedKey) {
+            /** @type {HTMLElement} */ (node).focus();
+            break;
+          }
+        }
+      }
+    }, Math.max(0, next - Date.now()) + 1);
+  }
+
   function renderSessions() {
     const items = store.getSessions().items;
     const all = /** @type {SessionRow[]} */ (items.filter(sessionMatches));
@@ -439,6 +478,8 @@ if (typeof document !== 'undefined') {
     const foldable = all.filter(s => folded(s) && s.conv_key !== state.session);
     // 列表被搜索或筛选收窄时才给分母；默认只报已加载数量，不伪造全库总数。
     el('sess-count').textContent = all.length === items.length ? `已加载 ${items.length}` : `${all.length} / ${items.length}`;
+    const now = Date.now();
+    const { live, rest } = partitionLiveSessions(list, now);
     const item = (/** @type {SessionRow} */ s) => {
       // 身份用第一个 agent 的品牌 logo；多 Agent 行其余仍走文字。
       const firstAgent = s.agents.length > 0 ? s.agents[0] : null;
@@ -454,6 +495,7 @@ if (typeof document !== 'undefined') {
       const who = s.agents.length > 0
         ? `${agentLabel(s.agents[0])}${s.agents.length > 1 ? ` +${s.agents.length - 1}` : ''}`
         : '归属未知';
+      const time = liveTimeCell(s, clock);
       return `<button class="sess" data-session="${esc(s.conv_key)}" aria-current="${s.conv_key === state.session}">
         <span class="sess-title">${esc(s.title || '（无标题）')}</span>
         <span class="sess-meta">
@@ -461,13 +503,18 @@ if (typeof document !== 'undefined') {
           <span class="who">${esc(who)}</span>
           <span class="sess-count">· ${s.request_count} 笔</span>
           ${mark}
-          <span class="sess-time num">${esc(clock(s.last_ms))}</span>
+          <span class="sess-time ${time.cls}">${esc(time.text)}</span>
         </span>
       </button>`;
     };
+    const rowsHtml = (/** @type {SessionRow[]} */ rows) => rows.map(item).join('');
     const foldHtml = sessionsListFoldHtml(foldable, state.showFolded);
+    // 活跃区在半空时不占位：没有活跃行就退回原来的平铺列表，不常驻空标题。
     const body = list.length
-      ? list.map(item).join('') + foldHtml
+      ? (live.length > 0
+        ? sessionsGroupLabel('活跃', live.length) + rowsHtml(live)
+          + (rest.length > 0 ? sessionsGroupLabel('全部会话', rest.length) + rowsHtml(rest) : '')
+        : rowsHtml(rest)) + foldHtml
       : (foldHtml !== ''
         ? foldHtml
         : `<p class="sess-empty">${icon('empty-tray', 24)}当前已加载的会话里没有符合条件的项。搜索与筛选只覆盖已加载范围。</p>`);
@@ -478,6 +525,7 @@ if (typeof document !== 'undefined') {
     const error = last.error === null ? ''
       : `<p class="sess-empty">${icon('empty-broken', 24)}会话列表读取失败：${esc(last.error)}。可再次点击加载更多重试。</p>`;
     el('sessions-list').innerHTML = body + more + error;
+    scheduleLiveExpiry(list, now);
   }
 
   /* ---------------- 中栏 ---------------- */

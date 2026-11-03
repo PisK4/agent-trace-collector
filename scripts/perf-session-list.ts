@@ -33,6 +33,7 @@ const sessions = arg('sessions', 400);
 const page = arg('page', 20);
 const reps = arg('reps', 5);
 const existingDb = stringArg('db');
+const withLive = process.argv.includes('--live');
 if (existingDb === null && requests < sessions) throw new Error('requests must be >= sessions');
 
 /** 确定性伪随机：同一参数重复运行得到同一分布，测量差异只来自查询本身。 */
@@ -116,26 +117,39 @@ try {
 
   const walk = (label: string, samples: number[]): void => {
     const sorted = [...samples].sort((a, b) => a - b);
+    const at = (ratio: number): number => sorted[Math.min(sorted.length - 1, Math.ceil(ratio * sorted.length) - 1)]!;
     const median = sorted[Math.trunc(sorted.length / 2)] ?? sorted[0]!;
-    console.log(`${label}: first ${samples[0]!.toFixed(1)} ms, min ${sorted[0]!.toFixed(1)}, median ${median.toFixed(1)}, max ${sorted[sorted.length - 1]!.toFixed(1)} (${samples.length} runs)`);
+    console.log(`${label}: first ${samples[0]!.toFixed(1)} ms, min ${sorted[0]!.toFixed(1)}, p50 ${median.toFixed(1)}, p95 ${at(0.95).toFixed(1)}, p99 ${at(0.99).toFixed(1)}, max ${sorted[sorted.length - 1]!.toFixed(1)} (${samples.length} runs)`);
   };
 
   // 严格交替：旧、新、旧、新……首遍各自单列，重复样本仍是交替顺序，
   // 后测不比前测多占一轮缓存优势。
   const legacyFirst: number[] = [];
   const freshFirst: number[] = [];
+  const liveFirst: number[] = [];
   const legacyCursor: number[] = [];
   const freshCursor: number[] = [];
+  const liveCursor: number[] = [];
+  // 生产路径每次请求都带同一个快照形状；in-flight 只做 Map 命中，不额外查库。
+  const live = withLive
+    ? { now: Date.now(), inflight: (key: string) => key.endsWith('7"]') }
+    : null;
   for (let i = 0; i < reps; i++) {
     legacyFirst.push(timed(() => legacyListSessions(store, page, null)));
     freshFirst.push(timed(() => listSessions(store, page, null)));
+    if (live !== null) liveFirst.push(timed(() => listSessions(store, page, null, live)));
     if (cursor !== null) {
       legacyCursor.push(timed(() => legacyListSessions(store, page, cursor)));
       freshCursor.push(timed(() => listSessions(store, page, cursor)));
+      if (live !== null) liveCursor.push(timed(() => listSessions(store, page, cursor, live)));
     }
   }
   walk('legacy first page', legacyFirst);
   walk('fresh  first page', freshFirst);
+  if (live !== null) {
+    walk('live   first page (production)', liveFirst);
+    if (liveCursor.length > 0) walk('live   cursor page (production)', liveCursor);
+  }
   if (cursor !== null) {
     walk('legacy cursor page', legacyCursor);
     walk('fresh  cursor page', freshCursor);
