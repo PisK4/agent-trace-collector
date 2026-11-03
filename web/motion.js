@@ -23,3 +23,18 @@ export function motion(el, keyframes, duration = 0.15) {
   const run = /** @type {(target: Element, frames: Record<string, (string | number)[]>, options: {duration: number, easing: number[]}) => {finished: Promise<unknown>, cancel: () => void}} */ (animate);
   return run(el, keyframes, { duration, easing: EASE });
 }
+
+/**
+ * finished 的兜底等待：个别环境（如嵌入式 WebKit）动画时钟不前进，finished
+ * 永不 settle，调用方按「动画或超时先到者」继续，界面不等地。返回值永不拒绝。
+ * @param {{ finished: Promise<unknown> } | null} controls
+ * @param {number} ms 毫秒上限，取动画时长加一档余量
+ * @returns {Promise<void>}
+ */
+export function settled(controls, ms) {
+  if (controls === null) return Promise.resolve();
+  return Promise.race([
+    controls.finished,
+    new Promise(resolve => setTimeout(resolve, ms)),
+  ]).then(() => {}, () => {});
+}

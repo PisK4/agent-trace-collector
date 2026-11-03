@@ -20,7 +20,7 @@ import { agentLogoHtml, setAgentLogoFetcher } from './agent-logos.js';
 import { backendStateHtml } from './backend-state.js';
 import { esc } from './html.js';
 import { icon } from './icons.js';
-import { motion } from './motion.js';
+import { motion, settled } from './motion.js';
 import { partLabel } from './parts.js';
 import { createReaderStore } from './reader-store.js';
 import { createHttpReadTransport } from './read-http.js';
@@ -2396,8 +2396,8 @@ if (typeof document !== 'undefined') {
     setTimeout(() => {
       if (!chip.isConnected) return;
       const out = motion(chip, { opacity: [1, 0], transform: ['translate(-50%, 0)', 'translate(-50%, 6px)'] }, 0.22);
-      if (out === null) { chip.remove(); return; }
-      out.finished.then(() => chip.remove()).catch(() => {});
+      // settled 超时兜底：动画时钟不前进的环境里也能按时移除。
+      void settled(out, 260).then(() => chip.remove());
     }, 2200);
   }
   /**

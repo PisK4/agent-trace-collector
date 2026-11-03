@@ -17,7 +17,7 @@
 
 import { esc } from './html.js';
 import { icon } from './icons.js';
-import { motion } from './motion.js';
+import { motion, settled } from './motion.js';
 import { baseNameOf, isPathKind, kk, partLabel } from './parts.js';
 
 /** iid → {kind, tag, name}；iid 由 kind\01tag\01name 拼成，名字段允许含分隔符。
@@ -391,12 +391,13 @@ export function createContextMenu({ readDirectory, readEntry }) {
     ].filter(a => a !== null);
     if (anims.length === 0) { container.hidden = true; return; }
     exitAnims = anims;
-    Promise.all(anims.map(a => a.finished)).then(() => {
+    // settled 带超时兜底：动画时钟不前进的环境里 finished 永不 settle，不能等它。
+    void Promise.all(anims.map(a => settled(a, 220))).then(() => {
       // 期间重开过（openDetail 换了新数组）就不隐藏。
       if (exitAnims !== anims) return;
       container.hidden = true;
       exitAnims = [];
-    }).catch(() => { /* 被重开取消：不隐藏 */ });
+    });
   }
 
   /** 切换请求或会话时调用：弹窗身份不再成立，直接关闭。 */
