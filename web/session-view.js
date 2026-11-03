@@ -419,7 +419,7 @@ function sessionBoard(s, status, rows, hidden, sessionKey, hiddenFoldOpen) {
   const hiddenEntry = sessionHiddenFold(rows, hidden, sessionKey, hiddenFoldOpen);
   if (perf !== '' || hiddenEntry !== '') {
     // 重绘按 data-fold 恢复 open 属性时，展开类要在构建时带上，否则单行裁掉清单。
-    left.push(cueRow('只统计当前已加载窗口；首字为 p50，未加载页不进计时',
+    left.push(cueRow(t('只统计当前已加载窗口；首字为 p50，未加载页不进计时'),
       perf + hiddenEntry, hiddenFoldOpen ? ' open-wrap' : ''));
   }
   if (s !== null) {

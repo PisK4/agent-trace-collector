@@ -576,4 +576,11 @@ export const dict = {
   '[图片块：不以文本呈现]': '[Image block: not shown as text]',
   '[推理内容：密封不可读]': '[Reasoning: sealed, unreadable]',
   '读取失败': 'Read failed',
+
+  /* trace-dom */
+  '旧版本 · 重读中': 'Stale · re-reading',
+  '旧版本 · 重读失败': 'Stale · re-read failed',
+
+  /* session-view 性能组说明 */
+  '只统计当前已加载窗口；首字为 p50，未加载页不进计时': 'Loaded window only; first token is p50; unloaded pages are not timed',
 };
