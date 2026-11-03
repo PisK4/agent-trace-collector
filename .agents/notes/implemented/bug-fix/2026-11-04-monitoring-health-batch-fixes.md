@@ -71,7 +71,7 @@ Status: implemented
 
 ### 生产回归（2026-11-04 凌晨，三次重启窗口：初版部署 / 跨组修复 / rebuild）
 
-F23 顺序执行：停服 → `maintain bundle`（3.92 GB 快照，manifest schema 10、盐与哈希齐备，落 `~/atc-backups/`）→ 启动 → 只读核对 `user_version=10`、`integrity_check=ok`。
+F23 顺序执行：停服 → `maintain bundle`（3.92 GB 快照，manifest schema 10、盐与哈希齐备）→ 启动 → 只读核对 `user_version=10`、`integrity_check=ok`。备份在生产验证通过后按用户指示删除（2026-11-04 凌晨）；最终部署实例 2892 加载 `beced71`，验证后（热采样、监控 sample/check 退出码 0、活跃告警清零、F24 状态保持）确认无再启动需求。
 
 - **F21 复采**（跨组修复后，15 轮 × 三端点）：metrics p50 2.1 ms、stats p50 **0.9 ms**（世代缓存生效，重启前 p50 262 ms）、sessions p50 **39.9 ms** / p95 83.7 ms；事件循环 p99 268–488 ms，主线程停顿仍在（F07 观察项保留）。
 - **F26 验收**：sessions limit=50 预热中位 39.9 ms ≤ 40 ms；原始 SQL 14.7 ms；EXPLAIN 断言钉死 t 驱动。
