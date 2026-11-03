@@ -1,12 +1,24 @@
 import type { Store } from '../store';
 import { addBodyReadStats, emptyBodyReadStats } from '../body-cache';
 import type { BodyReadStats } from '../body-cache';
+import { errorCode } from '../monitoring';
 import type { DeriveGroupRound, DeriveScope, DrainResult } from './sync';
 import { applyDeriveGroup, computeDeriveGroup } from './sync';
 import { claimGroupTx, queuePendingSql } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
 import { recoverSlice } from './slice/generation';
 import { sliceGroupStep } from './slice/scheduler';
+
+/**
+ * 派生轮失败的固定错误码：SQLite 锁冲突的英文原文归一成 snake_case，
+ * 其余交给通用分类（F11：结构化日志里要能按码认出整轮被丢弃）。
+ */
+function deriveErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/^database is locked$/i.test(message)) return 'database_locked';
+  if (/^database table is locked$/i.test(message)) return 'table_locked';
+  return errorCode(message);
+}
 
 const IDLE_MS = 2000;
 const ONLINE_LIMIT = 10;
@@ -87,7 +99,7 @@ async function drain(store: Store, limit: number, scope: DeriveScope | undefined
         result.groups.push(candidate);
       } catch (error) {
         onRound?.({ corr, result: 'failure', compute_ms: computeMs, apply_ms: applyMs,
-          code: error instanceof Error ? error.message : 'unknown' });
+          code: deriveErrorCode(error) });
         throw error;
       }
     } else {

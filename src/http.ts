@@ -482,6 +482,11 @@ export function createHandler(
 ): (req: Request) => Promise<Response> {
   // hook 计数在未注入观测运行时也保留，只是没有对外入口。
   const ingestMetrics = metrics?.ingest ?? createIngestMetrics();
+  // 同 key 的并发会话列表共享一次计算（F27）：SQLite 同步查询在事件循环里
+  // 天然排队，迟来的请求等已完成的那次，而不是再排一遍。Promise 不 reject——
+  // 参数错误也走正常响应路径——等待者不会因单次失败挂起；完成后立即出表，
+  // 不做任何跨请求缓存。
+  const sessionsInflight = new Map<string, Promise<Response>>();
   const handle = async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     if (url.pathname === '/hook/ingest') {
@@ -519,11 +524,22 @@ export function createHandler(
       if (path === '/api/stats') return json(getStats(store));
 
       if (path === '/api/sessions') {
-        const limit = parseLimit(url, 50);
-        const active = live === undefined
-          ? null
-          : { now: Date.now(), inflight: (key: string) => live.inflight(key) };
-        return json(listSessions(store, limit, url.searchParams.get('cursor'), active));
+        const key = url.search;
+        const inflight = sessionsInflight.get(key);
+        if (inflight !== undefined) return await inflight;
+        const promise = (async () => {
+          const limit = parseLimit(url, 50);
+          const active = live === undefined
+            ? null
+            : { now: Date.now(), inflight: (key: string) => live.inflight(key) };
+          return json(listSessions(store, limit, url.searchParams.get('cursor'), active));
+        })();
+        sessionsInflight.set(key, promise);
+        try {
+          return await promise;
+        } finally {
+          sessionsInflight.delete(key);
+        }
       }
 
       const requestsMatch = /^\/api\/sessions\/([^/]+)\/requests$/.exec(path);

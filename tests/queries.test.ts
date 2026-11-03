@@ -1499,3 +1499,17 @@ test('后台组标记：ambient 混入未知参与链仍是 background，出现�
     expect(mixed?.flags).not.toContain('background');
   } finally { f.close(); }
 });
+
+test('getStats 复用同写世代的缓存，写入后重算（F06）', () => {
+  const f = fixture();
+  try {
+    insertRequests(f.store, JSON.stringify(['session', 's-cache']), 1, false);
+    const first = getStats(f.store);
+    // 世代未变：返回同一份结果，不再付一次全表聚合。
+    expect(getStats(f.store)).toBe(first);
+    insertRequests(f.store, JSON.stringify(['session', 's-cache']), 1, false);
+    const second = getStats(f.store);
+    expect(second).not.toBe(first);
+    expect(second.requests).toBe(first.requests + 1);
+  } finally { f.close(); }
+});

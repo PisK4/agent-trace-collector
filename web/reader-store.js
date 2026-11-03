@@ -118,8 +118,8 @@ export function createReaderStore(transport, onReadChanged, options) {
 
   /** @type {{items: import('../src/queries/sessions').SessionRow[], cursor: string | null, error: string | null}} */
   const sessions = { items: [], cursor: null, error: null };
-  /** @type {boolean} 会话列表请求在跑：同 tick 的重复点击共用一次请求。 */
-  let sessionsLoading = false;
+  /** @type {Promise<void> | null} 在途的会话列表请求；并发调用共享它而不是被丢弃。 */
+  let sessionsInflight = null;
   /** @type {string | null} */
   let sessionKey = null;
   /** @type {import('../src/queries/projection').RequestRow[]} */
@@ -276,26 +276,28 @@ export function createReaderStore(transport, onReadChanged, options) {
   }
 
   /** @param {string | undefined} cursor */
-  async function loadSessions(cursor) {
-    if (sessionsLoading) return;
-    sessionsLoading = true;
-    try {
-      const page = await execute(pageScope, 'sessions', { limit: 20, cursor: cursor ?? null });
-      // 同 tick 的两次点击已经由上面的闸门挡住；分页边界仍可能把同一会话
-      // 返回两次（末条时间相同），按 conv_key 去重，保留先出现的一条。
-      /** @type {Map<string, import('../src/queries/sessions').SessionRow>} */
-      const seen = new Map();
-      for (const item of [...(cursor ? sessions.items : []), ...page.items]) {
-        if (!seen.has(item.conv_key)) seen.set(item.conv_key, item);
+  function loadSessions(cursor) {
+    if (sessionsInflight !== null) return sessionsInflight;
+    sessionsInflight = (async () => {
+      try {
+        const page = await execute(pageScope, 'sessions', { limit: 20, cursor: cursor ?? null });
+        // 并发调用已共享同一个在途请求；分页边界仍可能把同一会话返回两次
+        // （末条时间相同），按 conv_key 去重，保留先出现的一条。
+        /** @type {Map<string, import('../src/queries/sessions').SessionRow>} */
+        const seen = new Map();
+        for (const item of [...(cursor ? sessions.items : []), ...page.items]) {
+          if (!seen.has(item.conv_key)) seen.set(item.conv_key, item);
+        }
+        sessions.items = [...seen.values()];
+        sessions.cursor = page.next_cursor;
+        sessions.error = null;
+      } catch (error) {
+        sessions.error = error instanceof Error ? error.message : 'load_failed';
+      } finally {
+        sessionsInflight = null;
       }
-      sessions.items = [...seen.values()];
-      sessions.cursor = page.next_cursor;
-      sessions.error = null;
-    } catch (error) {
-      sessions.error = error instanceof Error ? error.message : 'load_failed';
-    } finally {
-      sessionsLoading = false;
-    }
+    })();
+    return sessionsInflight;
   }
 
   /** 后端状态与统计：顶栏降级标签与调试图共用一次读取，不做轮询。 */

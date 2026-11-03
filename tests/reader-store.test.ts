@@ -1204,8 +1204,12 @@ test('会话列表并发加载只发一次请求', async () => {
   const first = store.loadSessions();
   const second = store.loadSessions();
   release();
-  await Promise.all([first, second]);
+  // 并发调用共享在途 Promise：只等第二个的返回值，内容也已经装载完成
+  // （旧布尔闸门这里会立即返回 undefined，列表还是空的）。
+  await second;
+  expect(store.getSessions().items.map(item => item.conv_key)).toEqual(['a']);
   expect(fx.count('sessions')).toBe(1);
+  await first;
 });
 
 test('退出会话清窗口与缓存，迟到的会话读取不能复活内容', async () => {

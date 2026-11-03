@@ -134,6 +134,11 @@ export async function startCollector(
         corr: event.corr, result: event.result, phase: event.phase, dur_ms: event.stage_ms,
         compute_ms: event.compute_ms, apply_ms: event.apply_ms, code: event.code,
       });
+      // 轮失败同时进 kind:"error"：巡检按错误计数找 Worker 失败，只翻 derive
+      // 结果流会漏掉整轮被丢弃的事实（F11）。
+      if (event.result === 'failure' && event.code !== undefined) {
+        diagnostics.error('derive.run', { code: event.code, corr: event.corr });
+      }
       if (event.compute_ms !== undefined) {
         diagnostics.slow('derive.compute', {
           corr: event.corr, phase: 'compute', dur_ms: event.compute_ms,

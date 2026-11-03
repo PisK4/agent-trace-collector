@@ -205,7 +205,9 @@ function migrate(db: Database): void {
     return;
   }
   if (version === 0) throw new Error('schema_unknown');
-  if (version > SCHEMA_VERSION) throw new Error('schema_version_unsupported');
+  if (version > SCHEMA_VERSION) {
+    throw new Error(`schema_version_unsupported: db v${version} > code v${SCHEMA_VERSION}`);
+  }
   // v6→v10、v7→v10、v8→v10 与 v9→v10 都是纯新增（OTLP 原始层表、部分反向
   // 索引、队列的 claim_from_sort 列、请求的内容指纹与 turn 身份），原地执行
   // 即可；更低的库没有升级路径：普通启动不做 ALTER，也不搬旧数据，旧库由
@@ -238,7 +240,12 @@ function migrate(db: Database): void {
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version < SCHEMA_VERSION) {
-    throw new Error('schema_rebuild_required');
+    // 版本进错误信息：launchd 反复拉起时 stderr 直接说明差在哪，不用再开库核对
+    // （F01 的 13 段崩溃栈只留下一个裸错误码）。
+    throw new Error(
+      `schema_rebuild_required: db v${version} needs code v${SCHEMA_VERSION};`
+      + ' 旧库没有升级路径，按 docs/operations.md 显式删除重建',
+    );
   }
   if (pragmaNumber(db, 'auto_vacuum') !== 2) throw new Error('auto_vacuum_requires_migration');
 }
@@ -279,7 +286,9 @@ export function openStore(path: string, options: StoreOptions = {}): Store {
   db.exec('ROLLBACK');
   db.exec('PRAGMA synchronous=NORMAL');
   db.exec('PRAGMA foreign_keys=ON');
-  db.exec('PRAGMA busy_timeout=1000');
+  // 写连接给 5 秒等锁：launchd KeepAlive 重叠拉起时新旧进程的收尾事务短暂
+  // 共存，1 秒会把首轮派生整轮丢弃（F02）；进程内各写者共用本连接，不受影响。
+  db.exec('PRAGMA busy_timeout=5000');
 
   if (pragmaNumber(db, 'auto_vacuum') !== 2) throw new Error('auto_vacuum_not_incremental');
   if (String(Object.values(db.query('PRAGMA journal_mode').get() as Record<string, unknown>)[0]) !== 'wal') {

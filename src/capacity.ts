@@ -108,7 +108,7 @@ export type StorageMeasure = {
 export type CapacityMetricsOptions = {
   /** 进程实例标识；与诊断日志同源，采样器据此不跨重启做差。 */
   instance?: string;
-  /** 准入闸门最近一次量测；轻量端点用它代替全量存储求和。 */
+  /** 准入闸门最近一次量测；完整与轻量快照都用它代替全量存储求和。 */
   admission?: () => {
     mode: string; reason: string | null; usage: StorageUsage | null; at_ms: number | null;
   };
@@ -348,9 +348,17 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
       snapshot() { return eventLoop(); },
     },
     snapshot(target, targetDir) {
-      const measureStarted = performance.now();
-      const storage: StorageUsage = measureStorage(target, targetDir);
-      recordStorageMeasure(performance.now() - measureStarted);
+      // 存储复用闸门最近一次量测（TTL 内新鲜）；没有闸门的实验环境退回现算。
+      // 全量求和每次 111–190 ms，探针按需拉本端点时把事件循环顶出长尾（F06）。
+      const last = options.admission?.() ?? null;
+      let storage: StorageUsage;
+      if (last?.usage != null) {
+        storage = last.usage;
+      } else {
+        const measureStarted = performance.now();
+        storage = measureStorage(target, targetDir);
+        recordStorageMeasure(performance.now() - measureStarted);
+      }
       const now = Date.now();
       return {
         started_at_ms: startedAt,
@@ -364,6 +372,7 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
         event_loop: eventLoop(),
         rss_bytes: process.memoryUsage().rss,
         storage,
+        storage_measured_at_ms: last?.at_ms ?? null,
         storage_measure: storageMeasureSnapshot(),
         metadata: metadataSnapshot(target),
         derive_queue: queueSnapshot(target),

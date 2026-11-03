@@ -248,7 +248,7 @@ test('拒绝未知的高版本schema', () => {
     const raw = new Database(path);
     raw.exec('PRAGMA user_version=99');
     raw.close();
-    expect(() => openStore(path)).toThrow('schema_version_unsupported');
+    expect(() => openStore(path)).toThrow(/schema_version_unsupported: db v99 > code v10/);
   } finally {
     f.close();
   }
@@ -262,7 +262,7 @@ test('过低版本库拒绝打开，空库建到当前版本', () => {
     const raw = new Database(legacy);
     raw.exec('CREATE TABLE legacy(x); PRAGMA user_version=4');
     raw.close();
-    expect(() => openStore(legacy)).toThrow('schema_rebuild_required');
+    expect(() => openStore(legacy)).toThrow(/schema_rebuild_required: db v4 needs code v10/);
     const store = openStore(join(dir, 'fresh', 'trace.db'));
     try {
       expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 10 });

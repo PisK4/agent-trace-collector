@@ -6,7 +6,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  appendSample, buildReport, evaluateRules, extractMetrics, extractStats, loadSamples, localDay,
+  appendSample, buildReport, countDiagnosticsErrors, evaluateRules, extractMetrics, extractStats,
+  loadSamples, localDay, sampleEvidenceOk,
 } from '../scripts/monitor';
 import type { MetricsView, Sample, RuleContext, AlertState } from '../scripts/monitor';
 import {
@@ -74,14 +75,40 @@ test('服务探不到时立即告警，不因缺样本判成正常', () => {
   expect(hits.map(hit => hit.rule)).toContain('service_unreadable');
 });
 
-test('事件循环 p99 连续超过 10 分钟才告警', () => {
-  const short = [sample(NOW - 5 * MINUTE, { event_loop: { ...metrics().event_loop, p99_ms: 200 } }),
-    sample(NOW, { event_loop: { ...metrics().event_loop, p99_ms: 200 } })];
-  expect(evaluateRules(short, context()).some(hit => hit.rule === 'event_loop_p99')).toBe(false);
-  const sustained = [sample(NOW - 10 * MINUTE, { event_loop: { ...metrics().event_loop, p99_ms: 200 } }),
-    sample(NOW - 5 * MINUTE, { event_loop: { ...metrics().event_loop, p99_ms: 200 } }),
-    sample(NOW, { event_loop: { ...metrics().event_loop, p99_ms: 200 } })];
+test('事件循环 p99 连续超过 30 分钟才告警，2 秒级停顿走独立通道', () => {
+  const at = (ts: number, loop: Partial<MetricsView['event_loop']> = {}) =>
+    sample(ts, { event_loop: { ...metrics().event_loop, ...loop } });
+  // 阈值 330：200 与 300 的常态窗口都不告警。
+  expect(evaluateRules([at(NOW - 31 * MINUTE, { p99_ms: 300 }), at(NOW, { p99_ms: 300 })],
+    context()).some(hit => hit.rule === 'event_loop_p99')).toBe(false);
+  const sustained = [at(NOW - 30 * MINUTE, { p99_ms: 400 }), at(NOW - 20 * MINUTE, { p99_ms: 400 }),
+    at(NOW - 10 * MINUTE, { p99_ms: 400 }), at(NOW, { p99_ms: 400 })];
   expect(evaluateRules(sustained, context()).some(hit => hit.rule === 'event_loop_p99')).toBe(true);
+  // 单次停顿：max 通道立即命中，不需要凑跨度。
+  const stalled = [at(NOW - MINUTE, { max_ms: 10_855 }), at(NOW, { max_ms: 10_855 })];
+  expect(evaluateRules(stalled, context()).some(hit => hit.rule === 'event_loop_max')).toBe(true);
+  expect(evaluateRules([at(NOW, { max_ms: 1_500 })], context())
+    .some(hit => hit.rule === 'event_loop_max')).toBe(false);
+});
+
+test('断档在存活阈值内不清持续窗口，超过才重新起算', () => {
+  const at = (ts: number) => sample(ts, { event_loop: { ...metrics().event_loop, p99_ms: 400 } });
+  // 中间一个 9 分钟断档（采样停摆）： continuityGapMs=11 分钟，窗口不清。
+  const bridged = [at(NOW - 30 * MINUTE), at(NOW - 20 * MINUTE), at(NOW - 11 * MINUTE), at(NOW)];
+  expect(evaluateRules(bridged, context()).some(hit => hit.rule === 'event_loop_p99')).toBe(true);
+  // 断档超过存活阈值：连续性重新起算，30 分钟窗口凑不满。
+  const broken = [at(NOW - 45 * MINUTE), at(NOW - 30 * MINUTE), at(NOW)];
+  expect(evaluateRules(broken, context()).some(hit => hit.rule === 'event_loop_p99')).toBe(false);
+});
+
+test('采样连续性：一个漏采周期在窗口内提醒，正常间隔不提醒', () => {
+  const gapped = [sample(NOW - 10 * MINUTE), sample(NOW)];
+  expect(evaluateRules(gapped, context()).some(hit => hit.rule === 'sample_gap')).toBe(true);
+  // 断档已滑出窗口（样本只剩正常间隔）不再命中。
+  const recovered = [sample(NOW - 20 * MINUTE), sample(NOW - 15 * MINUTE), sample(NOW - 10 * MINUTE),
+    sample(NOW - 5 * MINUTE), sample(NOW)];
+  expect(evaluateRules(recovered, context()).some(hit => hit.rule === 'sample_gap')).toBe(false);
+  expect(evaluateRules([sample(NOW)], context()).some(hit => hit.rule === 'sample_gap')).toBe(false);
 });
 
 test('派生积压只在没有进展时告警', () => {
@@ -113,10 +140,27 @@ test('缺样本或采样失败时保留告警，不判恢复', () => {
   const kept = transitionAlerts(state, evaluateRules(failed, context({ stale: true })), context({ stale: true }));
   expect(kept.state.active.event_loop_p99).toBeDefined();
   expect(kept.events.some(event => event.event === 'recovered')).toBe(false);
-  // 真正恢复（样本正常且指标回落）才清状态。
-  const healthy = transitionAlerts(state, [], context());
+  // 条件消失先进恢复窗口：单样本回落不写 recovered（F10）。
+  const dipping = transitionAlerts(state, [], context());
+  expect(dipping.state.active.event_loop_p99).toBeDefined();
+  expect(dipping.state.active.event_loop_p99!.recover_since_ms).toBe(NOW);
+  expect(dipping.events.some(event => event.event === 'recovered')).toBe(false);
+  // 窗口内条件重新命中：恢复计时作废。
+  const rehit = transitionAlerts(dipping.state, [{ rule: 'event_loop_p99', detail: 'p99:400' }],
+    context({ now: NOW + MINUTE }));
+  expect(rehit.state.active.event_loop_p99!.recover_since_ms).toBeUndefined();
+  // 恢复窗口（15 分钟）过后仍无命中才写 recovered。
+  const healthy = transitionAlerts(dipping.state, [],
+    context({ now: NOW + THRESHOLDS.recoverSpanMs + MINUTE }));
   expect(healthy.state.active.event_loop_p99).toBeUndefined();
   expect(healthy.events.some(event => event.event === 'recovered')).toBe(true);
+});
+
+test('采样证据缺失时 check 退出码非 0', () => {
+  expect(sampleEvidenceOk(undefined, NOW)).toBe(false);
+  expect(sampleEvidenceOk(sample(NOW - MINUTE, {}, false), NOW)).toBe(false);
+  expect(sampleEvidenceOk(sample(NOW - 20 * MINUTE), NOW)).toBe(false);
+  expect(sampleEvidenceOk(sample(NOW - MINUTE), NOW)).toBe(true);
 });
 
 test('未到提醒间隔不重复通知，到点只提醒一次', () => {
@@ -206,6 +250,31 @@ test('采样按日追加重启不丢历史，14 天后按日清理', () => {
     expect(existsSync(stale)).toBe(false);
     expect(loadSamples(dir, NOW, 30 * MINUTE)).toHaveLength(2);
     expect(readFileSync(join(dir, 'monitor', 'samples', `${localDay(NOW)}.jsonl`), 'utf8')).toContain('proc-a');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('巡检记录按日落盘，成功也写；诊断错误计数带读不到与 0 的区分', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-monitor-'));
+  try {
+    mkdirSync(join(dir, 'monitor', 'checks'), { recursive: true });
+    const stale = join(dir, 'monitor', 'checks', '2026-01-01.jsonl');
+    writeFileSync(stale, '{}\n');
+    chmodSync(stale, 0o600);
+    expect(pruneMonitorData(dir, NOW)).toBe(1);
+    expect(existsSync(stale)).toBe(false);
+
+    const log = join(dir, 'collector.log');
+    writeFileSync(log, [
+      JSON.stringify({ ts: new Date(NOW - MINUTE).toISOString(), kind: 'error', op: 'derive.run', result: 'database_locked' }),
+      JSON.stringify({ ts: new Date(NOW - 2 * 24 * 60 * MINUTE).toISOString(), kind: 'error', op: 'route.file', result: 'route_file_error' }),
+      JSON.stringify({ ts: new Date(NOW - MINUTE).toISOString(), kind: 'slow', op: 'http.read', result: 'ok' }),
+      '{"ts":"broken',
+      '',
+    ].join('\n'));
+    expect(countDiagnosticsErrors(log, NOW - 24 * 60 * MINUTE)).toBe(1);
+    expect(countDiagnosticsErrors(join(dir, 'missing.log'), NOW - 24 * 60 * MINUTE)).toBeNull();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

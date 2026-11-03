@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { loadConfig } from '../src/config';
 import { createHandler } from '../src/http';
-import { acceptHook, bodyOmission, HOOK_ABSENT_THRESHOLD_MS, markHookAbsent, reconcilePending } from '../src/hook';
+import { acceptHook, bodyOmission, HOOK_ABSENT_THRESHOLD_MS, markHookAbsent, PENDING_HOOK_ORPHAN_TTL_MS, reconcilePending } from '../src/hook';
 import type { HookEnvelope } from '../src/hook';
 import { drainDerive } from '../src/derive/sync';
 import { onRequest, onResponse } from '../plugins/collector.hooks';
@@ -1080,4 +1080,23 @@ test('OTLP 先到、同 turn 的 hook 后到：复用占位行，不新增请求
   } finally {
     f.close();
   }
+});
+
+test('无 response_id 的孤儿超过保留期被清理，带 response_id 的行保留（F04）', () => {
+  const f = fixture();
+  try {
+    const now = 1_800_000_000_000;
+    f.store.write(db => {
+      db.run('INSERT INTO pending_hook(hook_id,response_id_norm,first_seen) VALUES (?,?,?)',
+        ['old-orphan', null, now - PENDING_HOOK_ORPHAN_TTL_MS - 1]);
+      db.run('INSERT INTO pending_hook(hook_id,response_id_norm,first_seen) VALUES (?,?,?)',
+        ['fresh-orphan', null, now - 1_000]);
+      db.run('INSERT INTO pending_hook(hook_id,response_id_norm,first_seen) VALUES (?,?,?)',
+        ['old-with-id', 'resp-old', now - PENDING_HOOK_ORPHAN_TTL_MS - 1]);
+    });
+    reconcilePending(f.store, now);
+    const ids = f.store.read.query<{ hook_id: string }, []>(
+      'SELECT hook_id FROM pending_hook ORDER BY hook_id').all().map(row => row.hook_id);
+    expect(ids).toEqual(['fresh-orphan', 'old-with-id']);
+  } finally { f.close(); }
 });

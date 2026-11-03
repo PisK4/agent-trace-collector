@@ -456,9 +456,15 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
   markRequestInputTx(db, targetId);
 }
 
+/** 无 response_id 的孤儿回调保留期：没有它永远不可能有候选，按期淘汰（F04）。 */
+export const PENDING_HOOK_ORPHAN_TTL_MS = 14 * 24 * 60 * 60_000;
+
 /**
  * 重新尝试把 pending hook 并到已到达的账本请求。
  * 只处理候选唯一的情况；仍无候选或多候选保持 pending。
+ *
+ * 带 response_id 的行永远保留：迟到的账本请求仍可能按它关联。只淘汰保留期
+ * 之上、从未有过候选资格的孤儿，队列才不会只增不减。
  */
 export function reconcilePending(store: Store, now: number): { merged: number; pending: number; ambiguous: number } {
   const result = { merged: 0, pending: 0, ambiguous: 0 };
@@ -477,8 +483,16 @@ export function reconcilePending(store: Store, now: number): { merged: number; p
       if (actions.length < 10) actions.push({ hookId: row.hook_id, candidates });
       else if (candidates.length === 1) result.pending += 1;
     }
-    if (actions.length === 0) return null;
+    const orphanCutoff = now - PENDING_HOOK_ORPHAN_TTL_MS;
+    const expired = read.query<{ n: number }, [number]>(
+      'SELECT COUNT(*) AS n FROM pending_hook WHERE response_id_norm IS NULL AND first_seen < ?',
+    ).get(orphanCutoff)!.n;
+    if (actions.length === 0 && expired === 0) return null;
     return db => {
+      if (expired > 0) {
+        db.run('DELETE FROM pending_hook WHERE response_id_norm IS NULL AND first_seen < ?',
+          [orphanCutoff]);
+      }
       for (const action of actions) {
         if (action.candidates.length > 1) {
           db.run('UPDATE pending_hook SET last_tried=?, candidates=? WHERE hook_id=?', [
