@@ -12,7 +12,10 @@ import {
   closeSourceGapsTx,
   enforceBodyBudget,
   evictOldestBodyBatch,
+  measureBodyBytes,
+  measureBodyBytesChunked,
   measureStorage,
+  measureStorageCheap,
   pruneRaw,
   recordPausedBatch,
   resumeSourceGaps,
@@ -235,6 +238,120 @@ test('shrinkStorage在无可回收页时也不报错', () => {
   }
 });
 
+test('分块正文求和与同步版一致，块时长与事件循环滞后都在预算内', async () => {
+  const f = fixture();
+  const blockRows = 88_000;
+  const requestRows = 52_000;
+  const hookRows = 500;
+  const blockBlob = new Uint8Array(64).fill(0x61);
+  const skeletonBlob = new Uint8Array(32).fill(0x62);
+  try {
+    f.store.write(db => {
+      const insertBlock = db.prepare('INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?)');
+      for (let i = 0; i < blockRows; i++) {
+        insertBlock.run(
+          new Uint8Array([i & 0xff, (i >> 8) & 0xff, (i >> 16) & 0xff]),
+          `fp-${i}`, blockBlob, blockBlob.length,
+        );
+      }
+      const insertRequest = db.prepare(
+        `INSERT INTO request(started_ms,day,via,body_state,derive_version,have,created_at,updated_at,skeleton_z)
+         VALUES (?, '2026-11-03', 'hook', 'pending', 0, 1, ?, ?, ?)`,
+      );
+      for (let i = 0; i < requestRows; i++) insertRequest.run(i, i, i, skeletonBlob);
+      const insertHook = db.prepare(
+        'INSERT INTO raw_hook(hook_id,received_at,parse_state,request_z,response_z) VALUES (?,?,?,?,?)',
+      );
+      for (let i = 0; i < hookRows; i++) insertHook.run(`h-${i}`, i, 'ok', blockBlob, blockBlob);
+    });
+
+    // 刷新期间用 10 ms 采样事件循环滞后：分块让出后不应出现 50 ms 以上的停顿。
+    const intervalMs = 10;
+    const lags: number[] = [];
+    let expected = performance.now() + intervalMs;
+    const sampler = setInterval(() => {
+      const now = performance.now();
+      lags.push(Math.max(0, now - expected));
+      expected = now + intervalMs;
+    }, intervalMs);
+    let measured;
+    try {
+      measured = await measureBodyBytesChunked(f.store);
+    } finally {
+      clearInterval(sampler);
+    }
+    const exact = measureBodyBytes(f.store);
+    expect(measured.bytes).toBe(exact);
+    expect(measured.chunks).toBeGreaterThan(3);
+    expect(measured.max_chunk_ms).toBeLessThanOrEqual(20);
+    expect(Math.max(0, ...lags)).toBeLessThanOrEqual(50);
+
+    // 闸门每次同步取的是廉价路径：磁盘部分现取，正文读缓存。
+    const cheapStarted = performance.now();
+    expect(measureStorageCheap(f.store, f.dir, exact).body_bytes).toBe(exact);
+    expect(performance.now() - cheapStarted).toBeLessThanOrEqual(5);
+  } finally {
+    f.close();
+  }
+});
+
+test('刷新窗口内摄入的字节量就是分块求和的误差上界', async () => {
+  const f = fixture();
+  const blob = new Uint8Array(64).fill(1);
+  try {
+    f.store.write(db => {
+      const insert = db.prepare('INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?)');
+      for (let i = 0; i < 4000; i++) {
+        insert.run(new Uint8Array([i & 0xff, (i >> 8) & 0xff]), `fp-${i}`, blob, blob.length);
+      }
+    });
+    const before = measureBodyBytes(f.store);
+    const pending = measureBodyBytesChunked(f.store, { chunkRows: 200 });
+    // 第一块已经跑完并让出；此后新增的正文落在后续块之外，总和不会读到它。
+    const extraBytes = 4096;
+    f.store.write(db => db.run(
+      'INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?)',
+      [new Uint8Array([9, 9, 9]), 'fp-late', new Uint8Array(extraBytes).fill(7), extraBytes],
+    ));
+    const measured = await pending;
+    const after = measureBodyBytes(f.store);
+    expect(after).toBe(before + extraBytes);
+    expect(measured.bytes).toBeGreaterThanOrEqual(before);
+    expect(after - measured.bytes).toBeLessThanOrEqual(extraBytes);
+  } finally {
+    f.close();
+  }
+});
+
+test('回收后准入正文值在后台刷新收敛，invalidate不阻塞调用方', async () => {
+  const f = fixture();
+  const blob = new Uint8Array(4096).fill(3);
+  try {
+    f.store.write(db => {
+      const insert = db.prepare('INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?)');
+      insert.run(new Uint8Array([1]), 'fp-a', blob, blob.length);
+      insert.run(new Uint8Array([2]), 'fp-b', blob, blob.length);
+    });
+    expect(measureBodyBytes(f.store)).toBe(8192);
+    const seen: number[] = [];
+    const gate = createAdmissionGate(f.store, f.dir, { bodyBudget: 10 * MiB, diskLimit: 100 * MiB }, {
+      ttlMs: 0, clock: () => 1000, onBodyMeasured: bytes => seen.push(bytes),
+    });
+    f.store.write(db => db.run('DELETE FROM block WHERE hash=?', [new Uint8Array([1])]));
+    const after = measureBodyBytes(f.store);
+    gate.invalidate();
+    const deadline = Date.now() + 1000;
+    while (seen.length === 0 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    expect(seen[0]).toBe(after);
+    gate.check(0);
+    expect(gate.last().usage?.body_bytes).toBe(after);
+  } finally {
+    f.close();
+  }
+});
+
 test('原始层过期先标证据再删原文，长期读数不动', () => {
   const f = fixture();
   try {
@@ -446,7 +563,7 @@ test('准入闸门把模式落库，重开后按落库模式继续滞回', () =>
   }
 });
 
-test('准入闸门按TTL缓存量测，回收后invalidate立刻重算', () => {
+test('准入闸门按TTL缓存量测，invalidate后排一轮后台刷新', () => {
   const f = fixture();
   try {
     let now = 1000;

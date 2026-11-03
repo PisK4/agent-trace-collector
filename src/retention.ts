@@ -32,6 +32,62 @@ export function measureBodyBytes(store: Store): number {
   return blockBytes + skeletonBytes + rawHookBytes;
 }
 
+/** 分块求和的默认行宽；按本机实测块时长再调整，不要凭行数猜。 */
+export const BODY_MEASURE_CHUNK_ROWS = 1000;
+
+const BODY_SUM_SOURCES: ReadonlyArray<{ table: string; expression: string }> = [
+  { table: 'block', expression: 'length(z)' },
+  { table: 'request', expression: 'length(skeleton_z)' },
+  { table: 'raw_hook', expression: 'length(request_z) + length(response_z)' },
+];
+
+export type BodyBytesMeasurement = {
+  bytes: number;
+  chunks: number;
+  max_chunk_ms: number;
+  duration_ms: number;
+};
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve));
+}
+
+/**
+ * 正文逻辑占用，按 rowid 区间分块求和，块间让出事件循环。
+ *
+ * 每块各自取一次读快照，总和不对应同一时刻：并发摄入或回收会让相邻块的
+ * 快照略有差异，误差等于一轮刷新期间的变动量。这里不把它包装成精确快照；
+ * 报告与容量验收仍用同步的 `measureBodyBytes`。
+ */
+export async function measureBodyBytesChunked(
+  store: Store,
+  options: { chunkRows?: number } = {},
+): Promise<BodyBytesMeasurement> {
+  const chunkRows = options.chunkRows ?? BODY_MEASURE_CHUNK_ROWS;
+  if (!Number.isInteger(chunkRows) || chunkRows < 1) throw new Error('invalid_body_chunk_rows');
+  const startedAt = performance.now();
+  let bytes = 0;
+  let chunks = 0;
+  let maxChunkMs = 0;
+  for (const source of BODY_SUM_SOURCES) {
+    const bounds = store.read.query<{ lo: number | null; hi: number | null }, []>(
+      `SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM ${source.table}`,
+    ).get();
+    if (bounds === null || bounds.lo === null || bounds.hi === null) continue;
+    for (let lo = bounds.lo; lo <= bounds.hi; lo += chunkRows) {
+      const chunkStarted = performance.now();
+      const row = store.read.query<{ n: number }, [number, number]>(
+        `SELECT IFNULL(SUM(${source.expression}),0) AS n FROM ${source.table} WHERE rowid>=? AND rowid<?`,
+      ).get(lo, lo + chunkRows);
+      bytes += row?.n ?? 0;
+      maxChunkMs = Math.max(maxChunkMs, performance.now() - chunkStarted);
+      chunks += 1;
+      await yieldToEventLoop();
+    }
+  }
+  return { bytes, chunks, max_chunk_ms: maxChunkMs, duration_ms: performance.now() - startedAt };
+}
+
 export type StorageUsage = {
   body_bytes: number;
   db_bytes: number;
@@ -118,11 +174,10 @@ function freeBytes(dir: string): number {
   }
 }
 
-/**
- * 正文逻辑预算求和 block.z + skeleton_z + raw_hook 残留正文；共享块在 block 表里只有一行，天然只计一次。
- * 物理用量逐项 stat，和逻辑预算分开：逻辑预算回答"正文占了多少"，物理用量回答"盘还剩多少"。
- */
-export function measureStorage(store: Store, dataDir: string): StorageUsage {
+type DiskUsage = Omit<StorageUsage, 'body_bytes'>;
+
+/** 目录扫描、statfs 与页计数；个位数毫秒，闸门每次同步取这部分。 */
+function measureDiskUsage(store: Store, dataDir: string): DiskUsage {
   const totals: WalkTotals = { db: 0, wal: 0, temp: 0, other: 0 };
   walk(dataDir, databaseFile(store), totals, 3);
 
@@ -130,7 +185,6 @@ export function measureStorage(store: Store, dataDir: string): StorageUsage {
   const freelist = store.read.query<{ freelist_count: number }, []>('PRAGMA freelist_count').get()?.freelist_count ?? 0;
 
   return {
-    body_bytes: measureBodyBytes(store),
     db_bytes: totals.db,
     wal_bytes: totals.wal,
     temp_bytes: totals.temp,
@@ -140,6 +194,20 @@ export function measureStorage(store: Store, dataDir: string): StorageUsage {
     page_count: pageCount,
     freelist_count: freelist,
   };
+}
+
+/**
+ * 正文逻辑预算求和 block.z + skeleton_z + raw_hook 残留正文；共享块在 block 表里只有一行，天然只计一次。
+ * 物理用量逐项 stat，和逻辑预算分开：逻辑预算回答"正文占了多少"，物理用量回答"盘还剩多少"。
+ * 这是精确的同步版本；报告、容量验收与回收判断用它，不能换成分块缓存值。
+ */
+export function measureStorage(store: Store, dataDir: string): StorageUsage {
+  return { ...measureDiskUsage(store, dataDir), body_bytes: measureBodyBytes(store) };
+}
+
+/** 廉价的同步量测：磁盘部分现取，正文用调用方给的上一次完成值。 */
+export function measureStorageCheap(store: Store, dataDir: string, bodyBytes: number): StorageUsage {
+  return { ...measureDiskUsage(store, dataDir), body_bytes: bodyBytes };
 }
 
 /**
@@ -197,15 +265,29 @@ function persistedMode(store: Store): AdmissionMode | null {
   }
 }
 
+export type AdmissionGateOptions = {
+  ttlMs?: number;
+  clock?: () => number;
+  /** 同步廉价量测的耗时，供进程观测计数。 */
+  onMeasure?: (ms: number) => void;
+  /** 后台正文量测完成后的回调；测试用来等待收敛，生产不依赖它。 */
+  onBodyMeasured?: (bytes: number) => void;
+};
+
 /**
  * 准入闸门。量测有代价，所以按 TTL 缓存 usage；模式在变化时才落库，
  * 重启后滞回仍从上次的模式接着算，不会一次重启就把暂停状态忘掉。
+ *
+ * 正文是全表求和、代价百毫秒级，改为后台按 rowid 分块刷新，完成后原子替换缓存值。
+ * `check()` 仍是同步的：磁盘部分现取（个位数毫秒），正文读最近一次完成值。
+ * 因此正文判断最多滞后一轮刷新 + TTL；分块刷新跨多个读快照，不是精确值，
+ * 报告与容量验收必须继续用同步的 `measureStorage`。
  */
 export function createAdmissionGate(
   store: Store,
   dataDir: string,
   limits: AdmissionLimits,
-  options: { ttlMs?: number; clock?: () => number } = {},
+  options: AdmissionGateOptions = {},
 ): AdmissionGate {
   const ttl = options.ttlMs ?? 2000;
   const clock = options.clock ?? Date.now;
@@ -213,12 +295,35 @@ export function createAdmissionGate(
   let measuredAt = Number.NEGATIVE_INFINITY;
   let mode: AdmissionMode = persistedMode(store) ?? 'normal';
   let reason: string | null = null;
+  // 开始服务前播种一次；此后由后台刷新替换。
+  let bodyBytes = measureBodyBytes(store);
+  let bodyMeasuredAt = clock();
+  let bodyRefresh: Promise<void> | null = null;
+
+  const startBodyRefresh = (): void => {
+    if (bodyRefresh !== null) return;
+    bodyRefresh = (async () => {
+      try {
+        const measured = await measureBodyBytesChunked(store);
+        bodyBytes = measured.bytes;
+        bodyMeasuredAt = clock();
+        options.onBodyMeasured?.(measured.bytes);
+      } catch {
+        // 停止过程中库可能已关闭：这一轮作废，保留上一次完成值。
+      } finally {
+        bodyRefresh = null;
+      }
+    })();
+  };
 
   const refresh = (): StorageUsage => {
     const now = clock();
     if (usage === null || now - measuredAt >= ttl) {
-      usage = measureStorage(store, dataDir);
+      const started = performance.now();
+      usage = measureStorageCheap(store, dataDir, bodyBytes);
+      options.onMeasure?.(performance.now() - started);
       measuredAt = now;
+      if (now - bodyMeasuredAt >= ttl) startBodyRefresh();
     }
     return usage;
   };
@@ -240,6 +345,9 @@ export function createAdmissionGate(
     invalidate() {
       usage = null;
       measuredAt = Number.NEGATIVE_INFINITY;
+      // 不阻塞调用方：标旧后立刻排一轮后台刷新，正文值在下一轮完成时收敛。
+      bodyMeasuredAt = Number.NEGATIVE_INFINITY;
+      startBodyRefresh();
     },
     last() {
       return { mode, reason, usage, at_ms: usage === null ? null : measuredAt };

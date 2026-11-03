@@ -53,6 +53,10 @@ test('容量快照包含写统计、事件循环、队列年龄与存储', () =>
     expect(snapshot.derive_queue.pending_groups).toBe(1);
     expect(snapshot.derive_queue.oldest_request_started_ms).toBe(100);
     expect(snapshot.storage.db_bytes).toBeGreaterThan(0);
+    // 快照自身那一次同步量测也要计数，便于对照闸门的廉价路径。
+    expect(snapshot.storage_measure).toEqual({
+      count: 1, total_ms: expect.any(Number), max_ms: expect.any(Number),
+    });
     expect(snapshot.ingest.rejected_total).toBe(0);
     expect(snapshot.metadata).toMatchObject({ clean_groups: 0 });
   } finally { f.close(); }
