@@ -34,6 +34,11 @@
 - 防护：改 `summaryList` 的取数后，用合成页面 curl 对比 chip 与页头计数；参数摘要从 `arg_path`/`arg_skill` 读，不从 `param` 反解。
 - Seen 1× (2026-11-02).
 
+**门禁报红先确认文件是否属于本批改动，再判断是否自己引入。**
+- 证据：2026-11-03 全量 `verify:notes` 在 `.agents/notes/implemented/feature/2026-11-03-live-session-activity-and-navigation.md` 报 implemented 格式错，该文件是并发会话尚未跟踪的迁移中途产物；本批改动在 `--staged` 与 `--range` 两处均通过。同一轮还有 7 个历史批次真的缺 note，不能因为存在并发文件就全部当成误报。
+- 防护：报红文件先跑 `git ls-files <path>`，输出为空说明未跟踪、归并发会话；本批范围单独跑 `node scripts/verify-change-notes.mjs --range origin/master..HEAD`；历史缺口逐批看提交信息里有没有 `Agent-Note: none`。
+- Seen 1× (2026-11-03).
+
 ## 已晋升到常备规则
 
 暂无。晋升后的条目在这里保留一行规则名、日期与证据锚点；规则正文只在它的新家。
