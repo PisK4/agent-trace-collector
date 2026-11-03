@@ -1129,10 +1129,12 @@ if (typeof document !== 'undefined') {
     }
     // 首行身份（req id · 时间 · Agent · 模型）整行删除：时间在会话行、Agent 在主栏、
     // 模型在「用量与上下文」；标题成为第一行，状态点并入标题右端。
-    return `<div class="rail-title-row">
-      ${contentTitle(r)}
-      <span class="rail-state">${statusDot(r)}${statusChip(r)}</span>
-    </div>
+    // 无标题请求（model_time 自动标）不撑空行：状态点留在原身份行高度的单行里。
+    const title = contentTitle(r);
+    const firstLine = title === ''
+      ? `<div class="rail-id"><span class="grow"></span><span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`
+      : `<div class="rail-title-row">${title}<span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`;
+    return `${firstLine}
       <div class="rail-tabs" role="tablist">
         <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">${t('读数')}</button>
         <button role="tab" data-rail="body" aria-pressed="${state.railTab === 'body'}">${t('正文')}</button>

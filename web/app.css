@@ -651,7 +651,9 @@ pre.raw{
 .ledger-chain .chain-row{padding:3px 0}
 .ledger-chain .chain-row dd{text-align:right;font:11px/1.5 var(--mono);font-variant-numeric:tabular-nums}
 .ledger-chain .miss{color:var(--missing);font-style:normal}
-.rail-tabs{display:flex;gap:0;margin:10px -14px 0;padding:0 14px;background:var(--surface)}
+.rail-tabs{display:flex;gap:0;margin:0 -14px;padding:0 14px;background:var(--surface)}
+/* 页签只在有标题行时才下移；无标题请求不跟着长高。 */
+.rail-title-row + .rail-tabs{margin-top:10px}
 .rail-tabs button{position:relative;font-size:11px;padding:8px 10px 7px;color:var(--muted)}
 .rail-tabs button[aria-pressed="true"]{color:var(--accent);font-weight:550}
 .rail-tabs button:hover{color:var(--text)}
