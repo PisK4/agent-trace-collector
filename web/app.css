@@ -143,6 +143,9 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .sessions-title{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
 .sessions-title h2{font-size:12.5px;font-weight:600;letter-spacing:.02em}
 .sessions-title span{font:10.5px var(--mono);color:var(--muted)}
+/* 计数与列表刷新同一端对齐：刷新只重读第一页，窗口刷新仍在主栏。 */
+.sessions-title-end{display:flex;align-items:center;gap:6px}
+.sessions-title-end .chip-btn.ico{width:20px;height:20px}
 .search{position:relative}
 .search input{
   width:100%;height:30px;border:1px solid transparent;border-radius:6px;background:var(--inset);

@@ -551,9 +551,8 @@ if (typeof document !== 'undefined') {
     const here = state.missingReqId !== null ? t('Request {id} 未找到', { id: state.missingReqId })
       : state.offPageReqId !== null ? t('Request {id} 未在当前窗口', { id: state.offPageReqId })
         : idx > 0 ? `Request ${String(idx).padStart(2, '0')}` : '';
-    // 面包屑先给请求位置，再跟会话标题；长标题只截断自己，不挤掉「我在哪」。
-    el('crumb').innerHTML = row === null ? (here === '' ? '' : `<b>${esc(here)}</b>`)
-      : `${here === '' ? '' : `<b>${esc(here)}</b><span class="sep">·</span>`}<span class="crumb-title">${esc(row.title)}</span>`;
+    // 面包屑只报「我在第几个请求」：会话标题已是主栏 h1，顶栏不再复述第二遍。
+    el('crumb').innerHTML = here === '' ? '' : `<b>${esc(here)}</b>`;
     document.title = row ? `${here === '' ? row.title : `${here} · ${row.title}`} — Tracery`
       : 'Tracery';
   }
@@ -2331,6 +2330,11 @@ if (typeof document !== 'undefined') {
       // 下划线从左生长一次：瞬态类只挂用户点击，重绘重建的按钮不重播。
       const active = document.querySelector('.rail-tabs button[aria-pressed="true"]');
       if (active !== null) active.classList.add('tab-fresh');
+      return;
+    }
+    if (target.closest('#refresh-sessions')) {
+      // 列表刷新只重读第一页并合并去重；已加载的后续页保留，滚动位置不重置。
+      void store.loadSessions().then(() => { renderSessions(); renderFilters(); });
       return;
     }
     if (target.closest('#load-more-sessions')) {
