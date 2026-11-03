@@ -1,6 +1,6 @@
-# agent-trace-collector 文档
+# Tracery 文档
 
-这个目录存放 trace 工具的调研与设计文档。另有[可交互的界面原型](../prototypes/README.md)，用于比较阅读结构；采集与查询后端已实现，实现依据见[收敛型技术架构设计](architecture-design.md)。数据形状的现状说明在 [ATC trace 格式](trace-format.md)，各轮验收结果在[验收记录](acceptance.md)。
+这个目录存放 trace 工具的调研与设计文档。另有[可交互的界面原型](../prototypes/README.md)，用于比较阅读结构；采集与查询后端已实现，实现依据见[收敛型技术架构设计](architecture-design.md)。数据形状的现状说明在 [ATC trace 格式](trace-format.md)，各轮验收结果在[验收记录](acceptance.md)。数据格式沿用 ATC trace 命名，与产品名 Tracery 无关。
 
 ## 索引
 
