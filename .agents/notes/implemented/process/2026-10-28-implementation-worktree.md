@@ -15,7 +15,7 @@ Status: implemented
 软规则，只写进根 `AGENTS.md` 的常备约定，不加闸门、不改 `verify:notes`。依据 Agent Note、`docs/superpowers/plans/` 计划或用户直接指定的实现，改动跨文件或需要多步验证时，在 worktree 分支里做；文档、Agent Note 与单文件修正留在主检出。
 
 - **位置与命名。** `creator-intelligence/.codex-worktrees/atc-<topic>`，分支 `feat/<topic>` 或 `fix/<topic>`，基线 `master`。上层 `.gitignore` 已忽略 `.codex-worktrees/`。
-- **依赖。** 符号链接主检出的 `node_modules`，不重复 `bun install`。
+- **依赖。** 符号链接主检出的 `node_modules`，不重复 `bun install`。软链不在 `.gitignore` 的目录模式内，要在 worktree 的 `info/exclude` 追加 `node_modules`（目录不存在时先 mkdir），否则会以未跟踪文件出现。
 - **验证隔离。** worktree 里起采集器必须给 `ATC_DATA_DIR` 临时根与 `ATC_PORT`；默认数据目录指向生产库（[配置入口](../../../../src/config.ts)）。
 - **服务归属。** `bun run service` 按 plist 的 `ProgramArguments` 认跑本检出 `src/main.ts` 的条目（[探测](../../../../scripts/service-support.ts)），worktree 里的实例归主检出，重启在合并后的主检出执行。
 - **合并与清理。** 验证通过后用 `git merge --no-ff` 进 `master`，合并提交保留 worktree 分支这一侧的历史；改动触及 `src/` 才需要 `bun run service restart`；随后只移除工作树目录，分支名保留。

@@ -22,17 +22,32 @@
 
 ## Worktree 与提交
 
-**新 worktree 先软链主检出的 `node_modules`，再把软链写进该 worktree 的 `info/exclude`。**
-- 证据：2026-10-25 新建 worktree 后 `tsc --noEmit` 找不到 `@types/bun`，因为 worktree 没有 `node_modules`；仓库 `.gitignore` 只写 `node_modules/`（目录模式），软链不匹配，会以未跟踪文件出现。
-- 防护：`ln -s <主检出>/node_modules node_modules`；在 `git rev-parse --git-dir` 下的 `info/exclude` 追加一行 `node_modules`，目录不存在时先 mkdir。
-- Seen 1× (2026-10-25).
-
 **合并被并行会话的在途文件挡住时，定向 stash 该文件、合并、再 pop，不整库 stash、不代提交。**
 - 证据：2026-11-03 合并 fix/websearch-subevent-cards 时，主检出里另一个会话对同一 note 文件有未提交的 F26 修复记录，`git merge` 以 "local changes would be overwritten" 拒绝；分支改动（F31/F32 状态行）与在途改动（F26 段落）分处同一文件不同段落。
 - 防护：`git stash push -m <说明> -- <path>` → `git merge --no-ff` → `git stash pop`；pop 前确认两批编辑不在同一行段。整库 stash 会把对方所有在途文件一起卷走。
 - Seen 1× (2026-11-03).
 
+**暂存后又改了同一文件，提交前重新 `git add` 并用 `git diff --cached` 核对最终内容。**
+- 证据：2026-11-02 `bb27546` 的 note 暂存后又被改成 implemented 骨架，index 仍是 Proposal/Acceptance criteria；`3ba7c8b` 补发 Decision/Consequences，`docs/acceptance.md` 记录这次返工。
+- 防护：`git add <paths>` 后跑 `git diff --cached --stat` 与 `git show :<path>`；确认 index 是最终版本再 commit。
+- Seen 1× (2026-11-02).
+
+**note 要交给其他会话接手时，先提交进 `proposed/`，别把唯一副本留成 `??`。**
+- 证据：2026-11-04 `5a102e1` 提交 `proposed/bug-fix/2026-11-03-migration-failure-autorebuild.md` 时注明「这是设计的唯一未跟踪副本，接 F23 的 agent 看不到」。
+- 防护：交接前跑 `git status --short .agents/notes`；有 `??` 的提案先 add 并提交，再让对方基于该检出工作。
+- Seen 1× (2026-11-04).
+
 ## 验证
+
+**改过 JS/TS 后，提交前跑 `bun run typecheck`；`bun test` 不检查 JSDoc 类型。**
+- 证据：2026-11-01 `9a97ed9` 才补 `web/app.js:1018-1019` 的 `headResizeObserver`/`observedHead` 注解，并单独合并为 `ba40614`；2026-11-02 `cb30675` 才补 `web/icons.js` 两处映射与 `web/trace-view.js:556` 的参数注解，修掉 3 处 TS7053/TS7006。
+- 防护：合并前跑 `bun run typecheck`；只动 web 的 JS 也跑，JSDoc 由 tsc 检查。
+- Seen 2× (2026-11-01, 2026-11-02).
+
+**带 note 的提交先跑 `bun run verify:notes:staged`；master 直提也算。**
+- 证据：2026-11-04 `a9c6d74` 在 master 直提 `proposed/bug-fix/2026-11-04-timing-safe-equal-stdlib.md`，缺 `## Proposal` / `## Acceptance criteria` / `## Risks`，全量 `verify:notes` 至今报红。
+- 防护：提交前跑 `bun run verify:notes:staged`；新增或移动 note 的 commit 不走合并也跑。
+- Seen 1× (2026-11-04).
 
 **`list.param` 是分组键，展示文案放 `label`。**
 - 证据：2026-11-02 方向 A 第 5 步第一版把 `param` 传成 `${name} 的调用`，对组永不命中、失败数恒 0；测试直接传 meta 测不到这条装配路径，真实后端同样中招，靠合成数据 curl 对比抓到。
@@ -53,4 +68,7 @@
 
 ## 已晋升到常备规则
 
-暂无。晋升后的条目在这里保留一行规则名、日期与证据锚点；规则正文只在它的新家。
+晋升后的条目在这里保留一行规则名、日期与证据锚点；规则正文只在它的新家。
+
+**新 worktree 的依赖软链与 `info/exclude`。**
+- 证据：2026-10-25 新建 worktree 后 `tsc --noEmit` 找不到 `@types/bun`；规则正文见[落地方案在 worktree 分支里做](implemented/process/2026-10-28-implementation-worktree.md)的「依赖」节。
