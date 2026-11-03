@@ -84,6 +84,15 @@ code,pre,.mono{font-family:var(--mono)}
 .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;white-space:nowrap;border-radius:4px;padding:4px 7px;margin:-4px -7px}
 .brand:hover{background:var(--hover)}
 .brand-mark{width:20px;height:20px;display:block;flex:none}
+/* 两枚标志都留在 DOM 里，主题只切可见性：切主题当帧完成，不会重新取图闪一下。
+   手动浅色要在系统深色下也保持 light，因此媒体查询与 data-theme 的排除条件对齐 token。 */
+.brand-mark--dark{display:none}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]) .brand-mark--light{display:none}
+  :root:not([data-theme="light"]) .brand-mark--dark{display:block}
+}
+:root[data-theme="dark"] .brand-mark--light{display:none}
+:root[data-theme="dark"] .brand-mark--dark{display:block}
 .crumb{display:flex;align-items:center;gap:7px;min-width:0;font-size:12px;color:var(--text-2)}
 .crumb b{font-weight:550;color:var(--text);white-space:nowrap;flex:none}
 .crumb-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}

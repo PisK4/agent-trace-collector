@@ -61,13 +61,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 /** 静态白名单是 web/ 目录的唯一发布面；测试用目录内容核对它的覆盖。 */
-export const STATIC_FILES: Record<string, { file: string; type: string; binary?: boolean }> = {
+export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.css': { file: 'app.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/agent-logos.js': { file: 'agent-logos.js', type: 'text/javascript; charset=utf-8' },
   '/agent-logos.json': { file: 'agent-logos.json', type: 'application/json; charset=utf-8' },
-  '/tracery.png': { file: 'tracery.png', type: 'image/png', binary: true },
+  '/tracery-light.svg': { file: 'tracery-light.svg', type: 'image/svg+xml' },
+  '/tracery-dark.svg': { file: 'tracery-dark.svg', type: 'image/svg+xml' },
   '/session-view.js': { file: 'session-view.js', type: 'text/javascript; charset=utf-8' },
   '/layout.js': { file: 'layout.js', type: 'text/javascript; charset=utf-8' },
   '/backend-state.js': { file: 'backend-state.js', type: 'text/javascript; charset=utf-8' },
@@ -236,14 +237,10 @@ function summaryEntriesQuery(url: URL): SummaryEntriesQuery | null {
 async function serveStatic(path: string): Promise<Response> {
   const entry = STATIC_FILES[path];
   if (entry === undefined) return json({ error: 'not_found' }, 404);
-  let body: string | Uint8Array<ArrayBuffer>;
+  let body: string;
   const file = new URL(entry.file, WEB_ROOT);
   try {
-    // 二进制（PNG 等）不能按 utf8 读，否则字节会被破坏；文本资源沿用原路径。
-    // Buffer 的 buffer 类型是 ArrayBufferLike，Response 只收 ArrayBuffer 支撑的视图。
-    body = entry.binary
-      ? readFileSync(file) as Uint8Array<ArrayBuffer>
-      : readFileSync(file, 'utf8');
+    body = readFileSync(file, 'utf8');
   } catch {
     return json({ error: 'not_found' }, 404);
   }
