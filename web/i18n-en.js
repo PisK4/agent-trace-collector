@@ -36,4 +36,57 @@ export const dict = {
   /* 通用(先随骨架进来的两条) */
   '已复制{label}': 'Copied {label}',
   '{n} 条探针记录': ({ n }) => (n === 1 ? '1 probe record' : `${n} probe records`),
+
+  /* backend-state */
+  '正文预算已满': 'Body budget full',
+  '磁盘预算已满': 'Disk budget full',
+  '存储降级 · 正文暂停': 'Storage degraded · bodies paused',
+  '{why}：只收元数据，新请求的正文不再保存；账本、路由与请求元数据仍在接收。点按重新读取。':
+    '{why}: metadata only — bodies of new requests are no longer saved. Ledger, routing, and request metadata are still accepted. Click to re-read.',
+  '磁盘剩余空间不足': 'Disk space low',
+  '存储降级 · 采集暂停': 'Storage degraded · ingestion paused',
+  '{why}：写入被拒绝，新的请求证据不会入库。点按重新读取。':
+    '{why}: writes are rejected, new request evidence will not be stored. Click to re-read.',
+
+  /* parts */
+  '系统提示': 'System prompt',
+  '工具定义': 'Tool definitions',
+  '记忆': 'Memory',
+  '文件引用': 'File references',
+  '工具结果': 'Tool results',
+  '对话内容': 'Conversation',
+  '技能': 'Skills',
+
+  /* row-summary */
+  '正文可读': 'Body readable',
+  '正文未到': 'Body not yet arrived',
+  '正文不完整': 'Body incomplete',
+  '正文已回收': 'Body evicted',
+  'OTLP 摘要': 'OTLP summary',
+  '协议暂不支持': 'Protocol not interpreted',
+  '正文可读，尚未读取；点开后才下载这一片。': 'Body readable, not yet read; opening it downloads this slice.',
+  '正文未到：{reason}': 'Body not yet arrived: {reason}',
+  '正文不完整：{reason}': 'Body incomplete: {reason}',
+  '正文已回收：{reason}': 'Body evicted: {reason}',
+  '正文来自 OTLP 摘要：{reason}': 'Body from OTLP summary: {reason}',
+  '正文来自 OTLP 摘要': 'Body from OTLP summary',
+  '原对象已保存，暂不支持结构化解析。': 'Raw object saved; structured parsing not supported yet.',
+  '缺失回复': 'Reply missing',
+  '回复未到': 'Reply not yet arrived',
+  '回复暂不可读': 'Reply temporarily unreadable',
+  '摘要无回复': 'No reply in summary',
+  '回复无法解析': 'Reply unparseable',
+  '回复状态未知': 'Reply state unknown',
+  '完整性未报告': 'Completeness not reported',
+  '回复截断': 'Reply truncated',
+  '回复完整': 'Reply complete',
+  '完整性未知（{finish}）': 'Completeness unknown ({finish})',
+
+  /* tool-summary */
+  '{from}–{to} 行': 'lines {from}–{to}',
+  '前 {n} 行': 'first {n} lines',
+  '{n} 行起': 'from line {n}',
+  '{a}→{b} 行': 'lines {a}→{b}',
+  '全部替换': 'replace all',
+  '未命名工具': 'Unnamed tool',
 };

@@ -3,9 +3,11 @@
  * 工具动作摘要：按工具分派到一行可读的动作段，路径折算成末两段。
  *
  * 中栏调用行与右栏工具往返共用这一份分派与回退链，新增工具只改这里。
- * 叶子模块，不 import 仓库内其他 web 模块。
+ * 叶子模块，不 import 仓库内其他 web 模块（i18n 例外：纯数据映射）。
  * 区间折算与字节读数只服务扫读，原始键值始终在悬停与配对页。
  */
+
+import { t } from './i18n.js';
 
 /** 悬停 title 属性的超长护栏：预览文本不按字符截断，属性仍要防大参数撑爆。 */
 const TITLE_MAX = 2000;
@@ -81,9 +83,9 @@ function dispatchSummary(name, args) {
       if (file === null) return null;
       const offset = asNum(args.offset);
       const limit = asNum(args.limit);
-      const range = offset !== null && limit !== null ? `${offset}–${offset + limit} 行`
-        : limit !== null ? `前 ${limit} 行`
-          : offset !== null ? `${offset} 行起` : '';
+      const range = offset !== null && limit !== null ? t('{from}–{to} 行', { from: offset, to: offset + limit })
+        : limit !== null ? t('前 {n} 行', { n: limit })
+          : offset !== null ? t('{n} 行起', { n: offset }) : '';
       return range === '' ? file : `${file} · ${range}`;
     }
     case 'Edit':
@@ -93,8 +95,8 @@ function dispatchSummary(name, args) {
       const oldS = typeof args.old_string === 'string' ? args.old_string : null;
       const newS = typeof args.new_string === 'string' ? args.new_string : null;
       const parts = [file];
-      if (oldS !== null || newS !== null) parts.push(`${lineCount(oldS)}→${lineCount(newS)} 行`);
-      if (args.replace_all === true) parts.push('全部替换');
+      if (oldS !== null || newS !== null) parts.push(t('{a}→{b} 行', { a: lineCount(oldS), b: lineCount(newS) }));
+      if (args.replace_all === true) parts.push(t('全部替换'));
       return parts.join(' · ');
     }
     case 'Write':
@@ -211,7 +213,7 @@ function fallbackSummary(args, inputText) {
  * @param {string} name @param {string} inputText @returns {{label: string, args: string}}
  */
 export function summaryParts(name, inputText) {
-  const label = name !== '' ? name : '未命名工具';
+  const label = name !== '' ? name : t('未命名工具');
   let args = null;
   try { args = JSON.parse(inputText); } catch { /* 非 JSON 参数按原文展示 */ }
   const dispatched = args !== null && typeof args === 'object' && !Array.isArray(args)
