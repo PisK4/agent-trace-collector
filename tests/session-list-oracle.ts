@@ -70,6 +70,7 @@ export const LEGACY_LIST_WIDE = `
   SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
          ${LEGACY_TITLE_SQL} AS title,
          GROUP_CONCAT(DISTINCT agent) AS agents,
+         SUM(cost) AS cost_usd,
          ${LEGACY_FLAG_COLUMNS}
   FROM request
   WHERE conv_key IS NOT NULL
@@ -79,6 +80,7 @@ export type LegacySessionDbRow = {
   conv_key: string; last_ms: number; request_count: number; title: string | null; agents: string | null;
   has_failed: number; has_unknown: number; has_missing: number; has_participate: number;
   all_probe_kind: number; has_readable_body: number; has_usage: number; has_actor: number;
+  cost_usd: number | null;
 };
 
 export function legacyListSessions(store: { read: Database }, limit: number, cursor: string | null) {
@@ -90,7 +92,7 @@ export function legacyListSessions(store: { read: Database }, limit: number, cur
         ORDER BY last_ms DESC, conv_key DESC
         LIMIT ?`).all(limit + 1)
     : store.read.query(`SELECT conv_key, last_ms, request_count, title, agents, has_failed, has_unknown, has_missing, has_participate,
-               all_probe_kind, has_readable_body, has_usage, has_actor FROM (
+               all_probe_kind, has_readable_body, has_usage, has_actor, cost_usd FROM (
           ${LEGACY_LIST_WIDE}
         ) GROUPED
         WHERE (last_ms, conv_key) < (?, ?)
@@ -112,6 +114,7 @@ export function legacyListSessions(store: { read: Database }, limit: number, cur
       request_count: row.request_count,
       agents: row.agents === null ? [] : row.agents.split(',').filter(value => value.length > 0),
       flags,
+      cost_usd: row.cost_usd ?? 0,
     };
   });
   const last = page[page.length - 1];

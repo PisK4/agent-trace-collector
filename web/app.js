@@ -472,10 +472,10 @@ if (typeof document !== 'undefined') {
   function renderSessions() {
     const items = store.getSessions().items;
     const all = /** @type {SessionRow[]} */ (items.filter(sessionMatches));
-    // 探针记录与旁路会话默认折叠：渲染层过滤，分页仍按全量，折叠计数只覆盖
-    // 已加载页。选中的行临时留下，否则 URL 打开后既高亮不了也找不到它。
+    // 探针记录、旁路会话与工具子事件默认折叠：渲染层过滤，分页仍按全量，折叠
+    // 计数只覆盖已加载页。选中的行临时留下，否则 URL 打开后既高亮不了也找不到它。
     const folded = (/** @type {SessionRow} */ s) => s.flags.includes('probe') || s.flags.includes('bypass')
-      || s.flags.includes('background');
+      || s.flags.includes('background') || s.flags.includes('tool_event');
     const list = state.showFolded ? all : all.filter(s => !folded(s) || s.conv_key === state.session);
     const foldable = all.filter(s => folded(s) && s.conv_key !== state.session);
     // 列表被搜索或筛选收窄时才给分母；默认只报已加载数量，不伪造全库总数。

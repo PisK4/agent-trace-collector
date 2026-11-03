@@ -789,6 +789,34 @@ test('无正文、零用量、无归属的探针组标 probe，任一条件不�
   }
 });
 
+test('无会话归属的 WebSearch 检索组标 tool_event，混入有归属或其它 kind 都不标', () => {
+  const f = fixture();
+  try {
+    const reqKey = JSON.stringify(['request', 'websearch-req']);
+    const convKey = JSON.stringify(['conv', 'magpie-websearch']);
+    const ownedKey = JSON.stringify(['request', 'websearch-owned']);
+    const chatKey = JSON.stringify(['request', 'websearch-chat']);
+    f.store.write(db => {
+      const insert = db.prepare(`INSERT INTO request(req_id,conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,req_kind,cost)
+        VALUES (?,?,?,'actor-x','claude','known',?,'2026-11-03','through','pending',1,2,1,1,?,?)`);
+      insert.run(31, reqKey, 'request', 1000, 'source:web_search', null);
+      insert.run(32, convKey, 'conv', 2000, 'source:web_search', 0.0628);
+      insert.run(33, ownedKey, 'request', 3000, 'source:web_search', null);
+      insert.run(34, chatKey, 'request', 4000, 'source:chat', 0.01);
+      db.run(`UPDATE request SET session='synthetic-owned' WHERE req_id=33`);
+    });
+    const items = listSessions(f.store, 10, null).items;
+    const flags = (key: string) => items.find(row => row.conv_key === key)?.flags;
+    expect(flags(reqKey)).toEqual(['missing_body', 'tool_event']);
+    expect(flags(convKey)).toEqual(['missing_body', 'tool_event']);
+    expect(items.find(row => row.conv_key === convKey)?.cost_usd).toBeCloseTo(0.0628);
+    expect(flags(ownedKey)).toEqual(['missing_body']);
+    expect(flags(chatKey)).toEqual(['missing_body']);
+  } finally {
+    f.close();
+  }
+});
+
 /** Task 1 红测种子：发布代结果与同步旧列刻意不同值，锁住整套选源。 */
 function seedPublishedReading(f: ReturnType<typeof fixture>) {
   const id = seedPurposeRequest(f.store, {

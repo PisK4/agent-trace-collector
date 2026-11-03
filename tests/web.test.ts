@@ -52,15 +52,19 @@ test('请求记录入口只列被省略的请求，按窗口序号定位', () =>
   expect(html).not.toContain('data-summary-req="4"');
 });
 
-test('折叠行：探针与旁路各自计数，展开与收起如实标注', () => {
-  const row = (flags: string[]) => ({
-    conv_key: 'k', title: 't', last_ms: 1, request_count: 1, agents: [], flags,
+test('折叠行：探针、旁路与工具子事件各自计数，展开与收起如实标注', () => {
+  const row = (flags: string[], cost_usd = 0) => ({
+    conv_key: 'k', title: 't', last_ms: 1, request_count: 1, agents: [], flags, cost_usd,
   });
   expect(sessionsListFoldHtml([row([]), row([])], false)).toBe('');
   expect(sessionsListFoldHtml([row(['probe']), row(['probe']), row(['bypass']), row([])], false))
     .toContain('已折叠 2 条探针记录 · 1 条旁路会话（已加载页）');
   expect(sessionsListFoldHtml([row(['bypass'])], false)).toContain('已折叠 1 条旁路会话（已加载页）');
   expect(sessionsListFoldHtml([row(['probe']), row(['probe'])], true)).toContain('收起 2 条探针记录');
+  // 工具子事件在折叠条里报条数与成本合计；没有成本就不带金额段。
+  expect(sessionsListFoldHtml([row(['tool_event'], 0.0628), row(['tool_event'], 0.0537)], false))
+    .toContain('已折叠 2 条工具子事件 · $0.1165（已加载页）');
+  expect(sessionsListFoldHtml([row(['tool_event'])], false)).toContain('已折叠 1 条工具子事件（已加载页）');
 });
 
 test('会话汇总配对列表行内是调用序号，页头带计数与失败数', () => {

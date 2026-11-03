@@ -3,7 +3,7 @@
  * 形状解析，以及跨 Harness 复用的来源 kind、标题兼容与正文不可读保留。Harness
  * 专属强指纹及其编排归 [harness/purpose](./harness/purpose.ts)。
  */
-export const PURPOSE_VERSION = 10;
+export const PURPOSE_VERSION = 11;
 
 export type PurposeStatus =
   | 'recognized' | 'unrecognized' | 'missing' | 'retained' | 'unsupported' | 'error';
@@ -172,10 +172,12 @@ export function titleFromReply(text: string | null): string | null {
 }
 
 /**
- * 来源 kind：只有精确的 `title` 才排除链。
+ * 来源 kind：精确的 `title` 与封闭的 `web_search` 走排除链，其它值保持参与。
  *
- * 其它值保留成 `source:<value>` 并参与链；来源冲突或缺值时这里不出结论，
- * 交给标题兼容兜底，而不是拿一个不可靠的值猜类别。
+ * `web_search` 是账本侧检索子事件的来源值，不依赖正文；正文可读时尾部模板
+ * 指纹先判并给出同一结论，没有正文时这里是唯一判据。其余值保留成
+ * `source:<value>` 并参与链；来源冲突或缺值时这里不出结论，交给标题兼容
+ * 兜底，而不是拿一个不可靠的值猜类别。
  */
 export function sourceDecision(view: PurposeView): PurposeDecision | null {
   const { state, value } = view.source;
@@ -193,6 +195,18 @@ export function sourceDecision(view: PurposeView): PurposeDecision | null {
       chain: 'exclude',
       kind: 'title',
       modelTitle: titleFromReply(view.replyText),
+    };
+  }
+  if (kindValue === 'web_search') {
+    signals.push('source.kind.web_search');
+    return {
+      status: 'recognized',
+      version: PURPOSE_VERSION,
+      rule: 'source.kind.v1',
+      signals,
+      chain: 'exclude',
+      kind: 'web_search',
+      modelTitle: null,
     };
   }
   return {
