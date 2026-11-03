@@ -93,6 +93,20 @@ const SESSION_TITLE_SQL = `COALESCE(
    ORDER BY r4.started_ms ASC, r4.req_id ASC LIMIT 1)
 )`;
 
+/**
+ * 组当前性闸门：整组没有任何 current 组时，四个候选都必然落空。
+ *
+ * 每个候选都要求所属组 current，而组按 `conv_key` 聚合；脏组与前缀组因此
+ * 一个标题也取不到。没有这道闸门时，子查询要扫完该会话全部请求才能证明
+ * 「没有」——活跃会话恰恰常是 dirty，列表成本随会话变长线性增长。
+ * `EXISTS` 只走 `derive_queue` 主键（每组一行），成本与会话长度脱钩。
+ *
+ * 多 actor 会话只要有一个 clean 组，闸门就放行，dirty actor 的行仍被扫描；
+ * 标题结果不变，只是省不掉这部分成本。
+ */
+const SESSION_TITLE_GUARD_SQL = `EXISTS (SELECT 1 FROM derive_queue g
+  WHERE g.conv_key = request.conv_key AND ${groupCurrentSql('g')})`;
+
 export function listSessions(store: Store, limit = 50, cursor: string | null = null): Page<SessionRow> {
   const size = checkLimit(limit, 100);
   const bound = cursor === null
@@ -130,7 +144,7 @@ export function listSessions(store: Store, limit = 50, cursor: string | null = n
     const pageKeys = rows.slice(0, size).map(row => row.conv_key);
     const detail = store.read.query<SessionDbRow, string[]>(`
         SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
-               ${SESSION_TITLE_SQL} AS title,
+               CASE WHEN ${SESSION_TITLE_GUARD_SQL} THEN ${SESSION_TITLE_SQL} END AS title,
                -- 同旧查询：agents 是 magpie 的客户端标签，不是 actor 身份。
                GROUP_CONCAT(DISTINCT agent) AS agents,
                ${SESSION_FLAG_COLUMNS}

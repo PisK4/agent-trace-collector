@@ -1072,6 +1072,117 @@ test('新旧会话列表实现逐页等价：翻页全序、标题、迟到旧�
   } finally { f.close(); }
 });
 
+/**
+ * 脏组首页的标题求值：组当前性闸门要先判一次组，脏组直接落空。
+ * 精确计时不好断言的场合用同一条 SQL 去掉标题列做差，把聚合的固定成本抵消掉。
+ */
+function dirtyWideSession(store: ReturnType<typeof fixture>['store'], convKey: string, rows: number): void {
+  store.write(db => {
+    const insert = db.prepare(
+      `INSERT INTO request(conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,
+        body_state,derive_version,have,created_at,updated_at,title,title_source,status,
+        purpose_pending,purpose_chain,chain_role,req_kind,cost_state,ms,ttft_ms,flow_ms)
+       VALUES (?,?,?,?,?,?,?,?,?,?,1,1,1,?,?,200,0,'participate','main','chat','absent',?,?,?)`,
+    );
+    for (let i = 0; i < rows; i++) {
+      // 宽标题让「逐行证明没有标题」的扫描成本在旧实现下显著增长。
+      insert.run(convKey, 'session', 'actor-a', 'claude', 'known', 1_700_000_000_000 + i,
+        '2026-11-01', 'through', 'pending', 0, `标题-${i}`.repeat(200), 'user_delta',
+        1000 + i, 100 + i, 900 + i);
+    }
+    // 组脏：输入修订领先已发布修订，四个标题候选全部落空。
+    db.run(`INSERT INTO derive_queue(conv_key,actor,from_sort,input_revision,published_revision,
+      target_algorithm,published_algorithm,state) VALUES (?,'actor-a','',3,2,1,1,'dirty')`, [convKey]);
+  });
+}
+
+/** 第二轮宽聚合去掉标题列后的耗时；与整条查询的差就是标题求值成本。 */
+function titleCostMs(store: ReturnType<typeof fixture>['store'], convKey: string): number {
+  const hook = captureReadQueries(store);
+  try {
+    listSessions(store, 1, null);
+  } finally {
+    hook.restore();
+  }
+  const sql = hook.captured.find(c => c.sql.includes('AS title,'));
+  if (sql === undefined) throw new Error('title_query_not_captured');
+  const start = sql.sql.indexOf('CASE WHEN EXISTS');
+  const end = sql.sql.indexOf('END AS title,');
+  if (start === -1 || end === -1) throw new Error('title_guard_not_found');
+  const blank = store.read.query(`${sql.sql.slice(0, start)}NULL AS title,${
+    sql.sql.slice(end + 'END AS title,'.length)}`);
+  const timed = (run: () => unknown): number => {
+    const started = performance.now();
+    run();
+    return performance.now() - started;
+  };
+  const full: number[] = [];
+  const bare: number[] = [];
+  for (let i = 0; i < 9; i++) {
+    full.push(timed(() => listSessions(store, 1, null)));
+    bare.push(timed(() => blank.all(convKey)));
+  }
+  const median = (samples: number[]): number => [...samples].sort((a, b) => a - b)[4]!;
+  return median(full) - median(bare);
+}
+
+test('脏热组的标题求值不随会话行数线性增长', () => {
+  const small = fixture();
+  const large = fixture();
+  try {
+    const key = JSON.stringify(['session', 'dirty-hot']);
+    dirtyWideSession(small.store, key, 1_000);
+    dirtyWideSession(large.store, key, 8_000);
+    // 标题为空是语义要求；闸门只是让它不再付整组扫描的代价。
+    expect(listSessions(large.store, 1).items[0]?.title).toBe('');
+    const smallCost = titleCostMs(small.store, key);
+    const largeCost = titleCostMs(large.store, key);
+    // 旧实现 8 千行约 27 ms，且随行数线性增长；闸门后两者都与行数脱钩。
+    expect(largeCost).toBeLessThan(5);
+    expect(largeCost - smallCost).toBeLessThan(3);
+  } finally {
+    small.close();
+    large.close();
+  }
+});
+
+test('组在两次读取之间切换 clean/dirty，标题随之出现与消失', () => {
+  const f = fixture();
+  try {
+    seedPurposeRequest(f.store, {
+      convKey: 'toggle-title', purposePending: 0, purposeChain: 'participate',
+      reqKind: 'chat', title: '用户首句', titleSource: 'user_delta',
+      chainRole: 'main', startedMs: 1, cleanGroup: true,
+    });
+    const titleOf = (): string => listSessions(f.store, 10).items[0]?.title ?? '';
+    expect(titleOf()).toBe('用户首句');
+    f.store.write(db => db.run(`UPDATE derive_queue SET input_revision=input_revision+1
+      WHERE conv_key='toggle-title'`));
+    expect(titleOf()).toBe('');
+    f.store.write(db => db.run(`UPDATE derive_queue SET published_revision=input_revision
+      WHERE conv_key='toggle-title'`));
+    expect(titleOf()).toBe('用户首句');
+  } finally { f.close(); }
+});
+
+test('多 actor 会话：一个组 clean 就放行，标题仍只取 current 组的行', () => {
+  const f = fixture();
+  try {
+    // actor-a 已结算并有标题；actor-b 的组还脏。
+    seedPurposeRequest(f.store, {
+      convKey: 'multi-actor', actor: 'actor-a', purposePending: 0, purposeChain: 'participate',
+      reqKind: 'chat', title: 'a 的标题', titleSource: 'user_delta',
+      chainRole: 'main', startedMs: 1, cleanGroup: true,
+    });
+    seedPurposeRequest(f.store, {
+      convKey: 'multi-actor', actor: 'actor-b', purposePending: 0, purposeChain: 'participate',
+      reqKind: 'chat', title: 'b 的标题', titleSource: 'user_delta',
+      chainRole: 'main', startedMs: 2,
+    });
+    expect(listSessions(f.store, 10).items[0]?.title).toBe('a 的标题');
+  } finally { f.close(); }
+});
+
 test('两阶段查询计划：候选走覆盖索引，宽聚合只搜索页内键，旧查询全表扫描', () => {
   const f = fixture();
   try {
@@ -1103,6 +1214,8 @@ test('两阶段查询计划：候选走覆盖索引，宽聚合只搜索页内�
       expect(outer).toContain('SEARCH request');
       expect(outer).toContain('(conv_key=?)');
       expect(outer).not.toContain('(conv_key>?)');
+      // 标题前的组当前性闸门只按键查队列主键，每组一行，不进请求行。
+      expect(detail).toContain('SEARCH g USING PRIMARY KEY (conv_key=?)');
     }
     // 同库旧查询的外层对全部会话键做区间扫描：范围断言能失败，新实现的通过才有意义。
     const legacyDetail = explainPlan(f.store.read, `${LEGACY_LIST_WIDE} ORDER BY last_ms DESC, conv_key DESC LIMIT ?`, [3]);
