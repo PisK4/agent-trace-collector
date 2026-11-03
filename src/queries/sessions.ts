@@ -8,6 +8,8 @@ import { checkLimit, decodeCursor, encodeCursor, type Page } from './cursor';
 export type SessionRow = {
   conv_key: string; title: string; last_ms: number; request_count: number;
   agents: string[]; flags: string[];
+  /** 组内成本合计；折叠条给工具子事件报总费，其余消费方可忽略。 */
+  cost_usd?: number;
   /** 只有传入活跃快照时才有这三个字段；旧调用方拿到的形状不变。 */
   live?: boolean; inflight?: boolean; live_until?: number | null;
 };
@@ -25,16 +27,18 @@ type SessionDbRow = {
   has_failed: number; has_unknown: number; has_missing: number; has_participate: number;
   has_background: number; has_recognized_main: number;
   all_probe_kind: number; has_readable_body: number; has_usage: number; has_actor: number;
+  all_tool_search: number; has_session: number; cost_usd: number | null;
 };
 
 /** 阶段一候选行：覆盖索引上每个会话只取键与真实最近请求时间。 */
 type SessionCandidateRow = { conv_key: string; last_ms: number };
 
 /**
- * 会话状态只从确定事实聚合，五个标志固定按失败、待确认、缺正文、旁路、探针的
- * 顺序输出。失败看 HTTP 状态；待确认看身份未知或前驱关系未知；缺正文看正文
- * 不在可读状态或没拿到回调（`have` 第 1 位是回调位）；旁路看会话内是否存在
- * 参与链请求；探针看整组是否都是 magpie 自己的探测请求。
+ * 会话状态只从确定事实聚合，标志固定按失败、待确认、缺正文、旁路、后台、
+ * 探针、工具子事件的顺序输出。失败看 HTTP 状态；待确认看身份未知或前驱关系
+ * 未知；缺正文看正文不在可读状态或没拿到回调（`have` 第 1 位是回调位）；旁路
+ * 看会话内是否存在参与链请求；探针看整组是否都是 magpie 自己的探测请求；
+ * 工具子事件看整组是否都是无会话归属的 WebSearch 检索行。
  */
 
 /** magpie `probelog` 的三个封闭 kind：模型列表、provider 连通性测试、接口探测。 */
@@ -68,7 +72,12 @@ const SESSION_FLAG_COLUMNS = `
   MAX(CASE WHEN body_state = 'available' THEN 1 ELSE 0 END) AS has_readable_body,
   MAX(CASE WHEN coalesce(in_tok,0)+coalesce(out_tok,0)+coalesce(cache_read,0)+coalesce(cache_write,0) > 0
     OR coalesce(cost,0) <> 0 THEN 1 ELSE 0 END) AS has_usage,
-  MAX(CASE WHEN actor IS NOT NULL THEN 1 ELSE 0 END) AS has_actor`;
+  MAX(CASE WHEN actor IS NOT NULL THEN 1 ELSE 0 END) AS has_actor,
+  -- 工具子事件：整组都是 WebSearch 检索行（request/conv 回退键上的账本事实），
+  -- 且没有任何一笔带真实会话归属。任一条件不满足都留在列表里：这批行没有
+  -- actor/session，一旦混入有归属的行就是真实会话的一部分。
+  MIN(CASE WHEN req_kind = 'source:web_search' AND conv_source IN ('request','conv') THEN 1 ELSE 0 END) AS all_tool_search,
+  MAX(CASE WHEN session IS NOT NULL THEN 1 ELSE 0 END) AS has_session`;
 
 /** 标题跨组绑定的时间窗：标题生成与线程首请求同一时刻，留一小时容错。 */
 const TITLE_BIND_WINDOW_MS = 3_600_000;
@@ -228,6 +237,7 @@ export function listSessions(
                CASE WHEN ${SESSION_TITLE_GUARD_SQL} THEN ${SESSION_TITLE_SQL} END AS title,
                -- 同旧查询：agents 是 magpie 的客户端标签，不是 actor 身份。
                GROUP_CONCAT(DISTINCT agent) AS agents,
+               SUM(cost) AS cost_usd,
                ${SESSION_FLAG_COLUMNS}
         FROM request
         WHERE conv_key IN (${pageKeys.map(() => '?').join(',')})
@@ -324,6 +334,9 @@ function toSessionRow(row: SessionDbRow, live: SessionLive | null): SessionRow {
   // 会话归属。四个条件全满足才折叠，判定依据留在读模型里，渲染层只认标志。
   if (row.all_probe_kind === 1 && row.has_readable_body === 0
     && row.has_usage === 0 && row.has_actor === 0) flags.push('probe');
+  // 工具子事件是 Harness 工具执行的账本记录（WebSearch 检索），不是会话：
+  // 默认折叠由渲染层做，折叠条带这批成本合计，行与成本都不删除。
+  if (row.all_tool_search === 1 && row.has_session === 0) flags.push('tool_event');
   const base = {
     conv_key: row.conv_key,
     title: row.title ?? '',
@@ -331,6 +344,7 @@ function toSessionRow(row: SessionDbRow, live: SessionLive | null): SessionRow {
     request_count: row.request_count,
     agents: row.agents === null ? [] : row.agents.split(',').filter(value => value.length > 0),
     flags,
+    cost_usd: row.cost_usd ?? 0,
   };
   if (live === null) return base;
   // 活跃集合由读模型判定：在途请求，或最近 60 秒内有更新。60 秒只看本行已有的

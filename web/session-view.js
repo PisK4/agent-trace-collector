@@ -154,18 +154,22 @@ const AGENT_LABELS = /** @type {Record<string, string>} */ ({
 export const agentLabel = (v) => AGENT_LABELS[v] ?? v;
 
 /**
- * 折叠行：探针记录与旁路会话默认收起，展开只影响渲染。
- * 计数只覆盖已加载页，界面措辞如实说「已加载」；两类都为空时整行不渲染。
+ * 折叠行：探针记录、旁路会话与工具子事件默认收起，展开只影响渲染。
+ * 计数只覆盖已加载页，界面措辞如实说「已加载」；三类都为空时整行不渲染。
+ * 工具子事件这类没有会话正文可看，折叠条代为报出这批的成本合计。
  * @param {SessionRow[]} items 搜索与筛选后、实际被折起的已加载条目
  * @param {boolean} showFolded 当前是否展开
  */
 export function sessionsListFoldHtml(items, showFolded) {
   const probe = items.filter(s => s.flags.includes('probe')).length;
   const bypass = items.filter(s => s.flags.includes('bypass')).length;
-  if (probe === 0 && bypass === 0) return '';
+  const tool = items.filter(s => s.flags.includes('tool_event'));
+  const toolCost = tool.reduce((a, s) => a + (s.cost_usd ?? 0), 0);
+  if (probe === 0 && bypass === 0 && tool.length === 0) return '';
   const parts = [];
   if (probe > 0) parts.push(`${probe} 条探针记录`);
   if (bypass > 0) parts.push(`${bypass} 条旁路会话`);
+  if (tool.length > 0) parts.push(`${tool.length} 条工具子事件${toolCost > 0 ? ` · $${toolCost.toFixed(4)}` : ''}`);
   const label = showFolded ? `收起 ${parts.join(' · ')}` : `已折叠 ${parts.join(' · ')}（已加载页）`;
   return `<div class="sess-fold"><button class="chip-btn" data-fold-toggle="1">${icon(showFolded ? 'caret-up' : 'caret-down', 16)}<span>${esc(label)}</span></button></div>`;
 }
