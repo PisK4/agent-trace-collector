@@ -603,8 +603,8 @@ export function usageFoldHtml(r, detail, meta = null) {
     t(({ recomputed: '当前结果', retained: '旧结果', missing: '缺失' })[p.state] ?? p.state),
   ].filter(Boolean).join(' · ');
   const note = hasComp
-    ? (p?.note ?? t('分类是估计分配，不是逐类精确计数。'))
-    : (p?.note ?? t('没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。'));
+    ? (p?.note !== null && p?.note !== undefined ? t(p.note) : t('分类是估计分配，不是逐类精确计数。'))
+    : (p?.note !== null && p?.note !== undefined ? t(p.note) : t('没有路由侧的 prompt 分析。可能是该请求未经网关规则路由，或路由记录已超出保留期。'));
   const effort = requestEffortOf(meta);
   const effortHtml = effort === null ? ''
     : `<dl class="chain ledger-chain"><div class="chain-row"><dt>effort</dt><dd title="${t('客户端随请求声明的 reasoning_effort')}">${esc(effort)}</dd></div></dl>`;

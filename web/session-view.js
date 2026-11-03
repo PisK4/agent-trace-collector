@@ -18,6 +18,8 @@ import { pairStateText } from './trace-pair.js';
 
 /** 日期格式化的 locale 标签随当前界面语言；调用点在渲染时求值，切换语言即生效。 */
 const localeTag = () => (currentLocale() === 'zh' ? 'zh-CN' : 'en-US');
+/** 说明短句列表的分隔符：中文全角分号，英文半角加空格。 */
+const noteJoin = () => (currentLocale() === 'zh' ? '；' : '; ');
 /** @param {number} ms */
 export const clock = (ms) => new Date(ms).toLocaleTimeString(localeTag(), { hour: '2-digit', minute: '2-digit' });
 /** @param {number} ms */
@@ -236,7 +238,7 @@ function resourceGroup(s, status, rows) {
       totals.cost_absent !== null && totals.cost_absent > 0 ? t('{n} 笔未取得费用', { n: totals.cost_absent }) : null,
       t('缓存命中＝Σcache_read ÷ Σ(in_tok + cache_read)，只计两个读数都在的请求'),
       totals.cache_hit === null ? t('本次没有可用分母，不给数') : null,
-    ].filter(Boolean).join('；');
+    ].filter(Boolean).join(noteJoin());
     const data = `<span class="cue-line">${[
       totals.in_tok !== null ? t('<i>提示</i> <b>{v}</b>', { v: kk(totals.in_tok) }) : '',
       totals.out_tok !== null ? t('<i>输出</i> <b>{v}</b>', { v: kk(totals.out_tok) }) : '',
@@ -255,7 +257,7 @@ function resourceGroup(s, status, rows) {
     status === 'absent' ? t('汇总快照不可用（端点缺失或读取失败）') : t('汇总快照读取中'),
     t('这是已加载窗口的相加，不是会话口径'),
     priced.length < rows.length ? t('{n} 笔未取得费用', { n: rows.length - priced.length }) : null,
-  ].filter(Boolean).join('；');
+  ].filter(Boolean).join(noteJoin());
   const data = `<span class="cue-line">${[
     t('<i>提示</i> <b>{v}</b>', { v: kk(totalIn) }),
     t('<i>输出</i> <b>{v}</b>', { v: kk(totalOut) }),
@@ -284,7 +286,7 @@ function structureGroup(s) {
     t('旁路＝分类器与标题生成等排除请求'),
     st.context_peak_pct !== null ? t('上下文峰值＝max(prompt_tokens ÷ prompt_window)') : t('上下文峰值没有可用分母，不给数'),
     st.models.length > 1 ? t('模型＝{list}', { list: st.models.map(m => `${m.name} ×${m.count}`).join(' · ') }) : null,
-  ].filter(Boolean).join('；');
+  ].filter(Boolean).join(noteJoin());
   return { desc, data: `<span class="cue-line">${data}</span>` };
 }
 

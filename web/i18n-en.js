@@ -273,7 +273,7 @@ export const dict = {
   '加载后续记录': 'Load later records',
   '这个会话没有已记录的请求。': 'This session has no recorded requests.',
   '当前窗口的请求都没有可读正文，不在对话时间线里；请求记录在会话头。': 'No request in the loaded window has a readable body, so none appear on the conversation timeline; request records are in the session header.',
-  ' 已是最新记录': ' This is the latest record',
+  '已是最新记录': 'This is the latest record',
   '正在读取{session}的请求…': 'Reading requests of {session}…',
   '正在重建窗口…': 'Rebuilding window…',
 
@@ -398,6 +398,7 @@ export const dict = {
   '链接里的会话 key 不在已加载的会话里：可能是已淘汰、从未记录，或者还在后面的会话页。下面没有用别的会话顶替。': 'The session key in the link is not among loaded sessions: it may be purged, never recorded, or on a later session page. Nothing else was substituted below.',
   '链接里的 Request {id} 在当前库里不存在，也没有别名指向它。下面显示的是本会话的请求，不是那一笔。': 'Request {id} in the link does not exist in this store, and no alias points to it. Below are this session requests, not that one.',
   '链接里的 Request {id} 存在，但不在当前载入窗口，右栏已显示它的详情。不自动扫描全部历史。': 'Request {id} in the link exists but is not in the loaded window; the rail shows its detail. Full history is not scanned automatically.',
+  '复制当前会话 ID': 'Copy current session ID',
   '回到开头窗口': 'Jump to start window',
   '切到最新窗口': 'Jump to latest window',
   '请求窗口读取失败：{error}。已加载内容保持不变，可重试。': 'Request window read failed: {error}. Loaded content is unchanged; retry available.',
@@ -576,6 +577,11 @@ export const dict = {
   '[图片块：不以文本呈现]': '[Image block: not shown as text]',
   '[推理内容：密封不可读]': '[Reasoning: sealed, unreadable]',
   '读取失败': 'Read failed',
+
+  /* 服务端下发的 prompt note(readings.ts),按已知值定名,未知回退中文 */
+  '没有可用的上下文分析': 'No context analysis available',
+  '输入无法复核，不显示比例': 'Input cannot be re-verified; ratio not shown',
+  '旧结果，不按当前输入计算比例': 'Stale result, not computed against the current input',
 
   /* trace-dom */
   '旧版本 · 重读中': 'Stale · re-reading',
