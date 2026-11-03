@@ -91,3 +91,23 @@ test('快速读取不写慢日志，超过阈值才写一条带路由模板的�
     f.close();
   }
 });
+
+test('完整快照存储值复用闸门量测，不触发全量求和（F06）', () => {
+  const f = fixture();
+  try {
+    const metrics = createCapacityMetrics(f.store, f.dir, 1_000, {
+      instance: 'proc-a',
+      admission: () => ({ mode: 'normal', reason: null, usage, at_ms: 2_000 }),
+    });
+    const full = metrics.snapshot(f.store, f.dir) as Record<string, unknown>;
+    expect(full.storage).toMatchObject({ body_bytes: 10, total_bytes: 33 });
+    expect(full.storage_measured_at_ms).toBe(2_000);
+    expect((full.storage_measure as { count: number }).count).toBe(0);
+    // 没有闸门时退回现算，量测计数照实增长。
+    const bare = createCapacityMetrics(f.store, f.dir, 1_000)
+      .snapshot(f.store, f.dir) as Record<string, unknown>;
+    expect((bare.storage_measure as { count: number }).count).toBe(1);
+  } finally {
+    f.close();
+  }
+});

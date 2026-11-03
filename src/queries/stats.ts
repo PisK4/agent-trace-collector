@@ -32,7 +32,24 @@ function admissionOf(value: unknown): Stats['admission'] {
   };
 }
 
+/**
+ * 健康统计的进程内缓存，按写世代失效。
+ *
+ * 汇总里有 request 全表 COUNT 与 GROUP BY，在 4 GB 库上冷页一次 200–570 ms，
+ * 探针与页面并发时每笔都付一遍。所有写都经 `store.write` 计数（维护命令要求
+ * 停服），世代不变就没有任何聚合会变，直接复用上一次结果（F06）。
+ */
+const statsCache = new WeakMap<Store, { generation: number; value: Stats }>();
+
 export function getStats(store: Store): Stats {
+  const cached = statsCache.get(store);
+  if (cached !== undefined && cached.generation === store.writeStats.count) return cached.value;
+  const value = computeStats(store);
+  statsCache.set(store, { generation: store.writeStats.count, value });
+  return value;
+}
+
+function computeStats(store: Store): Stats {
   const cursors = store.read.query(`
     SELECT source_kind, source_name, file_generation, committed_off, observed_off, last_ok_ms
     FROM source_cursor ORDER BY source_kind, source_name`).all() as Stats['cursors'];
