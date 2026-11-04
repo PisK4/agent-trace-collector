@@ -7,6 +7,9 @@ import { purgeMetadata } from '../src/maintenance/purge';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
 import { readSourceFacts } from '../src/sources/facts';
 import { PRIVACY_TRANSFORM_VERSION } from '../src/privacy';
+import { acceptOtlpTraces } from '../src/sources/otlp/ingest';
+import { decodeTracesBody } from '../src/sources/otlp/decode';
+import { SYNTH, tracesProtobuf } from './otlp-fixtures';
 
 function batchOf(rows: unknown[], generation = 'g:0', startOffset = 0): SourceRead {
   let offset = startOffset;
@@ -957,6 +960,45 @@ test('未变与读取失败不进入摄入，游标不推进', () => {
     expect(() => ingestSource(f.store, failed, salt, 2))
       .toThrow('source_not_decoded:error');
     expect(f.store.read.query('SELECT count(*) AS n FROM source_cursor').get()).toEqual({ n: 0 });
+  } finally {
+    f.close();
+  }
+});
+
+test('OTLP 先到、账本晚到：账本按同会话时间窗认领 OTLP 行，不留双份', () => {
+  const f = fixture();
+  try {
+    const startMs = 1_792_946_000_000;
+    const decoded = decodeTracesBody(tracesProtobuf([{ resource: { service: 'codex-app-server' }, spans: [{
+      traceId: SYNTH.traceB,
+      spanId: SYNTH.spanLLM,
+      name: 'session_task.turn',
+      startNano: SYNTH.msToNano(startMs),
+      endNano: SYNTH.msToNano(startMs + 3_200),
+      attrs: {
+        'thread.id': 'thread-synth-0001',
+        'turn.id': 'turn-synth-0001',
+        model: 'synth-codex-model',
+        'codex.turn.token_usage.input_tokens': { int: 1200 },
+        'codex.turn.token_usage.output_tokens': { int: 45 },
+      },
+    }] }]), 'protobuf');
+    expect(acceptOtlpTraces(f.store, decoded, startMs + 100, salt).requestsCreated).toBe(1);
+
+    ingestSource(f.store, batchOf([{
+      t: startMs, agent: 'codex', provider: 'synth', status: 200,
+      session: 'thread-synth-0001', req: 'synth-codex-model', model: 'synth-codex-model',
+      in: 1200, out: 45,
+    }], 'ledger-g1'), salt, startMs + 200);
+
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 1 });
+    expect(f.store.read.query('SELECT via, have, agent, session FROM request').get()).toEqual({
+      via: 'otlp', have: 10, agent: 'codex', session: 'thread-synth-0001',
+    });
+    expect(f.store.read.query(
+      "SELECT match_rule FROM request_evidence WHERE source_kind='ledger'").get())
+      .toEqual({ match_rule: 'conv_time_model.v1' });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request_evidence').get()).toEqual({ n: 2 });
   } finally {
     f.close();
   }

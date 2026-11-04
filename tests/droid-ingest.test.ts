@@ -88,8 +88,8 @@ test('普通会话落库：逐 assistant 建行、正文可读、证据/原始�
     const evidence = f.store.read.query(
       'SELECT req_id, source_kind, ref_key, merge_state, match_rule FROM request_evidence ORDER BY req_id').all();
     expect(evidence).toEqual([
-      { req_id: 1, source_kind: 'session_call', ref_key: 's1/m-a1', merge_state: 'merged', match_rule: 'session_call.v1' },
-      { req_id: 2, source_kind: 'session_call', ref_key: 's1/m-a2', merge_state: 'merged', match_rule: 'session_call.v1' },
+      { req_id: 1, source_kind: 'session_call', ref_key: 's1/m-a1', merge_state: 'merged', match_rule: 'match_absent' },
+      { req_id: 2, source_kind: 'session_call', ref_key: 's1/m-a2', merge_state: 'merged', match_rule: 'match_absent' },
     ]);
 
     expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_droid_event').get()).toEqual({ n: 6 });

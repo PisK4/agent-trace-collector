@@ -16,9 +16,13 @@ import { join } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import type { Store } from '../../store';
 import { PRIVACY_TRANSFORM_VERSION, redact } from '../../privacy';
-import { HAVE_SESSION, MATCH_BY_SESSION_CALL, insertEvidenceTx } from '../../evidence';
+import {
+  HAVE_SESSION, MATCH_ABSENT, MATCH_AMBIGUOUS, insertEvidenceTx,
+} from '../../evidence';
 import { localDay, modelTimeTitle } from '../../format';
 import { persistBodyTx } from '../../body';
+import { findRequestOwnerTx } from '../../owner';
+import { markRequestInputTx } from '../../derive/state';
 import { emptySourceFacts, readSourceFacts, serializeFacts } from '../facts';
 import { readBatch } from '../files';
 import type { SourceRead } from '../files';
@@ -31,6 +35,7 @@ import type { DroidCall, DroidParserState } from './parse';
 export type DroidIngestResult = {
   files: number;
   calls: number;
+  merged: number;
   duplicates: number;
   invalid: number;
   blocked: number;
@@ -39,14 +44,20 @@ export type DroidIngestResult = {
 };
 
 export function emptyDroidIngestResult(): DroidIngestResult {
-  return { files: 0, calls: 0, duplicates: 0, invalid: 0, blocked: 0, settingsChanged: 0, bytes: 0 };
+  return { files: 0, calls: 0, merged: 0, duplicates: 0, invalid: 0, blocked: 0, settingsChanged: 0, bytes: 0 };
 }
 
 const SOURCE_KIND = 'droid_transcript';
 const ISSUE_KIND = 'droid_session';
+const EVIDENCE_KIND = 'session_call';
 
 function evidenceRef(sessionId: string, messageId: string): string {
   return `${sessionId}/${messageId}`;
+}
+
+/** 会话语义的 droid 组键；与账本、OTLP 的 sessionRef 逐字相同，去重靠它对齐。 */
+function droidConvKey(sessionId: string): string {
+  return JSON.stringify(['session', sessionId]);
 }
 
 /** 脱敏后的整行原文：对象按脱敏后的 JSON 存，无法解析的行按字符串替换敏感片段。 */
@@ -90,7 +101,7 @@ function insertDroidRequestTx(
        attempt_state,sort_source,sort_key,source_facts_json
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
-      call.responseIdNorm, 'droid', sessionId, JSON.stringify(['session', sessionId]), 'droid-session',
+      call.responseIdNorm, 'droid', sessionId, droidConvKey(sessionId), 'droid-session',
       sessionId, 'known', call.isSubagent ? sessionId : null, call.parentSessionId,
       call.startedMs, localDay(call.startedMs), 'session', null, null, call.modelRequested, null, null,
       null, null, null, null, null,
@@ -102,23 +113,7 @@ function insertDroidRequestTx(
   return Number(inserted.lastInsertRowid);
 }
 
-/** 一行调用落库：证据、正文与派生入队。返回是否新建了行。 */
-function ingestCallTx(
-  db: Database,
-  call: DroidCall,
-  generation: string,
-  offset: number,
-  salt: Uint8Array,
-  now: number,
-): boolean {
-  const refKey = evidenceRef(call.sessionId, call.messageId);
-  const owned = db.query<{ req_id: number }, [string, string]>(
-    'SELECT req_id FROM request_evidence WHERE source_kind=? AND ref_key=?',
-  ).get('session_call', refKey);
-  if (owned !== null && owned !== undefined) return false;
-
-  const reqId = insertDroidRequestTx(db, call, generation, offset, now);
-  insertEvidenceTx(db, reqId, 'session_call', refKey, 'merged', MATCH_BY_SESSION_CALL, now);
+function persistDroidBodyTx(db: Database, reqId: number, call: DroidCall): void {
   persistBodyTx(db, reqId, {
     protocol: 'droid-session',
     request: { messages: call.requestMessages },
@@ -126,7 +121,85 @@ function ingestCallTx(
     reply: { role: 'assistant', content: call.replyContent },
     redact_version: PRIVACY_TRANSFORM_VERSION,
   });
-  return true;
+}
+
+/**
+ * 认领既有行：只补空字段，不覆盖别处已经写下的事实。
+ *
+ * 正文只在对方没有可读骨架、且没有因回收被淘汰时补；已有正文一律保留。
+ */
+function mergeIntoOwnerTx(
+  db: Database,
+  ownerId: number,
+  call: DroidCall,
+  refKey: string,
+  rule: string,
+  generation: string,
+  offset: number,
+  now: number,
+): void {
+  const current = db.query<{
+    actor: string | null; actor_state: string; skeleton_z: Uint8Array | null; body_state: string;
+    source_facts_json: string | null;
+  }, [number]>(
+    'SELECT actor,actor_state,skeleton_z,body_state,source_facts_json FROM request WHERE req_id=?',
+  ).get(ownerId);
+  if (current === null) return;
+  const title = modelTimeTitle(call.modelRequested, call.startedMs);
+  db.run(
+    `UPDATE request SET
+       session=COALESCE(session,?), conv_key=COALESCE(conv_key,?), conv_source=COALESCE(conv_source,?),
+       actor=COALESCE(actor,?),
+       actor_state=CASE WHEN actor_state='known' THEN 'known' WHEN actor IS NULL THEN 'known' ELSE actor_state END,
+       subagent=COALESCE(subagent,?), parent_agent=COALESCE(parent_agent,?),
+       response_id_norm=COALESCE(response_id_norm,?), model_requested=COALESCE(model_requested,?),
+       title=COALESCE(title,?), sort_source=COALESCE(sort_source,'droid_session'),
+       sort_key=COALESCE(sort_key,?), source_facts_json=?, have=have|${HAVE_SESSION}, updated_at=?
+     WHERE req_id=?`,
+    [
+      call.sessionId, droidConvKey(call.sessionId), 'droid-session',
+      call.sessionId, call.isSubagent ? call.sessionId : null, call.parentSessionId,
+      call.responseIdNorm, call.modelRequested, title,
+      `${generation}|${String(offset).padStart(20, '0')}`,
+      sourceFactsJson(current.source_facts_json, call),
+      now, ownerId,
+    ],
+  );
+  insertEvidenceTx(db, ownerId, EVIDENCE_KIND, refKey, 'merged', rule, now);
+  if (current.skeleton_z === null && current.body_state !== 'evicted') {
+    persistDroidBodyTx(db, ownerId, call);
+    db.run('UPDATE request SET miss_reason=NULL WHERE req_id=?', [ownerId]);
+  }
+  markRequestInputTx(db, ownerId);
+}
+
+/** 一行调用的证据已确认是新的时候，认领或建行。 */
+function ingestCallTx(
+  db: Database,
+  call: DroidCall,
+  refKey: string,
+  generation: string,
+  offset: number,
+  now: number,
+): 'inserted' | 'merged' {
+  const owner = findRequestOwnerTx(db, {
+    responseIdNorm: call.responseIdNorm,
+    turnRef: null,
+    convKey: droidConvKey(call.sessionId),
+    agent: 'droid',
+    startedMs: call.startedMs,
+    model: call.modelRequested,
+    excludeSourceKind: EVIDENCE_KIND,
+  });
+  if (owner.reqId !== null) {
+    mergeIntoOwnerTx(db, owner.reqId, call, refKey, owner.rule ?? MATCH_AMBIGUOUS, generation, offset, now);
+    return 'merged';
+  }
+  const reqId = insertDroidRequestTx(db, call, generation, offset, now);
+  insertEvidenceTx(db, reqId, EVIDENCE_KIND, refKey, 'merged',
+    owner.outcome === 'ambiguous' ? MATCH_AMBIGUOUS : MATCH_ABSENT, now);
+  persistDroidBodyTx(db, reqId, call);
+  return 'inserted';
 }
 
 /** 主会话的 settings：整份读、按内容哈希判变化，不占游标。 */
@@ -262,8 +335,17 @@ export async function ingestDroidTranscript(
       }
       state = step.state;
       if (step.call !== null) {
-        if (ingestCallTx(db, step.call, read.generation, line.offset, salt, now)) result.calls += 1;
-        else result.duplicates += 1;
+        const refKey = evidenceRef(step.call.sessionId, step.call.messageId);
+        const owned = db.query<{ req_id: number }, [string, string]>(
+          'SELECT req_id FROM request_evidence WHERE source_kind=? AND ref_key=?',
+        ).get(EVIDENCE_KIND, refKey);
+        if (owned !== null && owned !== undefined) {
+          result.duplicates += 1;
+        } else if (ingestCallTx(db, step.call, refKey, read.generation, line.offset, now) === 'merged') {
+          result.merged += 1;
+        } else {
+          result.calls += 1;
+        }
       }
       committed = line.end;
     }
@@ -294,6 +376,7 @@ export async function ingestDroidBatch(
     const result = await ingestDroidTranscript(store, transcript, salt, now);
     total.files += result.files;
     total.calls += result.calls;
+    total.merged += result.merged;
     total.duplicates += result.duplicates;
     total.invalid += result.invalid;
     total.blocked += result.blocked;

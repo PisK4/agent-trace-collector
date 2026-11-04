@@ -79,11 +79,14 @@ export const MATCH_BY_RESPONSE_ID = 'response_id_norm.v1';
 /** OTLP span 证据的匹配规则名：物理身份 (trace_id, span_id) 直接落位，不猜关联。 */
 export const MATCH_BY_SPAN_IDENTITY = 'trace_span.v1';
 
-/** 会话文件证据自身建行：ref_key `<session_id>/<message_id>` 是调用身份。 */
-export const MATCH_BY_SESSION_CALL = 'session_call.v1';
-
 /** 同会话 ±60 秒窗口 + 同模型认领：只在唯一命中时使用。 */
 export const MATCH_BY_CONV_TIME_MODEL = 'conv_time_model.v1';
+
+/** 统一 owner 查找的零候选结果：独立成行，没有可认领的既有行。 */
+export const MATCH_ABSENT = 'match_absent';
+
+/** 统一 owner 查找的多候选结果：不合并，独立成行，留痕供审计。 */
+export const MATCH_AMBIGUOUS = 'match_ambiguous';
 
 /** 上游 turn 身份相同：未按 response ID 命中时，hook 证据落到 OTLP 占位行。 */
 export const MATCH_BY_TURN = 'turn_ref.v1';
