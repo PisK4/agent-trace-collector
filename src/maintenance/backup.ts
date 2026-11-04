@@ -148,8 +148,8 @@ export function backupDatabase(
  * 备份与恢复都只查这一处：加一个版本就是在这里加一个数字，不另写第二份版本规则。
  */
 /** 可搬运的 schema 版本。只有当前版本：低版本没有升级路径，搬回来也打不开。 */
-/** 可恢复的 schema 版本：v6～v9 包恢复后首次打开会原地升到当前版本（纯新增）。 */
-export const RESTORABLE_SCHEMA_VERSIONS: readonly number[] = [6, 7, 8, 9, 10];
+/** 可恢复的 schema 版本：v6～v10 包恢复后首次打开会原地升到当前版本（纯新增）。 */
+export const RESTORABLE_SCHEMA_VERSIONS: readonly number[] = [6, 7, 8, 9, 10, 11];
 
 const BUNDLE_FILES = ['trace.db', 'redaction.salt', 'manifest.json'] as const;
 
