@@ -22,6 +22,7 @@ import { ReadingConflictError } from '../../src/reading';
 import { getRoute } from '../../src/queries/routes';
 import { listTurns } from '../../src/queries/turns';
 import { listBgJobs } from '../../src/queries/bg-jobs';
+import { getTodoByTurn } from '../../src/queries/todo-by-turn';
 import { getSessionSummary, getSummaryEntries } from '../../src/queries/session-summary';
 import { getStats } from '../../src/queries/stats';
 
@@ -205,6 +206,10 @@ function dispatchQuery(store: Store, operation: keyof ReadOperations, rawInput: 
     case 'bgJobs': {
       const input = rawInput as ReadInput<'bgJobs'>;
       return listBgJobs(store, input.key);
+    }
+    case 'todoByTurn': {
+      const input = rawInput as ReadInput<'todoByTurn'>;
+      return getTodoByTurn(store, input.key, input.actor, input.turn);
     }
     case 'summary': {
       const input = rawInput as ReadInput<'summary'>;

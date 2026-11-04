@@ -59,6 +59,10 @@ export function createHttpReadTransport({ fetcher, baseUrl = '', headers }) {
       }
       case 'bgJobs':
         return `/api/sessions/${enc(input.key)}/bg-jobs`;
+      case 'todoByTurn': {
+        const params = new URLSearchParams({ actor: input.actor, turn: String(input.turn) });
+        return `/api/sessions/${enc(input.key)}/todo?${params}`;
+      }
       case 'summary':
         return `/api/sessions/${enc(input.key)}/summary`;
       case 'summaryEntries': {
@@ -138,6 +142,20 @@ export function createHttpReadTransport({ fetcher, baseUrl = '', headers }) {
       case 'bgJobs':
         if (!Array.isArray(parsed)) reject();
         return;
+      case 'todoByTurn': {
+        // 新具名操作：身份、时点与列表形状都要完整，畸形 DTO 不进缓存。
+        if (!isObj(parsed) || typeof parsed.key !== 'string' || typeof parsed.actor !== 'string'
+          || !Number.isSafeInteger(parsed.turn) || parsed.turn < 1
+          || !['ready', 'absent', 'unavailable'].includes(parsed.state)) reject();
+        const snapshot = parsed.snapshot;
+        if (parsed.state !== 'ready') { if (snapshot !== null) reject(); return; }
+        if (!isObj(snapshot) || !Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0
+          || !Array.isArray(snapshot.items)) reject();
+        for (const item of snapshot.items) {
+          if (!isObj(item) || typeof item.content !== 'string' || typeof item.status !== 'string') reject();
+        }
+        return;
+      }
       case 'detail':
       case 'summary':
         if (!isObj(parsed)) reject();

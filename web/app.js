@@ -51,6 +51,8 @@ import { renderTracePair } from './trace-pair.js';
 import { isEmptyGroup, projectSteps, projectTailReply, renderTraceRow } from './trace-view.js';
 import { renderTurnBand, renderTurnRail, renderTurnRailHead } from './turn-band.js';
 import { demoFromParam, expandFromParam, railTabFromParam, railTabParam, resolveTraceTarget, summaryKindFromParam, traceIdFromParam } from './url-route.js';
+import { RAIL_TABS } from './rail-tabs.js';
+import { todoTabHtml } from './todo-tab.js';
 
 /**
  * 重绘后把滚动位置放回去。内容变短时夹到新的可滚动上限内。
@@ -244,7 +246,8 @@ if (typeof document !== 'undefined') {
     (/** @type {number} */ id) => { onStoreChange(id); },
     // 轮次快照与会话汇总落地（出现/消失、折叠区就绪）同样重绘两栏。
     { onTurnsChanged: () => { consumePendingTurn(); renderMain(); renderRail(); },
-      onSummaryChanged: () => { consumePendingSummary(); renderMain(); renderRail(); } });
+      onSummaryChanged: () => { consumePendingSummary(); renderMain(); renderRail(); },
+      onTodoChanged: () => { renderRail(); } });
   /** @type {Map<string, boolean>} 折叠开合按稳定键保存（键含 req id），重绘后恢复。 */
   const folds = new Map();
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
@@ -392,6 +395,7 @@ if (typeof document !== 'undefined') {
         case 'ensure-turn': void ensureTurnReads(Number(fx.startReq), Number(fx.replyReq), fx.ords ?? []); break;
         case 'resume-delta': void resumeDelta(Number(fx.reqId)); break;
         case 'read-route': void ensureRoute(Number(fx.reqId)); break;
+        case 'read-todo': void ensureTodo(Number(fx.turn)); break;
       }
     }
   }
@@ -797,6 +801,12 @@ if (typeof document !== 'undefined') {
     return store.peekToolResult(ownerId, callOrd);
   }
 
+  /** 轮次态点开待办页签时读取；actor 由服务端按主链结算，前端不猜归属。 @param {number} turn */
+  async function ensureTodo(turn) {
+    if (state.session === null) return;
+    await store.loadTodoByTurn(state.session, '', turn);
+  }
+
   /** 展开路由折叠区或切到路由页签时才读取；失败保持未读，重新展开可重试。 @param {number} id */
   async function ensureRoute(id) {
     if (store.peekRoute(id) !== null) return;
@@ -1189,10 +1199,13 @@ if (typeof document !== 'undefined') {
   }
 
   function railHead() {
-    // 轮次态：身份行换成轮次身份，页签行隐藏——页签是请求作用域。
+    // 页签行在两种阅读态都可见：轮次作用域页签（Todo）在轮次态也要能点。
+    const tabs = `<div class="rail-tabs" role="tablist">
+      ${RAIL_TABS.map(tab => `<button role="tab" data-rail="${esc(tab.id)}" aria-pressed="${state.railTab === tab.id}">${t(tab.label)}</button>`).join('')}
+    </div>`;
     if (state.turn !== null) {
       const turn = turnOf(state.turn);
-      if (turn !== null) return renderTurnRailHead(turn);
+      if (turn !== null) return `${renderTurnRailHead(turn)}${tabs}`;
     }
     const r = currentRow();
     if (r === null) {
@@ -1211,13 +1224,7 @@ if (typeof document !== 'undefined') {
     const firstLine = title === ''
       ? `<div class="rail-id"><span class="grow"></span>${sourceTag}<span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`
       : `<div class="rail-title-row">${title}${sourceTag}<span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`;
-    return `${firstLine}
-      <div class="rail-tabs" role="tablist">
-        <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">${t('读数')}</button>
-        <button role="tab" data-rail="body" aria-pressed="${state.railTab === 'body'}">${t('正文')}</button>
-        <button role="tab" data-rail="tools" aria-pressed="${state.railTab === 'tools'}">${t('工具')}</button>
-        <button role="tab" data-rail="route" aria-pressed="${state.railTab === 'route'}">${t('路由')}</button>
-      </div>`;
+    return `${firstLine}${tabs}`;
   }
 
   /**
@@ -1480,6 +1487,9 @@ if (typeof document !== 'undefined') {
         return text === '' ? null : text;
       });
     }
+    // Todo 是轮次作用域，放在轮次态提前返回之前：两种阅读态都能读到它，
+    // 且不会掉进后面四个请求作用域页签的分派。
+    if (state.railTab === 'todo') return todoTabHtml(store.peekTodoByTurn());
     // 轮次态：命令组与最终回复两个面板，两端默认展开；点轨迹任意行经选择转换回请求态。
     if (state.turn !== null) {
       const turn = turnOf(state.turn);
@@ -1586,8 +1596,8 @@ if (typeof document !== 'undefined') {
   let lastRailTurn = /** @type {number | null} */ (null);
   let lastRailTab = 'facts';
   let lastRailPhase = '';
-  /** 页签序即滑动方向：往右切，新内容从右来。 */
-  const TAB_ORDER = ['facts', 'body', 'tools', 'route'];
+  /** 页签序即滑动方向：往右切，新内容从右来；次序取自登记数组。 */
+  const TAB_ORDER = RAIL_TABS.map(tab => tab.id);
   /** 右栏当前键的内容相位：主读取在手为 ready，否则 loading。 */
   function railPhase() {
     if (state.turn !== null) {

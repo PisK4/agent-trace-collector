@@ -745,14 +745,16 @@ test('URL 页签声明：合法内容页签原样解析与写回，无效或缺�
   expect(railTabFromParam('body')).toBe('body');
   expect(railTabFromParam('tools')).toBe('tools');
   expect(railTabFromParam('route')).toBe('route');
+  expect(railTabFromParam('todo')).toBe('todo');
   expect(railTabFromParam(null)).toBe('facts');
   expect(railTabFromParam('bogus')).toBe('facts');
   expect(railTabParam('facts')).toBeNull();
   expect(railTabParam('body')).toBe('body');
   expect(railTabParam('tools')).toBe('tools');
   expect(railTabParam('route')).toBe('route');
+  expect(railTabParam('todo')).toBe('todo');
   // 往返一致：解析结果写回 URL 后仍解析出同一页签。
-  for (const tab of ['body', 'tools', 'route'] as const) {
+  for (const tab of ['body', 'tools', 'route', 'todo'] as const) {
     expect(railTabFromParam(railTabParam(tab))).toBe(tab);
   }
 });

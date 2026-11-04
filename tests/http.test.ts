@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, seedPurposeRequest } from './fixtures';
 import { loadConfig } from '../src/config';
-import { createHandler, loadReadToken, STATIC_FILES } from '../src/http';
+import { createHandler, loadReadToken, STATIC_FILES, routeTemplate } from '../src/http';
 import { getRequest, listRequests } from '../src/queries/requests';
 import { getRoute } from '../src/queries/routes';
 import { listSessions } from '../src/queries/sessions';
@@ -773,5 +773,23 @@ test('同 key 并发会话列表共享一次计算；参数错误广播；完成
     expect(((await after.json()) as { items: unknown[] }).items).toHaveLength(2);
     // 出表后重新执行（多了一行，活跃判定随之多调一次）；若是跨请求缓存，这里仍是 0。
     expect(calls).toBeGreaterThan(0);
+  } finally { f.close(); }
+});
+
+test('todo 路由纳入慢请求模板，缺轮号与非数字轮号显式 400', async () => {
+  expect(routeTemplate('/api/sessions/k/todo')).toBe('/api/sessions/:key/todo');
+  const f = fixture();
+  try {
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
+    const get = (path: string) => handler(new Request(`http://127.0.0.1:8320${path}`, {
+      headers: { host: '127.0.0.1:8320', 'sec-fetch-site': 'same-origin' },
+    }));
+    for (const path of ['/api/sessions/k/todo', '/api/sessions/k/todo?turn=0',
+      '/api/sessions/k/todo?turn=abc', '/api/sessions/k/todo?turn=-1']) {
+      expect((await get(path)).status).toBe(400);
+    }
+    const ok = await get('/api/sessions/k/todo?turn=1');
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { state: string }).state).toBe('absent');
   } finally { f.close(); }
 });

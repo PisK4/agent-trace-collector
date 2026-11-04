@@ -1,5 +1,6 @@
 // @ts-check
 import { routeReadTarget } from './url-route.js';
+import { isTab, scopeOf } from './rail-tabs.js';
 
 /**
  * 选择状态的唯一写者：纯转换函数，无 DOM、无网络、无 store。
@@ -38,12 +39,13 @@ import { routeReadTarget } from './url-route.js';
 
 /**
  * @typedef {Object} Effect 待执行效果；执行器按序消费。
- * @property {'open-rail'|'render-crumb'|'render-main'|'render-rail'|'update-url'|'focus-step'|'scroll-group'|'ensure-read'|'ensure-pair'|'resume-delta'|'read-route'|'ensure-turn'} kind
+ * @property {'open-rail'|'render-crumb'|'render-main'|'render-rail'|'update-url'|'focus-step'|'scroll-group'|'ensure-read'|'ensure-pair'|'resume-delta'|'read-route'|'read-todo'|'ensure-turn'} kind
  * @property {number} [reqId]
  * @property {number} [owner]
  * @property {number} [callOrd]
  * @property {number} [startReq]
  * @property {number} [replyReq]
+ * @property {number} [turn]
  * @property {number[]} [ords]
  */
 
@@ -236,9 +238,17 @@ export function applyIntent(state, intent) {
       return { state: next, effects: [{ kind: 'render-rail' }, { kind: 'update-url' }] };
     }
     case 'select-tab': {
-      const tab = intent.tab === 'facts' || intent.tab === 'route' || intent.tab === 'tools' ? intent.tab : 'body';
-      const next = { ...state, railTab: tab, turn: null };
-      return { state: next, effects: [...routeEffects(next), { kind: 'render-rail' }, { kind: 'update-url' }] };
+      // 非法值沿用既有归一到正文；合法值取自 RAIL_TABS。turn 作用域页签在
+      // 轮次态保留 turn，其余四栏点一下仍回请求态。
+      const tab = isTab(intent.tab) ? intent.tab : 'body';
+      const keepTurn = scopeOf(tab) === 'turn';
+      const next = { ...state, railTab: tab, turn: keepTurn ? state.turn : null };
+      /** @type {Effect[]} */
+      const effects = [...routeEffects(next), { kind: 'render-rail' }, { kind: 'update-url' }];
+      if (tab === 'todo' && state.turn !== null) {
+        effects.push({ kind: 'read-todo', turn: state.turn });
+      }
+      return { state: next, effects };
     }
     case 'select-tool-page': {
       // 工具四页导航：只改页内页签，不更新 URL（现行行为）。
@@ -259,13 +269,13 @@ export function applyIntent(state, intent) {
       // 过期工具选择清掉。选中不落 URL，点轨迹任意行经其余意图回请求态。
       // 两端补读需要轮次行的请求号与命令组 ords：由装配层随意图带进来，转换不做查找。
       const next = { ...state, turn: intent.row.turn, toolOrd: null, toolOwner: null };
-      return {
-        state: next,
-        effects: [
-          { kind: 'render-main' }, { kind: 'render-rail' },
-          { kind: 'ensure-turn', startReq: intent.row.start_req, replyReq: intent.row.reply_req, ords: intent.row.ordinals },
-        ],
-      };
+      /** @type {Effect[]} */
+      const effects = [
+        { kind: 'render-main' }, { kind: 'render-rail' },
+        { kind: 'ensure-turn', startReq: intent.row.start_req, replyReq: intent.row.reply_req, ords: intent.row.ordinals },
+      ];
+      if (next.railTab === 'todo') effects.push({ kind: 'read-todo', turn: next.turn });
+      return { state: next, effects };
     }
     case 'turn-gone': {
       // 轮次列表重算后选中的轮不在了：清选择，渲染由调用方继续。

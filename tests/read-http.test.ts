@@ -67,6 +67,18 @@ test('批次输入编码为 JSON 查询参数', async () => {
     encodeURIComponent(JSON.stringify([{ id: 3, token, from: 0, to: 40 }]))}`);
 });
 
+test('todoByTurn 编码会话、actor 与轮号，校验顶层形状', async () => {
+  const ready = { key: 'k', actor: '', turn: 2, state: 'ready',
+    snapshot: { seq: 0, items: [{ content: 'ship', status: 'pending' }] } };
+  const { fetcher, calls } = scriptedFetch([{ body: ready }, { body: { ...ready, state: 'bogus' } }]);
+  const transport = createHttpReadTransport({ fetcher });
+  await transport.execute('todoByTurn', { key: 'a/b', actor: '', turn: 2 },
+    { signal: new AbortController().signal });
+  expect(calls[0]!.url).toBe('/api/sessions/a%2Fb/todo?actor=&turn=2');
+  await expect(transport.execute('todoByTurn', { key: 'k', actor: '', turn: 2 },
+    { signal: new AbortController().signal })).rejects.toMatchObject({ code: 'invalid_response' });
+});
+
 test('汇总条目按判别 kind 编码', async () => {
   const { fetcher, calls } = scriptedFetch([{
     body: { items: [{ req_id: 1, ord: 0, tool_name: 'Bash', state: 'resolved',

@@ -183,6 +183,16 @@ test('close-tool 与 select-tab：Escape 连页签回读数，页签归一化并
 
   const notRoute = applyIntent(base(), { kind: 'select-tab', tab: 'tools' });
   expect(kinds(notRoute)).toEqual(['render-rail', 'update-url']);
+
+  // 第五栏是轮次作用域：轮次态点它保留 turn 并发读取，四栏点一下仍回请求态。
+  const todo = applyIntent(base({ railTab: 'facts', reqId: 7, turn: 3 }),
+    { kind: 'select-tab', tab: 'todo' });
+  expect(todo.state.railTab).toBe('todo');
+  expect(todo.state.turn).toBe(3);
+  expect(kinds(todo)).toEqual(['render-rail', 'update-url', 'read-todo']);
+  const backToRequest = applyIntent(base({ railTab: 'todo', reqId: 7, turn: 3 }),
+    { kind: 'select-tab', tab: 'body' });
+  expect(backToRequest.state.turn).toBeNull();
 });
 
 test('select-tool-page 归一化且不更新 URL；clear-step 只清步骤；tool-gone 只清工具', () => {

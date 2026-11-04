@@ -290,6 +290,7 @@ export const dict = {
   '正文': 'Body',
   '工具': 'Tools',
   '路由': 'Route',
+  '待办': 'Todo',
   '正文回调': 'Body callback',
   '未收到': 'Not received',
   '用量账本': 'Usage ledger',
@@ -607,4 +608,8 @@ export const dict = {
 
   /* session-view 性能组说明 */
   '只统计当前已加载窗口；首字为 p50，未加载页不进计时': 'Loaded window only; first token is p50; unloaded pages are not timed',
+
+  /* todo-tab */
+  '本轮没有待办': 'No todos in this turn',
+  '正文已回收，待办不可读': 'Bodies reclaimed; todos unreadable',
 };

@@ -72,6 +72,8 @@ test('HTTP adapter 与进程内 adapter 给出相同公开结果', async () => {
       { name: 'route', run: t => t.execute('route', { id: firstId }, { signal }) },
       { name: 'turns', run: t => t.execute('turns', { key: CONV_KEY, from: null }, { signal }) },
       { name: 'bgJobs', run: t => t.execute('bgJobs', { key: CONV_KEY }, { signal }) },
+      { name: 'todoByTurn', run: t => t.execute('todoByTurn',
+        { key: CONV_KEY, actor: '', turn: 1 }, { signal }) },
       { name: 'summary', run: t => t.execute('summary', { key: CONV_KEY }, { signal }) },
       { name: 'summaryEntries', run: t => t.execute('summaryEntries',
         { key: CONV_KEY, query: { kind: 'tool', name: 'Read' } }, { signal }) },
