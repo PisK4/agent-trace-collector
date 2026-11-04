@@ -1996,3 +1996,30 @@ Grok 的 `session_usage` 有 4 行而游标有 6 个，不是漏刷：本机 6 �
 - WorkBuddy 同一回复的行跨批次到达时，`mutable` 重放按偏移刷新正文，工具块排在文本块之后，与文件里的 `parentId` 链顺序不一致；内容不丢，顺序以摄入先后为准。
 - WorkBuddy 经 magpie 网关发出的调用可能与网关侧证据各建一行：Magpie 的 `models.json` 网关模型排除规则没有实现，属跨来源认领的后续议题。
 - `factory_credits` 列复用 droid 的 credits 列存 USD 近似值，列名字面与内容不完全一致；精确费用展示需要给 `session_usage` 加专门列。
+
+## 巡查机制 explainer 复核与 `--if-due` 闸门修复（2026-11-05）
+
+### 页面首跑读数
+
+`.archify/explainer-patrol-mechanism-20261104-233817/` 的 explainer 记录 2026-11-04 对生产库只读跑的一次 `patrol weekly`，状态目录指向 `/tmp`，当次没有上期，输出「无上期可比」。两项越界：`body_ratio` 2020.1 MiB / 5772.5 MiB = 35.0%（下限 45%），`otlp_yield` 193,183 span → 1 条证据、0 个 `body_ref`。两项与 F38、F37 的旧记录（37.4%、188,099 行 → 1 条证据）同向，属既有基线，不是新缺陷。
+
+原始命令输出没有留存：`.archify/` 被 `.gitignore` 忽略，页面里的数字只在该目录的 `candidate.archify.md` 与生成的 HTML 中出现，`docs/`、`.agents/` 与 `scripts/` 都查不到。这次把读数补进验收记录，作为后续复核的锚点。2026-11-05 只读复查同一生产库：文件 6046.6 MiB、正文 2104.3 MiB = 34.8%，`raw_otlp_span` 194,259 行、`otlp_span` 证据 1 行、`otlp_body_ref` 0 行。数值随采集增长，方向与首跑一致；这是复核读数，不是首跑原始输出的复制。
+
+### 页面三处事实错误与源码注释
+
+复核 `scripts/patrol.ts`、`docs/patrol.md`、`tests/patrol.test.ts` 后订正页面：`conversation_size` 不是固定 `info`（`maxRequests` 超上限会报 `over`）；`judgeSmoke` 有三个按探测名硬编码的 `info` 分支，页面漏了 `limit=201` 的 200；OTLP 分子是 `spanEvidence` 本身，`bodyRefs` 只走 `spans>0 && bodyRefs===0` 的旁路，不相加。脚本头部注释同时写「不写文件」与「周快照写到状态目录」，已改为「不写库、不改 schema、不重启进程，唯一写点是周快照」；usage 注释补上漏掉的 `--if-due`。
+
+### `--if-due` 到期漂移（真实流量之外发现）
+
+原判据是「最近一期距今不足 7 天则跳过」，但 `saveSnapshot` 同周重跑会覆盖本期并刷新 `takenAt`。周一采集、周三不带闸门重跑、下周一再带 `--if-due` 时距今不足 7 天，下一期整周被跳过。改成判「本期 ISO 周是否已有快照」：`dueState` 用 `isoWeek(nowMs)` 比对 `history.periods`，`DUE_DAYS` 删除，未到期输出改为 `未到期（<本期> 本期已采，距上期 N 天），跳过`。`tests/patrol.test.ts` 补一条同周重跑后下一期仍放行的断言。`docs/patrol.md` 的闸门说明与 checklist、`implemented/process/2026-11-04-patrol-history.md` 的决策与备选同步。
+
+### 合成验收（本批）
+
+- `bun test tests/patrol.test.ts`：15 pass / 0 fail，新增断言覆盖同周重跑的到期漂移。
+- `bun run typecheck`：通过。
+
+### 未执行与边界
+
+- 没有对生产库重跑 `patrol weekly`；闸门改动只在合成状态目录上验证。生产部署与真实流量复测是另一次动作。
+- 调度器、launchd 与告警消费方仍不在仓库里，`--if-due` 只保证幂等，不保证「一周一次」真的被触发；`over` 退出码没有自动消费方。
+- F37 的 OTLP 通道修复与 `skipped` 计数不在本批；`otlp_issues` 对 `skipped` 不敏感，`otlp_yield` 只能当结果指标。
