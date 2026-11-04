@@ -307,3 +307,59 @@ test('Codex 压缩转录损坏：记固定 issue，不建调用也不推进游�
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Codex 同名 twin：内容相等只读 plain，压缩副本不重复摄入', async () => {
+  const root = makeRoot();
+  const f = fixture();
+  try {
+    const lines = [
+      meta(SESSION_ID),
+      turn('turn-1'),
+      item(T0 + 100, userItem),
+      item(T0 + 1_000, assistantItem),
+      usage(T0 + 2_000, 'resp_twin-1', 'turn-1'),
+    ];
+    writeSession(root, 'rollout-twin.jsonl', lines);
+    writeSessionZst(root, 'rollout-twin.jsonl.zst', lines);
+
+    const result = await ingestSessionBatch(f.store, codexAdapter, [root], SALT, Date.now());
+    expect(result).toMatchObject({ files: 1, calls: 1, duplicates: 0 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 1 });
+    expect(f.store.read.query(
+      "SELECT source_name FROM source_cursor WHERE source_kind='codex_session'").get())
+      .toEqual({ source_name: join(root, 'rollout-twin.jsonl') });
+  } finally {
+    f.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Codex 同名 twin：压缩副本覆盖更长前缀时读压缩副本', async () => {
+  const root = makeRoot();
+  const f = fixture();
+  try {
+    const head = [
+      meta(SESSION_ID),
+      turn('turn-1'),
+      item(T0 + 100, userItem),
+      item(T0 + 1_000, assistantItem),
+      usage(T0 + 2_000, 'resp_prefix-1', 'turn-1'),
+    ];
+    writeSession(root, 'rollout-prefix.jsonl', head);
+    writeSessionZst(root, 'rollout-prefix.jsonl.zst', [
+      ...head,
+      item(T0 + 2_100, userItem),
+      item(T0 + 3_000, assistantItem),
+      usage(T0 + 4_000, 'resp_prefix-2', 'turn-1'),
+    ]);
+
+    const result = await ingestSessionBatch(f.store, codexAdapter, [root], SALT, Date.now());
+    expect(result).toMatchObject({ files: 1, calls: 2 });
+    expect(f.store.read.query(
+      "SELECT source_name FROM source_cursor WHERE source_kind='codex_session'").get())
+      .toEqual({ source_name: join(root, 'rollout-prefix.jsonl.zst') });
+  } finally {
+    f.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -10,7 +10,7 @@
  */
 
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { normalizeResponseId } from '../../magpie/mapping';
 import { discoverJsonl, jsonlBatch, jsonlRead } from '../read';
 import type { SourceCursor, SourceRead } from '../../files';
@@ -29,7 +29,27 @@ export type JsonlSessionSpec = {
   homeEnv: string;
   /** 环境变量缺失时的默认根目录名。 */
   homeDir: string;
+  /** 覆盖默认单根的根列表；用于 profiles、XDG 与自定义 sessionDir。 */
+  rootDirs?: (env: NodeJS.ProcessEnv, home: string) => readonly string[];
 };
+
+/** `~` 只展开开头，配置里的其它波浪号按普通字符处理。 */
+export function expandHome(path: string, home: string): string {
+  if (path === '~') return home;
+  return path.startsWith('~/') ? join(home, path.slice(2)) : path;
+}
+
+export function uniqueRoots(roots: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const root of roots) {
+    const resolved = resolve(root);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    unique.push(resolved);
+  }
+  return unique;
+}
 
 type WindowMessage = { role: string; content: unknown[] };
 
@@ -230,6 +250,7 @@ export function createJsonlSessionAdapter(spec: JsonlSessionSpec): SessionAdapte
     batch: jsonlBatch(),
 
     roots(env, home = homedir()) {
+      if (spec.rootDirs !== undefined) return uniqueRoots(spec.rootDirs(env, home));
       const base = env[spec.homeEnv]?.trim();
       const root = base !== undefined && base.length > 0 ? base : join(home, spec.homeDir);
       return [join(root, 'agent', 'sessions')];

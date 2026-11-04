@@ -85,6 +85,13 @@ export function jsonlRead(file: SessionFile, cursor: SourceCursor | null,
 }
 
 /**
+ * 解压整份封口文件。调用方决定坏帧/超限如何记账。
+ */
+function decodeSealed(bytes: Uint8Array): string {
+  return zstdDecompressSync(bytes, { maxOutputLength: 256 * 1024 * 1024 }).toString('utf8');
+}
+
+/**
  * 读整份封口的 `.jsonl.zst`。
  *
  * 压缩后字节的 SHA-256 就是代际；同一代际不再解压。偏移是解压后文本的字节
@@ -116,7 +123,7 @@ export function sealedJsonlRead(file: SessionFile, cursor: SourceCursor | null,
   let text: string;
   try {
     // shortcut: 假定一份归档是单个 zstd frame；多 frame 文件需要逐帧解压。
-    text = zstdDecompressSync(bytes, { maxOutputLength: 256 * 1024 * 1024 }).toString('utf8');
+    text = decodeSealed(bytes);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return {

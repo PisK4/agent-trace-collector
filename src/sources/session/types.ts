@@ -125,6 +125,8 @@ export type SessionAdapter = {
   batch: { maxFiles: number; maxBytes: number; order?: 'mtime' | 'remaining' };
   roots(env: Record<string, string | undefined>, home: string): string[];
   discover(root: string, cursorFor: SessionCursorLookup): SessionFile[] | Promise<SessionFile[]>;
+  /** 发现后的副本裁决；要比较内容时用异步读，不阻塞事件循环。 */
+  select?(files: readonly SessionFile[]): SessionFile[] | Promise<SessionFile[]>;
   read(file: SessionFile, cursor: import('../files').SourceCursor | null): Promise<import('../files').SourceRead>;
   /** 解析已脱敏的 payload 文本；坏行只报原因，不抛异常。 */
   parse(text: string): SessionParseResult;

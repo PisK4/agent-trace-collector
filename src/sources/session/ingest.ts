@@ -453,16 +453,23 @@ export async function discoverSessionFiles(
       : { generation: cursor.generation, committedOff: cursor.committedOff, seenSize: cursor.seenSize };
   };
   const files: SessionFile[] = [];
+  // source_name 是游标身份：文件是绝对路径，Zcode 是 `<db>#<session>`；
+  // 同一根下的多个 Zcode 会话共用 path，不能用 path 去重。
+  const seen = new Set<string>();
   for (const root of roots) {
     try {
-      files.push(...await adapter.discover(root, cursorFor));
+      for (const file of await adapter.discover(root, cursorFor)) {
+        if (seen.has(file.name)) continue;
+        seen.add(file.name);
+        files.push(file);
+      }
     } catch {
       // 根存在但本轮读不出：冻结这一家，不影响其余适配器。
       store.write(db => recordIssue(db, adapter.issueKind, root, 'session_root_unreadable', now, null),
         adapter.agent);
     }
   }
-  return files;
+  return adapter.select === undefined ? files : await adapter.select(files);
 }
 
 /** 摄入已发现的一批文件；调用方决定取件范围与单轮预算。 */
