@@ -1849,3 +1849,38 @@ Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮�
 重启与空闲轮通过：发现、settings 刷新、游标与 issue 都没有变化，也没有重复证据。数据库增加的 4.8 MB 来自其他来源的持续写入，不归 droid。
 
 本轮没有新的 droid 行，插入、认领与正文重建没有被真实流量走到；这部分只有合成测试覆盖（droid 26 pass）。下一次 droid 真实调用到来时需要补一次新行前后对账：request 与 evidence 的增量应等于 assistant 消息增量，新增 droid issue 或重复证据按回归处理。
+
+## DSH 会话适配器（合成 + 生产真实流量，2026-11-04）
+
+范围：`feat/dsh-session-adapter` 的发现、按 frame 边界读取、seed 归约与共用摄入的容器钩子。合成数据与真实流量分开记录；真实正文、账号、令牌与用户配置不进入 fixture 与本文。
+
+### 合成验收
+
+隔离 worktree `.codex-worktrees/atc-dsh`，分支 `feat/dsh-session-adapter`。
+
+| 项 | 结果 |
+| --- | --- |
+| `bun test tests/session-dsh.test.ts` | 4 pass / 0 fail |
+| 全部会话适配器测试（9 个文件） | 34 pass / 0 fail |
+| `bun test` | 1257 pass / 0 fail，109 个文件 |
+| `bun run typecheck` | 退出 0 |
+
+窄测试覆盖：同目录多版本只取最高版本；半写 frame 不提交、补齐后从上一 frame 继续；父会话 + 分叉子会话首轮不重复建父调用，追加 `session/end-seed` 后只建子会话自己的一笔；格式 1 的 `seedLength` 只把 seed 段放进消息窗口。合成验收只证明读取与归约路径，不代表本机真实 DSH 数据已经全部入库。
+
+### 本机目录形态（只读 metadata）
+
+只扫描文件名、大小与 frame 头，不解压、不读正文：
+
+| 项 | 读数 |
+| --- | --- |
+| 会话文件 | 77 |
+| frame 总数 | 68,760 |
+| 单 frame 最大 | 305,020 字节 |
+| 单文件最大 | 1,601,320 字节 |
+| 文件大小 p50 / p95 | 319,880 / 1,247,301 字节 |
+
+按这些读数，当前 256 frame / 2 MiB 的单次读取上限会跨多轮推进大文件；frame 本身都远小于 256 MiB 解压上限。
+
+### 生产真实流量
+
+待部署后补：DSH 发现与首轮回填的 `request`、证据、游标、issue 与重复证据读数，以及本轮事件循环。合成通过不替代这一节。

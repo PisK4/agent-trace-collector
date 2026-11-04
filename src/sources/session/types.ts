@@ -17,7 +17,7 @@ import type { SourceKind } from '../files';
 import { canonicalSessionId } from '../../evidence';
 
 export type SessionKind = Extract<SourceKind,
-  'claude_session' | 'codex_session' | 'omp_session' | 'pi_session' | 'zcode_session'
+  'claude_session' | 'codex_session' | 'dsh_session' | 'omp_session' | 'pi_session' | 'zcode_session'
   | 'droid_transcript'>;
 
 /** magpie 口径的四段用量；缺任一段的调用记 null，不用 0 冒充。 */
@@ -121,6 +121,11 @@ export type SessionAdapter = {
    * （如 Zcode 的 SQLite）行本身可重读，落原始层只会把整段上下文再存一份。
    */
   storesRaw?: boolean;
+  /**
+   * 行偏移就是游标位置时逐行推进游标，默认 true。容器读取（DSH 的 zstd
+   * frame）的行偏移只是身份，游标由读取层的整批 `committedOff` 决定。
+   */
+  lineCommit?: boolean;
   /** 单轮取件预算；Zcode 按会话计，不受字节预算约束。 */
   batch: { maxFiles: number; maxBytes: number; order?: 'mtime' | 'remaining' };
   roots(env: Record<string, string | undefined>, home: string): string[];

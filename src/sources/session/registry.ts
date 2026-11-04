@@ -12,6 +12,7 @@
 import type { SessionAdapter } from './types';
 import { claudeAdapter } from './adapters/claude';
 import { codexAdapter } from './adapters/codex';
+import { dshAdapter } from './adapters/dsh';
 import { ompAdapter } from './adapters/omp';
 import { piAdapter } from './adapters/pi';
 import { zcodeAdapter } from './adapters/zcode';
@@ -19,6 +20,7 @@ import { zcodeAdapter } from './adapters/zcode';
 export const SESSION_ADAPTERS: readonly SessionAdapter[] = [
   claudeAdapter,
   codexAdapter,
+  dshAdapter,
   zcodeAdapter,
   ompAdapter,
   piAdapter,

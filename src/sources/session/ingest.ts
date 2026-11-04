@@ -309,6 +309,7 @@ export async function ingestSessionFile(
     return { ...result, files: 1, remaining: 0 };
   }
 
+  let finalCommitted = read.startOff;
   store.write(db => {
     const firstIssueOffset = read.issues[0]?.offset ?? Number.POSITIVE_INFINITY;
     for (const issue of read.issues) {
@@ -350,13 +351,15 @@ export async function ingestSessionFile(
       }
     };
 
-    let committed = read.startOff;
+    const perLineCommit = adapter.lineCommit !== false;
+    // 容器读取的游标由读取层整批给出；没有行可处理时也要越过已提交的 frame。
+    let committed = perLineCommit ? read.startOff : read.committedOff;
     let blocked = false;
     for (const line of read.lines) {
       if (line.offset >= firstIssueOffset) break;
       const parsed = adapter.parse(line.text);
       if (parsed.kind === 'ignore') {
-        committed = line.end;
+        committed = perLineCommit ? line.end : read.committedOff;
         continue;
       }
       // 不落原始层的来源跳过脱敏后的再序列化：物化行可重读，整段上下文
@@ -365,7 +368,7 @@ export async function ingestSessionFile(
         ? { payloadJson: '', parsed }
         : sanitizedPayload(line.text, parsed, salt, value => adapter.parse(value));
       if (sanitized.parsed.kind === 'ignore') {
-        committed = line.end;
+        committed = perLineCommit ? line.end : read.committedOff;
         continue;
       }
       const parsedEvent = sanitized.parsed.kind === 'event'
@@ -418,7 +421,8 @@ export async function ingestSessionFile(
         recordIssue(db, adapter.issueKind, `${file.name}:${line.offset}`, step.error, now,
           line.end - line.offset);
         // 游标停在坏行起点：跳过一条消息会让后续每轮请求体都缺一条。
-        committed = line.offset;
+        // 容器内行没有真实偏移，退回容器起点整段重读。
+        committed = perLineCommit ? line.offset : (line.restartOff ?? read.startOff);
         blocked = true;
         break;
       }
@@ -426,8 +430,9 @@ export async function ingestSessionFile(
       for (const call of step.calls) {
         acceptCall(call, call.sortOffset ?? line.offset, rawChanged);
       }
-      committed = line.end;
+      committed = perLineCommit ? line.end : read.committedOff;
     }
+    finalCommitted = committed;
 
     // 延迟发调用的适配器在批末补发仍挂起的调用；下一批重放后会以同一 ref
     // 再次补发，重复证据按 refreshOnDuplicate 刷新正文。
@@ -444,6 +449,8 @@ export async function ingestSessionFile(
 
     upsertSourceCursorTx(db, { ...read, committedOff: committed }, now);
   }, adapter.agent);
+  // 预算按实际推进量记：坏行重读没有推进时，不能继续在同一个文件上耗本轮预算。
+  result.bytes = Math.max(0, finalCommitted - read.startOff);
   result.files = 1;
   return result;
 }

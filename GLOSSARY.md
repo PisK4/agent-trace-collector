@@ -5,7 +5,7 @@
 ## 基础名词
 
 **请求（request）**：
-本项目的主记录单位，表示来源报告的一笔调用；网关请求可包含多次上游尝试。magpie、harness OTLP 与本地 Agent 会话文件（droid、Claude Code、Codex、Zcode、OMP、Pi）都可提供请求记录，同一调用经多条通道分别记录时，请求行数不等于去重后的调用数。
+本项目的主记录单位，表示来源报告的一笔调用；网关请求可包含多次上游尝试。magpie、harness OTLP 与本地 Agent 会话文件（droid、Claude Code、Codex、DSH、Zcode、OMP、Pi）都可提供请求记录，同一调用经多条通道分别记录时，请求行数不等于去重后的调用数。
 
 **session**：
 客户端或 harness 声明的会话标识，由 magpie 转报、从 OTLP 属性映射或从本地 Agent 会话文件读出；标识缺失时不凭空推定会话归属。
