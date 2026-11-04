@@ -30,9 +30,11 @@ Feature 指一类可解释的阅读能力，Parser 指某家 Agent 对该能力�
 
 supersession check 覆盖三条记录。[Harness 语义的静态扩展](../../implemented/architecture/2026-10-26-harness-semantics-adapters.md) 在 `:85` 否决过建设动态插件加载器，理由是当时只需要仓内静态适配、不需要第三方代码执行和市场；现在要做社区轨，失效的是这条理由的前提，Harness 专属用途走静态登记这个决策本身继续有效。旧记录保持活跃，实施时双向链接。[读取架构与多客户端演进](../../implemented/architecture/2026-11-02-read-architecture-and-client-seams.md) 继续持有页面读取的统一入口，本提案只消费它，规则细节归 `docs/read-feature-rules.md`。[Agent Profile 与请求类别注册表](2026-10-22-agent-request-kind-registry.md) 在 `:109` 与 `:212` 声明 RequestKind 不是插件系统、不需要运行时加载，限定的是该机制自身，两者范围不重叠。目录改名会让 implemented 记录里指向 `plugins/collector.hooks.ts` 的链接与目录描述过期，按 [implemented 记录同步规则](../../implemented/AGENTS.md) 在同一个变更里更新事实，不改决策。
 
-### 未收口的两处
+### 社区轨首版范围
 
-社区轨首版怎么加载外部代码，以及首版是否连远程市场，尚未拍板。候选分别是同进程 import、Bun Worker、长驻子进程，以及只装本地包、内置清单、远程 registry。两者直接决定 `Alternatives considered` 的落选理由、`Risks` 的审查面，以及 `src/plugins/runtime/` 与 `market.ts` 是否首版就写。本节按 2026-11-04 对话记录保留为待决项，不替维护者补一个决定。Magpie 的社区轨是 5774 行 host、长驻 Bun 子进程、NDJSON 行协议加信用窗口，官方明说 Bun 插件有宿主权限、只装可信代码；Tracery 是 Bun 单进程、不引依赖，CSP 没有 `frame-src`，照搬会先扩大信任边界。
+2026-11-05 拍板：外部代码用 Bun Worker 加载，首版只装本地包。Worker 复用 `src/derive/worker.ts:51` 的 `new Worker(ENTRY)`，超时与崩溃可以 terminate，兑现社区包出错只隐藏该页签、其余四栏照常工作；`src/plugins/runtime/` 首版就写，承载 Worker host 与消息协议。Bun Worker 仍与采集器同进程，外部代码拥有宿主权限，安装入口要写明只装可信代码。
+
+市场不联网：用户把可信包放进本机目录，清单登记，`api` 字段比对后不兼容就拒绝加载，内置轨照常工作。首版不做远程 registry、自动更新、签名校验与安装失败回滚，`market.ts` 不写，本地包清单加载器另起名。Magpie 社区轨是 5774 行 host、长驻 Bun 子进程、NDJSON 行协议加信用窗口，官方明说 Bun 插件有宿主权限、只装可信代码；Tracery 是 Bun 单进程、不引依赖，CSP 没有 `frame-src`，照搬会先扩大信任边界，进程级隔离与远程市场留到后续。
 
 ## Alternatives considered
 
@@ -50,7 +52,7 @@ supersession check 覆盖三条记录。[Harness 语义的静态扩展](../../im
 
 **先把会话汇总组清单或工具往返配对页搬成第二个 Plugin。** 落选。汇总组清单是 `summaryList` 的第三态，把右栏整块替换；配对页仍持有 `toolOrd` / `toolOwner` / `toolPage` 状态。两者都要先改宿主状态模型，Todo 闭环之前动它们会把首版从验证机制变成改造页面。
 
-**照搬 Magpie 的社区轨。** 落选。5774 行 host 里很大一部分在跨 Go 与 Node.js 边界，Tracery 没有这道边界；远程 registry、自动更新与 iframe 沙箱会把首版拉成另一个项目。加载形态待拍板后再定。
+**照搬 Magpie 的社区轨。** 落选。5774 行 host 里很大一部分在跨 Go 与 Node.js 边界，Tracery 没有这道边界；远程 registry、自动更新与 iframe 沙箱会把首版拉成另一个项目。2026-11-05 定为 Bun Worker 加本地包清单，进程级隔离与远程市场留到后续。
 
 ## Acceptance criteria
 
@@ -66,6 +68,6 @@ supersession check 覆盖三条记录。[Harness 语义的静态扩展](../../im
 
 ## Risks
 
-zcode 的 `TodoWrite` 大量未配对结果，读取若退回依赖 `tool_call.result_req`，列表会静默变空。正文回收后 Todo 会消失，这是零迁移的代价。双轨首版同批扩大审查面：Worker 隔离、清单热重载、安装失败回滚都要跟合成测试，不能只验内置 Parser。社区轨的信任边界尚未收口，外部代码若与采集器同进程运行，就拥有宿主权限；官方明说只装可信代码，首版必须在安装入口写清这一点。目录改名牵动生产配置，漏改或漏重启会让 hook 加载失败，采集出现缺口。
+zcode 的 `TodoWrite` 大量未配对结果，读取若退回依赖 `tool_call.result_req`，列表会静默变空。正文回收后 Todo 会消失，这是零迁移的代价。双轨首版同批扩大审查面：Worker 超时与崩溃隔离、`api` 不兼容拒绝、畸形 DTO 都要跟合成测试，不能只验内置 Parser。Bun Worker 与采集器同进程，外部代码拥有宿主权限，安装入口写清只装可信代码；进程级沙箱与远程市场留到后续。目录改名牵动生产配置，漏改或漏重启会让 hook 加载失败，采集出现缺口。
 
 实现走仓库上级目录 `.codex-worktrees/atc-plugin-system` 的 `feat/plugin-system` 分支，合并前不动主检出的 `src/` 与 `web/`。测试只用合成数据；真实请求正文、账号、令牌与用户配置不进 fixture、日志或提交。
