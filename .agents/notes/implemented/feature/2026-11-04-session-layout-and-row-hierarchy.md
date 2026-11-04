@@ -98,18 +98,18 @@ Status: implemented
 
 ## Verification
 
-在 worktree `feat/session-layout-row-hierarchy`（tip `7715736`，7 笔按主题切分）上完成，随后 `merge --no-ff` 合入 master（merge commit `ac0015a`，父提交 `7fbda9a` + `7715736`，7 个原提交哈希保留）。合入时 master 已前进 12 笔（整轮 i18n），`web/app.js`、`web/session-view.js`、`web/trace-view.js` 三处按「结构改动优先、字符串保持 `t()` 包裹」解冲突。
+在 worktree `feat/session-layout-row-hierarchy`（tip `7715736`，7 笔按主题切分）上完成。master 因并行会话的历史清理被重写，原 merge commit 作废，改为把这 7 笔逐笔重放到新 tip `9afe13f`（隔离 worktree，逐个解冲突），再 `merge --no-ff` 合入。重放时 `web/app.js`、`web/session-view.js`、`web/trace-view.js` 三处按「结构改动优先、字符串保持 `t()` 包裹」解冲突；另补一笔把 ①⑤ 的刷新按钮、⑦ 的 `+N` 计数与弹层标题收进 `t()`，避免英文模式漏中文。
 
-- **测试**：合入后 `bun test` **1,164 通过 / 0 失败**，12,116 expect，91 文件；分支上为 1,157 通过 / 89 文件（差额来自 i18n 新增测试）。
+- **测试**：重放后 `bun test` **1,164 通过 / 0 失败**，12,115 expect，91 文件（原分支 1,157 通过 / 89 文件）。
 - **类型**：`bun run typecheck`（`tsc --noEmit`）通过。
-- **i18n 覆盖闸门**：`tests/i18n-coverage.test.ts` 通过；本分支新增的 5 个文案已进 `web/i18n-en.js`（「刷新会话列表」「重新读取会话列表第一页」「另有 {n} 个目标…」「完整目标 {n}」「完整目标清单」）。
+- **i18n 覆盖闸门**：`tests/i18n-coverage.test.ts` 通过；本分支新增的 6 个文案已进 `web/i18n-en.js`（「刷新会话列表」「重新读取会话列表第一页」「另有 {n} 个目标…」「另有 {n} 个目标」「完整目标 {n}」「完整目标清单」）。
 - **回归**：`live-activity` / `live-session-settle` / `live-session-view` / `web` / `trace-view` / `http` 六文件 **132 通过**；`createLivePartition`、`LIVE_SETTLE_MS`、`LIVE_COMMIT_MS`、`live_until`、`liveCommitAt` 与沉降用例原样通过。
 - **会话行**：51.14px → **44px**，5 行同高；第二行 `logo + Agent 名 + · N 笔 + 时间` 常显。
 - **主栏 facts**：第一格只剩 logo，命中区 18×18；`aria-label`/`title`/`tabindex="0"` 齐；真实 `focus()` 后 `::after` content 为 `"Hermes"`、opacity 1。
 - **轨迹**：最大请求组 5 行 / 184px，行高 36px；改前后行数一致。
 - **详情栏头部**：78.2 → **76.2px**（标题起点 27→15，上移 12px）；无标题 56 → 55；首行身份信息整行消失。
 - **折叠条**：无 id，收起态 `.more-body` **0 子节点**，点击后 1。
-- **真实实例**：临时 `ATC_DATA_DIR` + 独立端口起服务，1440×900 截图核对三栏（250 / 544 / 6 / 640）、live 分区、`sess-empty-art` 与 `rail-empty-art`、`ctx-gauge`/`ctx-pin`/`ctx-cache` 图标均在。
+- **真实实例**：临时 `ATC_DATA_DIR` + 独立端口起服务，1440×900 实测三栏（250 / 544 / 6 / 640）、live 分区（`LIVE 1` / `ALL SESSIONS 9`）、四个右栏 icon（已用上下文 / 固定开销 / 提示词缓存 / 耗时）均在；`sess-empty-art` 与 `rail-empty-art` 在源码仍是唯一空状态出口，但真实数据没有零请求会话，本轮未能在运行时复现。
 
 ## Consequences
 
