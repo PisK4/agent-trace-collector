@@ -13,15 +13,19 @@ import type { SessionAdapter } from './types';
 import { claudeAdapter } from './adapters/claude';
 import { codexAdapter } from './adapters/codex';
 import { dshAdapter } from './adapters/dsh';
+import { grokAdapter } from './adapters/grok';
 import { ompAdapter } from './adapters/omp';
 import { piAdapter } from './adapters/pi';
+import { workbuddyAdapter } from './adapters/workbuddy';
 import { zcodeAdapter } from './adapters/zcode';
 
 export const SESSION_ADAPTERS: readonly SessionAdapter[] = [
   claudeAdapter,
   codexAdapter,
   dshAdapter,
+  grokAdapter,
   zcodeAdapter,
   ompAdapter,
   piAdapter,
+  workbuddyAdapter,
 ];

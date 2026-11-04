@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { basename, join } from 'node:path';
 
-/** 来源在库里的标识：账本、路由文件、droid 转录与六个本地 Agent 会话。 */
+/** 来源在库里的标识：账本、路由文件、droid 转录与八个本地 Agent 会话。 */
 export type SourceKind =
   | 'ledger' | 'route_file' | 'route_gz' | 'droid_transcript'
-  | 'claude_session' | 'codex_session' | 'dsh_session' | 'omp_session' | 'pi_session' | 'zcode_session';
+  | 'claude_session' | 'codex_session' | 'dsh_session' | 'grok_session'
+  | 'omp_session' | 'pi_session' | 'workbuddy_session' | 'zcode_session';
 
 /** 文件形态：可以按偏移续读的追加流，或整份替换、只能按指纹识别的封口文件。 */
 export type SourceMode = 'appendable' | 'sealed';
