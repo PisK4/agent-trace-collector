@@ -30,7 +30,7 @@ import {
   createAdmissionGate,
   type AdmissionGate,
   enforceBodyBudget,
-  pruneRaw,
+  pruneRawBounded,
   resumeSourceGaps,
   shrinkStorage,
 } from './retention';
@@ -287,9 +287,9 @@ export async function startCollector(
     if (evicted > 0) process.stderr.write(`retention_evicted:${evicted}\n`);
   });
 
-  const rawPruneTick = guard('raw_prune', () => {
+  const rawPruneTick = guard('raw_prune', async () => {
     const now = Date.now();
-    const pruned = pruneRaw(store, now - RAW_TTL_MS);
+    const pruned = await pruneRawBounded(store, now - RAW_TTL_MS);
     if (pruned.ledger + pruned.route + pruned.hook + pruned.otlpSpan + pruned.otlpLog
       + pruned.session > 0) shrinkStorage(store);
   });

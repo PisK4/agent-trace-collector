@@ -125,6 +125,13 @@ export const RAW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const EVICT_BATCH = 100;
 const EVICT_REF_LIMIT = 10_000;
 const PRUNE_BATCH = 100;
+/**
+ * 单次有界清理的批数上限。每小时一个 tick × 每批各表 100 行 × 200 批
+ * ≈ 2 万行/表/时，覆盖观测到的日增量（otlp span 峰值单日 150,603 行）还有余量。
+ */
+export const PRUNE_MAX_BATCHES = 200;
+/** 单次有界清理的墙钟上限：批间让出事件循环，超时即停，余量留给下一个 tick。 */
+export const PRUNE_WALL_BUDGET_MS = 200;
 
 function databaseFile(store: Store): string {
   const filename = (store.db as unknown as { filename?: unknown }).filename;
@@ -605,6 +612,35 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
       session: sessionRows.length,
     };
   }, 'raw_prune');
+}
+
+export type PruneBudget = { maxBatches?: number; wallMs?: number };
+
+/**
+ * 有界的多批清理：每次调用按 PRUNE_BATCH 小批循环，每批是独立提交的小事务，
+ * 批间让出事件循环，到批数或墙钟上限即停。超期存量大的首轮靠连续多个 tick
+ * 收敛，不在单次调用里制造长写事务或 WAL 尖刺；返回各表累计删除行数，
+ * 全零表示已经没有可删行。
+ */
+export async function pruneRawBounded(store: Store, beforeMs: number,
+  budget: PruneBudget = {}): Promise<PruneResult> {
+  const maxBatches = budget.maxBatches ?? PRUNE_MAX_BATCHES;
+  const wallMs = budget.wallMs ?? PRUNE_WALL_BUDGET_MS;
+  const started = performance.now();
+  const total: PruneResult = { ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0, session: 0 };
+  for (let batch = 0; batch < maxBatches; batch++) {
+    const result = pruneRaw(store, beforeMs);
+    total.ledger += result.ledger;
+    total.route += result.route;
+    total.hook += result.hook;
+    total.otlpSpan += result.otlpSpan;
+    total.otlpLog += result.otlpLog;
+    total.session += result.session;
+    if (result.ledger + result.route + result.hook + result.otlpSpan + result.otlpLog + result.session === 0) break;
+    await yieldToEventLoop();
+    if (performance.now() - started >= wallMs) break;
+  }
+  return total;
 }
 
 /** 物理收缩：分批增量回收空闲页，再截断 WAL。不做在线全库 VACUUM。 */
