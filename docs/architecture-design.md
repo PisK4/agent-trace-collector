@@ -202,7 +202,7 @@ harness OTLP exporter（Claude Code / OMP / Codex）
 
 两个摄入端点 `POST /v1/traces` 与 `POST /v1/logs` 收 harness 侧 OTLP。Bearer 认证用独立的 `otlp.token`，与 `hook.token` 分开——一份密钥不进两份上游配置。content-type 只收 `application/x-protobuf` 与 `application/json`，非白名单的简单请求形态直接 415：浏览器防线三件套（预检、Host 校验、显式拒绝非白名单 content-type）与 hook 共用同一段。解码失败 400 带原因码，单飞守卫共用（429），整批上限 64 MiB（413），95% 磁盘档整批拒绝（507），成功回 OTLP 规范的 `{"partialSuccess":{}}`。
 
-span 选取按 `(service.name, 规则)` 白名单：Claude Code 按 span 名 `claude_code.llm_request`，OMP 按 `gen_ai.operation.name='chat'`，Codex CLI 按 span 名 `session_task.turn`（用量键是自有 `codex.turn.token_usage.*` 族，无正文与回复侧模型；`service.name` 取 originator，按 `codex_exec` / `codex_cli_rs` 等一族取值收）。白名单外的服务不建行：span 只落原始层，并按服务与日聚合记 `service_not_registered` issue，未登记 harness 指向端点这件事可被发现（对外规范见[接入 profile](otlp-exporter-profile.md)）。OTLP 行不参与三路加法合并，独立建 `request`（`via='otlp'`，`have` 第 4 位）。OTLP 先到、账本后到时，账本按统一 owner 规则认领该行；账本先到、OTLP 后到时，OTLP 仍独立建行，行上来源可区分。跨来源认领规则见[跨来源认领](#跨来源认领)。
+span 选取按 `(service.name, 规则)` 白名单：Claude Code 按 span 名 `claude_code.llm_request`，OMP 按 `gen_ai.operation.name='chat'`，Codex CLI 按 span 名 `session_task.turn`（用量键是自有 `codex.turn.token_usage.*` 族，无正文与回复侧模型；`service.name` 取 originator，按 `codex_exec` / `codex_cli_rs` 等一族取值收）。白名单外的服务不建行：span 只落原始层，并按服务与日聚合记 `service_not_registered` issue，未登记 harness 指向端点这件事可被发现（对外规范见[接入 profile](otlp-exporter-profile.md)）。OTLP 行不参与三路加法合并，独立建 `request`（`via='otlp'`，`have` 第 4 位）。OTLP 先到、账本后到时，账本按统一 owner 规则认领该行；账本先到、OTLP 后到时，OTLP 仍独立建行，行上来源可区分。跨来源认领规则见[跨来源认领](#跨来源认领)。这条链路生产上的接入现状与落差量级见 [OTLP 摄入链路现状](otlp-pipeline.md)。
 
 写操作全部走一个 writer，避免 SQLite 的 `database is locked`。实测第二个连接在写事务期间写会被拒绝，读不受影响。查询用独立只读连接。
 
