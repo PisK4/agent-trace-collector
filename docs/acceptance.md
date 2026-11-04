@@ -46,6 +46,40 @@
 - raw 层 TTL 只有合成删除样本；生产库当前没有可删代际。
 - 未做长窗口 p99、RSS、全部历史回填后的容量复测；twin 分叉只核对了选择计数，没有逐调用审计重复跳过。
 
+## 封口会话分块摄入（合成 + 生产真实流量，2026-11-04）
+
+前提：隔离 worktree `.codex-worktrees/atc-zstd-backfill` 的 `fix/zstd-backfill-chunking` 分支，基于 master `785cc5b`。代码、测试与文档提交 `5ec370f`，以 `--no-ff` 合并；2026-11-04 19:17:24 用 `bun run service restart` 重启采集器，pid 71738，`service status` 显示 src 未落后。合成验收只进临时库；真实流量读数来自生产库只读查询与全量 `/api/ingest-metrics`，没有写入正文、账号或令牌。
+
+### 合成数据
+
+| 检查 | 结果 |
+| --- | --- |
+| 分块边界 | 300 行 × 4 KiB 的封口文件每次最多交 256 KiB 或 64 行；`observed_off` 大于 `committed_off`；分块拼回的文本与原文一致 |
+| 发现剩余 | 只读进度按 `observed_off - committed_off` 算；到末尾后剩余为 0 |
+| 跨事务补齐 | 每轮 1 字节预算强制每次只提交一个分块；80 笔调用跨多个事务补齐，最终游标 `committed_off = observed_off`，请求 80、证据 80、重复 0、issue 0 |
+| 事件循环（1.44 MB） | 旧实现单事务最大 349 ms；分块后 27 ms，总耗时 359 → 413 ms |
+| 事件循环（9.75 MB） | 旧实现单事务最大 15,534 ms；分块后 406 ms，总耗时 15.5 → 22.6 s |
+
+自动化：`bun test` 1245 pass / 0 fail（107 个文件）；`bun run typecheck` 退出 0；`verify:notes` 通过。
+
+### 生产真实流量
+
+只读查询，快照截至 19:21:40（服务启动约 256 秒）。
+
+| 检查 | 实测 |
+| --- | --- |
+| codex 写事务 | 两轮回填 18 次，合计 1,169 ms，最长 125.5 ms；修复前同机为 18 次合计 18.58 s、最长 6.17 s |
+| 事件循环 | p50 1.5 ms、p95 21.0 ms、p99 379.2 ms、进程内 max 2,149.3 ms；max 不归因于 zst 写入，同期 codex 写事务最长 125.5 ms，claude 写事务最长 1,225 ms，derive 任务最长 17.8 s |
+| zst 游标 | 34 个，其中 1 个分块中；79 秒快照时在途的 2,352,899 字节文件已在第二轮完成，当前在途文件解压 2,278,299 字节、已提交 1,994,869 |
+| 证据与 issue | `codex_session_call` 3,334 行、3,334 个 `(req_id, ref_key)` 唯一对，重复 0；`codex_session` issue 0 |
+| 调度 | 五轮 `sessions`：合计 18.9 s，首轮 10.6 s；两轮 codex 回填分别处理 2.35 MB 与 2.28 MB 的文件，前者完成，后者跨轮继续 |
+
+### 未覆盖与待观察
+
+- 事件循环的进程内 max 仍由 derive 与 claude 等既有路径贡献，本次只证明封口写入不再是秒级来源；没有做长时间 p99 对比。
+- backfill 预算按解压字节计；大归档仍需多轮推进，本记录不宣称历史 zst 已回填完成。
+- 每次分块重新解压整份文件，CPU 随分块数放大；9.75 MB 合成样本总耗时增加约 45%，真实大文件未单独统计。
+
 ## Droid 会话文件摄入（合成 + 本机转录，2026-11-04）
 
 前提：隔离 worktree `.codex-worktrees/atc-droid-session`，分支 `feat/droid-session-ingestion-rebased`，基于 master `dfd9b9c`。原分支从旧里程碑分支检出，rebase 会重放数百个已合并提交，改用 cherry-pick 移到当前 master。只改代码、测试与文档；没有合并、push，没有重启生产采集器，也没有往生产库写 droid 行。全量扫描在临时目录建空库，读本机 `~/.factory/sessions` 下的 216 个转录，扫描结束后删除临时库；没有保留正文、标题或会话键。
