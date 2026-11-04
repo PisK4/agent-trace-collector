@@ -1741,3 +1741,37 @@ Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮�
 - Claude 330 个文件、1.8 GB，每轮预算 64 文件/2 MiB，完整回填需要数十小时；未做全量回填验收。
 - 长时间资源占用（RSS 2.2 GB 左右）、WAL 增长与页面在回填高峰的表现未做多小时窗口采样。
 - 多来源同一调用的 OTLP 认领、direct 行入口与 Magpie 19 种 Agent 目录检测未做。
+
+## droid 会话摄入并入共用写路径的生产切换与对账（2026-11-04）
+
+范围：`feat/droid-shared-ingest` 合并 master、生产重启、第一轮 droid tick 对账。合成验收见 [Agent Note](../.agents/notes/implemented/architecture/2026-11-04-droid-shared-session-ingest.md)；本节只记真实库。
+
+### 切换
+
+| 项 | 结果 |
+| --- | --- |
+| 合并 | `2536213` 合并，代码提交 `24aea3b` |
+| 重启 | `bun run service restart`，pid 16666，3 秒起；状态未落后 |
+| 启动日志 | 无 droid 错误 |
+
+### 重启前后对账
+
+基线在重启前读取；第一轮 droid tick 在启动约 60 秒后完成。
+
+| 项 | 重启前 | 第一轮 tick 后 |
+| --- | --- | --- |
+| `request`（agent=droid） | 9,582 行，最大 req_id 110,006 | 9,582 行，最大 req_id 110,006 |
+| `request_evidence`（session_call） | 9,582 | 9,582 |
+| `raw_session_event`（droid_transcript） | 49,204 | 49,204 |
+| `session_usage`（droid） | 140 | 140 |
+| `ingest_issue`（droid_session） | 0 | 0 |
+| `source_cursor`（droid_transcript） | 216 个，最大 committed_off 5,198,123 | 216 个，最大 committed_off 5,198,123 |
+| 数据库大小 | 4,593.3 MB | 4,598.1 MB |
+
+第一轮 droid tick 34 ms；事件循环 p99 288 ms，最大 1,141 ms 出现在启动段。重复证据查询 0。重启后 216 个 droid 游标全部在文件末尾，最近 30 分钟没有 droid 转录写入。
+
+### 结论与边界
+
+重启与空闲轮通过：发现、settings 刷新、游标与 issue 都没有变化，也没有重复证据。数据库增加的 4.8 MB 来自其他来源的持续写入，不归 droid。
+
+本轮没有新的 droid 行，插入、认领与正文重建没有被真实流量走到；这部分只有合成测试覆盖（droid 26 pass）。下一次 droid 真实调用到来时需要补一次新行前后对账：request 与 evidence 的增量应等于 assistant 消息增量，新增 droid issue 或重复证据按回归处理。
