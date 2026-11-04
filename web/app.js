@@ -1487,9 +1487,9 @@ if (typeof document !== 'undefined') {
         return text === '' ? null : text;
       });
     }
-    // Todo 是轮次作用域，放在轮次态提前返回之前：两种阅读态都能读到它，
+    // Todo 是轮次作用域，放在轮次态提前返回之前：请求态给选轮提示，轮次态读数，
     // 且不会掉进后面四个请求作用域页签的分派。
-    if (state.railTab === 'todo') return todoTabHtml(store.peekTodoByTurn());
+    if (state.railTab === 'todo') return todoTabHtml(store.peekTodoByTurn(), state.turn !== null);
     // 轮次态：命令组与最终回复两个面板，两端默认展开；点轨迹任意行经选择转换回请求态。
     if (state.turn !== null) {
       const turn = turnOf(state.turn);

@@ -5,10 +5,15 @@ import { t } from './i18n.js';
 
 /**
  * @param {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/todo-by-turn').TodoByTurn | null}} reading
+ * @param {boolean} hasTurn 请求态没有轮号，读取不会开始，不能停在「读取中」。
  * @returns {string}
  */
-export function todoTabHtml(reading) {
-  if (reading.status === 'loading' || reading.status === 'idle') {
+export function todoTabHtml(reading, hasTurn) {
+  if (reading.status === 'loading') {
+    return `<div class="rail-empty">${t('读取中')}</div>`;
+  }
+  if (reading.status === 'idle') {
+    if (!hasTurn) return `<div class="rail-empty">${t('选择轮次后查看待办')}</div>`;
     return `<div class="rail-empty">${t('读取中')}</div>`;
   }
   if (reading.status === 'absent' || reading.data === null) {

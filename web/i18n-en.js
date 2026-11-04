@@ -610,6 +610,7 @@ export const dict = {
   '只统计当前已加载窗口；首字为 p50，未加载页不进计时': 'Loaded window only; first token is p50; unloaded pages are not timed',
 
   /* todo-tab */
+  '选择轮次后查看待办': 'Select a turn to see todos',
   '本轮没有待办': 'No todos in this turn',
   '正文已回收，待办不可读': 'Bodies reclaimed; todos unreadable',
 };
