@@ -34,12 +34,14 @@ export type SessionIngestResult = {
   blocked: number;
   sideEffects: number;
   bytes: number;
+  /** 封口文件本次分块后还剩多少解压字节；0 表示这个文件已读完。 */
+  remaining: number;
 };
 
 export function emptySessionIngestResult(): SessionIngestResult {
   return {
     files: 0, calls: 0, merged: 0, duplicates: 0, refreshed: 0,
-    invalid: 0, blocked: 0, sideEffects: 0, bytes: 0,
+    invalid: 0, blocked: 0, sideEffects: 0, bytes: 0, remaining: 0,
   };
 }
 
@@ -283,14 +285,20 @@ export async function ingestSessionFile(
     store.write(db => recordIssue(db, adapter.issueKind, file.name,
       adapter.unreadableReason ?? 'session_source_unreadable', now, null),
       adapter.agent);
-    return { ...result, files: 1 };
+    return { ...result, files: 1, remaining: 0 };
   }
   if (read.state === 'error') {
     store.write(db => recordIssue(db, adapter.issueKind, file.name,
       read.error ?? 'session_source_unreadable', now, null), adapter.agent);
-    return { ...result, files: 1 };
+    return { ...result, files: 1, remaining: 0 };
   }
-  result.bytes = read.observedOff - read.startOff;
+  // 封口文件只提交一个分块，observedOff 是整份长度；预算按本块计入。
+  result.bytes = read.mode === 'sealed'
+    ? read.committedOff - read.startOff
+    : read.observedOff - read.startOff;
+  result.remaining = read.mode === 'sealed'
+    ? Math.max(0, read.observedOff - read.committedOff)
+    : 0;
   const unchanged = read.lines.length === 0 && read.issues.length === 0
     && read.generation === (cursor?.generation ?? '')
     && read.committedOff === (cursor?.committedOff ?? 0);
@@ -298,7 +306,7 @@ export async function ingestSessionFile(
     if (read.observedOff > (cursor?.observedOff ?? 0)) {
       observeSourceOffset(store, adapter.sourceKind, file.name, read.observedOff);
     }
-    return { ...result, files: 1 };
+    return { ...result, files: 1, remaining: 0 };
   }
 
   store.write(db => {
@@ -450,7 +458,10 @@ export async function discoverSessionFiles(
   const cursorFor = (name: string) => {
     const cursor = readFileCursor(store, adapter.sourceKind, name);
     return cursor === null ? null
-      : { generation: cursor.generation, committedOff: cursor.committedOff, seenSize: cursor.seenSize };
+      : {
+        generation: cursor.generation, committedOff: cursor.committedOff,
+        observedOff: cursor.observedOff, seenSize: cursor.seenSize,
+      };
   };
   const files: SessionFile[] = [];
   // source_name 是游标身份：文件是绝对路径，Zcode 是 `<db>#<session>`；
@@ -490,21 +501,37 @@ export async function ingestSessionFiles(
       : (left, right) => right.mtimeMs - left.mtimeMs || left.name.localeCompare(right.name));
   const total = emptySessionIngestResult();
   let bytes = 0;
+  let fileCount = 0;
   for (const file of selected) {
-    if (total.files >= batch.maxFiles || bytes >= batch.maxBytes) break;
-    const result = await ingestSessionFile(store, adapter, file, salt, now);
-    total.files += result.files;
-    total.calls += result.calls;
-    total.merged += result.merged;
-    total.duplicates += result.duplicates;
-    total.refreshed += result.refreshed;
-    total.invalid += result.invalid;
-    total.blocked += result.blocked;
-    total.sideEffects += result.sideEffects;
-    total.bytes += result.bytes;
-    // 预算按实际读到的字节记，不按 remaining 估：大文件首轮只读一个批次，
-    // 按整份估会把后续小文件全挤掉。
-    bytes += result.bytes;
+    if (fileCount >= batch.maxFiles || bytes >= batch.maxBytes) break;
+    let counted = false;
+    let remaining = file.remaining;
+    // 封口文件一块一个写事务；本批内连续读到预算用完，避免一个大文件占满许多轮。
+    while (remaining > 0) {
+      // 封口读取与写事务都含同步段；块与块之间让出事件循环，避免一轮把定时器压到秒级。
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const result = await ingestSessionFile(store, adapter, file, salt, now);
+      if (!counted) {
+        // 一个物理文件只记一次，分块不放大 files 计数。
+        fileCount += result.files;
+        total.files += result.files;
+        counted = true;
+      }
+      total.calls += result.calls;
+      total.merged += result.merged;
+      total.duplicates += result.duplicates;
+      total.refreshed += result.refreshed;
+      total.invalid += result.invalid;
+      total.blocked += result.blocked;
+      total.sideEffects += result.sideEffects;
+      total.bytes += result.bytes;
+      // 预算按实际读到的字节记，不按 remaining 估：大文件首轮只读一个分批，
+      // 按整份估会把后续小文件全挤掉。
+      bytes += result.bytes;
+      remaining = result.remaining;
+      // 没有推进（坏行阻挡、文件消失）就换下一个文件，避免原地空转。
+      if (result.bytes <= 0 || bytes >= batch.maxBytes || fileCount >= batch.maxFiles) break;
+    }
   }
   return total;
 }

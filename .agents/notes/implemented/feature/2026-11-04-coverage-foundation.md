@@ -36,6 +36,7 @@ Magpie 的 `internal/sessions/sessions.go` 列了 19 个本地 Agent。仓库里
 
 - `discoverJsonl` 接受 `extensions` 选项；Codex 适配器同时发现 `.jsonl` 与 `.jsonl.zst`。
 - `sealedJsonlRead` 以压缩后字节的 SHA-256 作为 `generation` 与 `fingerprint`。同指纹返回 `unchanged`，不重复解压；指纹变化则整份解压并按解压后字节偏移切行。
+- 解压后每次只提交一个分块（256 KiB 或 64 行）：`committed_off` 记本块末尾，`observed_off` 记整份长度，发现阶段用两者之差算剩余。一个封口文件跨多个写事务完成，块与块之间让出事件循环。
 - 解压失败记 `codex_zstd_invalid`，超过 256 MiB 记 `codex_zstd_limit`；游标不推进，下一轮同指纹重试。
 - 压缩文件按单个 zstd frame 处理。多 frame 归档需要逐帧解压，当前不猜。
 - 同名 plain 与 `.jsonl.zst` 先比较解压内容：相等或 zst 是 plain 前缀时只读 plain；plain 是 zst 前缀时只读 zst；内容分叉时两份都保留，交给共用写路径去重。比较结果按大小与 mtime 缓存。
@@ -87,16 +88,16 @@ Magpie 的 `internal/sessions/sessions.go` 列了 19 个本地 Agent。仓库里
 
 ## Testing
 
-合成验收在隔离 worktree `.codex-worktrees/atc-coverage-foundation` 的 `feat/coverage-foundation` 分支完成：`bun test` 1243 pass / 0 fail（106 个文件），`bun run typecheck` 退出 0，`verify:notes` 通过。新增或更新的窄测试覆盖 `.jsonl.zst` 首次摄入与同指纹跳过、损坏压缩记固定 issue、同名 twin 的相等与前缀裁决、OMP/Pi 默认/profiles/XDG/自定义目录/`settings.sessionDir` 与重叠根去重、live/backfill 两轮调度、孤儿与过期封口代际清理、19 家目录与注册表一致性。
+合成验收在隔离 worktree `.codex-worktrees/atc-coverage-foundation` 的 `feat/coverage-foundation` 分支完成：`bun test` 1243 pass / 0 fail（106 个文件），`bun run typecheck` 退出 0，`verify:notes` 通过。新增或更新的窄测试覆盖 `.jsonl.zst` 首次摄入与同指纹跳过、损坏压缩记固定 issue、同名 twin 的相等与前缀裁决、OMP/Pi 默认/profiles/XDG/自定义目录/`settings.sessionDir` 与重叠根去重、live/backfill 两轮调度、孤儿与过期封口代际清理、19 家目录与注册表一致性。封口分块另有 `tests/session-sealed-chunk.test.ts` 覆盖单块边界、发现阶段剩余与跨事务补齐。
 
 真实流量、容量与事件循环读数见[验收记录](../../../docs/acceptance.md#覆盖护栏合成--生产真实流量2026-11-04)，本 note 不复制读数。未覆盖：zst 历史回填没有跑完；本机 OMP/Pi 只有默认根，没有 profile/XDG 真实数据；`raw_session_event` 的 TTL 只有合成删除样本，生产库没有可删代际。
 
 ## Consequences
 
 - 收益：Codex 归档会话第一次进入 `request`/`evidence`；live 与回填不再共用一个预算；OMP/Pi 的 profile、XDG 与自定义目录进入发现；`raw_session_event` 的增长有了观察口径和可执行的安全回收边界。
-- 代价：首轮 twin 比较要解压同名 zst；封口文件整份解压后再按行切分，内存峰值随解压后大小增长；追加代际的原始层仍随会话增长，TTL 只处理不可达代际。
-- 长尾：部署后首个 Codex zst 批次期间事件循环出现秒级长尾；单个封口文件可达数 MB 解压文本，批次预算按压缩字节计算，实际写入量会超出 2 MiB。读数与根因见验收记录，修复另列，不在本文伪装成已解决。
-- 回填速度：历史 zst 由 backfill 轮转推进，选中 216 个 zst 后不会在一次启动内追平；页面先看到 live 会话与逐步进入的历史会话。
+- 代价：首轮 twin 比较要解压同名 zst；封口文件每次分块都重新解压整份，压缩比越高、文件越大，重复解压的份额越高；追加代际的原始层仍随会话增长，TTL 只处理不可达代际。
+- 长尾：首个 zst 批次的事件循环秒级长尾已在[封口摄入分块](../bug-fix/2026-11-04-sealed-ingest-chunking.md)修复；单个分块仍要把整份解压文本读进内存，内存峰值不随分块下降。
+- 回填速度：历史 zst 由 backfill 轮转推进，每轮受 2 MiB 预算约束；选中 216 个 zst 后不会在一次启动内追平，页面先看到 live 会话与逐步进入的历史会话。
 - 目录只是骨架，`source-health` 与真实覆盖状态还没落地；Codex 同大小原地替换不会被指纹发现，这是归档文件假定写入后不再改的代价。
 
 ## Deferred
@@ -105,7 +106,6 @@ Magpie 的 `internal/sessions/sessions.go` 列了 19 个本地 Agent。仓库里
 - 追加代际的原始层 TTL，需要先设计「清原始层时重置游标、下次全量重读」。
 - Pi 的项目级 `.pi/settings.json` 里如果单独写了 `sessionDir`，没有可枚举的 cwd，当前不扫。
 - 新 Agent 适配器（DSH、Qoder、Grok、WorkBuddy 等）单独分批，不在本文混入。
-- 首个 zst 批次的事件循环长尾：先量稳定态，再决定是让封口读取异步化、在文件之间显式让出事件循环，还是把单文件写入拆小。
 
 ## Related
 

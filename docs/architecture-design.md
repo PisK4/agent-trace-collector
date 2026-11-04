@@ -418,12 +418,12 @@ Claude Code、Codex、Zcode、OMP、Pi 与 droid 的本地会话走同一条采�
 
 OMP/Pi 的多根在适配器里展开：OMP 还读 `PI_CODING_AGENT_DIR`、`PI_CODING_AGENT_SESSION_DIR` 与 `OMP_HOME`；Pi 还读 `PI_CODING_AGENT_SESSION_DIR` 与 `PI_HOME`。共享发现按 `source_name` 去重，重叠根只进一次。Pi 的项目级 `.pi/settings.json` 没有可枚举的 cwd，不扫。
 
-Codex 归档的 `.jsonl.zst` 按整份内容读取：压缩字节的 SHA-256 作为代际与指纹，同指纹不再解压；解压失败记 `codex_zstd_invalid`，超过 256 MiB 记 `codex_zstd_limit`，游标不前进。压缩文件按单个 zstd frame 处理。同名 plain 与 zst 先比较解压内容；相等或互为前缀时只留覆盖更全的一份，分叉时都保留。
+Codex 归档的 `.jsonl.zst` 先整份解压，再按解压后的字节省份提交：压缩字节的 SHA-256 作为代际与指纹，同指纹不再解压；每次写事务最多提交 256 KiB 或 64 行，`committed_off` 是本块末尾，`observed_off` 是整份长度，发现阶段用两者之差判断还有没有剩余。解压失败记 `codex_zstd_invalid`，超过 256 MiB 记 `codex_zstd_limit`，游标不前进。压缩文件按单个 zstd frame 处理。同名 plain 与 zst 先比较解压内容；相等或互为前缀时只留覆盖更全的一份，分叉时都保留。
 
 五个非 droid 适配器共用一个 `sessions` 定时器，每 60 秒跑一轮。每轮先对全部适配器做一次只读发现，只 stat；发现后 Codex 对同名 plain/zst twin 读两份比较内容，结果按大小与 mtime 缓存。
 
 - live：mtime 在 10 分钟内的文件，按 mtime 从新到旧，最多 4 家，每家 2 个文件或 256 KiB；
-- backfill：从轮转游标选一家仍有剩余的来源，重新发现后按该适配器自己的预算摄入，每家每轮最多 64 个文件或 2 MiB；没有剩余的来源跳过。
+- backfill：从轮转游标选一家仍有剩余的来源，重新发现后按该适配器自己的预算摄入，每家每轮最多 64 个文件或 2 MiB；封口文件在本轮预算内连续提交多个分块，没有剩余的来源跳过。
 
 live 先于 backfill，活跃会话不用等轮转；第 5 家活跃来源要等下一轮，历史积压仍由 backfill 覆盖。droid 保留独立 `droid` 定时器与 8 MiB 预算，按剩余字节从大到小取，不放进轮转，避免同一来源被两个定时器重复摄入。单家抛错只冻结这一家。启动后的第一轮异步跑，不挡 HTTP 监听。测试用 `CollectorOptions.sessionAdapters` 与 `sessionRoots` 注入合成根，不读真实主目录。
 

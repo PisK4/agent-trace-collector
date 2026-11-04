@@ -77,6 +77,8 @@ export async function runSessionScheduler(
     add(total, await ingestSessionFiles(store, entry.adapter, entry.active, salt, now, config.liveBatch));
     total.live += 1;
   }
+  // live 的最后一个写事务可能刚结束；回填接着跑前先让定时器有机会执行。
+  await new Promise<void>(resolve => setImmediate(resolve));
 
   // 回填轮转跳过空来源；找到一家后重新发现，避免重复读取 live 刚提交的文件。
   for (let offset = 0; offset < adapters.length; offset += 1) {
