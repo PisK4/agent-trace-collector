@@ -101,6 +101,11 @@
 - 防护：折叠到父会话的调用，callId 与 `ref_key` 带 subagent id；验收时把原始层 assistant 数与 request/duplicate 数对账，并测两个使用相同 seq 的子代理各建一行。
 - Seen 1× (2026-11-04).
 
+**`afterFile` 只在主流有推进的写事务里跑，覆盖写的旁路快照要另找刷新入口。**
+- 证据：2026-11-04 Grok 适配器的 `usage.json` 是会话级累计快照，`chat_history.jsonl` 停止追加后它被单独改写时，共用摄入的 `unchanged` 分支在 `afterFile` 之前就 return，累计值刷新不到；合成测试里「静止改写 -> sideEffects=1」直接失败。droid 用独立批次入口 `ingestDroidBatch` 按 `session_usage.source_path` 补刷，走通用 `sessions` 调度的适配器没有这个入口。
+- 防护：把旁路快照的刷新挂在主流下一次推进上，测试只断言这个契约；静止期改写列为未覆盖边界写进 note，别让测试断言一个 `afterFile` 根本到不了的路径。要覆盖静止期改写，得在批次入口或调度层加刷新，不改 `ingest.ts` 主体做不到。
+- Seen 1× (2026-11-04).
+
 **给逐项循环加分块内层循环时，预算计数与结果累计分开，物理条目只在首块计一次。**
 - 证据：2026-11-04 封口分块把 `ingestSessionFiles` 改成每文件多事务，直接把累计 `total.files` 当预算计数器会让分块放大文件数；局部计数器又与参数 `files` 同名，typecheck 报 TS2300 才发现。
 - 防护：预算用 `fileCount`/`bytes` 独立变量，`total.*` 只做输出；内层循环用 `counted` 标记首块；新增循环后先跑 `bun run typecheck` 与多块集成测试。
