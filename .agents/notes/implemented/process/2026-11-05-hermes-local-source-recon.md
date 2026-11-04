@@ -12,6 +12,8 @@ Status: implemented
 
 记录三条只读实测结论，作为后续决定批次 C 的依据。按用户 2026-11-05 的方向选择，**路线暂不调整**，本记录不把结论升级为改判。
 
+更正指针：下文第一条把零交集归因为「两套会话命名空间」，这个归因已由[conv id 更正](2026-11-05-hermes-conv-id-correction.md)推翻——网关侧 conv id 是从请求正文首条 user 消息确定性派生的摘要，仓内 `src/hook.ts` 已有同一口径。零交集读数仍成立，但由此推出的路线判断以更正记录为准。
+
 侦查只读 `~/Library/Application Support/tracery/trace.db` 与 `~/.hermes/state.db` 的元数据、聚合与键的交集；不读正文、账号、令牌与用户配置，不把任何真实值写进记录。
 
 **一、两侧会话 id 零交集。** 网关侧 `request.agent='hermes'` 共 4,787 行，`session` 全为 NULL，`conv_key` 全非空且是 JSON 数组：`["conv", <31 字符>]` 4,720 行、`["hook", <36 字符 UUID>]` 69 行。抽出第二段得 588 个不同 id，与本地 `sessions.id`（162）、`sessions.session_key`（161，全部 90 字符）、`sessions.chat_id`（161）、`messages.session_id`（153）逐列求交集，命中都是 0。反向用本地三类 id 与网关侧 13,517 个不同 `ref_key` 求交集，同样是 0。`source_facts_json` 的顶层 key 是 `format`、`kinds`、`hook`、`selected`，`kinds` 下是 `ledger`/`route`/`state`/`value`，说明这批行由 magpie 的 hook 与账本合成，会话坐标是 magpie 侧的，与 Hermes 本地 `state.db` 的命名空间不同。「补本地解析器会把同一调用第二次送进库」在当前数据上不成立，因为两边不是同一批调用。
