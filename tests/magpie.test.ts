@@ -637,3 +637,27 @@ test('response id 叠层前缀剥到一个裸值且结果幂等', () => {
   expect(normalizeResponseId('')).toBeNull();
   expect(normalizeResponseId(normalizeResponseId('chatcmpl-msg_synthetic'))).toBe('synthetic');
 });
+
+test('stats缓存：世代不变且未过TTL时复用，外部进程写库最迟一个TTL后反映', () => {
+  const f = fixture();
+  try {
+    expect(getStats(f.store).requests).toBe(0);
+    // 外部写不走 store.write：写世代不变，缓存只能靠 TTL 失效。
+    f.store.db.exec(`INSERT INTO request(started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
+      VALUES (1,'2026-11-05','hook','pending',0,1,1,1)`);
+    expect(getStats(f.store).requests).toBe(0);
+    const clock = spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000);
+    try {
+      expect(getStats(f.store).requests).toBe(1);
+    } finally { clock.mockRestore(); }
+  } finally { f.close(); }
+});
+
+test('stats十条聚合在同一个读快照里取', () => {
+  const f = fixture();
+  try {
+    const txn = spyOn(f.store.read, 'transaction');
+    getStats(f.store);
+    expect(txn).toHaveBeenCalledTimes(1);
+  } finally { f.close(); }
+});
