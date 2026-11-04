@@ -9,6 +9,8 @@ import { getRoute } from '../src/queries/routes';
 import { listSessions } from '../src/queries/sessions';
 import { createCapacityMetrics } from '../src/capacity';
 import { persistBody } from '../src/body';
+import { createDiagnosticLog } from '../src/monitoring';
+import type { Store } from '../src/store';
 
 function seedRequests(store: ReturnType<typeof fixture>['store'], convKey: string, count: number, sameMs = false): number[] {
   const ids: number[] = [];
@@ -294,6 +296,55 @@ test('正文区间规则与内层防御共用：HTTP 层映射 400', async () =>
   }
 });
 
+test('畸形百分号编码的路径参数返回 400，不再计入 5xx（F20）', async () => {
+  const f = fixture();
+  try {
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
+    const get = (path: string) => handler(new Request(`http://127.0.0.1:8320${path}`, {
+      headers: { host: '127.0.0.1:8320', 'sec-fetch-site': 'same-origin' },
+    }));
+    const response = await get('/api/sessions/a%zz/requests');
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe('invalid_path_param');
+    // 七个解码点共用同一个 helper：抽查其余会话端点同样 400 而非 500。
+    for (const path of ['/api/sessions/a%zz/turns', '/api/sessions/a%zz/bg-jobs',
+      '/api/sessions/a%zz/summary', '/api/sessions/a%zz/summary/entries?kind=interrupts']) {
+      expect((await get(path)).status).toBe(400);
+    }
+  } finally {
+    f.close();
+  }
+});
+
+test('正文区间偏移要求安全整数：超大 from 返回 400 而非零宽页（F41）', async () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(
+      `INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
+       VALUES (1,1000,'2026-10-20','hook','pending',0,1,1,1)`));
+    persistBody(f.store, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'm0' }] }] },
+      reply: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r0' }] },
+      redact_version: 1,
+    });
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
+    const range = (query: string) => handler(new Request(
+      `http://127.0.0.1:8320/api/requests/1/body?${query}`,
+      { headers: { host: '127.0.0.1:8320', origin: 'http://127.0.0.1:8320' } }));
+    // 合法安全整数区间不受影响。
+    expect((await range('from=0&to=1')).status).toBe(200);
+    // 超过 2^53：解析即拒绝，统一映射 invalid_body_range，from 与 to 同规。
+    const huge = await range('from=99999999999999999999');
+    expect(huge.status).toBe(400);
+    expect(((await huge.json()) as { error: string }).error).toBe('invalid_body_range');
+    expect((await range('from=9007199254740993')).status).toBe(400);
+    expect((await range('from=0&to=99999999999999999999')).status).toBe(400);
+  } finally {
+    f.close();
+  }
+});
+
 test('详情不返回账户字段也不返回骨架', () => {
   const f = fixture();
   try {
@@ -424,6 +475,49 @@ test('hook 拒绝按固定原因计数且不保留正文', async () => {
     expect(snapshot.rejected_by_reason.origin).toBe(1);
     expect(JSON.stringify(snapshot)).not.toContain('REJECTED_BODY_MARKER');
     expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 0 });
+  } finally { f.close(); }
+});
+
+test('写失败响应只带固定枚举码；SQLITE_FULL 与 disk_full 同映射 507（F21/F44）', async () => {
+  const f = fixture();
+  try {
+    const metrics = createCapacityMetrics(f.store, f.dir, 1000);
+    const logLines: string[] = [];
+    const diagnostics = createDiagnosticLog({
+      instance: 'synthetic', throttleMs: 0, sink: line => logLines.push(line),
+    });
+    // session/request 显式置空：缺省 undefined 会在写事务前的身份归一步抛 TypeError，到不了 store.write。
+    const envelope = JSON.stringify({ hook_id: 'h1', origin: 'local', session: null, request: null });
+    const send = (store: Store) => createHandler(store, loadConfig({}), 'synthetic-read-token', {
+      token: 'synthetic-hook-token', salt: new Uint8Array(32),
+    }, metrics, undefined, diagnostics)(new Request('http://127.0.0.1:8320/hook/ingest', {
+      method: 'POST',
+      headers: { host: '127.0.0.1:8320', authorization: 'Bearer synthetic-hook-token' },
+      body: envelope,
+    }));
+    const broken = (error: unknown) => Object.assign(Object.create(f.store), {
+      write: () => { throw error; },
+    }) as Store;
+
+    // 真实 SQLite 写满（code=SQLITE_FULL）与准入闸门 disk_full 同映射 507，响应体同形。
+    const full = new Error('database or disk is full');
+    (full as { code?: string }).code = 'SQLITE_FULL';
+    const fullResponse = await send(broken(full));
+    expect(fullResponse.status).toBe(507);
+    expect(await fullResponse.json()).toEqual({ error: 'insufficient_storage' });
+    expect((await send(broken(new Error('disk_full')))).status).toBe(507);
+
+    // 其余写失败 503：code 是固定枚举，原始文本不进响应体也不进结构化日志。
+    const failed = await send(broken(new Error('UNIQUE constraint failed: request.req_id')));
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).toEqual({ error: 'writer_failed', code: 'write_failed' });
+    const snapshot = metrics.ingest.snapshot(2000);
+    expect(snapshot.rejected_by_reason.insufficient_storage).toBe(2);
+    expect(snapshot.rejected_by_reason.writer_failed).toBe(1);
+    const logs = logLines.join('\n');
+    expect(logs).toContain('hook.write');
+    expect(logs).not.toContain('UNIQUE constraint');
+    expect(logs).not.toContain('database or disk is full');
   } finally { f.close(); }
 });
 
@@ -601,6 +695,7 @@ test('阅读批端点：合法批次、逐项错误与参数边界', async () =>
       JSON.stringify([{ id: ids[0], token: 'bad', from: 0, to: 1 }]),
       JSON.stringify([{ id: ids[0], token, from: 0, to: 41 }]),
       JSON.stringify([{ id: ids[0], token, from: 5, to: 2 }]),
+      JSON.stringify([{ id: ids[0], token, from: 1e20, to: 1e20 }]),
       '[]', 'not-json',
       JSON.stringify(Array.from({ length: 65 }, (_, i) => ({ id: ids[0], token, from: 0, to: 1 }))),
     ]) {
