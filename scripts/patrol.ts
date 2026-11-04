@@ -24,6 +24,8 @@ const MB = 1024 * 1024;
 const DAY_MS = 24 * 60 * 60_000;
 const HISTORY_FILE = 'history.json';
 const HISTORY_LIMIT = 12;
+/** `--if-due` 的到期窗口：最近一期快照距今不足这么多天就跳过采集。 */
+const DUE_DAYS = 7;
 
 /**
  * 阈值与判定口径。数字随容量策略一起改；改这里等于改巡检标准，docs/patrol.md
@@ -452,6 +454,18 @@ export function previousSnapshot(history: History, period: string): Snapshot | n
     .sort((a, b) => (a.period < b.period ? 1 : -1))[0] ?? null;
 }
 
+/** `--if-due`：最近一期距今不足 days 天算未到期；没有历史或历史损坏视为到期。 */
+export function dueState(
+  history: History,
+  nowMs: number,
+  days = DUE_DAYS,
+): { due: boolean; ageDays: number | null } {
+  const latest = history.periods[history.periods.length - 1];
+  if (latest === undefined) return { due: true, ageDays: null };
+  const ageDays = Math.max((nowMs - latest.takenAt) / DAY_MS, 0);
+  return { due: ageDays >= days, ageDays };
+}
+
 export function toSnapshot(reading: WeeklyReading, checks: Check[], nowMs = Date.now()): Snapshot {
   return {
     period: isoWeek(nowMs),
@@ -499,7 +513,7 @@ export function render(checks: Check[]): string {
   return `${lines.join('\n')}\n`;
 }
 
-type Options = { command: string; dataDir: string; port: number; stateDir: string; json: boolean };
+type Options = { command: string; dataDir: string; port: number; stateDir: string; json: boolean; ifDue: boolean };
 
 function parseArgs(argv: string[]): Options | null {
   const command = argv[0];
@@ -508,9 +522,11 @@ function parseArgs(argv: string[]): Options | null {
   let stateDir = patrolStateDir(process.env);
   let port = 8320;
   let json = false;
+  let ifDue = false;
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--json') json = true;
+    else if (arg === '--if-due') ifDue = true;
     else if (arg === '--data-dir') {
       const value = argv[index + 1];
       if (value === undefined) return null;
@@ -528,13 +544,14 @@ function parseArgs(argv: string[]): Options | null {
       index += 1;
     } else return null;
   }
-  return { command, dataDir, stateDir, port, json };
+  if (ifDue && command !== 'weekly') return null;
+  return { command, dataDir, stateDir, port, json, ifDue };
 }
 
 async function main(argv: string[]): Promise<number> {
   const options = parseArgs(argv);
   if (options === null) {
-    process.stderr.write('usage: patrol weekly [--data-dir PATH] [--state-dir PATH] [--json] | patrol smoke [--port N] [--data-dir PATH] [--json]\n');
+    process.stderr.write('usage: patrol weekly [--data-dir PATH] [--state-dir PATH] [--if-due] [--json] | patrol smoke [--port N] [--data-dir PATH] [--json]\n');
     return 2;
   }
   const dbPath = join(options.dataDir, 'trace.db');
@@ -545,9 +562,17 @@ async function main(argv: string[]): Promise<number> {
   let checks: Check[];
   try {
     if (options.command === 'weekly') {
+      const now = Date.now();
+      if (options.ifDue) {
+        const due = dueState(loadHistory(options.stateDir), now);
+        if (!due.due && due.ageDays !== null) {
+          const detail = `未到期（距上期 ${due.ageDays.toFixed(1)} 天），跳过`;
+          process.stdout.write(options.json ? `${JSON.stringify([{ id: 'due', state: 'info', detail }], null, 2)}\n` : `${detail}\n`);
+          return 0;
+        }
+      }
       const reading = collectWeekly(dbPath, options.dataDir);
       const evaluated = evaluateWeekly(reading);
-      const now = Date.now();
       const period = isoWeek(now);
       const history = loadHistory(options.stateDir);
       const current = toSnapshot(reading, evaluated, now);

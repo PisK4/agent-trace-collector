@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  PATROL_THRESHOLDS, collectWeekly, compareSnapshots, evaluateWeekly, isoWeek, judgeSmoke,
+  PATROL_THRESHOLDS, collectWeekly, compareSnapshots, dueState, evaluateWeekly, isoWeek, judgeSmoke,
   loadHistory, localDay, patrolStateDir, previousSnapshot, saveSnapshot, toSnapshot,
 } from '../scripts/patrol';
 import type { Snapshot, WeeklyReading } from '../scripts/patrol';
@@ -219,6 +219,20 @@ test('状态目录可被环境变量覆盖，期号是 ISO 周', () => {
   expect(patrolStateDir({ ATC_PATROL_STATE_DIR: '/tmp/patrol-x' } as NodeJS.ProcessEnv)).toBe('/tmp/patrol-x');
   expect(patrolStateDir({} as NodeJS.ProcessEnv).endsWith(join('tracery', 'patrol'))).toBe(true);
   expect(isoWeek(new Date(2026, 10, 4).getTime())).toMatch(/^\d{4}-W\d{2}$/);
+});
+
+test('到期闸门只在最近一期满 7 天后放行，无历史与损坏历史都算到期', () => {
+  const now = Date.now();
+  const recent: Snapshot[] = [
+    snapshot('2026-W44', now - 10 * DAY_MS, 4_800),
+    snapshot('2026-W45', now - 3 * DAY_MS, 5_000),
+  ];
+  const fresh = dueState({ periods: recent, corrupt: false, path: '/tmp/history.json' }, now);
+  expect(fresh.due).toBe(false);
+  expect(fresh.ageDays).toBeCloseTo(3, 5);
+  expect(dueState({ periods: recent, corrupt: false, path: '/tmp/history.json' }, now + 4 * DAY_MS).due).toBe(true);
+  expect(dueState({ periods: [], corrupt: false, path: '/tmp/history.json' }, now)).toEqual({ due: true, ageDays: null });
+  expect(dueState({ periods: [], corrupt: true, path: '/tmp/history.json' }, now).due).toBe(true);
 });
 
 test('快照落下采集时间、计数、体积与当次判定', () => {
