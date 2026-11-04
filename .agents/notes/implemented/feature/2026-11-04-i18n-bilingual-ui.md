@@ -14,7 +14,7 @@ Status: implemented
 - **静态 `index.html` 文案**在 boot 与每次切换由 `applyStaticTexts()` 按当前语言改写；`<html lang>` 随动为 `zh-CN`/`en`。选择器带 `.pulse` 防止误改渲染出来的同款空态段。
 - **服务端零改动协商**：只加 `/i18n.js` 与 `/i18n-en.js` 两条静态路由。两处服务端中文数据在客户端翻译：`EXEC_MS_HINT` 常量在使用点包 t；prompt reading 的 `note`（readings.ts 三条已知中文句）在使用点包 t，未知值回退中文——服务端不进字典业务。
 - **日期格式化**随当前语言（`zh-CN`/`en-US`），说明短句列表的分隔符（`；`/`; `）与成员列表 join 同样随语言。
-- **覆盖闸门**（`tests/i18n-coverage.test.ts`）：web 模块里中文引号字符串必须是 t() 直接 key、en 字典 key（key-map 经 t 间接消费）或白名单（语言钮的目标语言自称）。反引号模板不扫描——模板内中文要么是 t 的 key 要么是插值组合，行级静态分析分不清，写在测试头注。
+- **覆盖闸门**（`tests/i18n-coverage.test.ts`）：web 模块里中文引号字符串必须是 t() 直接 key、en 字典 key（key-map 经 t 间接消费）或白名单（语言钮的目标语言自称）。反引号模板不扫描——模板内中文要么是 t 的 key 要么是插值组合，行级静态分析分不清，写在测试头注。闸门后来补上「t() 字面量 key 必须是字典成员」与「译文占位符集合相等」两条断言，见 [i18n 覆盖闸门补字典成员与占位符校验](../bug-fix/2026-11-04-i18n-coverage-gate.md)。
 - **英文定名**以 [GLOSSARY](../../../../GLOSSARY.md)「界面英文定名」节为准（callback、totals/summary、reasoning、attribution、index、fragment 六项是本次拍板）；英文文案遵守与中文相同的落笔风格。
 - 叶子模块（tool-summary、row-summary、body-model）引入 i18n 是记录在头的唯一例外：纯数据映射，无 DOM。
 
