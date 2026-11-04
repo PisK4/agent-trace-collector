@@ -32,7 +32,7 @@ Status: implemented
 
 **社区文件按英文写。** `CONTRIBUTING.md` 与 `SECURITY.md` 用英文，与英文 README 一致：它们是陌生人读的第一批文件。`CHANGELOG.md` 用 Keep a Changelog 格式，当前只有 `[Unreleased]`——没有打 tag 就不编版本号，不写未发布的日期。issue 模板用 YAML 表单，把「不要贴真实请求正文」写成表单顶部的硬提示，而不是指望提交者点开安全政策。PR 模板带一条中英文 README 同步的勾选。
 
-**数据目录默认值改为按平台选根。** `src/config.ts` 之前写死 `~/Library/Application Support/agent-trace-collector`，Linux 用户会把库落进 `~/Library`。新增 `defaultDataDir(env, platform, home)`：macOS 走 `~/Library/Application Support`，其余走 `XDG_DATA_HOME` 或 `~/.local/share`。目录名继续沿用仓库名而不是产品名 Tracery——改名会让已有数据的用户找不到自己的库。四个 backfill 脚本原本各自硬编码同一路径，改为调用这个函数。
+**数据目录默认值改为按平台选根。** `src/config.ts` 之前写死 `~/Library/Application Support/agent-trace-collector`，Linux 用户会把库落进 `~/Library`。新增 `defaultDataDir(env, platform, home)`：macOS 走 `~/Library/Application Support`，其余走 `XDG_DATA_HOME` 或 `~/.local/share`。目录名当时沿用仓库名而不是产品名 Tracery：改名会让已有数据的用户找不到自己的库。后来按[统一改名为 Tracery](2026-11-04-rename-to-tracery.md) 用停→移→起的显式迁移改成了 `tracery`，这条理由随迁移窗口消解。四个 backfill 脚本原本各自硬编码同一路径，改为调用这个函数。
 
 ## Alternatives considered
 

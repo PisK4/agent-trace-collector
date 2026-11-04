@@ -4,7 +4,7 @@
 
 ## 数据目录
 
-默认按平台惯例：macOS 为 `~/Library/Application Support/agent-trace-collector`，其他平台为 `${XDG_DATA_HOME:-~/.local/share}/agent-trace-collector`，用 `ATC_DATA_DIR` 覆盖。目录权限 0700，里面的数据库、WAL、日志与三个令牌文件都是 0600。
+默认按平台惯例：macOS 为 `~/Library/Application Support/tracery`，其他平台为 `${XDG_DATA_HOME:-~/.local/share}/tracery`，用 `ATC_DATA_DIR` 覆盖。目录权限 0700，里面的数据库、WAL、日志与三个令牌文件都是 0600。
 
 | 文件 | 用途 |
 | --- | --- |
@@ -19,7 +19,7 @@
 
 ## 起停与状态
 
-生产采集器由 launchd 托管（label `local.agent-trace-collector`，`KeepAlive=true`、`ThrottleInterval=10`）。这套配置下 `kill` 不安全：进程退出后 10 秒内会被重新拉起，维护命令正好可能落进那个窗口，再手动起一个还会撞端口。起停统一走 `bun run service`：
+生产采集器由 launchd 托管（label `local.tracery`，`KeepAlive=true`、`ThrottleInterval=10`）。这套配置下 `kill` 不安全：进程退出后 10 秒内会被重新拉起，维护命令正好可能落进那个窗口，再手动起一个还会撞端口。起停统一走 `bun run service`：
 
 ```sh
 bun run service status     # 只读：作业、pid、代码是否落后、端口、游标与积压
@@ -32,10 +32,10 @@ bun run service restart    # kickstart -k，等到新 pid 可用
 
 服务条目按 plist 的 `ProgramArguments` 认本检出的 `src/main.ts`，不按 label 猜。在 worktree 里跑时找不到就报 `service_not_managed`，不会操作另一份检出的服务。脚本读 plist 的 `EnvironmentVariables` 决定数据目录，不读调用者的 shell 环境。
 
-plist 的 `ProgramArguments[0]` 指向 `~/.local/libexec/agent-trace-collector`，一份 bun 二进制的硬链接；系统界面按可执行文件名显示进程。链接与源文件共享 inode，不占额外空间。bun 升级换掉源文件后链接仍指向旧版本，升级之后重建：
+plist 的 `ProgramArguments[0]` 指向 `~/.local/libexec/tracery`，一份 bun 二进制的硬链接；系统界面按可执行文件名显示进程。链接与源文件共享 inode，不占额外空间。bun 升级换掉源文件后链接仍指向旧版本，升级之后重建：
 
 ```sh
-ln -f "$(realpath "$(command -v bun)")" ~/.local/libexec/agent-trace-collector
+ln -f "$(realpath "$(command -v bun)")" ~/.local/libexec/tracery
 ```
 
 为什么不用别的改名方式，见 [launcher 显示名](../.agents/notes/implemented/process/2026-10-27-launchd-launcher-name.md)。
@@ -46,7 +46,7 @@ ln -f "$(realpath "$(command -v bun)")" ~/.local/libexec/agent-trace-collector
 
 ## 后台监控
 
-监控是独立于采集器 launchd 任务的第二个作业，label `local.agent-trace-monitor`，每 300 秒执行一次采样与检查。它只读接口和本地文件，不改库，也不重启采集器。
+监控是独立于采集器 launchd 任务的第二个作业，label `local.tracery-monitor`，每 300 秒执行一次采样与检查。它只读接口和本地文件，不改库，也不重启采集器。
 
 ```sh
 bun scripts/monitor.ts sample     # 取一次 /api/metrics 与 /api/stats，写样本并轮转日志
@@ -57,7 +57,7 @@ bun scripts/monitor.ts inspect    # 巡检：判据结果落盘 checks/<day>.jso
 
 `sample` 的退出码：`0` 采样成功，`1` 采样失败（超时、连不上、HTTP 错误或没有令牌）。失败样本照实写入，不填 0。`check` 的退出码对作业层交代采样证据：最新样本缺失、失败或超出存活阈值时返回 `1`——launchd 作业是 `sample; check`，shell 取末条退出码，sample 的失败由 check 补报。`inspect` 在采样证据新鲜时返回 `0`，否则 `1`。
 
-样本与告警路径（数据目录默认 `~/Library/Application Support/agent-trace-collector`）：
+样本与告警路径（数据目录默认 `~/Library/Application Support/tracery`）：
 
 | 路径 | 内容 | 权限与保留 |
 | --- | --- | --- |
@@ -70,20 +70,20 @@ bun scripts/monitor.ts inspect    # 巡检：判据结果落盘 checks/<day>.jso
 
 采集器的诊断日志仍在 launchd plist 的 `StandardOutPath` / `StandardErrorPath`。live 文件达到 64 MiB 时，监控任务先复制到 `monitor/logs/` 再清空 live 文件；不删除、不改名，因为 launchd 还握着原文件描述符。
 
-安装（先确认采集器 plist 的路径与运行时入口。运行时写绝对路径，本机是 `$HOME/.local/libexec/agent-trace-collector`；不要写 `bun` 命令名，launchd 的 PATH 不含 nvm 目录）：
+安装（先确认采集器 plist 的路径与运行时入口。运行时写绝对路径，本机是 `$HOME/.local/libexec/tracery`；不要写 `bun` 命令名，launchd 的 PATH 不含 nvm 目录）：
 
 ```sh
-cat > ~/Library/LaunchAgents/local.agent-trace-monitor.plist <<'PLIST'
+cat > ~/Library/LaunchAgents/local.tracery-monitor.plist <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>local.agent-trace-monitor</string>
+  <key>Label</key><string>local.tracery-monitor</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>cd /绝对路径/agent-trace-collector &amp;&amp; /绝对路径/agent-trace-collector-runtime scripts/monitor.ts sample; /绝对路径/agent-trace-collector-runtime scripts/monitor.ts check</string>
+    <string>cd /绝对路径/tracery &amp;&amp; /绝对路径/libexec/tracery scripts/monitor.ts sample; /绝对路径/libexec/tracery scripts/monitor.ts check</string>
   </array>
   <key>StartInterval</key><integer>300</integer>
   <key>RunAtLoad</key><true/>
@@ -93,7 +93,7 @@ cat > ~/Library/LaunchAgents/local.agent-trace-monitor.plist <<'PLIST'
 </plist>
 PLIST
 mkdir -p "/绝对数据目录/monitor"
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.agent-trace-monitor.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.tracery-monitor.plist
 ```
 
 `sample` 失败不影响随后的 `check` 执行（命令用 `;` 连接），失败本身会成为一条样本并参与 `service_unreadable` 判定。
@@ -101,8 +101,8 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.agent-trace-monitor.pl
 卸载：
 
 ```sh
-launchctl bootout gui/$UID/local.agent-trace-monitor
-rm ~/Library/LaunchAgents/local.agent-trace-monitor.plist
+launchctl bootout gui/$UID/local.tracery-monitor
+rm ~/Library/LaunchAgents/local.tracery-monitor.plist
 ```
 
 `bootout` 只停监控作业，采集器不受影响。`monitor/` 下的历史数据不会自动删除，需要清空时手动处理。手工验证时先跑 `sample` 再跑 `check`；`check` 依赖最新样本，单独跑不会凭空产生告警。
@@ -464,7 +464,7 @@ AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按
 }
 ```
 
-4. 生成 launchd plist（`~/Library/LaunchAgents`，label `local.agent-trace-collector`），设 `WorkingDirectory`、`ProgramArguments`、`KeepAlive` 与受限日志路径，先 `plutil -lint`。
+4. 生成 launchd plist（`~/Library/LaunchAgents`，label `local.tracery`），设 `WorkingDirectory`、`ProgramArguments`、`KeepAlive` 与受限日志路径，先 `plutil -lint`。
 5. 启动 collector，确认健康接口带 Host 保护、`/api/stats` 可读。
 6. 按 magpie 官方入口 `magpie plugin add <本地 hook 路径>` 添加，核对生成的配置只多了这一条。
 7. **保持 AVA 继续运行**，用自然发生的流量观察至少 24 小时。观察窗口必须覆盖一次 collector 重启和一个带大请求的会话；达不到就延长，不人为发大模型请求补样本。
@@ -538,7 +538,7 @@ curl -s --noproxy '*' -X POST http://127.0.0.1:8320/v1/traces \
 未登记 `service.name` 的导出不建行：span 全量落原始层，并按服务与日聚合记一行 `service_not_registered` issue（健康接口的 issues 列表可见）——新 harness 把 exporter 指过来这件事在列表上看得见。查有哪些服务敲过门、各落了多少 span：
 
 ```sh
-sqlite3 "$HOME/Library/Application Support/agent-trace-collector/trace.db" \
+sqlite3 "$HOME/Library/Application Support/tracery/trace.db" \
   "SELECT service, COUNT(*) AS spans, MAX(received_at) AS last_seen FROM raw_otlp_span GROUP BY service ORDER BY service"
 ```
 

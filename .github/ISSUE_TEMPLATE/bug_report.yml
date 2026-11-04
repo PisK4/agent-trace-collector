@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Do not paste real request bodies, tokens or account names.** The collector stores your actual prompts, code and model replies; reproduce with synthetic input instead. Security issues go through [SECURITY.md](https://github.com/PisK4/agent-trace-collector/blob/master/SECURITY.md), not this form.
+        **Do not paste real request bodies, tokens or account names.** The collector stores your actual prompts, code and model replies; reproduce with synthetic input instead. Security issues go through [SECURITY.md](https://github.com/PisK4/tracery/blob/master/SECURITY.md), not this form.
 
   - type: textarea
     id: what-happened

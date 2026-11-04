@@ -1,6 +1,6 @@
 # Tracery
 
-[![CI](https://github.com/PisK4/agent-trace-collector/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/PisK4/agent-trace-collector/actions/workflows/ci.yml)
+[![CI](https://github.com/PisK4/tracery/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/PisK4/tracery/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Runtime: Bun](https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.4-black)](https://bun.sh)
 [![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
@@ -76,7 +76,7 @@ bun prototypes/synthetic-server.ts
 bun run start        # 采集器，127.0.0.1:8320
 ```
 
-打开 `http://127.0.0.1:8320`。首次启动在数据目录生成 `read.token`、`hook.token`、`otlp.token` 与 `redaction.salt`，权限 0600，目录 0700。默认数据目录在 macOS 上是 `~/Library/Application Support/agent-trace-collector`，其他平台是 `${XDG_DATA_HOME:-~/.local/share}/agent-trace-collector`。支持 macOS 与 Linux；不支持 Windows——采集器依赖的文件权限位在 Windows 上不成立。
+打开 `http://127.0.0.1:8320`。首次启动在数据目录生成 `read.token`、`hook.token`、`otlp.token` 与 `redaction.salt`，权限 0600，目录 0700。默认数据目录在 macOS 上是 `~/Library/Application Support/tracery`，其他平台是 `${XDG_DATA_HOME:-~/.local/share}/tracery`。支持 macOS 与 Linux；不支持 Windows——采集器依赖的文件权限位在 Windows 上不成立。
 
 可覆盖的项：`ATC_DATA_DIR`、`ATC_PORT`、`ATC_LEDGER_PATH`、`ATC_ROUTING_DIR`、`ATC_MAGPIE_URL`、`ATC_BODY_BUDGET`、`ATC_DISK_LIMIT`。监听地址写死回环，不接受配置成通配地址。
 
@@ -125,7 +125,7 @@ Tracery 存的是真实请求正文。这是它的用途，也值得直接说清
 
 | | |
 | --- | --- |
-| 数据目录 | macOS 为 `~/Library/Application Support/agent-trace-collector`，其他平台为 `${XDG_DATA_HOME:-~/.local/share}/agent-trace-collector`（可用 `ATC_DATA_DIR` 覆盖） |
+| 数据目录 | macOS 为 `~/Library/Application Support/tracery`，其他平台为 `${XDG_DATA_HOME:-~/.local/share}/tracery`（可用 `ATC_DATA_DIR` 覆盖） |
 | 内容 | `trace.db` 与 WAL、四个令牌与盐文件、日志 |
 | 权限 | 目录 0700，文件 0600 |
 | 网络 | 只监听 `127.0.0.1`，写死；不接受通配地址 |

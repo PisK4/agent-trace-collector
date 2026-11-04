@@ -7,11 +7,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PisK4/agent-trace-collector.git"
+    "url": "git+https://github.com/PisK4/tracery.git"
   },
-  "homepage": "https://github.com/PisK4/agent-trace-collector#readme",
+  "homepage": "https://github.com/PisK4/tracery#readme",
   "bugs": {
-    "url": "https://github.com/PisK4/agent-trace-collector/issues"
+    "url": "https://github.com/PisK4/tracery/issues"
   },
   "engines": {
     "bun": ">=1.4.0"

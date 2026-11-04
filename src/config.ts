@@ -108,7 +108,7 @@ export function defaultDataDir(
   platform: string = process.platform,
   home: string = homedir(),
 ): string {
-  const name = 'agent-trace-collector';
+  const name = 'tracery';
   if (platform === 'darwin') return join(home, 'Library', 'Application Support', name);
   return join(env.XDG_DATA_HOME?.trim() || join(home, '.local', 'share'), name);
 }

@@ -1,4 +1,4 @@
-# AGENTS.md — agent-trace-collector
+# AGENTS.md — Tracery
 
 本机 magpie 请求记录器：账本、路由与 hook 三路证据收敛进同一个 SQLite 库，查询走独立只读连接，页面按会话阅读正文。改核心目录前先读[架构设计](docs/architecture-design.md)。
 

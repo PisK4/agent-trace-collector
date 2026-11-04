@@ -28,7 +28,7 @@
 
 ## 后台监控落地（生产，2026-11-03）
 
-前提：master `46240dd`（合并 `feat/background-monitoring`）。2026-11-03 14:11 重启采集器，pid 56474，端口 8320；14:12 安装并加载 `local.agent-trace-monitor`，`ProgramArguments` 指向主检出的 `scripts/monitor.ts`，运行时用 `$HOME/.local/libexec/agent-trace-collector`。
+前提：master `46240dd`（合并 `feat/background-monitoring`）。2026-11-03 14:11 重启采集器，pid 56474，端口 8320；14:12 安装并加载 `local.tracery-monitor`，`ProgramArguments` 指向主检出的 `scripts/monitor.ts`，运行时用 `$HOME/.local/libexec/tracery`。
 
 | 检查 | 实测结果 |
 | --- | --- |
@@ -403,7 +403,7 @@ HTTP 读取在本机回环上顺序测 20 轮：
 
 ## 读取架构生产部署与真实流量只读复测（2026-11-02）
 
-前提：[读取架构落地](#读取架构落地合成2026-11-02)的合并态代码由 `bun run service restart` 载入生产：launchd 作业 `local.agent-trace-collector` 重启用时 10 秒，新 pid 3374，`bun run service status` 报告代码未落后，`/api/stats` 172 ms 可用。复测只经 GET 读取生产库，浏览器只读交互；测量与采集、派生后台任务并行，读数不是固定负载下的容量保证。
+前提：[读取架构落地](#读取架构落地合成2026-11-02)的合并态代码由 `bun run service restart` 载入生产：launchd 作业 `local.tracery` 重启用时 10 秒，新 pid 3374，`bun run service status` 报告代码未落后，`/api/stats` 172 ms 可用。复测只经 GET 读取生产库，浏览器只读交互；测量与采集、派生后台任务并行，读数不是固定负载下的容量保证。
 
 ### 服务端背景：既有后台任务的同步长阻塞
 

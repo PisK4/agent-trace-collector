@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        This project is deliberately narrow. Read *Scope and non-goals* in the [README](https://github.com/PisK4/agent-trace-collector#scope-and-non-goals) first — export, alerting, dashboards, multi-machine aggregation and evaluation are out of scope by design, and proposals in those directions will be closed.
+        This project is deliberately narrow. Read *Scope and non-goals* in the [README](https://github.com/PisK4/tracery#scope-and-non-goals) first — export, alerting, dashboards, multi-machine aggregation and evaluation are out of scope by design, and proposals in those directions will be closed.
 
   - type: textarea
     id: problem
