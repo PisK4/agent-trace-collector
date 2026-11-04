@@ -25,9 +25,9 @@ Tracery 留下原始请求：把每笔调用记成一笔请求——组装后的
 - **定位问题。** 失败、截断与重试发生在哪一笔请求，前一笔和后一笔差在哪几条消息。
 - **横向对照。** 不同 harness 的请求放进同一套读数、同一种轨迹结构与同一个会话列表里比较。
 
-## 从上游捕获：两条进路
+## 从上游捕获：三条进路
 
-两条进路可以单独开，也可以同时开，写进同一个 SQLite 库。
+三条进路可以单独开，也可以同时开，写进同一个 SQLite 库。droid 转录在默认位置时自动扫描。
 
 ### 进路一 · magpie 网关：三路证据，正文完整
 
@@ -53,7 +53,13 @@ export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $ATC_TOKEN"
 - **OMP**：span 落成请求行，正文一栏是结构化摘要（页面标「OTLP 摘要」）；它的 OTLP 不带逐笔正文通路。
 - **Codex CLI**：不读环境变量，在 `~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 指向本机端点，`protocol` 写 `binary`；turn span 落成请求行，有会话、模型与用量读数，不带逐笔正文。
 
-同一会话同时开 magpie 与 OTLP 时，时间线里每笔调用会出现两行，一行 magpie 一行 OTLP，行上来源可区分；不做自动合并。
+同一会话同时开 magpie 与 OTLP 时，账本晚到会按统一 owner 规则认领 OTLP 已建的行；账本先到、OTLP 后到时仍保留两行，行上来源可区分。droid 与账本行同样双向认领。
+
+### 进路三 · droid 会话文件：按转录重建
+
+droid（Factory）既不经过 magpie，也不导 OTLP。采集器默认每 60 秒扫一次 `~/.factory/sessions`（可用 `FACTORY_HOME_OVERRIDE` 指向别的 Factory 主目录），把每份 `.jsonl` 转录按 assistant 消息拆成逐笔请求。请求体由截至该轮的消息重建，回复取该行内容；system prompt 与工具定义不在转录里，页面标「droid 会话文件」。
+
+转录只给会话累计用量，不给逐笔用量：逐笔读数列留空，会话头单列「会话累计」。fork 会话的复制段与子代理归属按转录里的 `forkedAtMessageId` 与 `callingSessionId` 还原。
 
 ## 快速开始
 
@@ -80,7 +86,7 @@ bun run start        # 采集器，127.0.0.1:8320
 
 可覆盖的项：`ATC_DATA_DIR`、`ATC_PORT`、`ATC_LEDGER_PATH`、`ATC_ROUTING_DIR`、`ATC_MAGPIE_URL`、`ATC_BODY_BUDGET`、`ATC_DISK_LIMIT`。监听地址写死回环，不接受配置成通配地址。
 
-之后按上面的进路选：magpie 装 hook，或把 harness 的 OTLP exporter 指到本机。两条也可以同时开。
+之后按上面的进路选：magpie 装 hook，把 harness 的 OTLP exporter 指到本机，或让采集器扫 droid 转录。三条也可以同时开。
 
 ## 一条 trace 长什么样
 
@@ -129,17 +135,17 @@ Tracery 存的是真实请求正文。这是它的用途，也值得直接说清
 | 内容 | `trace.db` 与 WAL、四个令牌与盐文件、日志 |
 | 权限 | 目录 0700，文件 0600 |
 | 网络 | 只监听 `127.0.0.1`，写死；不接受通配地址 |
-| 外发 | 读取 magpie 的本机账本与路由文件，探测 magpie 的本机端口。不上传任何内容 |
+| 外发 | 读取 magpie 的本机账本与路由文件、droid 的本机转录，探测 magpie 的本机端口。不上传任何内容 |
 | 账号字段 | 不出接口 |
 | 回收 | 正文按预算回收：正文 10 GB、总盘 16 GB。正文到 90% 预算时回收最旧的，总盘到 80% 只接元数据，到 95% 停止接收。回收的正文补不回来 |
 
-不扫描这份范围之外的东西：Tracery 不读 Agent 自己的会话文件。OTLP 通道上唯一的文件读取是 `body_ref`——只读事件显式指到的单个文件，不列目录。
+这份范围之外，Tracery 只按定时器读 `~/.factory/sessions` 下的 droid 转录，不读别的 Agent 会话数据。OTLP 通道上唯一的文件读取是 `body_ref`——只读事件显式指到的单个文件，不列目录。
 
 测试只用合成数据。真实请求正文、账号、令牌与用户配置不进 fixture、日志或提交。
 
 ## 边界与非目标
 
-- **只记录观察到的东西。** 不经过网关也不导 OTLP 的请求看不见。请求统计以已保存的观测范围为限，缺正文单独标明，不能把 hook 覆盖率当作总请求量。
+- **只记录观察到的东西。** 不经过 magpie、不导 OTLP、也不在 droid 转录里的请求看不见。请求统计以已保存的观测范围为限，缺正文单独标明，不能把 hook 覆盖率当作总请求量。
 - **不做代理。** 不转发、不改写、不拦截任何 LLM 流量。
 - **不做跨 harness 的通用摄入协议。** 唯一的通用入口是 OTLP 的 `/v1/traces` 与 `/v1/logs`；其余通用 trace 协议不做。
 - **不做导出、告警、指标看板与多机聚合；不做服务端全文检索。** 页面上的搜索只按会话标题与客户端标签过滤已加载列表。

@@ -732,6 +732,25 @@ test('会话 flags 按确定状态聚合且顺序固定', () => {
   }
 });
 
+test('会话文件来源只期望 session 证据位与可读正文，不因缺回调标缺正文', () => {
+  const f = fixture();
+  try {
+    const readyKey = JSON.stringify(['session', 'droid-ready']);
+    const pendingKey = JSON.stringify(['session', 'droid-pending']);
+    f.store.write(db => {
+      const insert = db.prepare(`INSERT INTO request(req_id,conv_key,conv_source,actor,agent,actor_state,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,title,title_source)
+        VALUES (?,?,'droid-session','actor-a','droid','known',?,'2026-11-04','session',?,1,16,1,1,'t','model_time')`);
+      insert.run(41, readyKey, 1000, 'available');
+      insert.run(42, pendingKey, 2000, 'pending');
+    });
+    const items = listSessions(f.store, 10, null).items;
+    expect(items.find(row => row.conv_key === readyKey)?.flags).toEqual([]);
+    expect(items.find(row => row.conv_key === pendingKey)?.flags).toEqual(['missing_body']);
+  } finally {
+    f.close();
+  }
+});
+
 test('全员 exclude 的会话标 bypass，混入一笔参与链就不标', () => {
   const f = fixture();
   try {

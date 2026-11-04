@@ -17,7 +17,11 @@ import { SOURCE_PROJECTION_VERSION, projectRequestTx, projectionSignature, readP
 import { markOwnershipChangeTx, markRequestInputTx, requestGroupTx } from './derive/state';
 import type { RequestProjection } from './sources/projection';
 import { closeSourceGapsTx, markStaleGapsTx, recordPausedBatchTx } from './retention';
-import { HAVE_LEDGER, HAVE_ROUTE, insertEvidenceTx, ledgerConv, routeConv, sessionRef } from './evidence';
+import {
+  HAVE_LEDGER, HAVE_ROUTE, MATCH_ABSENT, MATCH_AMBIGUOUS, insertEvidenceTx,
+  ledgerConv, routeConv, sessionRef,
+} from './evidence';
+import { findRequestOwnerTx } from './owner';
 
 /** 一次来源摄入的计数。账本与路由共用同一组字段，便于调用方统一记录。 */
 export type SourceIngestResult = {
@@ -192,7 +196,7 @@ function ingestRouteFileTx(
   };
 }
 
-function recordIssue(
+export function recordIssue(
   db: Database,
   sourceKind: string,
   refKey: string,
@@ -214,7 +218,7 @@ function recordIssue(
  * 防止并发或迟到的读把游标拉回去；代际或重写计数变了说明已经是另一份内容，
  * 旧偏移不限制新游标。封口 gz 的代际就是整份指纹，换代即重读。
  */
-function upsertSourceCursorTx(db: Database, cursor: SourceCursor, now: number): void {
+export function upsertSourceCursorTx(db: Database, cursor: SourceCursor, now: number): void {
   db.run(
     `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,seen_size,head_len,head_hash,fingerprint,last_ok_ms,rewrite_epoch,observed_off)
      VALUES (?,?,?,?,?,?,?,?,?,?,?)
@@ -491,12 +495,32 @@ function mergeLedgerRow(
     ).get(fields.routeId);
     if (existing != null) reqId = existing.req_id;
   }
+  // route_id 未命中时再按统一 owner 规则找：账本迟到也能认领 OTLP 或 droid 已建的行。
+  const owner = reqId === null && !rejected
+    ? findRequestOwnerTx(db, {
+      responseIdNorm: fields.responseIdNorm,
+      turnRef: null,
+      convKey: ledgerConv(fields.session, refKey).key,
+      agent: fields.agent,
+      startedMs: fields.tMs,
+      model: fields.requested ?? fields.model ?? fields.served,
+      excludeSourceKind: 'ledger',
+    })
+    : null;
+  if (owner?.reqId != null) reqId = owner.reqId;
   if (reqId === null) {
     reqId = insertRequest(db, fields, refKey, now);
+  } else if (fields.routeId !== null) {
+    // 迟到认领的行也要挂上 route_id，路由文件之后到达才能落到同一行。
+    db.run('UPDATE request SET route_id=COALESCE(route_id,?), magpie_version=COALESCE(magpie_version,?) WHERE req_id=?',
+      [fields.routeId, fields.magpieVersion, reqId]);
   }
+  const matchRule = owner === null ? null
+    : owner.outcome === 'matched' ? owner.rule
+      : owner.outcome === 'ambiguous' ? MATCH_AMBIGUOUS : MATCH_ABSENT;
   // 基线必须在本次证据写入之前取：写完再读只会读到已含新证据的结果。
   const baseline = projectionBaselineTx(db, reqId);
-  insertEvidenceTx(db, reqId, 'ledger', refKey, 'merged', null, now);
+  insertEvidenceTx(db, reqId, 'ledger', refKey, 'merged', matchRule, now);
   if (!rejected && fields.routeId !== null) linkRouteIfPresent(db, reqId, fields.routeId, now, baseline);
   // 行级事实只由投影写；投影幂等，route 挂载前后各调一次不改变结果。
   const projection = projectLedgerRequestTx(db, reqId, now, baseline);

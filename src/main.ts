@@ -14,6 +14,8 @@ import {
 } from './reconcile';
 import { syncCosts } from './sources/magpie/costs';
 import { probeMagpie, saveProbe } from './sources/magpie/probe';
+import { ingestDroidBatch } from './sources/droid/ingest';
+import { droidSessionsRoot } from './sources/droid/discover';
 import { createHandler, loadReadToken } from './http';
 import { createLiveActivity } from './activity';
 import { markHookAbsent, reconcilePending } from './hook';
@@ -32,6 +34,7 @@ import { maintenanceLockPresent } from './maintenance/lock';
 
 const LEDGER_INTERVAL_MS = 5000;
 const ROUTE_INTERVAL_MS = 2000;
+const DROID_INTERVAL_MS = 60_000;
 const COST_INTERVAL_MS = 60_000;
 const PROBE_INTERVAL_MS = 60_000;
 const DERIVE_INTERVAL_MS = 2000;
@@ -226,6 +229,12 @@ export async function startCollector(
     }
   });
 
+  // droid 转录是追加文件：每轮按剩余字节取一批，未读完的下一轮继续。
+  const droidRoot = droidSessionsRoot();
+  const droidTick = guard('droid', async () => {
+    await ingestDroidBatch(store, droidRoot, salt, Date.now());
+  });
+
   const costTick = guard('cost', async () => {
     const today = new Date();
     const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
@@ -299,6 +308,7 @@ export async function startCollector(
 
   timers.push(setInterval(ledgerTick, intervalOf(config, 'ledger', LEDGER_INTERVAL_MS)));
   timers.push(setInterval(routeTick, intervalOf(config, 'route', ROUTE_INTERVAL_MS)));
+  timers.push(setInterval(droidTick, intervalOf(config, 'droid', DROID_INTERVAL_MS)));
   timers.push(setInterval(costTick, intervalOf(config, 'cost', COST_INTERVAL_MS)));
   timers.push(setInterval(probeTick, intervalOf(config, 'probe', PROBE_INTERVAL_MS)));
   timers.push(setInterval(pendingTick, intervalOf(config, 'pending', LEDGER_INTERVAL_MS)));

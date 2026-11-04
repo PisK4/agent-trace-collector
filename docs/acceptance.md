@@ -6,6 +6,39 @@
 
 记录里的数字、端口、pid 与耗时都来自作者机器，用于说明当时怎么判断，不是可复现的基准。
 
+## Droid 会话文件摄入（合成 + 本机转录，2026-11-04）
+
+前提：隔离 worktree `.codex-worktrees/atc-droid-session`，分支 `feat/droid-session-ingestion-rebased`，基于 master `dfd9b9c`。原分支从旧里程碑分支检出，rebase 会重放数百个已合并提交，改用 cherry-pick 移到当前 master。只改代码、测试与文档；没有合并、push，没有重启生产采集器，也没有往生产库写 droid 行。全量扫描在临时目录建空库，读本机 `~/.factory/sessions` 下的 216 个转录，扫描结束后删除临时库；没有保留正文、标题或会话键。
+
+### 合成数据
+
+| 检查 | 结果 |
+| --- | --- |
+| 解析 | `session_start`、`message`、`todo_state`、`agent_turn_outcome`、`compaction_state` 逐行解析；两种 `openaiMessageId` 拼写与缺 `modelId` 的 assistant 行都不报错 |
+| 摄入守恒 | 普通会话每条 assistant 消息一行；fork 复制段只进消息窗口，零建行；子代理的 `actor` 与 `subagent` 取自身，`parent_agent` 取调用者 |
+| 坏行与截断 | 坏 JSON 停在行起点并记 issue，修复后从同一偏移继续；无换行的末行等下一批补全，不提前建行 |
+| 正文与脱敏 | 重建消息数与行前消息数一致，`protocol='droid-session'`，回复取 assistant `content`；canary 不进 `raw_droid_event` 与正文块 |
+| 用量 | settings 缺失或 assistant 缺 `modelId` 时不补值；覆盖写按内容哈希判变化；转录停止增长时 settings 仍刷新 |
+| 去重 | 账本先到、droid 先到都能认领同一行；无 response id 时按同会话 ±60 秒同模型合并，模型不同不合并；多候选记 `match_ambiguous`；`via='rejected'` 行不被认领 |
+| 闸门 | 全量 `bun test` 1200 pass / 0 fail（97 个文件）；`tsc --noEmit` 退出 0；`verify:notes` 通过（201 篇，批次带 note） |
+
+### 本机全量转录（临时库）
+
+| 检查 | 实测 |
+| --- | --- |
+| 范围 | 216 个 `.jsonl`，111.7 MiB；49 批读完，总耗时 30.5 s，单批最长 3.6 s（达到 8 MiB 上限的批次） |
+| 建行 | 9,582 行，与解析器调用数相等；13,518 条 assistant 消息中 3,936 条属于 fork 复制段，按设计不建行，其余全部建行 |
+| 正文 | 9,582 行全部可读，`protocol` 均为 `droid-session`，可读率 100% |
+| 错误 | `ingest_issue` 0 条；重复 0、坏行阻塞 0；49 批后全部游标 `committed_off == seen_size` |
+| 会话 | 174 个会话有请求行（109 个主会话、65 个子代理）；140 个主会话写入 `session_usage`（含 31 个没有请求行的会话），76 个子代理转录不另计 |
+| 用量 | 会话累计 input 55,204,994、output 2,983,021 tokens；`factoryCredits` 等字段按 settings 原值写入 |
+| 体积 | 临时库 336 MB、WAL 3 MB；其中 `raw_droid_event` 的脱敏原文合计 103.1 MiB，接近源文件总量 |
+| 资源 | 进程峰值 RSS 78 MB；读取总量 253.6 MiB，高于源文件 111.7 MiB，差额来自读取器 1 MiB 分块预读与下一批从 `committed_off` 重读，不是 droid 新增的行为 |
+
+未覆盖：生产库写入与页面呈现、重启后首轮耗时与长期 RSS、真实流量下的跨来源重复率。本机 droid 不走 magpie，没有可对账的账本行；`openaiMessageId` 与 magpie `response_id` 的对应关系仍无真实样本。
+
+已知缺口：`raw_droid_event` 没有回收路径，而每批解析要从它重放会话与消息窗口，体积随转录和文件改写代际线性增长；回收前必须先有解析状态检查点。坏行会让该文件后续调用全部停住，直到原文修复，这是为正文完整性做的取舍。
+
 ## 后台监控落地（合成，2026-11-03）
 
 前提：隔离 worktree `<worktrees>/atc-background-monitoring`，分支 `feat/background-monitoring`，基于 master `4a4108f`。只改代码、测试与文档；没有提交、合并、push，没有重启生产采集器，没有安装或触发新的 launchd 作业。主工作区与其他 worktree 未触碰。

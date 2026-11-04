@@ -1,7 +1,7 @@
 /** 会话列表：聚合窗口、标题选取与状态标志。 */
 
 import { derivedColSql, groupCurrentSql } from '../derive/state';
-import { HAVE_BODY, HAVE_LEDGER, HAVE_OTLP, HAVE_ROUTE } from '../evidence';
+import { HAVE_BODY, HAVE_LEDGER, HAVE_OTLP, HAVE_ROUTE, HAVE_SESSION } from '../evidence';
 import type { Store } from '../store';
 import { checkLimit, decodeCursor, encodeCursor, type Page } from './cursor';
 
@@ -48,11 +48,13 @@ const SESSION_FLAG_COLUMNS = `
   MAX(CASE WHEN status IS NOT NULL AND status >= 400 THEN 1 ELSE 0 END) AS has_failed,
   MAX(CASE WHEN actor_state = 'unknown' OR prev_relation = 'unknown' THEN 1 ELSE 0 END) AS has_unknown,
   -- 缺正文按期望位图算：through 期望回调+账本+路由三路、rejected 只期望账本、
-  -- otlp 只期望第 4 位——OTLP 行不因缺 magpie 证据被标成采集失败；其余通道
-  -- （hook 落位、账本未关联）沿用第 1 位与可读状态的现行语义。
+  -- otlp 只期望第 4 位——OTLP 行不因缺 magpie 证据被标成采集失败；session
+  -- 行只期望第 5 位并要求正文可读——会话文件本来就没有回调与账本；
+  -- 其余通道（hook 落位、账本未关联）沿用第 1 位与可读状态的现行语义。
   MAX(CASE WHEN (
     CASE
       WHEN via = 'otlp' THEN (have & ${HAVE_OTLP}) = 0
+      WHEN via = 'session' THEN (have & ${HAVE_SESSION}) = 0 OR body_state <> 'available'
       WHEN via = 'rejected' THEN (have & ${HAVE_LEDGER}) = 0
       WHEN via = 'through' THEN (have & ${HAVE_BODY | HAVE_LEDGER | HAVE_ROUTE}) <> ${HAVE_BODY | HAVE_LEDGER | HAVE_ROUTE}
         OR body_state <> 'available'

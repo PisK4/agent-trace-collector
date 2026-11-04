@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadReadToken } from '../src/http';
 import { DEFAULT_DERIVE_BUDGET, loadBoundSaltTx, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
@@ -194,6 +195,47 @@ test('启动时逐项运行各任务，回收不受其它任务占锁影响', as
       await collector.stop();
     }
   } finally {
+    f.close();
+  }
+});
+
+test('droid 定时任务接入：按注入间隔读取合成转录', async () => {
+  const f = fixture();
+  const factory = `${f.dir}/factory`;
+  const sessions = `${factory}/.factory/sessions`;
+  mkdirSync(sessions, { recursive: true });
+  const t0 = Date.parse('2026-08-24T10:00:00.000Z');
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  writeFileSync(join(sessions, 's1.jsonl'), [
+    JSON.stringify({ type: 'session_start', id: 's1', cwd: '/work/synth', version: 2 }),
+    JSON.stringify({ type: 'message', id: 'm-u1', timestamp: iso(t0),
+      message: { role: 'user', content: [{ type: 'text', text: 'prompt' }] } }),
+    JSON.stringify({ type: 'message', id: 'm-a1', timestamp: iso(t0 + 1_000),
+      message: { role: 'assistant', content: [{ type: 'text', text: 'reply' }], modelId: 'synth-model' } }),
+  ].join('\n') + '\n');
+  const previous = process.env.FACTORY_HOME_OVERRIDE;
+  process.env.FACTORY_HOME_OVERRIDE = factory;
+  let collector: Awaited<ReturnType<typeof startCollector>> | undefined;
+  try {
+    collector = await startCollector({
+      ...loadConfig({}),
+      port: 0,
+      dataDir: f.dir,
+      ledgerPath: `${f.dir}/missing.jsonl`,
+      routingDir: `${f.dir}/missing-routing`,
+      intervals: { droid: 5, ledger: 60_000, route: 60_000 },
+    });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((f.store.read.query('SELECT count(*) AS n FROM request').get() as { n: number }).n > 0) break;
+      await Bun.sleep(5);
+    }
+    expect(f.store.read.query('SELECT via, agent, model_requested FROM request').get()).toEqual({
+      via: 'session', agent: 'droid', model_requested: 'synth-model',
+    });
+  } finally {
+    await collector?.stop();
+    if (previous === undefined) delete process.env.FACTORY_HOME_OVERRIDE;
+    else process.env.FACTORY_HOME_OVERRIDE = previous;
     f.close();
   }
 });

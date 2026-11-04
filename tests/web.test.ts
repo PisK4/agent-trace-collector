@@ -837,6 +837,27 @@ test('会话头汇总状态：资源回退可见标明已加载窗口，读取�
   expect(empty).not.toContain('cue-board');
 });
 
+test('会话头：会话文件累计用量单独成行并标「会话累计」', () => {
+  const html = sessionHead({
+    ...headBase, rows: [],
+    summary: summaryFixture({
+      totals: { in_tok: null, out_tok: null, cost: null, cost_absent: 0, cache_hit: null },
+      session_usage: {
+        agent: 'droid', session: 'synth-session', model: 'synth-model',
+        input_tokens: 1200, output_tokens: 340, cache_creation_tokens: 50,
+        cache_read_tokens: 900, thinking_tokens: 40, factory_credits: 1.25, observed_at: 1,
+      },
+    }) as never,
+    summaryStatus: 'ready',
+  });
+  expect(html).toContain('<i>会话累计</i>');
+  expect(html).toContain('<b>1.2k</b>');
+  expect(html).toContain('<b>340</b>');
+  expect(html).toContain('inputTokens 不含缓存读');
+  // 有会话累计时不再回退成已加载窗口口径。
+  expect(html).not.toContain('已加载窗口');
+});
+
 test('会话头双列：左右分组、副标题删除与身份行', () => {
   const html = sessionHead({
     ...headBase, rows: [requestRow({ req_id: 2, in_tok: 10, out_tok: 5, ms: 2000, ttft_ms: 500 })] as never,

@@ -703,6 +703,7 @@ if (typeof document !== 'undefined') {
   /** @param {RequestRow} r */
   function viaText(r) {
     if (r.via === 'otlp') return t('OTLP 通道');
+    if (r.via === 'session') return t('droid 会话文件');
     if (!(r.have & HAVE_LEDGER)) return t('仅回调，未关联账本');
     if (!(r.have & HAVE_BODY)) return t('仅账本，没有回调');
     return t('账本 + 回调');
@@ -1130,10 +1131,13 @@ if (typeof document !== 'undefined') {
     // 首行身份（req id · 时间 · Agent · 模型）整行删除：时间在会话行、Agent 在主栏、
     // 模型在「用量与上下文」；标题成为第一行，状态点并入标题右端。
     // 无标题请求（model_time 自动标）不撑空行：状态点留在原身份行高度的单行里。
+    const sourceTag = r.via === 'session'
+      ? `<span class="muted" title="${esc(t('请求体由 droid 会话文件重建，不含 system prompt 与工具定义'))}">${t('droid 会话文件')}</span>`
+      : '';
     const title = contentTitle(r);
     const firstLine = title === ''
-      ? `<div class="rail-id"><span class="grow"></span><span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`
-      : `<div class="rail-title-row">${title}<span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`;
+      ? `<div class="rail-id"><span class="grow"></span>${sourceTag}<span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`
+      : `<div class="rail-title-row">${title}${sourceTag}<span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`;
     return `${firstLine}
       <div class="rail-tabs" role="tablist">
         <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">${t('读数')}</button>
@@ -1149,10 +1153,13 @@ if (typeof document !== 'undefined') {
    * @param {RequestRow} r
    */
   function completenessSection(r) {
-    const rows = [
-      !(r.have & HAVE_BODY) ? [t('正文回调'), t('未收到'), 'var(--bad)'] : '',
-      !(r.have & HAVE_LEDGER) ? [t('用量账本'), t('待关联'), 'var(--warn)'] : '',
-    ].filter(Boolean);
+    // 会话文件来源没有回调与账本，两者都缺是常态；只有正文读不出来才算缺口。
+    const rows = (r.via === 'session'
+      ? [r.body_state !== 'available' ? [t('会话文件正文'), t('不可读'), 'var(--bad)'] : '']
+      : [
+        !(r.have & HAVE_BODY) ? [t('正文回调'), t('未收到'), 'var(--bad)'] : '',
+        !(r.have & HAVE_LEDGER) ? [t('用量账本'), t('待关联'), 'var(--warn)'] : '',
+      ]).filter(Boolean);
     if (rows.length === 0) return '';
     return `<section class="rail-section">
       <h3 title="${t('路由历史未关联是当前来源的常态，不在此提示；需要路由详情看「路由」页签。')}">${t('身份完整性')}</h3>

@@ -275,6 +275,37 @@ CREATE TABLE otlp_body_ref (
 ) WITHOUT ROWID;
 CREATE INDEX i_otlp_body_ref_pending ON otlp_body_ref(trace_id) WHERE state='pending_span';
 
+-- Droid 转录原始层：物理身份 (file_generation, byte_offset)，存脱敏后的整行原文；
+-- 解析状态从这些行按偏移重放，坏行不推进游标。
+CREATE TABLE raw_droid_event (
+  file_generation TEXT NOT NULL,
+  byte_offset      INTEGER NOT NULL,
+  session_id       TEXT,
+  line_type        TEXT NOT NULL,
+  event_at_ms      INTEGER,
+  payload_json     TEXT NOT NULL,
+  privacy_version  INTEGER NOT NULL,
+  PRIMARY KEY (file_generation, byte_offset)
+) WITHOUT ROWID;
+CREATE INDEX i_raw_droid_event_session ON raw_droid_event(session_id);
+
+-- 会话级累计用量：droid 只给总量，不拆到轮；主键 (agent, session)。
+CREATE TABLE session_usage (
+  agent                 TEXT NOT NULL,
+  session               TEXT NOT NULL,
+  model                 TEXT,
+  input_tokens          INTEGER,
+  output_tokens         INTEGER,
+  cache_creation_tokens INTEGER,
+  cache_read_tokens     INTEGER,
+  thinking_tokens       INTEGER,
+  factory_credits       REAL,
+  source_path           TEXT NOT NULL,
+  source_hash           TEXT NOT NULL,
+  observed_at           INTEGER NOT NULL,
+  PRIMARY KEY (agent, session)
+) WITHOUT ROWID;
+
 CREATE TABLE block (
   id       INTEGER PRIMARY KEY,
   hash     BLOB NOT NULL UNIQUE,

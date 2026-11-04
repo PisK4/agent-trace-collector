@@ -245,20 +245,36 @@ function cueRow(desc, data, extraClass = '') {
 function resourceGroup(s, status, rows) {
   if (s !== null) {
     const totals = s.totals;
-    if (totals.in_tok === null && totals.out_tok === null && totals.cost === null) return null;
-    const desc = [
+    const usage = s.session_usage ?? null;
+    const totalsEmpty = totals.in_tok === null && totals.out_tok === null && totals.cost === null;
+    if (totalsEmpty && usage === null) return null;
+    const descParts = totalsEmpty ? [] : [
       t('整个会话的读数，含旁路与子代理'),
       totals.cost_absent !== null && totals.cost_absent > 0 ? t('{n} 笔未取得费用', { n: totals.cost_absent }) : null,
       t('缓存命中＝Σcache_read ÷ Σ(in_tok + cache_read)，只计两个读数都在的请求'),
       totals.cache_hit === null ? t('本次没有可用分母，不给数') : null,
-    ].filter(Boolean).join(noteJoin());
-    const data = `<span class="cue-line">${[
-      totals.in_tok !== null ? t('<i>提示</i> <b>{v}</b>', { v: kk(totals.in_tok) }) : '',
-      totals.out_tok !== null ? t('<i>输出</i> <b>{v}</b>', { v: kk(totals.out_tok) }) : '',
-      totals.cost !== null ? t('<i>费用</i> <b>{v}</b>', { v: `$${totals.cost.toFixed(4)}` }) : '',
-      totals.cache_hit !== null ? t('<i>缓存</i> <b>{v}%</b>', { v: Math.round(totals.cache_hit * 100) }) : '',
-    ].filter(Boolean).join(' · ')}</span>`;
-    return { desc, data };
+    ];
+    if (usage !== null) descParts.push(t('会话文件的累计用量：inputTokens 不含缓存读，outputTokens 含思考'));
+    const desc = descParts.filter(Boolean).join(noteJoin());
+    const lines = [];
+    if (!totalsEmpty) {
+      lines.push(`<span class="cue-line">${[
+        totals.in_tok !== null ? t('<i>提示</i> <b>{v}</b>', { v: kk(totals.in_tok) }) : '',
+        totals.out_tok !== null ? t('<i>输出</i> <b>{v}</b>', { v: kk(totals.out_tok) }) : '',
+        totals.cost !== null ? t('<i>费用</i> <b>{v}</b>', { v: `$${totals.cost.toFixed(4)}` }) : '',
+        totals.cache_hit !== null ? t('<i>缓存</i> <b>{v}%</b>', { v: Math.round(totals.cache_hit * 100) }) : '',
+      ].filter(Boolean).join(' · ')}</span>`);
+    }
+    if (usage !== null) {
+      // 会话级累计与逐笔 totals 分开成行：口径不同，混在一行会被读成同一件事。
+      const parts = [
+        usage.input_tokens !== null ? t('<i>提示</i> <b>{v}</b>', { v: kk(usage.input_tokens) }) : '',
+        usage.output_tokens !== null ? t('<i>输出</i> <b>{v}</b>', { v: kk(usage.output_tokens) }) : '',
+        usage.cache_read_tokens !== null ? t('<i>缓存读</i> <b>{v}</b>', { v: kk(usage.cache_read_tokens) }) : '',
+      ].filter(Boolean).join(' · ');
+      if (parts !== '') lines.push(`<span class="cue-line"><i>${t('会话累计')}</i> ${parts}</span>`);
+    }
+    return { desc, data: lines.join('') };
   }
   const hasUsage = rows.some(r => r.in_tok !== null || r.out_tok !== null);
   if (!hasUsage) return null;
