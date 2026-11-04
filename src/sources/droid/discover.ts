@@ -20,6 +20,8 @@ export type DroidTranscript = {
   path: string;
   dir: string;
   size: number;
+  /** 文件修改时间；共用取件排序用，合成测试可省略。 */
+  mtimeMs?: number;
 };
 
 export type DroidCursor = { generation: string; committedOff: number } | null;
@@ -44,12 +46,15 @@ function filesIn(dir: string, prefix: string): DroidTranscript[] {
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
     const path = join(dir, entry.name);
     let size: number;
+    let mtimeMs: number;
     try {
-      size = statSync(path).size;
+      const stat = statSync(path);
+      size = stat.size;
+      mtimeMs = stat.mtimeMs;
     } catch {
       continue;
     }
-    files.push({ name: `${prefix}${entry.name}`, path, dir, size });
+    files.push({ name: `${prefix}${entry.name}`, path, dir, size, mtimeMs });
   }
   return files;
 }

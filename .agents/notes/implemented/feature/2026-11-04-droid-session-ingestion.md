@@ -41,11 +41,11 @@ droid 完全未接入，不会与现有 magpie 行产生重叠，去重压力最
 
 ### 来源与发现
 
-新增 `src/sources/droid/`，三个文件：`discover.ts` 找文件与游标，`parse.ts` 把转录行解析成调用，`ingest.ts` 落库。当前不做多 Agent 通用注册表；第二个来源接入时再抽公共接口，避免现在为一种格式写适配层。
+新增 `src/sources/droid/`：`discover.ts` 找文件与游标，`parse.ts` 把转录行解析成调用，`settings.ts` 刷新会话累计，`ingest.ts` 只做批次入口。写入路径后来并入五家共用的 `src/sources/session/ingest.ts`，droid 以 `SessionAdapter` 接入，见[droid 会话摄入并入共用写路径](../architecture/2026-11-04-droid-shared-session-ingest.md)。
 
 扫描根目录取 `$FACTORY_HOME_OVERRIDE/.factory/sessions`，否则 `~/.factory/sessions`，与 magpie 的 `FactoryDir` 一致（[droid.go:35](https://github.com/yetone/magpie/blob/3173440ca3be3eb0a855870d92faeadea6785aaa/internal/sessions/droid.go#L35-L43)）。匹配 `*.jsonl` 与 `*/*.jsonl`，忽略 `.settings.json`。
 
-转录是 append-only，复用 `source_cursor`，`source_kind='droid_transcript'`，按文件身份、`committed_off` 与冻结头部基线增量读；规则与账本、路由相同。`.settings.json` 是覆盖写，整份读、按内容哈希判变化，不占游标。取件只选还有剩余字节的转录，所以转录停止增长时文件不会进批次；每批结束再按 `session_usage.source_path` 刷新一次已记录的 settings，覆盖写不会漏。文件消失时保留已摄入行，不删除。
+转录是 append-only，复用 `source_cursor`，`source_kind='droid_transcript'`，按文件身份、`committed_off` 与冻结头部基线增量读；规则与账本、路由相同。`.settings.json` 是覆盖写，整份读、按内容哈希判变化，不占游标。取件只选还有剩余字节的转录，所以转录停止增长时文件不会进批次；每批结束再按 `session_usage.source_path` 刷新一次已记录的 settings，覆盖写不会漏。新会话的 settings 由适配器的 `afterFile` 在同一写事务里刷新。文件消失时保留已摄入行，不删除。
 
 每轮按剩余字节从大到小取文件，单轮上限 64 个文件或 8 MiB，未读完的下一轮继续。新增 `intervalOf(config, 'droid', …)`，默认 60 秒。
 
@@ -63,7 +63,7 @@ fork 处理：`forkedAtMessageId` 之前的行是源会话的复制。它们进�
 
 ### 落库与正文
 
-schema v11 增加两张表。`raw_droid_event` 存脱敏后的整行原文与物理身份 `(file_generation, byte_offset)`，供重放与审计；`session_usage` 存会话级累计用量，主键 `(agent, session)`，字段为 model、四件套、thinkingTokens、factoryCredits、来源文件与观测时间。
+schema v11 增加两张表。原始层存脱敏后的整行原文与物理身份 `(file_generation, byte_offset)`，供重放与审计；v12 起这张表是 `raw_session_event`，droid 行以 `source_kind='droid_transcript'` 区分。`session_usage` 存会话级累计用量，主键 `(agent, session)`，字段为 model、四件套、thinkingTokens、factoryCredits、来源文件与观测时间。
 
 `request_evidence` 用 `source_kind='session_call'`，`ref_key=<session_id>/<message_id>`；`have` 加第 5 位 `HAVE_SESSION=16`，`via='session'`。
 
@@ -124,7 +124,7 @@ droid 的调用现在进了同一个 request 账本：转录按 assistant 消息
 
 还有几条长期代价：
 
-- `raw_droid_event` 保存脱敏原文供每批重放，当前没有回收路径。全量扫描后原文合计 103.1 MiB，临时库 336 MB；体积随转录与改写代际线性增长。回收前要先有解析状态检查点，否则下一批会丢失会话与消息窗口。
+- `raw_session_event` 保存脱敏原文供每批重放，当前没有回收路径。全量扫描后原文合计 103.1 MiB，临时库 336 MB；体积随转录与改写代际线性增长。回收前要先有解析状态检查点，否则下一批会丢失会话与消息窗口。
 - 坏行停在原地会阻塞该文件后续所有调用，直到原文修复；这是为了后续请求体不缺点而做的取舍，issue 与游标位置可查。
 - 转录没有版本契约，`session_start.version` 目前为 2。格式变化时解析器要跟着改，错误行进 `ingest_issue`，不能让坏行推进游标。
 - 首次全量扫描 216 个文件、111.7 MiB，会占用一段后台时间；分批读取把单轮代价压在 8 MiB 内，生产上约一分钟一批。

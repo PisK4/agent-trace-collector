@@ -32,13 +32,14 @@ export type SessionIngestResult = {
   refreshed: number;
   invalid: number;
   blocked: number;
+  sideEffects: number;
   bytes: number;
 };
 
 export function emptySessionIngestResult(): SessionIngestResult {
   return {
     files: 0, calls: 0, merged: 0, duplicates: 0, refreshed: 0,
-    invalid: 0, blocked: 0, bytes: 0,
+    invalid: 0, blocked: 0, sideEffects: 0, bytes: 0,
   };
 }
 
@@ -52,7 +53,7 @@ function sourceFactsJson(existing: string | null, call: SessionCall): string {
   const previous = facts.session;
   facts.session = {
     usageScope: 'session',
-    reasoningEffort: call.reasoning ?? previous?.reasoningEffort ?? null,
+    reasoningEffort: call.reasoningEffort ?? previous?.reasoningEffort ?? null,
     cwd: call.cwd ?? previous?.cwd ?? null,
   };
   return serializeFacts(facts);
@@ -106,7 +107,7 @@ function insertSessionRequestTx(
       call.usage?.input ?? null, call.usage?.output ?? null,
       call.usage?.cacheRead ?? null, call.usage?.cacheWrite ?? null, call.reasoning,
       'pending', 0, HAVE_SESSION, now, now, title, 'model_time', 'absent',
-      'known', adapter.sortSource,
+      adapter.attemptState ?? 'known', adapter.sortSource,
       `${generation}|${String(offset).padStart(20, '0')}`,
       sourceFactsJson(null, call),
     ],
@@ -279,7 +280,8 @@ export async function ingestSessionFile(
     read = await adapter.read(file, cursor);
   } catch {
     // 文件/库在发现与读取之间消失：已摄入行保留，不删、不猜。
-    store.write(db => recordIssue(db, adapter.issueKind, file.name, 'session_source_unreadable', now, null),
+    store.write(db => recordIssue(db, adapter.issueKind, file.name,
+      adapter.unreadableReason ?? 'session_source_unreadable', now, null),
       adapter.agent);
     return { ...result, files: 1 };
   }
@@ -341,6 +343,7 @@ export async function ingestSessionFile(
     };
 
     let committed = read.startOff;
+    let blocked = false;
     for (const line of read.lines) {
       if (line.offset >= firstIssueOffset) break;
       const parsed = adapter.parse(line.text);
@@ -408,6 +411,7 @@ export async function ingestSessionFile(
           line.end - line.offset);
         // 游标停在坏行起点：跳过一条消息会让后续每轮请求体都缺一条。
         committed = line.offset;
+        blocked = true;
         break;
       }
       state = step.state;
@@ -424,6 +428,10 @@ export async function ingestSessionFile(
       for (const call of flushed.calls) {
         acceptCall(call, call.sortOffset ?? committed, false);
       }
+    }
+
+    if (!blocked && adapter.afterFile !== undefined) {
+      result.sideEffects += adapter.afterFile(db, state, file, now);
     }
 
     upsertSourceCursorTx(db, { ...read, committedOff: committed }, now);
@@ -457,8 +465,11 @@ export async function ingestSessionBatch(
   }
   const selected = [...files]
     .filter(file => file.remaining > 0)
-    // 新文件优先：历史回填期间，正在写入的会话先出现。
-    .sort((left, right) => right.mtimeMs - left.mtimeMs || left.name.localeCompare(right.name));
+    // 默认新文件优先：历史回填期间，正在写入的会话先出现。droid 保持按
+    // 剩余字节从大到小，先把积压的大转录推完。
+    .sort(adapter.batch.order === 'remaining'
+      ? (left, right) => right.remaining - left.remaining || left.name.localeCompare(right.name)
+      : (left, right) => right.mtimeMs - left.mtimeMs || left.name.localeCompare(right.name));
   const total = emptySessionIngestResult();
   let bytes = 0;
   for (const file of selected) {
@@ -471,6 +482,7 @@ export async function ingestSessionBatch(
     total.refreshed += result.refreshed;
     total.invalid += result.invalid;
     total.blocked += result.blocked;
+    total.sideEffects += result.sideEffects;
     total.bytes += result.bytes;
     // 预算按实际读到的字节记，不按 remaining 估：大文件首轮只读一个批次，
     // 按整份估会把后续小文件全挤掉。
