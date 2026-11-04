@@ -71,6 +71,8 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/agent-logos.json': { file: 'agent-logos.json', type: 'application/json; charset=utf-8' },
   '/tracery-light.svg': { file: 'tracery-light.svg', type: 'image/svg+xml' },
   '/tracery-dark.svg': { file: 'tracery-dark.svg', type: 'image/svg+xml' },
+  '/favicon.png': { file: 'favicon.png', type: 'image/png' },
+  '/apple-touch-icon.png': { file: 'apple-touch-icon.png', type: 'image/png' },
   '/session-view.js': { file: 'session-view.js', type: 'text/javascript; charset=utf-8' },
   '/layout.js': { file: 'layout.js', type: 'text/javascript; charset=utf-8' },
   '/backend-state.js': { file: 'backend-state.js', type: 'text/javascript; charset=utf-8' },
@@ -242,10 +244,13 @@ function summaryEntriesQuery(url: URL): SummaryEntriesQuery | null {
 async function serveStatic(path: string): Promise<Response> {
   const entry = STATIC_FILES[path];
   if (entry === undefined) return json({ error: 'not_found' }, 404);
-  let body: string;
+  // 二进制资产（favicon、apple-touch-icon）必须按字节读：按 utf8 读会把非法序列
+  // 换成 U+FFFD，PNG 头部直接损坏；文本类型仍走 utf8 以便返回字符串。
+  const binary = !entry.type.startsWith('text/') && !entry.type.startsWith('image/svg+xml') && !entry.type.startsWith('application/json');
+  let body: BodyInit;
   const file = new URL(entry.file, WEB_ROOT);
   try {
-    body = readFileSync(file, 'utf8');
+    body = binary ? new Blob([readFileSync(file)]) : readFileSync(file, 'utf8');
   } catch {
     return json({ error: 'not_found' }, 404);
   }

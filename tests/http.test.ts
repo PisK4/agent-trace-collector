@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, seedPurposeRequest } from './fixtures';
 import { loadConfig } from '../src/config';
@@ -138,6 +138,23 @@ test('页面模块白名单能取到阅读器依赖的脚本', async () => {
       expect(response.headers.get('content-type')).toContain(entry.type.split(';')[0]);
       expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     }
+  } finally {
+    f.close();
+  }
+});
+
+test('二进制静态资产按字节原样返回', async () => {
+  const f = fixture();
+  try {
+    const handler = createHandler(f.store, loadConfig({}), 'synthetic-read-token');
+    // 按 utf8 读会把 PNG 里的非法序列换成 U+FFFD，头部从 8950 4e47 变成 efbfbd50：
+    // favicon 在浏览器里变成坏图，而 SVG 是文本，发现不了这种损坏。
+    const onDisk = readFileSync(join(import.meta.dir, '..', 'web', 'favicon.png'));
+    const response = await handler(new Request('http://127.0.0.1:8320/favicon.png', {
+      headers: { host: '127.0.0.1:8320', origin: 'http://127.0.0.1:8320' },
+    }));
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array(onDisk));
   } finally {
     f.close();
   }

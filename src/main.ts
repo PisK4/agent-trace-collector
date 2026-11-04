@@ -345,7 +345,10 @@ export async function startCollector(
 
 if (import.meta.main) {
   const { loadConfig } = await import('./config');
+  const { startupBanner } = await import('./banner');
   const config = loadConfig();
   const collector = await startCollector(config);
+  // 横幅只上屏，不碰 `collector_listening`：容量脚本按这一行解析端口。
+  process.stdout.write(startupBanner({ ...config, port: collector.port }, process.stdout.isTTY === true));
   process.stdout.write(`collector_listening:${collector.port}\n`);
 }
