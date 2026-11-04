@@ -16,7 +16,7 @@ Status: implemented
 
 命令块只列日常四条加提交前一条；`maintain` 与 `verify-cutover` 单独一句说明必须带子命令，细节链接运维手册。豁免语法保留在根文件：它是提交前会用到、且不看 note 就会漏的机械要求。
 
-仓库布局不再逐目录罗列：`src/`、`web/`、`tests/`、`docs/` 看一眼目录就懂，只留三处不显然的（`prototypes/` 只提供数据源并加载同一份生产页面、`plugins/` 是给 magpie 的薄插件、`.agents/` 是 note 规则与 kit 版本基线）。
+仓库布局不再逐目录罗列：`src/`、`web/`、`tests/`、`docs/` 看一眼目录就懂，只留三处不显然的（`prototypes/` 只提供数据源并加载同一份生产页面、`integrations/magpie-hook/` 是给 magpie 的薄插件、`.agents/` 是 note 规则与 kit 版本基线）。
 
 界面降噪那条去掉英文原文：判断标准本身就是完整的，原文对执行没有增量。
 

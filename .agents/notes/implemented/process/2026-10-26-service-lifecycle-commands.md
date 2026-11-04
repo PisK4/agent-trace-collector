@@ -32,7 +32,7 @@ Status: implemented
 - **读服务实际那份配置。** launchd 不继承交互 shell 的环境，脚本按 plist 的 `EnvironmentVariables` 调 `loadConfig`，不按调用者的环境猜数据目录。
 - **起停前先挡住能提前发现的失败。** 维护锁在盘上、或读不到 `read.token` 时直接失败，不去杀进程换一次起不来的起停。
 
-`status` 报四组事实：作业状态与 pid、进程启动时刻对最后一次 `src/` 改动的先后、端口与 `/api/stats` 耗时、游标与积压。判断「落后」只看 `src/`：`web/` 每次请求现读文件，`plugins/` 由 magpie 侧加载，两者改完都不需要重启采集器。
+`status` 报四组事实：作业状态与 pid、进程启动时刻对最后一次 `src/` 改动的先后、端口与 `/api/stats` 耗时、游标与积压。判断「落后」只看 `src/`：`web/` 每次请求现读文件，`integrations/magpie-hook/` 由 magpie 侧加载，两者改完都不需要重启采集器。
 
 ## Alternatives considered
 

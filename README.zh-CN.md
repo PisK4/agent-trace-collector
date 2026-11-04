@@ -33,7 +33,7 @@ Tracery 留下原始请求：把每笔调用记成一笔请求——组装后的
 
 [magpie](https://github.com/yetone/magpie) 在请求发送点记录三路证据：hook 拿到客户端协议请求体与合并后的回复，用量账本给出状态、用量、`route_id` 与 `response_id`，路由历史给出候选顺序、尝试与规则。三路按 `response_id` 与 `route_id` 对账成一笔请求。
 
-正文来自 hook。把 [`plugins/collector.hooks.ts`](plugins/collector.hooks.ts) 注册进 magpie 的插件配置，并把首次启动生成的 `hook.token` 交给它。插件只做三件事：请求期生成 `hook_id`、完成期上报完整对象、按固定码记录投递结果；不改正文、不做关联、不做脱敏。
+正文来自 hook。把 [`integrations/magpie-hook/collector.hooks.ts`](integrations/magpie-hook/collector.hooks.ts) 注册进 magpie 的插件配置，并把首次启动生成的 `hook.token` 交给它。插件只做三件事：请求期生成 `hook_id`、完成期上报完整对象、按固定码记录投递结果；不改正文、不做关联、不做脱敏。
 
 不装 hook 时，页面仍能读到账本与路由两路证据，但没有请求体与回复正文。
 

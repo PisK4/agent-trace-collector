@@ -33,7 +33,7 @@ Three independent ingestion paths write into one SQLite database. You can enable
 
 [magpie](https://github.com/yetone/magpie) is an LLM gateway that records evidence at the point of send: a hook captures the client protocol request body and the merged reply, a usage ledger carries status, usage, `route_id` and `response_id`, and routing history carries candidate order, attempts and rules. Tracery reconciles all three into a single request row keyed on `response_id` and `route_id`.
 
-Bodies come from the hook. Register [`plugins/collector.hooks.ts`](plugins/collector.hooks.ts) in magpie's plugin config and give it the `hook.token` that Tracery generates on first start. The plugin does three things: it tags the request with a `hook_id`, reports the complete object when the call finishes, and records delivery outcomes under fixed codes. It never rewrites bodies, never correlates, never redacts.
+Bodies come from the hook. Register [`integrations/magpie-hook/collector.hooks.ts`](integrations/magpie-hook/collector.hooks.ts) in magpie's plugin config and give it the `hook.token` that Tracery generates on first start. The plugin does three things: it tags the request with a `hook_id`, reports the complete object when the call finishes, and records delivery outcomes under fixed codes. It never rewrites bodies, never correlates, never redacts.
 
 Without the hook you still get the ledger and routing evidence — just no request or reply bodies.
 

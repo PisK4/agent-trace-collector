@@ -47,4 +47,4 @@ bun run verify:notes   # 合并到 master 前
 
 ## 目录与上位文档
 
-目录一眼可见，只有三处不显然：`prototypes/` 只提供数据源、加载同一份生产页面；`plugins/` 是给 magpie 的薄插件；`.agents/` 是 note 规则与 kit 版本基线。中文写作遵守 de-AI-writing 风格。
+目录一眼可见，只有三处不显然：`prototypes/` 只提供数据源、加载同一份生产页面；`integrations/magpie-hook/` 是给 magpie 的薄插件；`.agents/` 是 note 规则与 kit 版本基线。中文写作遵守 de-AI-writing 风格。

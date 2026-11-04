@@ -40,7 +40,7 @@ Status: proposed
 
 `have=6` 与 `hook_absent` 不能单独证明回调从未到达：失败或取消请求可能仍触发 hook，但回复为 null、没有 response ID，ATC 无法精确关联。[magpie 机制研究](../../../../docs/magpie-mechanisms-research.md)在 `开源源码@magpie-2374ffe` 下已区分 HTTP 失败、回复不可用和回调缺失；该源码结论不替代当前安装版的运行验证。不能按 429/499 直接排除预期回调，也不能在没有关联依据时断言 pending 历史与 Hermes 无关。
 
-投递丢失仍是假设。宿主的 `gatewayTimeoutMs` 与[薄插件](../../../../plugins/collector.hooks.ts)自身的总预算 1500 ms、单次 fetch 600 ms、最多两次尝试同时生效。原检查记本机宿主配置未设置、取默认 1000 ms，这一配置状态及当前加载插件需复核。调大宿主预算只能验证宿主提前终止这一种路径；`ingest_issue` 没有错误也不能排除未到达、请求超时或 HTTP 拒收。
+投递丢失仍是假设。宿主的 `gatewayTimeoutMs` 与[薄插件](../../../../integrations/magpie-hook/collector.hooks.ts)自身的总预算 1500 ms、单次 fetch 600 ms、最多两次尝试同时生效。原检查记本机宿主配置未设置、取默认 1000 ms，这一配置状态及当前加载插件需复核。调大宿主预算只能验证宿主提前终止这一种路径；`ingest_issue` 没有错误也不能排除未到达、请求超时或 HTTP 拒收。
 
 ### 缺口三：空 session 将无归属请求放进同一个列表分组
 

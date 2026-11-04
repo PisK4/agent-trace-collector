@@ -31,7 +31,7 @@ const repository = dirname(import.meta.dir);
 /**
  * 只有 `src/` 需要重启才生效：进程启动时把这些模块读进内存，之后不再重读。
  * `web/` 每次请求现读文件（改内容立即生效），新增页面文件要改 `src/http.ts` 的
- * 静态白名单，那本身是 `src/` 改动；`plugins/` 由 magpie 侧加载，重启采集器不影响它。
+ * 静态白名单，那本身是 `src/` 改动；`integrations/magpie-hook/` 由 magpie 侧加载，重启采集器不影响它。
  */
 const RUNTIME_PATHS = ['src'];
 /** 日志尾部读这么多行再折叠连续重复：单看最后几行，实际全是同一条周期噪声。 */

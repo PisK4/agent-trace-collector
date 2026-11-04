@@ -486,7 +486,7 @@ AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按
 
 ```json
 {
-  "spec": "/absolute/collector/plugins/collector.hooks.ts",
+  "spec": "/absolute/collector/integrations/magpie-hook/collector.hooks.ts",
   "options": {
     "endpoint": "http://127.0.0.1:8320/hook/ingest",
     "token": "<本机生成的 hook 令牌>",

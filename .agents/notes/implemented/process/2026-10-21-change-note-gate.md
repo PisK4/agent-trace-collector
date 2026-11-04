@@ -10,7 +10,7 @@ Agent Notes 体系接入后，`verify:notes` 只校验已有 note 的格式与�
 
 `scripts/verify-change-notes.mjs` 增加变更检查，接进 `package.json` 的 `verify:notes`，同时跑暂存区与未推送提交两个范围。它按路径保守判定「需要 note」：改动落在下列任一路径，就必须在同一暂存集或同一合并批次里新增或修改一篇 `.agents/notes/.../yyyy-mm-dd-topic.md`。
 
-- 代码与工具目录：`src/`、`web/`、`plugins/`、`scripts/`、`tests/`
+- 代码与工具目录：`src/`、`web/`、`integrations/`、`scripts/`、`tests/`
 - 工程配置：`package.json`、`bun.lock`、`tsconfig.json`、根 `AGENTS.md`
 
 纯机械或局部编辑走显式豁免：提交信息里写 `Agent-Note: none — <reason>`；`--staged` 阶段还没有提交信息，用 `ATC_NOTE_EXEMPT=<reason>` 放行，并把同一理由写进提交信息供 range 模式核对。`--range` 按落地批次检查：有 merge 时每个第二父分支一批，没有 merge 时整个 range 一批；一批至少一篇 note。它跳过本脚本首次进入历史之前的提交，避免追溯旧账。批次粒度的来由见 [Note 闸门按合并批次判定](2026-11-03-note-gate-merge-batch.md)。
