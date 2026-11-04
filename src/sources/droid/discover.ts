@@ -71,9 +71,9 @@ export function discoverDroidTranscripts(root: string): DroidTranscript[] {
 }
 
 /**
- * 单轮取件：剩余字节大的先读；`size <= committed_off` 的文件视为暂时读尽
- * （截断与同长重写由 readBatch 的代际与头部基线在读取时识别）。
- * 一个文件即使超过剩余预算也会被选中，本轮由 readBatch 的 8 MiB 上限截断。
+ * 单轮取件：剩余字节大的先读；没有新增字节的文件本轮不取，等它再增长后
+ * 由 readBatch 按代际与冻结头部基线识别截断或重写。一个文件即使超过剩余
+ * 预算也会被选中，本轮由 readBatch 的 8 MiB 上限截断。
  */
 export function selectDroidTranscripts(
   files: readonly DroidTranscript[],
