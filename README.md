@@ -84,58 +84,23 @@ bun run start        # collector on 127.0.0.1:8320
 
 Open `http://127.0.0.1:8320`. On first start the collector creates `read.token`, `hook.token`, `otlp.token` and `redaction.salt` in the data directory — file mode 0600, directory mode 0700. The default data directory is `~/Library/Application Support/tracery` on macOS and `${XDG_DATA_HOME:-~/.local/share}/tracery` elsewhere. macOS and Linux are supported; Windows is not, because the file-mode checks the collector relies on do not apply there.
 
-<<<<<<< HEAD
 Override any of these with `ATC_DATA_DIR`, `ATC_PORT`, `ATC_LEDGER_PATH`, `ATC_ROUTING_DIR`, `ATC_MAGPIE_URL`, `ATC_BODY_BUDGET`, `ATC_DISK_LIMIT`. The listen address is hard-coded to loopback; it cannot be configured to a wildcard address.
-=======
-之后按上面的进路选：magpie 装 hook，或把 harness 的 OTLP exporter 指到本机；droid 转录在默认位置时自动扫描。三条也可以同时开。
->>>>>>> bd30b44 (docs: record droid ingestion, owner claim and schema v11)
 
-Then pick an ingestion path above: install the magpie hook, or point a harness's OTLP exporter here.
+Then pick an ingestion path above: install the magpie hook, point a harness's OTLP exporter here, or let the collector scan droid transcripts. All three can run at once.
 
-<<<<<<< HEAD
 ## What a trace looks like
 
 The middle pane is one row per step, 36px tall, showing only an index, the actor, and a summary of the content. Protocol lines come first — system prompt (including fields like `cc_version` and `anthropic-beta`), user prompt, environment injection — then assistant text and tool calls. Calls and results are separate rows, paired by `call_id` and message position, with no per-tool styling.
 
 Title generation and classifier calls are marked as auxiliary and stay off the main chain; the formal title computed by a title-generation request is borrowed by the main session. Sub-agents share the main session's `conv_key` and group separately per `actor`; the session header shows how many sub-agents ran and how many requests each made.
-=======
-| 通道 | 拿什么 | 拿不到什么 |
-| --- | --- | --- |
-| magpie hook | 客户端协议请求体、合并回复、success、agent、session、model | 请求头、流内事件、provider 尝试、`route_id`；回调可能缺失 |
-| 用量账本 | 状态、用量、`route_id`、`response_id`、provider、账户 | 请求与回复正文 |
-| 路由历史 | 候选顺序、尝试、规则、亲和性、prompt 结构 | 窗口过滤不全留痕；只读盘、30 天滚动 |
-| OTLP（harness 侧） | LLM span 的模型、用量、耗时与会话 id；Claude Code 另带正文文件指针 | 请求头、provider 尝试；OMP 只到结构化摘要，Codex 没有逐笔正文通路 |
-| droid 会话文件 | 会话身份、逐轮消息、模型、响应 id、会话累计用量 | 逐笔用量与费用、状态码、provider 与 served 模型、路由决策、system prompt 与工具定义 |
-
-连接靠两个键：`response_id` 把 hook 记录接到账本行，`route_id` 把账本行接到路由历史。OTLP 行靠 span 物理身份 `(trace_id, span_id)` 自持；账本晚到时会按统一 owner 规则认领 OTLP 或 droid 已建的行，账本先到时 OTLP 仍独立建行。规则见[跨来源认领](docs/architecture-design.md#跨来源认领)。
-
-magpie 另有自己的 OTLP 导出，但属性白名单里没有 `response_id`、`conv`、`subagent`、`archive`，正文以 `langfuse.observation.input` / `output` 两段文本发出。这些键正是三路证据的连接点，所以 magpie 的导出适合送观测平台，不能当本项目的证据源。表里的 OTLP 行接的是 harness 侧 exporter，属性键齐全。
->>>>>>> bd30b44 (docs: record droid ingestion, owner claim and schema v11)
 
 Clicking any row points the right pane at that step's protocol source. The right pane has four tabs: readings (this reply, request structure, capability list, usage and context, identity integrity), body (raw messages, 40 per page), tools (overview, arguments, pairing and schema for the selected call), and routing (candidate order and attempt chain).
 
-<<<<<<< HEAD
 <img src="docs/images/session-trace.png" alt="A session trace: assistant lines alternating with tool calls and results" width="620">
-=======
-- **会话列表**：按最后活动时间排，标出失败、待确认与缺正文；可按 Agent 过滤已加载列表。
-- **轨迹**：中栏主体，一行一步骤；点行看右栏。
-- **右栏**：读数、正文、工具、路由四个页签；工具页选中调用后给出概览、参数、配对与 Schema。
-- **轮次带**：贴在会话头下沿，一条用户命令到它的最终回复算一轮，跨多笔请求即时结算。
-- **会话汇总**：工具次数、失败数、中断次数、写入与读取路径、Skill、缓存命中、上下文峰值、会话累计用量，以及覆盖缺口。
->>>>>>> bd30b44 (docs: record droid ingestion, owner claim and schema v11)
 
 Assistant lines carry reasoning-segment timings at the end; tool call and result lines carry execution-segment timings. Above, request 6's Bash call exits with code 1 and the following assistant line gives the correction.
 
-<<<<<<< HEAD
 <img src="docs/images/tool-pair.png" alt="Tool pairing tab: call JSON and result body side by side" width="520">
-=======
-- **只记录 magpie、已适配 harness 与 droid 观察到的流量。** 不经过网关、不导 OTLP 且不在 droid 转录里的请求看不见。请求统计以已保存的观测范围为限，缺正文单独标明，不能把 hook 覆盖率当作总请求量。
-- **不做代理。** 不转发、不改写、不拦截任何 LLM 流量。
-- **只读显式接入的会话文件。** droid 是当前唯一直接扫描的 Agent 私有目录，其他 Agent 的文件不读。OTLP 通道唯一的文件读取是 `body_ref`，只读事件显式指到的单个文件，不列目录。
-- **不做跨 harness 的通用摄入协议。** 唯一的通用入口是 OTLP 的 `/v1/traces` 与 `/v1/logs`；其余通用 trace 协议不做。
-- **不做导出、告警、指标看板与多机聚合；不做服务端全文检索。** 页面上的搜索只按会话标题与客户端标签过滤已加载列表。
-- **正文按预算回收。** 默认正文 10 GB、总盘 16 GB，回收最旧正文到 90% 预算；总盘到 80% 只接元数据，到 95% 停止接收。回收的正文补不回来。
->>>>>>> bd30b44 (docs: record droid ingestion, owner claim and schema v11)
 
 The pairing tab shows a call's JSON and its result body under the same `call_id`, and notes which later request carried the result back.
 
