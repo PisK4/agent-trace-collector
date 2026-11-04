@@ -108,6 +108,11 @@ export type SessionAdapter = {
   refreshOnDuplicate?: boolean;
   /** 需要从本代际原始层重放解析状态（追加文件）时为 true。 */
   replaysState: boolean;
+  /**
+   * 是否把每条解析事件落 `raw_session_event`。默认 true；物化行来源
+   * （如 Zcode 的 SQLite）行本身可重读，落原始层只会把整段上下文再存一份。
+   */
+  storesRaw?: boolean;
   /** 单轮取件预算；Zcode 按会话计，不受字节预算约束。 */
   batch: { maxFiles: number; maxBytes: number };
   roots(env: Record<string, string | undefined>, home: string): string[];

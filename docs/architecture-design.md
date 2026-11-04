@@ -415,9 +415,9 @@ Claude Code、Codex、Zcode、OMP 与 Pi 的本地会话走与 droid 同一条�
 
 调度只加一个 `sessions` 定时器，每 60 秒轮转一家；每家每轮最多 64 个文件或 2 MiB，未读完的靠游标留到下一轮，新文件按 mtime 从新到旧取。单家抛错只冻结这一家。启动后的第一轮异步跑，不挡 HTTP 监听。测试用 `CollectorOptions.sessionAdapters` 与 `sessionRoots` 注入合成根，不读真实主目录。
 
-调用身份：有精确 response id 的用 id（Claude 的 `message.id` 去掉 `msg_`，Codex 的 `response_id`）；没有的优先用同来源稳定的物化身份（OMP/Pi 的行偏移、Zcode 的消息 id）。用量一律归一到 magpie 口径（`input` 不含 cache read/write）；Codex 的 `input_tokens` 与 Zcode 的 `input_tokens` 都含缓存，要减掉。四段用量齐全时进 `usage_fingerprint.v1`，与网关行去重。
+调用身份：有精确 response id 的用 id（Claude 的 `message.id` 去掉 `msg_`，Codex 的 `response_id`）；没有的优先用同来源稳定的物化身份（OMP/Pi 的行偏移、Zcode 的消息 id）。用量一律归一到 magpie 口径（`input` 不含 cache read/write）；Codex 的 `input_tokens` 与 Zcode 的 `input_tokens` 都含缓存，要减掉。四段用量齐全时进 `usage_fingerprint.v1`，与网关行去重；指纹不比较模型名，跨来源写法不同不构成两笔调用。没有指纹时按同会话 ±60 秒、模型名归一后比较的弱线索兜底。
 
-原始层与 droid 共用 `raw_session_event`，`source_kind` 区分来源；JSONL 适配器按代际重放本来源的行恢复消息窗口，Zcode 返回自包含调用行（`replaysState: false`），不需要重放。会话 id 在入口统一按 UUID 前缀归一，账本、路由与本地适配器同口径。
+原始层与 droid 共用 `raw_session_event`，`source_kind` 区分来源；JSONL 适配器按代际重放本来源的行恢复消息窗口（`storesRaw` 默认 true）。Zcode 返回自包含调用行（`replaysState: false`），本地库行可重读，且每条调用已带整段上下文，原始层再存一份会按调用重复整段窗口（实测单条约 288 KB），因此 `storesRaw: false`，不落原始层。会话 id 在入口统一按 UUID 前缀归一，账本、路由与本地适配器同口径。
 
 ### 合并规则
 
@@ -657,7 +657,7 @@ CREATE TABLE session_usage (
 ) WITHOUT ROWID;
 ```
 
-`raw_session_event` 是批次之间重放解析状态的唯一来源，当前不参与 rawPrune；转录整份落原始层后，纳入回收前要先另存解析位点。`source_kind` 区分 droid 与各本地适配器；物理主键仍是 `(file_generation, byte_offset)`，Zcode 的 offset 用 `model_usage` 的 rowid。`session_usage` 每个 `(agent, session)` 一行，覆盖写按 `source_hash` 判变化，`source_path` 与 `source_hash` 留作来源审计。
+`raw_session_event` 是追加文件在批次之间重放解析状态的唯一来源，当前不参与 rawPrune；转录整份落原始层后，纳入回收前要先另存解析位点。`source_kind` 区分 droid 与各本地适配器；物理主键仍是 `(file_generation, byte_offset)`，Zcode 的 offset 用 `model_usage` 的 rowid。Zcode 不落这张表：物化行可重读，`storesRaw: false`，避免把每条调用携带的整段上下文重复存一遍。`session_usage` 每个 `(agent, session)` 一行，覆盖写按 `source_hash` 判变化，`source_path` 与 `source_hash` 留作来源审计。
 
 ### 路由摘要长期层
 

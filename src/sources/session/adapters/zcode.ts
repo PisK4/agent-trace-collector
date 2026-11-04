@@ -219,6 +219,9 @@ export const zcodeAdapter: SessionAdapter = {
   sortSource: 'zcode_session',
   mutable: false,
   replaysState: false,
+  // 本地库是物化行，整段请求上下文已在正文层按块去重；原始层再存一份会按
+  // 调用重复整段窗口（实测单条约 288 KB），回填几个会话就是 GB 级。
+  storesRaw: false,
   batch: { maxFiles: 64, maxBytes: Number.POSITIVE_INFINITY },
 
   roots(env, home = homedir()) {

@@ -308,7 +308,7 @@ export async function ingestSessionFile(
     }
 
     let state = adapter.emptyState(file);
-    if (adapter.replaysState) {
+    if (adapter.replaysState && adapter.storesRaw !== false) {
       const replay = db.query<{ payload_json: string; source_kind: string; byte_offset: number }, [string]>(`
         SELECT payload_json, source_kind, byte_offset FROM raw_session_event
         WHERE file_generation=? ORDER BY byte_offset`).all(read.generation);
@@ -348,7 +348,11 @@ export async function ingestSessionFile(
         committed = line.end;
         continue;
       }
-      const sanitized = sanitizedPayload(line.text, parsed, salt, value => adapter.parse(value));
+      // 不落原始层的来源跳过脱敏后的再序列化：物化行可重读，整段上下文
+      // 再存一份既费空间也费 CPU；正文仍由 persistBodyTx 脱敏后入库。
+      const sanitized = adapter.storesRaw === false
+        ? { payloadJson: '', parsed }
+        : sanitizedPayload(line.text, parsed, salt, value => adapter.parse(value));
       if (sanitized.parsed.kind === 'ignore') {
         committed = line.end;
         continue;
@@ -361,37 +365,40 @@ export async function ingestSessionFile(
         : { state, calls: [], error: parsedEvent.reason, sessionId: null };
 
       // 同一物理位置的新 payload 只在可更新来源上替换；追加文件保持首份原文。
+      // 不落原始层的来源连查询都省掉。
       let rawChanged = false;
-      if (adapter.mutable) {
-        const previous = db.query<{ payload_json: string }, [string, string, number]>(
-          'SELECT payload_json FROM raw_session_event WHERE source_kind=? AND file_generation=? AND byte_offset=?',
-        ).get(adapter.sourceKind, read.generation, line.offset);
-        rawChanged = previous !== null && previous.payload_json !== sanitized.payloadJson;
-        db.run(
-          `INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,line_type,
-             event_at_ms,payload_json,privacy_version) VALUES (?,?,?,?,?,?,?,?)
-           ON CONFLICT(file_generation,byte_offset) DO UPDATE SET
-             session_id=excluded.session_id, line_type=excluded.line_type,
-             event_at_ms=excluded.event_at_ms, payload_json=excluded.payload_json,
-             privacy_version=excluded.privacy_version`,
-          [
-            adapter.sourceKind, read.generation, line.offset,
-            step.sessionId, sanitized.parsed.kind === 'event' ? sanitized.parsed.lineType : 'invalid',
-            sanitized.parsed.kind === 'event' ? sanitized.parsed.atMs : null,
-            sanitized.payloadJson, PRIVACY_TRANSFORM_VERSION,
-          ],
-        );
-      } else {
-        db.run(
-          `INSERT OR IGNORE INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
-             line_type,event_at_ms,payload_json,privacy_version) VALUES (?,?,?,?,?,?,?,?)`,
-          [
-            adapter.sourceKind, read.generation, line.offset,
-            step.sessionId, sanitized.parsed.kind === 'event' ? sanitized.parsed.lineType : 'invalid',
-            sanitized.parsed.kind === 'event' ? sanitized.parsed.atMs : null,
-            sanitized.payloadJson, PRIVACY_TRANSFORM_VERSION,
-          ],
-        );
+      if (adapter.storesRaw !== false) {
+        if (adapter.mutable) {
+          const previous = db.query<{ payload_json: string }, [string, string, number]>(
+            'SELECT payload_json FROM raw_session_event WHERE source_kind=? AND file_generation=? AND byte_offset=?',
+          ).get(adapter.sourceKind, read.generation, line.offset);
+          rawChanged = previous !== null && previous.payload_json !== sanitized.payloadJson;
+          db.run(
+            `INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,line_type,
+               event_at_ms,payload_json,privacy_version) VALUES (?,?,?,?,?,?,?,?)
+             ON CONFLICT(file_generation,byte_offset) DO UPDATE SET
+               session_id=excluded.session_id, line_type=excluded.line_type,
+               event_at_ms=excluded.event_at_ms, payload_json=excluded.payload_json,
+               privacy_version=excluded.privacy_version`,
+            [
+              adapter.sourceKind, read.generation, line.offset,
+              step.sessionId, sanitized.parsed.kind === 'event' ? sanitized.parsed.lineType : 'invalid',
+              sanitized.parsed.kind === 'event' ? sanitized.parsed.atMs : null,
+              sanitized.payloadJson, PRIVACY_TRANSFORM_VERSION,
+            ],
+          );
+        } else {
+          db.run(
+            `INSERT OR IGNORE INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
+               line_type,event_at_ms,payload_json,privacy_version) VALUES (?,?,?,?,?,?,?,?)`,
+            [
+              adapter.sourceKind, read.generation, line.offset,
+              step.sessionId, sanitized.parsed.kind === 'event' ? sanitized.parsed.lineType : 'invalid',
+              sanitized.parsed.kind === 'event' ? sanitized.parsed.atMs : null,
+              sanitized.payloadJson, PRIVACY_TRANSFORM_VERSION,
+            ],
+          );
+        }
       }
 
       if (step.error !== null) {
