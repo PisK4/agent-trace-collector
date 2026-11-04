@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { drainDerive, enqueueDerive } from '../src/derive/sync';
+import { claimGroupTx } from '../src/derive/state';
 import { applyDeriveGroup, computeDeriveGroup, drainDeriveGroupTx } from '../src/derive/sync';
 import { drainRequestPurposesTx } from '../src/request-purpose';
 import { fixture, seedTextChain } from './fixtures';
@@ -85,7 +86,9 @@ test('读连接算出的计划落库与单事务路径逐表一致', () => {
     alignEpoch(a.store, b.store);
     const round = computeDeriveGroup(a.store.read, CONV, ACTOR);
     expect(round).not.toBeNull();
-    // A：只读连接算 + 独立写事务落库；B：旧口径，读与写同一个事务。
+    // A：认领独立成事务（在线单元的形状），只读连接算，独立写事务落库；
+    // B：旧口径，读与写同一个事务。认领计数现在进队列行，两边都要认领才可比。
+    a.store.write(db => claimGroupTx(db, CONV, ACTOR));
     expect(a.store.write(db => applyDeriveGroup(db, round!))).toEqual(round!.outcome);
     expect(b.store.write(db => drainDeriveGroupTx(db, CONV, ACTOR))).toEqual(round!.outcome);
     expect(dumpTables(a.store)).toEqual(dumpTables(b.store));

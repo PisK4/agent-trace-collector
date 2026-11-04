@@ -178,11 +178,48 @@ export function markGroupDirtyTx(db: Database, convKey: string, actor: string, f
  *
  * 在计算快照之前执行，所以写侧边界比真实快照更保守——只可能少写前缀，不会写错。
  * 组不是待办状态时不动它：认领只发生在确实要算的这一轮。
+ *
+ * 认领即计数：`attempts` 与切片路径的 `beginGeneration` 同义，记的是认领次数，
+ * 不是失败次数；`last_error` 在认领时清空，失败由 `recordDeriveFailureTx` 写回，
+ * 整组成功保持空——非空就表示「最近一次完成的尝试失败，正在重试」。
  */
 export function claimGroupTx(db: Database, convKey: string, actor: string): void {
-  db.run(`UPDATE derive_queue SET claim_from_sort=? WHERE conv_key=? AND actor=?
+  db.run(`UPDATE derive_queue SET claim_from_sort=?,attempts=attempts+1,last_error=NULL
+    WHERE conv_key=? AND actor=?
     AND ${queuePendingSql()}`,
   [POSITION_ALL, convKey, actor]);
+}
+
+/**
+ * 整轮失败后把原因写回队列；调用方在异常路径上 best-effort 调用，写不进时
+ * 保留原始错误。`last_completed_ms` 与切片路径的 discard 同义：最后一次
+ * 处理结束的时间。组已 clean（失败前刚好被并发标脏又完成）时不覆盖。
+ *
+ * 永久失败判据（丢弃策略尚未实现，先固定口径）：同一 `input_revision` 下
+ * attempts 达到上限仍失败，且错误码不是锁类瞬态（`database_locked`、
+ * `table_locked`）——输入没变、重试改不了结果，才算永久失败；输入修订一变，
+ * 失败原因可能已随新输入消失，旧计数不构成丢弃依据。上限值要等生产队列里
+ * 观察到 attempts 与 last_error 的真实分布再定，现在只做记录与退避。
+ */
+export function recordDeriveFailureTx(db: Database, convKey: string, actor: string,
+  code: string, now: number): void {
+  db.run(`UPDATE derive_queue SET last_error=?,last_completed_ms=?
+    WHERE conv_key=? AND actor=? AND ${queuePendingSql()}`,
+  [code, now, convKey, actor]);
+}
+
+/**
+ * 整轮失败后的重试间隔：2 秒起步、连续失败翻倍、60 秒封顶。
+ *
+ * 在线调度每轮失败后按连续失败次数取间隔，成功一轮就清零。永久失败的组
+ * 从每 2 秒一次降到最多每分钟一次；真正的瞬态（锁竞争）通常在头两档内自愈。
+ */
+export const DERIVE_RETRY_BASE_MS = 2_000;
+export const DERIVE_RETRY_MAX_MS = 60_000;
+
+export function deriveRetryBackoffMs(consecutiveFailures: number): number {
+  return Math.min(DERIVE_RETRY_BASE_MS * 2 ** Math.max(0, consecutiveFailures - 1),
+    DERIVE_RETRY_MAX_MS);
 }
 
 /** 请求当前归属的组；未知归属返回 null（不进队列）。 */

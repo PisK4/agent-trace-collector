@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
 import {
-  markGroupDirtyTx, markRequestGroupsTx, markRequestInputTx,
-  normalizeTargetAlgorithmTx, purposePendingSql,
+  claimGroupTx, deriveRetryBackoffMs, markGroupDirtyTx, markRequestGroupsTx,
+  markRequestInputTx, normalizeTargetAlgorithmTx, purposePendingSql,
+  recordDeriveFailureTx,
 } from '../src/derive/state';
 
 test('用途门控片段：已知归属且待判定，别名可选', () => {
@@ -128,4 +129,33 @@ test('未知归属的请求不产生派生任务', () => {
     f.store.write(db => markRequestGroupsTx(db, 1));
     expect(f.store.read.query('SELECT COUNT(*) AS n FROM derive_queue').get()).toEqual({ n: 1 });
   } finally { f.close(); }
+});
+
+test('认领计数并清空上次失败，失败原因写回未完成组', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => markGroupDirtyTx(db, 'k', 'a', ''));
+    f.store.write(db => claimGroupTx(db, 'k', 'a'));
+    expect(f.store.read.query(
+      'SELECT attempts,last_error,claim_from_sort FROM derive_queue').get())
+      .toEqual({ attempts: 1, last_error: null, claim_from_sort: '~' });
+    f.store.write(db => recordDeriveFailureTx(db, 'k', 'a', 'synthetic_ack_failure', 99));
+    expect(f.store.read.query(
+      'SELECT attempts,last_error,last_completed_ms FROM derive_queue').get())
+      .toEqual({ attempts: 1, last_error: 'synthetic_ack_failure', last_completed_ms: 99 });
+    // 重试认领：计数累加，上一次失败原因清空，等本轮结果说话。
+    f.store.write(db => claimGroupTx(db, 'k', 'a'));
+    expect(f.store.read.query('SELECT attempts,last_error FROM derive_queue').get())
+      .toEqual({ attempts: 2, last_error: null });
+    // 整组成功后失败记录不再写回：last_error 只描述未完成组。
+    f.store.write(db => db.run("UPDATE derive_queue SET state='clean'"));
+    f.store.write(db => recordDeriveFailureTx(db, 'k', 'a', 'late_failure', 100));
+    expect(f.store.read.query('SELECT last_error FROM derive_queue').get())
+      .toEqual({ last_error: null });
+  } finally { f.close(); }
+});
+
+test('整轮失败退避按连续失败翻倍并封顶', () => {
+  expect([1, 2, 3, 4, 5, 6, 7].map(deriveRetryBackoffMs))
+    .toEqual([2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]);
 });
