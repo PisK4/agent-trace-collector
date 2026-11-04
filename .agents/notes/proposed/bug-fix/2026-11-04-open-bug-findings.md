@@ -8,11 +8,11 @@ Status: proposed
 
 2026-11-04 按条目状态行、修复记录与提交历史重新核实的结论是：11-03 那批 **26 条已判关闭、1 条部分关闭（F28 仅 title 通道）、6 条仍未关闭**。已关闭的 26 条是 F01/F02/F04/F05/F06/F08/F09/F10/F11/F12/F13/F14/F16/F17/F18/F20/F21/F22/F23/F24/F25/F26/F27/F29/F30/F31；未关闭的是 F03/F07/F15/F19/F32 与 F28 的 `turn_ref` 子项。这些未关闭项全部承继到本篇，另有一条 11-03 遗留的 F01 残余项（`verify-cutover` 只读预检）一并承继。
 
-11-03 篇里的长派生调查（原文编号 F33）本身是 **2026-11-04** 的取证，不是 11-03 的体检结果，已完整移入本篇 **F07**。它是本篇成文时唯一的新发现；此后系统巡查又补入 **F09–F36**（均标「11-04 新发现（系统巡查）」；第一轮 F09–F17、第二轮 F18–F24、第三轮 F25–F31、第四轮 F32–F36），F01–F08 的既有结论未因此改写；只在 F06/F09/F11/F12/F16 上追加了第二轮证据、在 F07/F22 上追加第三轮交叉印证与实测，结论不变。
+11-03 篇里的长派生调查（原文编号 F33）本身是 **2026-11-04** 的取证，不是 11-03 的体检结果，已完整移入本篇 **F07**。它是本篇成文时唯一的新发现；此后系统巡查又补入 **F09–F41**（均标「11-04 新发现（系统巡查）」；第一轮 F09–F17、第二轮 F18–F24、第三轮 F25–F31、第四轮 F32–F36、第五轮 F37–F41），F01–F08 的既有结论未因此改写；只在 F06/F09/F11/F12/F16 上追加了第二轮证据、在 F07/F22 上追加第三轮交叉印证与实测，结论不变。
 
 编号从 F01 重新开始，每条在标题上注明「承继自 2026-11-03 #Fxx」或「11-04 新发现」。正文引用旧编号时一律写成「旧编号 Fxx」并给出旧篇链接，避免两套 F 号混用。全部证据来自只读检查与 `VACUUM INTO` 副本；未改生产库、未重启服务、未 push。
 
-## 汇总（F01–F36）
+## 汇总（F01–F41）
 
 | 编号 | 来源 | 严重度 | 一句话现象 | 证据等级 | 状态 | 修复依赖 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -52,6 +52,11 @@ Status: proposed
 | F34 | 11-04 新发现（系统巡查，第四轮） | P2 | `maintain verify` 无论 `integrity`/悬空块/重复证据如何都输出 `ok:true`、退出 0 | 代码核查 | 待修（等统一修复窗口） | 先补 CLI 集成测试，再定 `ok`/退出码口径 |
 | F35 | 11-04 新发现（系统巡查，第四轮） | P2 | `purge-metadata --before` 只做正则校验；未来或非法日期会删掉全部 77,417 条请求 | 实测+代码核查 | 待修（等统一修复窗口） | 独立小笔；排在所有 purge 执行之前 |
 | F36 | 11-04 新发现（系统巡查，第四轮） | P2 | 两个 backfill 脚本在派生「无进展」时空转死循环；`rebuild` 有守卫，脚本没有 | 代码核查（当前 1 dirty / 0 purpose-pending，未触发） | 待修（等统一修复窗口） | 独立小笔；照抄 `derive_no_progress` 守卫 |
+| F37 | 11-04 新发现（系统巡查，第五轮） | P2 | OTLP span **188,099 行 → 1 条证据 / 1 个 `via='otlp'` 请求**；非 LLM span 静默 `skipped`，无计数、无 issue | 实测+代码核查 | 待修（等统一修复窗口） | 与 F11 同批评估 raw 落盘；先补 skipped 计数 |
+| F38 | 11-04 新发现（系统巡查，第五轮） | P2 | 正文预算只覆盖文件 **37%**（1.76 GiB / 4.70 GiB）；`cost_observation`+`route_summary` 1.4 GB 无 TTL 不计量 | 实测+代码核查 | 待修（等统一修复窗口） | 与 F11/F12 同属保留层；先定「可回收字节」口径 |
+| F39 | 11-04 新发现（系统巡查，第五轮） | P2 | `diskTight` 仍以正文预算 9 GB 为停止条件：每 30 s 只淘汰 100 条，清空全部正文也降不下盘 | 代码核查（当前 4.70 GiB，未触发） | 待修（等统一修复窗口） | 与 F38 同批评审；先定磁盘目标水位 |
+| F40 | 11-04 新发现（系统巡查，第五轮） | P3 | 分页游标键可变：`projection` 重写 `started_ms`、会话游标用 `MAX(started_ms)`；forward 游标不绑定会话 | 实测+代码核查 | 待修（等统一修复窗口） | 独立小笔；与 F32 的 `day` 重写同源 |
+| F41 | 11-04 新发现（系统巡查，第五轮） | P3 | `from` 超过 2^53 通过区间校验并被浮点坍缩：1e20 时 `from=to`，仍返回 200 完整页 | 实测+代码核查 | 待修（等统一修复窗口） | 归入「HTTP 契约小修」；与 F20/F21 同批 |
 
 ## 承继映射（2026-11-03 → 2026-11-04）
 
@@ -586,6 +591,72 @@ Status: proposed
 - **建议方向**：照抄 `rebuild` 的三元守卫并抛 `derive_no_progress`；加最大轮次或墙钟超时；脚本入口取维护锁或至少拒绝服务运行时的调用。
 - **未证实点**：没有构造出「选中后变 waiting」的测试用例；当前 dirty 组可正常排队，未实际跑到该分支。
 
+### F37 OTLP span 99.99% 被静默 `skipped`，归属链在生产上实质为空（11-04 新发现，系统巡查，第五轮）
+
+- **现象**：OTLP 接收侧持续收到大量 span，但分类阶段把非 LLM 形状的 span 直接 `continue`，既不计数也不写 issue；生产库里 `raw_otlp_span` 已有 **188,099 行**，而 `request_evidence` 中 `source_kind='otlp_span'` 只有 **1 行**、`request.via='otlp'` 只有 **1 行**，`otlp_body_ref` **0 行**。HTTP 响应永远是 `{"partialSuccess":{}}`，调用方与运维都无法看出「收到了多少 / 丢了多少」。
+- **证据**：
+  - [src/sources/otlp/mapping.ts L121-132](../../../../src/sources/otlp/mapping.ts#L121-L132)：注册服务内不匹配规则的 span 走 `shapeLikeLlm ? unknown : skipped`；[L129](../../../../src/sources/otlp/mapping.ts#L129) 未注册服务直接 `skipped`（issue 按服务去重，仅 7 行）。
+  - [src/sources/otlp/ingest.ts L154](../../../../src/sources/otlp/ingest.ts#L154)：`if (verdict.kind === 'skipped') continue;` 无计数；[L31-42](../../../../src/sources/otlp/ingest.ts#L31-L42) 的结果类型只有 `spans / spanDuplicates / requestsCreated / unknownShape / unknownServices / bodiesWired`，没有 `skipped`。
+  - [src/http.ts L461](../../../../src/http.ts#L461)：响应体固定 `{"partialSuccess":{}}`，OTLP 规范允许在这里带拒收计数，但没有用。
+  - 生产实测（18:36）：`raw_otlp_span` 188,099 行，其中 `codex-app-server` **187,416**、`codex_exec` 407、`codex-exec-server` 234；span 名以 `fs.get_metadata` 38,572、`receiving` 33,382、`handle_responses` 33,382、`fs.read_file` 32,710 为主，`session_task.turn` / `claude_code.llm_request` 合计 **16 条**；`ingest_issue` 仅 7 条 `service_not_registered` + 1 条 `span_shape_unknown`。11-03 单日 span **150,603 行**（见 F11）。
+  - 日志侧 `raw_otlp_log` 有行，但 `otlp_body_ref` 0 行：body 接线路径从未在生产执行过。
+- **影响**：OTLP 通道在生产里等于「只落 raw、不产生归属」；按 11-03 的 15 万 span/日估算，约 **99.99%** 的 OTLP 数据被静默丢弃，且丢弃量与「服务没收到」无法区分；raw 行仍按 7 天保留并继续占盘（F11 又清不掉），同时把 F38 的容量时钟往前推。
+- **严重度**：P2（静默、无计数；当前只有 1 条证据，OTLP 归属能力等于不可用）。
+- **建议方向**：在 `AcceptOtlpTracesResult` 增加 `skipped` 并按 `service/name` 每日写一条聚合 issue；对确定非 LLM 的 span 不入 `raw_otlp_span` 或采样；HTTP 用 `partialSuccess.rejectedSpans` 返回真实拒收数。
+- **未证实点**：哪些 span 属于「本应识别但形状不符」没有逐条核对；16 条 LLM span 只有 1 条证据，可能是同 span 重投被去重，也可能是 rule 未命中，需用一条真实 span 回放确认。
+
+### F38 正文预算只覆盖文件的 37%，长期表无 TTL、不计量（11-04 新发现，系统巡查，第五轮）
+
+- **现象**：`measureBodyBytes` 只统计 `block` + `request.skeleton_z` + `raw_hook` 正文副本；`cost_observation`、`route_summary`、`raw_route`、`raw_session_event`、`raw_ledger` 等长期表既不进预算，也没有 TTL（只有手工 purge 会顺带删一部分）。因此「正文淘汰」即使把正文全清掉，也压不住文件体积。
+- **证据**：
+  - [src/retention.ts L22-32](../../../../src/retention.ts#L22-L32)：`measureBodyBytes` 仅三段；[L611-616](../../../../src/retention.ts#L611-L616) 的 `shrinkStorage` 只做 `incremental_vacuum(256)`。
+  - [src/config.ts L127-128](../../../../src/config.ts#L127-L128)：默认 `bodyBudget=10 GB`、`diskLimit=16 GB`（进程环境无 `ATC_*` 覆盖）；[src/retention.ts L118-122](../../../../src/retention.ts#L118-L122)：正文触发线 9 GB、盘 80% = 12.8 GB 进 `diskTight`、95% = 15.2 GB 暂停收正文。
+  - 18:42 快照：`page_size*page_count` = **5,079,519,232 B**（4.73 GiB）、`page_count` 1,240,117、`freelist_count` **0**；正文 = `block` **662,678,516** + `skeleton_z` **1,235,504,051** + `raw_hook` **0** = **1,898,182,567 B**（1.77 GiB），只占文件的 **37.4%**。
+  - `dbstat` 分配（同一快照前后）：`request` 1,571.0 MB（其中 skeleton 1,235.5 MB，非 skeleton/页内空洞 336.5 MB）、`cost_observation` **1,092.7 MB**（payload 474.3 MB、**593,223 行**；10-24 单日回填 478,059 行、10-27 66,587 行）、`block` 727.8 MB、`raw_session_event` 340.4 MB、`raw_route` 335.7 MB、`route_summary` **309.0 MB**（payload 261.0 MB、58,597 行）、`raw_ledger` 216.3 MB、`request_block` 136.1 MB + 索引 127.3 MB、`raw_otlp_span` 79.7 MB。
+  - 增速（最近 24h 实测）：`skeleton` **217.6 MB**、`route_summary` **24.1 MB**、`raw_session_event` 15.4 MB、`raw_route` 30.4 MB（按 F11 仍未能按 7 天清掉）、`raw_otlp_span` 8.7 MB、`cost_observation` 4.7 MB、`raw_ledger`/`request_evidence` 约 6 MB，加 `block` 后合计约 **330–360 MB/日**；最近 7 天 `skeleton` 合计 863.9 MB（123 MB/日）；18:36→18:42 的 6 分钟内文件又涨 **28.6 MB**（约 286 MB/小时），说明高峰是突发的。
+  - `auto_vacuum=2` 本身工作正常：`freelist_count=0`，说明整页释放都被 `incremental_vacuum` 回收到文件里；但表内空洞（`cost_observation` 618 MB、`request` 336 MB、`raw_session_event` 148 MB、`raw_otlp_span` 27 MB，合计约 **1.1 GB**）不属于整页，`auto_vacuum` 不回收，代码里也没有 `VACUUM` 入口。
+- **影响**：按基线 330–360 MB/日，从 4.73 GiB 到 12.8 GB 触发线约 **20–25 天**；若最近 1 小时的突发速率（约 0.9–1 GB/日）延续，则 **5–8 天**。触发后先淘汰正文，而文件地板仍有约 3.2 GB（现在非正文 = 5.08 GB − 1.90 GB），且 `cost_observation`/`route_summary` 只增不减；物理盘还有 324 GiB，真正先撞的是**策略线**而不是盘满。
+- **严重度**：P2（可预测的容量与正文保留崩塌；当前未触发）。
+- **建议方向**：给 `cost_observation`、`route_summary` 定 TTL 或纳入容量预算；把预算口径从「正文」改成「可回收字节」，并单独暴露「不可回收字节」；提供一次性 `VACUUM`（或 `VACUUM INTO` + 替换）维护入口；`ATC_DISK_LIMIT` 与真实盘量对齐，而不是固定 16 GB。
+- **未证实点**：没有历史文件大小记录，增速按 24h/7d 增量推算；10-31 14:22–18:04 的 12,714 条批量正文淘汰（全部来自 10-24…10-27）触发源无法从库内证明——`retention_event` 只有 10-26 的一次 purge，没有记录正文淘汰。
+
+### F39 `diskTight` 仍以正文预算 9 GB 作为停止条件（11-04 新发现，系统巡查，第五轮）
+
+- **现象**：`enforceBodyBudget` 由「正文 ≥ 9 GB」或「盘 ≥ 12.8 GB」任一条件触发，但循环的停止目标恒为 `bodyBudget * 0.9 = 9 GB`，与磁盘水位无关。当磁盘先到 12.8 GB 而正文只有 1.77 GiB 时，第一轮淘汰 100 条，第二轮即因子句 `measureBodyBytes <= target && evicted > 0` 退出；但下一个 30 s tick 盘仍是 tight，于是再淘汰 100 条——直到正文被清空也不会按磁盘目标多淘汰。
+- **证据**：
+  - [src/retention.ts L382-388](../../../../src/retention.ts#L382-L388)：`bodyFull` / `diskTight` 的 OR 分支；[L385](../../../../src/retention.ts#L385) `const target = limits.bodyBudget * EVICT_TARGET_RATIO;`；[L388](../../../../src/retention.ts#L388) 的退出条件。
+  - [src/retention.ts L125](../../../../src/retention.ts#L125) `EVICT_BATCH = 100`；[src/main.ts L342](../../../../src/main.ts#L342) 每 **30 s** 跑一次 `retentionTick`（[L46](../../../../src/main.ts#L46)）。
+  - 当前 `body_state='available'` 的请求约 5.6 万条、正文 1.77 GiB；按 100 条/30 s，理论 **约 4.7 小时**可把可用正文全部淘汰。淘汰的正文不可恢复，而 `raw_route`/`cost_observation` 等大头不在淘汰范围。
+- **影响**：一旦盘先到 12.8 GB（F38 估算 20–25 天内），会进入「每 30 s 删 100 条正文、持续数小时直到正文历史清空」的循环；清完后盘只降约 1.9 GiB（block 还共享，实际更少），随后正文按 0.25 GB/日回涨，约 5–7 天再触发一次——正文有效期从当前 76 天塌到不足 7 天，而盘并没有真正降到安全区。
+- **严重度**：P2（触发后不可逆；当前 4.73 GiB 未触发，但按 F38 的增速是必然路径）。
+- **建议方向**：为 `diskTight` 设独立的磁盘目标（例如降到 75% × `diskLimit`），并优先回收可删的 raw/长期表，而不是正文；或把 `ATC_DISK_LIMIT` 调到真实盘量，避免策略线先于物理容量生效。
+- **未证实点**：没有在真实磁盘压力下观测本轮路径；4.7 小时是按 100 条/30 s 与当前可用正文估算，`EVICT_REF_LIMIT=10,000` 可能让单批更小。
+
+### F40 keyset 游标在数据变动下没有一致性保证（11-04 新发现，系统巡查，第五轮）
+
+- **现象**：请求列表按 `(started_ms, req_id)` 做 keyset，但 `started_ms` 会在账本晚到后被 `projection` 原地改写；合并会把 loser 行删掉；会话列表的游标是 `MAX(started_ms)`，活跃会话会因新请求跳到游标之前。另外 forward 游标不携带 `conv_key`，可以静默复用到另一个会话。
+- **证据**：
+  - [src/queries/requests.ts L121-138](../../../../src/queries/requests.ts#L121-L138)：older 游标校验 `parts[1] === convKey`，forward 游标只校验 `startedMs/reqId`，不绑定会话；[L183-185](../../../../src/queries/requests.ts#L183-L185) 用当前行生成下一页游标。
+  - [src/queries/sessions.ts L226-L237](../../../../src/queries/sessions.ts#L226-L237)：会话游标键是 `MAX(started_ms)`；[L263-265](../../../../src/queries/sessions.ts#L263-L265) 的 `HAVING (last_ms, conv_key) < (?,?)`。
+  - [src/sources/projection.ts L652](../../../../src/sources/projection.ts#L652)：账本投影完整时 `UPDATE request SET ... started_ms=?, day=?` 原地改写排序键；[src/merge.ts L156](../../../../src/merge.ts#L156) 合并时删除 loser 行。
+  - 生产实测：1,626 个 `conv_key`，最大会话 **4,433** 条请求，**94 个会话 >200 条**（必然翻页）；hook + ledger 同时存在的请求 **49,699** 对，这些行的 `started_ms` 至少被账本覆盖过一次；手工复用 forward 游标（会话 A → 会话 B）返回 **200** 并给出 B 的一页，而不是 400。
+- **影响**：翻页窗口内被改写/合并的行可能跨过游标 → 后续页重复或漏掉；会话在翻页期间收到新请求会移到游标前 → 本轮不再出现；forward 游标跨会话不会报错，调用方拼错会静默拿到另一会话的数据。刷新首屏即可自愈，但「一次翻到底」不保证完整。
+- **严重度**：P3（瞬时漏行/重复，可自愈；不是稳定错误）。
+- **建议方向**：游标绑定 `conv_key` + 一个不可变键（`req_id` 或 `created_at`），或引入快照 id；forward/older 两个方向都做同样的 key 校验；会话列表改按不可变的 `conv_key` 排序或接受并在文档中写明「翻页期间有新请求的会话会跳到首屏」。
+- **未证实点**：没有历史版本可比，无法统计真正跨页的重写行数；跨会话复用 forward 游标只做了手工构造验证，未确认前端会走到该路径。
+
+### F41 区间上界用 `Number` 而非安全整数，`from > 2^53` 会坍缩为零宽窗口（11-04 新发现，系统巡查，第五轮）
+
+- **现象**：`parseIndex` 只做 `/^\d+$/` 后转 `Number`，`bodyRangeError` 用 `Number.isInteger`（1e20 也返回 true）且只检查 `to - from > PAGE_MAX`（40）；`to` 默认 `from + 40`，当 `from` 是 1e20 时 `from + 40 === from`，差值 0，校验通过，接口返回 200 且 `from=to`。
+- **证据**：
+  - [src/http.ts L177-181](../../../../src/http.ts#L177-L181)：`parseIndex` 取 `Number` 后仅做 `Number.isInteger` / 范围正则；[src/protocols.ts L71-81](../../../../src/protocols.ts#L71-L81)：`PAGE_MAX=40` 与 `bodyRangeError` 的整数、40 长度检查；[src/http.ts L646](../../../../src/http.ts#L646) 的默认 `to = from + PAGE_MAX`。
+  - 实测 `/api/requests/96204/body?from=9007199254740993` → **200**，响应里的 `from` 已被舍入为 **9007199254740992**、`to=9007199254741032`；`from=99999999999999999999` → **200**，`from=to=100000000000000000000`，`messages` 空，`coverage` 报完整。
+  - 同一函数对批读 item 的 `id` 要求 `Number.isSafeInteger`，但对 `from/to` 不要求（[src/http.ts L205-230](../../../../src/http.ts#L205-L230)），同一份参数规则内部不自洽。
+- **影响**：超大/非安全整数偏移拿到 200 伪完整页，而不是 400；任何按 `from/to` 递进的客户端会在 1e20 处得到零宽窗口并可能死循环或越界；契约上「from 超过正文长度」与「from 非法」无法区分。
+- **严重度**：P3（需要客户端传超大值；当前是手工构造验证）。
+- **建议方向**：`parseIndex` 与 `bodyRangeError` 一律要求 `Number.isSafeInteger(from)` 和 `Number.isSafeInteger(to)`；`from > total` 按契约返回空页，但绝不允许 `from+page` 被浮点吞掉。
+- **未证实点**：没有真实客户端会传这种值；未测大整数在批读端点的完整行为。
+
 ## 前提更正
 
 早前笔记写的备份门槛「`1.1×` + 64 MiB」与代码不符：实际门槛是 **`1.1×`（DB 备份）** 与 **`1.1×` + 4,096 B（bundle）**，见 [src/maintenance/backup.ts L116](../../../../src/maintenance/backup.ts#L116) 与 [L270](../../../../src/maintenance/backup.ts#L270)；单位是**字节**，不是 MiB。本条只在新篇记录，**不改 11-03 归档篇与 F23 设计笔记的正文**。
@@ -646,9 +717,19 @@ Status: proposed
 - 脚本退出码正常的部分：`scripts/monitor.ts` 陈旧样本退 1、`scripts/service.ts stop` 等到 socket 消失才返回；异常路径都有非零退出（F36 的 backfill 是例外）。
 - 派生队列现状：`derive_queue` clean **1,467**、dirty **1**、blocked/error **0**；`actor_state='known' AND purpose_pending=1` **0** 行，F36 的触发条件未出现。
 
+第五轮补充（摄入链路 / 存储增长 / API 契约）：
+
+- hook → ledger 的延迟正常：49,699 对同时有 hook/ledger 证据的请求，gap p50 **2.5 s**、p95 **5.0 s**、p99 **8.7 s**；>5 min 的只有 2 例（10-27、10-28，服务重启/积压），没有持续积压。
+- hook 待定行没有失控：`pending_hook` **1,389** 行，只有 **1** 行 `response_id_norm` 非空；`candidates` 全为 NULL，落在 14 天孤儿窗口内（最早 10-24），与 F01 的描述一致。
+- session 文件的截断与头部改写有处理：`size < committedOff` 时 `epoch+1`、`start=0`，头部 hash 变化时从 0 重读（[src/sources/session/read.ts](../../../../src/sources/session/read.ts)）；`ingest_issue` 只有 6 条 `omp_content_invalid`，0 条 ledger/session 解析错误。
+- `limit` 上下界一致：`limit=0` / `-1` / `abc` / `201` / `1.5` 都返回 **400 `invalid_limit`**，`007` 归一为 7；sessions 上限 100、requests 上限 200，两个入口同码。
+- 错误码分层判为正常（不另立条）：单正文区间非法 → `invalid_body_range`，批读区间非法 → `invalid_input`，turns 数值参数非法 → `invalid_from`，`limit` 非法 → `invalid_limit`；[src/http.ts L660](../../../../src/http.ts#L660) 的注释明确批读是「参数非法整体 400」，不是同因异码。
+- WAL 峰值正常：当前 `-wal` **2.7 MB**，`wal_autocheckpoint=1000`（约 4 MB），没有异常增长；`auto_vacuum=2` 对整页释放有效（当前 `freelist_count=0`），但表内空洞见 F38。
+- 并发读同一 `/api/sessions` URL 的 6 个请求均返回 200 且正文完整，`sessionsInflight` 共享 Response 没有触发一次性读取错误。
+
 ## Proposal
 
-按「先补证据、再动写窗口、最后做结构性性能与可验证性」排序。F03/F04/F05/F08 与 F13/F16/F18/F22 的取证都是只读工作，可与任何写窗口并行。**F09 是唯一涉及历史数据重判的写操作，单列在性能波之前。** 第二轮条目按性质归口：F19 并入 F11+F12 的保留/隐私批，F20/F21 合为「HTTP 契约小修」，F23 归派生可观测性，F24 归 `maintain purge` 估算修正，F22 只观察。第三轮：F25+F26+F27+F28 归「身份/合并不变量」，F29 是前端独立小笔，F30+F31 是备份可验证性与口径。第四轮：F35/F34/F36 是 CLI 与脚本失败路径（F35 先于任何 purge 执行），F32 是时间窗口口径，F33 是读侧缓存失效口径；五条彼此独立，但都排在结构性性能改动之前。
+按「先补证据、再动写窗口、最后做结构性性能与可验证性」排序。F03/F04/F05/F08 与 F13/F16/F18/F22 的取证都是只读工作，可与任何写窗口并行。**F09 是唯一涉及历史数据重判的写操作，单列在性能波之前。** 第二轮条目按性质归口：F19 并入 F11+F12 的保留/隐私批，F20/F21 合为「HTTP 契约小修」，F23 归派生可观测性，F24 归 `maintain purge` 估算修正，F22 只观察。第三轮：F25+F26+F27+F28 归「身份/合并不变量」，F29 是前端独立小笔，F30+F31 是备份可验证性与口径。第四轮：F35/F34/F36 是 CLI 与脚本失败路径（F35 先于任何 purge 执行），F32 是时间窗口口径，F33 是读侧缓存失效口径；五条彼此独立，但都排在结构性性能改动之前。第五轮：F37 归摄入可观测性，F38+F39 归容量/保留层同批评审（F39 先定磁盘目标水位），F40 归分页契约小笔，F41 归入「HTTP 契约小修」，与 F20/F21 同批。
 
 ### 修复顺序
 
@@ -711,6 +792,14 @@ Status: proposed
 31. **F01（P2，hook 缺失）**：排查 claude 侧 hook 安装与 `response_id` 回传；与 F06 的孤儿队列同一排查线。
 32. **F02（P1，探针尖峰）**：给探针加分段计时；用 F07-a 的组标识把长派生轮次与 17:20–17:24 的停顿窗口对齐。
 
+**第 6 波（第五轮：摄入可观测性、容量与契约，独立小笔）**
+
+33. **F37（P2，OTLP 静默丢弃）**：先只读统计「按服务 × span 名 × 日」的 skipped 量（当前 188,099 行 → 1 条证据），再决定「不入 raw」还是「采样」；`AcceptOtlpTracesResult` 加 `skipped` 与按服务的聚合 issue，HTTP 用 `partialSuccess.rejectedSpans` 回真实数。**先补计数再改采样**，否则只是把静默丢换成静默少收。
+34. **F38（P2，预算口径）**：先把 `cost_observation` / `route_summary` / `raw_route` / `raw_session_event` / `raw_ledger` 的分配字节纳入一份只读报表，再定 TTL 或预算；预算口径改「可回收字节 + 不可回收字节」两项；`VACUUM` 只在维护窗口用 `VACUUM INTO` + 替换，不做在线 `VACUUM`。
+35. **F39（P2，diskTight 目标）**：先定磁盘目标水位（建议 75% × `diskLimit`）与「先回收 raw/长期表、再动正文」的顺序；`ATC_DISK_LIMIT` 与真实盘量对齐后再验收。**与 F38 同批评审，先定目标再改循环。**
+36. **F40（P3，分页契约）**：forward 游标绑定 `conv_key` + 一个不可变键，或引入快照 id；会话列表改按 `conv_key` 排序，或在契约里写明「有新请求的会话会跳到首屏」。**独立小笔，不与 F32 的 `day` 重写合并。**
+37. **F41（P3，区间安全整数）**：`parseIndex` / `bodyRangeError` 统一要求 `Number.isSafeInteger`；与 F20/F21 同一「HTTP 契约小修」批次，各一笔。
+
 ### 依赖图（文字版）
 
 ```
@@ -739,6 +828,10 @@ F06（unknown-actor 进派生）→ 存量 ["request" 卡数据层收敛（展�
 F07-A（组内预取）→ F07-C（分片护栏）；F07-D（真增量）独立议程；F07-a（日志补 conv_key）与 A 同批、单独提交
 F05（turn_ref）独立只读；F04 / F03 / F08 独立只读，不阻塞任何写窗口
 F02（探针尖峰）与 F01（hook 缺失）只在排查层关联，互不阻塞
+F37（OTLP skipped 计数）→ 先补计数再谈采样；与 F11 共享 raw 落盘策略，与 F38 共享容量时钟
+F38 ↔ F39 同批评审：F39 先定磁盘目标水位，F38 定「可回收 / 不可回收」口径；两条都不与 F11/F12 的 TTL 合并成一笔
+F40 独立小笔；与 F32 的 `day` 重写同源，但不合并
+F41 归入「HTTP 契约小修」，与 F20/F21 同批、各一笔
 ```
 
 ## Acceptance criteria
@@ -779,6 +872,11 @@ F02（探针尖峰）与 F01（hook 缺失）只在排查层关联，互不阻�
 - **F34**：`integrity` 非 `ok`、`dangling_blocks > 0`、`duplicate_evidence > 0` 任一成立时，`maintain verify` 输出 `ok:false`、退出 **1**；`pending_derivations > 0` 不单独判失败；CLI 集成测试覆盖坏库与悬空块。
 - **F35**：`--before 2027-01-01`、`2026-13-01`、`2026-02-31` 均被拒绝（用法错误、退出非 0）；全量命中必须额外确认；只读计数与执行前预览一致。
 - **F36**：无进展时脚本在 **≤1 轮** 或 **≤30 s** 内以 `derive_no_progress` 退出，不再无限空转；当前 1,467 个 clean + 1 个 dirty、0 个 purpose-pending 的基线不变。
+- **F37**：`AcceptOtlpTracesResult` 有 `skipped` 计数；按服务 × span 名 × 日的聚合 issue 可读；HTTP `partialSuccess.rejectedSpans` 与库内 skipped 对得上；24 h 的 `raw_otlp_span` 增量下降 **≥50%**，或明确保留并计入 F38 的可回收/不可回收报表。
+- **F38**：产出「不可回收字节」只读报表（至少覆盖 `cost_observation`、`route_summary`、`raw_route`、`raw_session_event`、`raw_ledger`）；这些表要么有 TTL 且超期归零，要么明确声明长期归档并计入预算；预算口径里「正文」与「不可回收」两项同时可见；维护窗口执行一次 `VACUUM INTO` 后 `freelist` 与表内空洞的下降可量化。
+- **F39**：`diskTight` 有独立的磁盘目标（不再复用正文 9 GB）；触发后先回收可删 raw/长期表，正文淘汰量不超过「降到目标所需」；模拟盘 ≥12.8 GB 时不出现「每 30 s 删 100 条直到正文清空」。
+- **F40**：forward 游标跨会话返回 **4xx**；翻页窗口内被 `projection` 改写或合并的行不再造成跨页漏行/重复（或用快照 id 保证一致）；会话列表的「新请求跳首屏」写进契约或改排序键。
+- **F41**：`from` / `to` 超过 2^53 返回 **400 `invalid_body_range`**；`from=1e20` 不再返回零宽完整页；区间参数与批读 `id` 使用同一安全整数要求。
 
 ## Risks
 
@@ -812,6 +910,11 @@ F02（探针尖峰）与 F01（hook 缺失）只在排查层关联，互不阻�
 - **F34 把 `pending_derivations` 也算失败会误伤停机场景**：停机前队列有积压是正常的，门禁若把它算红会让每次停服都报错；必须把「完整性/悬空/重复」与「队列积压」分开。
 - **F35 加「不得晚于今天」会挡掉合法的未来日预清理**：若确实需要提前清理未来日期（例如导入数据已知），要留显式 `--allow-future`，不能一刀切。
 - **F36 加超时可能把慢但正常的组判死**：大组派生本身可能超过 30 s；超时应按「连续无进展轮次」而不是总墙钟，否则会误报。
+- **F37 先计数再改采样**：直接停写 `raw_otlp_span` 会把「静默丢」换成「静默少收」，并失去事后判断「规则漏识别」的唯一证据；先有按服务 × span 名的量级，再谈采样率。
+- **F38 的 TTL 与「长期归档」冲突**：`cost_observation` 是历史成本回算的主要来源，加 TTL 会让 10-24 的回填数据到期消失；要么明确声明长期归档并计入预算，要么只对「可重算的副本表」设 TTL。
+- **F39 调 `ATC_DISK_LIMIT` 会整体放宽现有保护**：把 16 GB 调到真实盘量后，`diskTight` 与 `paused` 的绝对水位一起后移；先确认这条线原本防的是「盘被其他进程占满」还是「tracery 自身失控」，再决定是否对齐。
+- **F40 上快照 id 的代价**：快照要额外存储或过期清理，翻页期间的删除仍可能让页不满；先用「绑定 `conv_key` + 不可变键」这个最小修，不要一次上快照。
+- **F41 收紧整数校验会拒绝历史客户端**：用 float/字符串传超大 `from` 的调用方会从 200 变 400；与 F20 同批时仍要各一笔提交，避免回归定位变难。
 
 ## Alternatives considered
 
@@ -845,7 +948,14 @@ F02（探针尖峰）与 F01（hook 缺失）只在排查层关联，互不阻�
 - **F34 让 `verify` 遇到任何非零计数都退出 1**：把 `pending_derivations` 也当失败，停机场景会误报；落选，按「完整性/悬空/重复」三项判定。
 - **F35 只靠预览让人发现全量命中**：预览确实显示 `requests=77,417`（测量时），但自动化/赶时间的操作员会直接 `--apply`；落选，输入侧必须拒绝。
 - **F36 只给脚本加 `sleep`**：空转变慢转，仍不退出；落选，必须有「无进展即失败」的判据。
+- **F37 直接把非 LLM span 丢掉、连 raw 都不写**：能立刻省盘，但失去事后判断「规则漏识别」的唯一证据，也无法区分「上游没发」与「我们没收」；落选，先补 skipped 计数与聚合 issue，再谈采样或丢弃。
+- **F38 只加 TTL、不改预算口径**：到期数据能降，但「正文预算只覆盖 37%」这个错位口径仍在，淘汰仍压不住文件体积；落选，口径与 TTL 一起改。
+- **F39 直接把 `diskTight` 的停止条件改成「盘降到 75%」**：方向正确，但没有「哪些表可删」的优先级会先删正文；落选为首选方案的一部分，先定回收顺序再改目标。
+- **F40 一次性上服务端快照（copy-on-read）**：一致性问题彻底解决，但每次翻页要多一份快照存储与过期清理；落选，先用不可变键 + 会话绑定。
+- **F41 只在文档里写明「请传安全整数」**：不动代码，契约仍可被 200 伪完整页违反；落选，校验必须在服务端。
 
 ## 下一轮起的前置提醒
 
 第四轮已补入 F32–F36；此前 F25–F31 的「未证实点」仍应作为下一轮巡查的输入：弱规则正反例、裸 32 hex 上游形态、真实旧 schema 恢复、最长会话 `+N` 触顶。第四轮新增的四项未证实点：真实 `hook-delivery` 窗口与本地日计数对照、外部进程写库后的 `/api/stats` 陈旧窗口、生产库 `integrity_check` 当前状态、backfill「选中后变 waiting」的复现；前两项可用只读/临时实例补齐，后两项需要一次维护窗口。
+
+第五轮已补入 F37–F41，新增四项未证实点：① OTLP 中 16 条 LLM span 只有 1 条证据，是同 span 重投被去重还是规则未命中（需回放一条真实 span）；② 10-31 14:22–18:04 的 12,714 条批量正文淘汰触发源在库内没有记录；③ `diskTight` 路径没有真实盘压观测，F39 的「4.7 小时清空正文」是按 100 条/30 s 估算；④ forward 游标跨会话复用只做了手工构造，未确认前端会走到该路径（直接读前端代码即可）。此外 F38 的增速是 24 h / 7 d 增量推算，没有历史文件大小记录，拿到 `du` 日线后可把「20–25 天」收窄。存储面下一轮若只重复 F38/F39 不再立条，改为只补日线数字。
