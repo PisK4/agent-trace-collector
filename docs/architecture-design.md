@@ -519,11 +519,11 @@ SQLite，WAL，单文件，放仓库外。默认路径按平台惯例落在数�
 
 ### 版本与破坏式替换
 
-当前结构版本是 v12。空库在同一个事务里建到 v12。存量库的原地升级路径：v6 到 v11 打开时在单个事务里升到 v12（纯新增表、列与索引，不动旧行；v12 例外见下），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
+当前结构版本是 v13。空库在同一个事务里建到 v13。存量库的原地升级路径：v6 到 v12 打开时在单个事务里升到 v13（纯新增表、列与索引，不动旧行），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
 
-首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6 起不走这条路，原因是仓库已有本机真实数据且各步变更纯新增，原地升级可执行、可验证。备份白名单收 v6 到 v12，低版本包恢复后首次打开时同样原地升级。
+首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6 起不走这条路，原因是仓库已有本机真实数据且各步变更纯新增，原地升级可执行、可验证。备份白名单收 v6 到 v13，低版本包恢复后首次打开时同样原地升级。
 
-v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列：五个本地 Agent 适配器复用同一张原始层，不再各建一张同形表。改名与加列在同一事务里，旧行保留并补上 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若同时存在两张表，旧表行按 `INSERT OR IGNORE` 并入后删除。v11 在 v10 之上加的是 droid 原始层 `raw_droid_event` 与会话累计 `session_usage` 两张表，建表与索引全是 `IF NOT EXISTS`，不扫描存量。v10 在 v9 之上给 `request` 加 `user_fingerprint` 与 `turn_ref` 两列和两条按非空值的部分索引。v9 在 v8 之上给 `derive_queue` 加 `claim_from_sort` 列，带常量默认值。v8 在 v7 之上加的是两条部分反向索引：`i_req_prev`（`request(prev_req_id) WHERE prev_req_id IS NOT NULL`）与 `i_tool_result_req`（`tool_call(result_req) WHERE result_req IS NOT NULL`）。hook 合并按旧 id 反向改指前驱与工具结果位置，这两条 UPDATE 没有索引时是全表扫描（[采集期间交互延迟](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)）；部分形状匹配写路径，两个更新绑定的参数都非空。存量库建索引的启动停顿与失败恢复归[运维手册](operations.md#schema-版本)。
+v13 在 v12 之上给 `session_usage` 加一条读侧索引 `i_session_usage_session`（`(session, agent)`）：会话摘要按 session 取累计用量，主键以 agent 开头绕不过前缀；索引 `IF NOT EXISTS`，不扫描正文，停顿毫秒级。v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列：五个本地 Agent 适配器复用同一张原始层，不再各建一张同形表。改名与加列在同一事务里，旧行保留并补上 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若同时存在两张表，旧表行按 `INSERT OR IGNORE` 并入后删除。v11 在 v10 之上加的是 droid 原始层 `raw_droid_event` 与会话累计 `session_usage` 两张表，建表与索引全是 `IF NOT EXISTS`，不扫描存量。v10 在 v9 之上给 `request` 加 `user_fingerprint` 与 `turn_ref` 两列和两条按非空值的部分索引。v9 在 v8 之上给 `derive_queue` 加 `claim_from_sort` 列，带常量默认值。v8 在 v7 之上加的是两条部分反向索引：`i_req_prev`（`request(prev_req_id) WHERE prev_req_id IS NOT NULL`）与 `i_tool_result_req`（`tool_call(result_req) WHERE result_req IS NOT NULL`）。hook 合并按旧 id 反向改指前驱与工具结果位置，这两条 UPDATE 没有索引时是全表扫描（[采集期间交互延迟](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)）；部分形状匹配写路径，两个更新绑定的参数都非空。存量库建索引的启动停顿与失败恢复归[运维手册](operations.md#schema-版本)。
 
 v7 在 v6 之上加的是 OTLP 三张表：`raw_otlp_span`（span 原始层，主键 `(trace_id, span_id)`）、`raw_otlp_log`（logs 原始层，按记录内容哈希判重）与 `otlp_body_ref`（Claude Code 正文指针状态机）。v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，切片模式不写它们，同步模式照旧写。
 

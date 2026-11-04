@@ -308,6 +308,9 @@ CREATE TABLE session_usage (
   observed_at           INTEGER NOT NULL,
   PRIMARY KEY (agent, session)
 ) WITHOUT ROWID;
+-- 摘要接口按会话取累计用量（WHERE session=? ORDER BY agent），主键以 agent
+-- 开头绕不过前缀；读侧索引与写侧主键各管一个方向。
+CREATE INDEX i_session_usage_session ON session_usage(session, agent);
 
 CREATE TABLE block (
   id       INTEGER PRIMARY KEY,

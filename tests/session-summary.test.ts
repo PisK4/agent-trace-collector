@@ -686,3 +686,20 @@ test('会话汇总：会话文件累计用量按会话键读出，非会话键�
     expect(getSessionSummary(f.store, JSON.stringify(['request', 'x'])).session_usage).toBeNull();
   } finally { f.close(); }
 });
+
+test('session_usage 按会话取用量走 (session, agent) 索引，不全表扫描', () => {
+  const f = fixture();
+  try {
+    // 钉住摘要接口用量查询的驱动形状：主键以 agent 开头，改回按 session 过滤
+    // 走主键就会退回 SCAN（F15 的回归形态）。
+    const plan = f.store.read.query<{ detail: string }, [string]>(`
+      EXPLAIN QUERY PLAN SELECT agent FROM session_usage WHERE session=? ORDER BY agent LIMIT 2`,
+    ).all('summary');
+    const detail = plan.map(row => row.detail).join(' | ');
+    // 只选索引列时是 COVERING INDEX，摘要查询选全列时是普通 INDEX：两种形态
+    // 都算命中，SCAN 才是回归。
+    expect(detail).toContain('SEARCH session_usage');
+    expect(detail).toContain('i_session_usage_session');
+    expect(detail).not.toContain('SCAN session_usage');
+  } finally { f.close(); }
+});
