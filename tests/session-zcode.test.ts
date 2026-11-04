@@ -170,7 +170,8 @@ test('Zcode 会话：completed 调用建行，用量按 magpie 口径归一，�
       source_kind: 'zcode_session_call', ref_key: `${SESSION_ID}/m-assistant-1`,
       merge_state: 'merged', match_rule: 'match_absent',
     }]);
-    expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_session_event').get()).toEqual({ n: 1 });
+    // 物化行落库可重读，原始层不重复存整段上下文。
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_session_event').get()).toEqual({ n: 0 });
 
     const cursor = f.store.read.query(`
       SELECT source_name, committed_off, seen_size FROM source_cursor
