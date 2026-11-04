@@ -575,7 +575,9 @@ sqlite3 "$HOME/Library/Application Support/tracery/trace.db" \
 
 ## schema 版本
 
-当前 `user_version=12`。空数据目录首次启动直接建到 v12；v6 到 v11 库打开时在单个事务里原地升到 v12，更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 到 v12，旧版本包恢复后首次打开同样原地升级。部署或恢复前可先跑 `maintain precheck` 只读预判同一套判据，不必等服务启动失败（见[维护命令](#维护命令)）。
+当前 `user_version=13`。空数据目录首次启动直接建到 v13；v6 到 v12 库打开时在单个事务里原地升到 v13，更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 到 v13，旧版本包恢复后首次打开同样原地升级。部署或恢复前可先跑 `maintain precheck` 只读预判同一套判据，不必等服务启动失败（见[维护命令](#维护命令)）。
+
+v13 在 v12 之上给 `session_usage` 加一条 `IF NOT EXISTS` 读侧索引 `i_session_usage_session`（`(session, agent)`）：会话摘要按 session 取累计用量走索引，不全表扫描。迁移不扫描正文、不回填，停顿毫秒级，无部署顺序变化。
 
 v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列，五个本地 Agent 适配器与 droid 共用一张原始层。旧行保留并补 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若因旧脚本同时存在两张表，旧表行先并入再删除。升级不扫描正文，停顿是毫秒级。升级后 `sessions` 定时器从偏移 0 开始按每家 64 个文件或 2 MiB 追历史；当前调度改为 live/backfill 两档，见[架构设计](architecture-design.md)。页面上 `via='session'` 的行按 `agent` 区分来源。
 

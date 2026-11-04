@@ -247,6 +247,30 @@ test('分页期间新增请求不会让旧页重复', async () => {
   }
 });
 
+test('forward游标绑定会话与方向：跨会话复用、方向混用与旧形状都拒绝', () => {
+  const f = fixture();
+  try {
+    const keyA = JSON.stringify(['session', 'synthetic-a']);
+    const keyB = JSON.stringify(['session', 'synthetic-b']);
+    seedRequests(f.store, keyA, 5);
+    seedRequests(f.store, keyB, 5);
+    const first = listRequests(f.store, keyA, 2);
+    expect(first.next_cursor).not.toBeNull();
+    // 跨会话复用：游标带着会话 A 的绑定，到会话 B 上必须 400。
+    expect(() => listRequests(f.store, keyB, 2, first.next_cursor)).toThrow('invalid_cursor');
+    // 方向混用：older 游标当 forward 用、forward 游标当 older 用，都拒绝。
+    const olderPage = listRequests(f.store, keyA, 2, null, 'older');
+    expect(() => listRequests(f.store, keyA, 2, olderPage.next_cursor)).toThrow('invalid_cursor');
+    expect(() => listRequests(f.store, keyA, 2, first.next_cursor, 'older')).toThrow('invalid_cursor');
+    // 缺会话绑定的旧形状游标（两元组）一律拒绝。
+    const legacy = Buffer.from(JSON.stringify([1_700_000_000_000, 1]), 'utf8').toString('base64url');
+    expect(() => listRequests(f.store, keyA, 2, legacy)).toThrow('invalid_cursor');
+    // 同会话同方向翻页照常工作，页与页不重不漏。
+    const second = listRequests(f.store, keyA, 2, first.next_cursor);
+    expect(new Set([...first.items, ...second.items].map(row => row.req_id)).size).toBe(4);
+  } finally { f.close(); }
+});
+
 test('会话列表按最后时间倒序且分页稳定', () => {
   const f = fixture();
   try {

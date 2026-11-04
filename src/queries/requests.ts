@@ -109,9 +109,27 @@ const REQUEST_COLUMNS = `r.req_id, r.conv_key, r.actor, r.agent, r.actor_state, 
 export type RequestDirection = 'forward' | 'older';
 
 /**
+ * 两个方向共用的游标校验：绑定会话与方向，`(started_ms, req_id)` 里的
+ * `req_id` 是不可变键。跨会话复用、方向混用与缺绑定的旧形状游标都按
+ * `invalid_cursor` 拒绝；`started_ms` 会被账本投影改写，翻页窗口内的改写与
+ * 合并可能漏行或重复，刷新首屏自愈（契约见 docs/architecture-design.md 查询接口）。
+ */
+function decodeBoundCursor(cursor: string, key: string,
+  tag: RequestDirection): { startedMs: number; reqId: number } | null {
+  return decodeCursor(cursor, value => {
+    if (!Array.isArray(value) || value.length !== 4) return null;
+    const [cursorTag, boundKey, startedMs, reqId] = value;
+    if (cursorTag !== tag || boundKey !== key) return null;
+    if (typeof startedMs !== 'number' || !Number.isFinite(startedMs) || !Number.isInteger(startedMs)) return null;
+    if (!Number.isSafeInteger(reqId)) return null;
+    return { startedMs, reqId };
+  });
+}
+
+/**
  * 会话内请求分页。forward 从最早页向后追加（默认）；older 无游标取最近窗口，
  * 之后向更早方向翻。返回 items 始终按 (started_ms, req_id) 升序，两个方向
- * 只是比较符与扫描方向不同；older 游标额外绑定会话与方向，禁止与 forward 混用。
+ * 只是比较符与扫描方向不同；两个方向的游标都绑定会话与方向，禁止混用。
  */
 export function listRequests(
   store: Store, key: string, limit = 100,
@@ -119,23 +137,7 @@ export function listRequests(
 ): Page<RequestRow> {
   const size = checkLimit(limit, 200);
   if (direction !== 'forward' && direction !== 'older') throw new QueryInputError('invalid_direction');
-  const bound = cursor === null
-    ? null
-    : direction === 'older'
-      ? decodeCursor(cursor, value => {
-        if (!Array.isArray(value) || value.length !== 4) return null;
-        const [tag, boundKey, startedMs, reqId] = value;
-        if (tag !== 'older' || boundKey !== key) return null;
-        if (typeof startedMs !== 'number' || !Number.isFinite(startedMs) || !Number.isInteger(startedMs)) return null;
-        if (!Number.isSafeInteger(reqId)) return null;
-        return { startedMs, reqId };
-      })
-      : decodeCursor(cursor, value => {
-        if (!Array.isArray(value) || value.length !== 2) return null;
-        const [startedMs, reqId] = value;
-        if (typeof startedMs !== 'number' || !Number.isFinite(startedMs) || !Number.isInteger(reqId)) return null;
-        return { startedMs, reqId };
-      });
+  const bound = cursor === null ? null : decodeBoundCursor(cursor, key, direction);
   // 分页与状态判定必须在同一个快照里：分成两次读会把分页时的行与状态时的行混在一起。
   const rows = store.read.transaction(() => {
     if (direction === 'older') {
@@ -182,7 +184,7 @@ export function listRequests(
   const nextCursor = rows.length > size && cursorRow !== undefined
     ? direction === 'older'
       ? encodeCursor(['older', key, cursorRow.started_ms, cursorRow.req_id])
-      : encodeCursor([cursorRow.started_ms, cursorRow.req_id])
+      : encodeCursor(['forward', key, cursorRow.started_ms, cursorRow.req_id])
     : null;
   return { items, next_cursor: nextCursor };
 }

@@ -25,6 +25,7 @@ import { createLiveActivity } from './activity';
 import { markHookAbsent, reconcilePending } from './hook';
 import { createDeriveUnit, type DeriveCompute } from './derive/unit';
 import { createDeriveWorker } from './derive/worker';
+import { deriveRetryBackoffMs } from './derive/state';
 import {
   RAW_TTL_MS,
   createAdmissionGate,
@@ -183,6 +184,7 @@ export async function startCollector(
 
   const timers: ReturnType<typeof setInterval>[] = [];
   let deriveTimer: ReturnType<typeof setTimeout> | undefined;
+  let deriveFailureStreak = 0;
   const running = new Set<string>();
   let stopped = false;
 
@@ -311,7 +313,14 @@ export async function startCollector(
     let nextDueMs = intervalOf(config, 'derive', DERIVE_INTERVAL_MS);
     try {
       const result = await deriveUnit.run({ budgetMs: 400 });
+      deriveFailureStreak = 0;
       if (result.nextDueMs === 0) nextDueMs = 0;
+    } catch (error) {
+      // 整轮失败按指数退避再试（2s 起步、60s 封顶），永久失败的组不再每 2 秒
+      // 空转；失败原因在 derive_queue.last_error，丢弃判据见 derive/state.ts。
+      deriveFailureStreak += 1;
+      nextDueMs = Math.max(nextDueMs, deriveRetryBackoffMs(deriveFailureStreak));
+      throw error;
     } finally {
       if (!stopped) deriveTimer = setTimeout(trackedDeriveTick, nextDueMs);
     }

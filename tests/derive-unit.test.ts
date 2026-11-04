@@ -67,6 +67,24 @@ test('第二组失败只回滚该组，重开库保留已完成组并继续', as
   } finally { reopened?.close(); f.close(); }
 });
 
+test('失败组把原因写回队列，attempts 只记认领过的组', async () => {
+  const f = fixture();
+  try {
+    seedGroups(f);
+    f.store.db.exec(`CREATE TRIGGER fail_group_b BEFORE UPDATE OF state ON derive_queue
+      WHEN NEW.conv_key='b' AND NEW.state='clean'
+      BEGIN SELECT RAISE(ABORT,'synthetic_ack_failure'); END`);
+    await expect(createDeriveUnit(f.store).run({ budgetMs: 400 })).rejects.toThrow('synthetic_ack_failure');
+    expect(f.store.read.query(
+      'SELECT conv_key,attempts,last_error FROM derive_queue ORDER BY conv_key').all())
+      .toEqual([
+        { conv_key: 'a', attempts: 1, last_error: null },
+        { conv_key: 'b', attempts: 1, last_error: 'synthetic_ack_failure' },
+        { conv_key: 'c', attempts: 0, last_error: null },
+      ]);
+  } finally { f.close(); }
+});
+
 test('在线每轮最多完成十个组，维护排空仍按显式limit', async () => {
   const f = fixture();
   try {

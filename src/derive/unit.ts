@@ -4,7 +4,7 @@ import type { BodyReadStats } from '../body-cache';
 import { errorCode } from '../monitoring';
 import type { DeriveGroupRound, DeriveScope, DrainResult } from './sync';
 import { applyDeriveGroup, computeDeriveGroup } from './sync';
-import { claimGroupTx, queuePendingSql } from './state';
+import { claimGroupTx, queuePendingSql, recordDeriveFailureTx } from './state';
 import { drainRequestPurposesTx } from '../request-purpose';
 import { recoverSlice } from './slice/generation';
 import { sliceGroupStep } from './slice/scheduler';
@@ -98,6 +98,14 @@ async function drain(store: Store, limit: number, scope: DeriveScope | undefined
         addBodyReadStats(result.body_read, group.body_read);
         result.groups.push(candidate);
       } catch (error) {
+        // 失败原因写回队列，队列里才看得出是哪个组、为什么反复重试（F23）。
+        // 记录是 best-effort：写不进（例如锁竞争未恢复）时保留原始错误上抛。
+        try {
+          store.write(db => recordDeriveFailureTx(db, candidate.conv_key, candidate.actor,
+            deriveErrorCode(error), Date.now()), 'derive-fail');
+        } catch {
+          // 原始错误照常抛出，失败记录缺失可在诊断流里对账。
+        }
         onRound?.({ corr, result: 'failure', compute_ms: computeMs, apply_ms: applyMs,
           code: deriveErrorCode(error) });
         throw error;
