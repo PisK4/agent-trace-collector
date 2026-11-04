@@ -221,16 +221,21 @@ test('状态目录可被环境变量覆盖，期号是 ISO 周', () => {
   expect(isoWeek(new Date(2026, 10, 4).getTime())).toMatch(/^\d{4}-W\d{2}$/);
 });
 
-test('到期闸门只在最近一期满 7 天后放行，无历史与损坏历史都算到期', () => {
-  const now = Date.now();
+test('到期闸门只看本期是否已有快照，无历史与损坏历史都算到期', () => {
+  const now = new Date(2026, 10, 4).getTime();
+  const thisWeek = isoWeek(now);
   const recent: Snapshot[] = [
     snapshot('2026-W44', now - 10 * DAY_MS, 4_800),
-    snapshot('2026-W45', now - 3 * DAY_MS, 5_000),
+    snapshot(thisWeek, now - 3 * DAY_MS, 5_000),
   ];
   const fresh = dueState({ periods: recent, corrupt: false, path: '/tmp/history.json' }, now);
   expect(fresh.due).toBe(false);
   expect(fresh.ageDays).toBeCloseTo(3, 5);
-  expect(dueState({ periods: recent, corrupt: false, path: '/tmp/history.json' }, now + 4 * DAY_MS).due).toBe(true);
+  // 同周重跑把 takenAt 刷到今天，下一期头一天仍应放行，而不是整周被跳过。
+  const rerun: Snapshot[] = [recent[0], { ...recent[1], takenAt: now }];
+  const nextWeek = new Date(2026, 10, 11).getTime();
+  expect(dueState({ periods: rerun, corrupt: false, path: '/tmp/history.json' }, nextWeek).due).toBe(true);
+  expect(dueState({ periods: [recent[0]], corrupt: false, path: '/tmp/history.json' }, now).due).toBe(true);
   expect(dueState({ periods: [], corrupt: false, path: '/tmp/history.json' }, now)).toEqual({ due: true, ageDays: null });
   expect(dueState({ periods: [], corrupt: true, path: '/tmp/history.json' }, now).due).toBe(true);
 });

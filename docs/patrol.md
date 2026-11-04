@@ -44,7 +44,7 @@ bun run patrol smoke --port 8396     # 临时实例
 bun run patrol weekly                                   # 生产数据目录
 bun run patrol weekly --data-dir /path                  # 副本
 bun run patrol weekly --state-dir /path/to/state        # 历史落到别处
-bun run patrol weekly --if-due                          # 距上期不足 7 天时只打印未到期并退出 0
+bun run patrol weekly --if-due                          # 本期已有快照时只打印未到期并退出 0
 ```
 
 输出逐行给出读数、当前阈值与 `ok / over / info`；有越界项时退出码 1。`weekly` 会把本期快照写进状态目录，并自动与上一期比较，周环比不再需要人算，见下面的「历史与周环比」。整段输出仍然建议贴进周报，方便人看趋势。
@@ -65,7 +65,7 @@ bun run patrol weekly --if-due                          # 距上期不足 7 天�
 - 比较：取严格早于本期的最近一期，输出 `growth_delta`（增量、占上期百分比、日均，以及是否越过日增/周增阈值）与 `conversation_delta`（`>200` 会话数与最大请求的变化）。没有更早期时只打印 `无上期可比`。
 - 期数：只保留最近 12 期，写入时按周号从旧到新裁掉；状态目录因此不会无限增长。
 - 损坏：文件缺失、JSON 解析失败或形状不符时退化为「无上期可比」，打印 `[info] history: 历史不可读（<path>）…`，退出码语义不变（0/1/2）。下次写入会用本期重建，坏内容被覆盖，不做恢复。
-- 到期闸门：`--if-due` 在最近一期快照距今不足 7 天时只打印 `未到期（距上期 N 天），跳过` 并退出 0，不采集、不写快照；历史缺失或损坏视为到期，照常采集。`smoke` 不认这个开关（退出 2）。
+- 到期闸门：`--if-due` 看本期 ISO 周是否已有快照，有则打印 `未到期（<本期> 本期已采，距上期 N 天），跳过` 并退出 0，不采集、不写快照；历史缺失或损坏视为到期，照常采集。同一周不带闸门重跑会覆盖本期并刷新 `takenAt`，按天数判断会让下一期整周被跳过，所以判据用期号不用时间窗。`smoke` 不认这个开关（退出 2）。
 - 写入先落临时文件再改名，半写不会留下坏文件；`smoke` 不写历史。
 
 ## C. 触发式（只在动到对应代码时跑）
@@ -178,7 +178,7 @@ rm -rf "$TMP"
 前置：只读。生产库 $HOME/Library/Application Support/tracery/trace.db；不写、不重启、不 kill 生产进程；不读真实请求正文与令牌明文。
 
 1. 门禁：按根 AGENTS.md「命令」一节跑类型检查、测试、note 两项；任一非 0 立即停。
-2. 跑 bun run patrol smoke；limit=0/201/1.5、direction=sideways、body?from=1e20、%ZZ 路径逐项看状态码；越界项记录，F41 的 200 记作已知基线。
+2. 跑 bun run patrol smoke；limit=0/201/1.5、direction=sideways、body?from=1e20、%ZZ 路径逐项看状态码；越界项记录，F41 的 200、F20 的 500 与 `limit=201` 的 200 都记作 info，不另立 finding。
 3. 跑 bun run patrol weekly --if-due；未到期只打印一行并退出 0，到期则写入本期快照并与上一期比较（首次显示「无上期可比」）；把整段输出贴进周报。
 4. 需要进程内指标时跑 bun scripts/monitor.ts inspect；它的规则是权威口径，不要用本文或记忆里的数字另立标准。
 5. 动到 schema、保留层、摄入、查询、生命周期时，按 C1–C5 对应项加跑；临时目录或 ≤300 MB 镜像，结束卸载并 rm，确认 mount 无残留。

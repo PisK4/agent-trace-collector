@@ -1,13 +1,13 @@
 /**
  * 巡检：把巡查里能计算的部分固化成只读命令。
  *
- * 数据库用只读连接打开，磁盘读数走 statfs；不写库、不写文件、不重启进程。
- * 周快照写到维护者的状态目录（默认 <data>/patrol，可用 ATC_PATROL_STATE_DIR
- * 或 --state-dir 改），不写库、不写仓库工作区。
+ * 数据库用只读连接打开，磁盘读数走 statfs；不写库、不改 schema、不重启进程。
+ * 唯一的写点是周快照：写到维护者的状态目录（默认 <data>/patrol，可用
+ * ATC_PATROL_STATE_DIR 或 --state-dir 改），不写库、不写仓库工作区。
  * 阈值只在这里定义，docs/patrol.md 讲节奏与误报边界，不复制数字。
  *
  * 用法：
- *   bun scripts/patrol.ts weekly [--data-dir PATH] [--state-dir PATH] [--json]
+ *   bun scripts/patrol.ts weekly [--data-dir PATH] [--state-dir PATH] [--if-due] [--json]
  *   bun scripts/patrol.ts smoke [--port N] [--data-dir PATH] [--json]
  *
  * 退出码：0 全部通过或只有信息项；1 有越界项；2 用法错误或读不到库。
@@ -24,8 +24,6 @@ const MB = 1024 * 1024;
 const DAY_MS = 24 * 60 * 60_000;
 const HISTORY_FILE = 'history.json';
 const HISTORY_LIMIT = 12;
-/** `--if-due` 的到期窗口：最近一期快照距今不足这么多天就跳过采集。 */
-const DUE_DAYS = 7;
 
 /**
  * 阈值与判定口径。数字随容量策略一起改；改这里等于改巡检标准，docs/patrol.md
@@ -454,16 +452,16 @@ export function previousSnapshot(history: History, period: string): Snapshot | n
     .sort((a, b) => (a.period < b.period ? 1 : -1))[0] ?? null;
 }
 
-/** `--if-due`：最近一期距今不足 days 天算未到期；没有历史或历史损坏视为到期。 */
+/** `--if-due`：本期已有快照就算未到期；没有历史或历史损坏视为到期。
+ *  同周不带闸门重跑会覆盖本期并刷新 takenAt，用天数判断会让下一期整周被跳过。 */
 export function dueState(
   history: History,
   nowMs: number,
-  days = DUE_DAYS,
 ): { due: boolean; ageDays: number | null } {
   const latest = history.periods[history.periods.length - 1];
   if (latest === undefined) return { due: true, ageDays: null };
   const ageDays = Math.max((nowMs - latest.takenAt) / DAY_MS, 0);
-  return { due: ageDays >= days, ageDays };
+  return { due: !history.periods.some(row => row.period === isoWeek(nowMs)), ageDays };
 }
 
 export function toSnapshot(reading: WeeklyReading, checks: Check[], nowMs = Date.now()): Snapshot {
@@ -566,7 +564,7 @@ async function main(argv: string[]): Promise<number> {
       if (options.ifDue) {
         const due = dueState(loadHistory(options.stateDir), now);
         if (!due.due && due.ageDays !== null) {
-          const detail = `未到期（距上期 ${due.ageDays.toFixed(1)} 天），跳过`;
+          const detail = `未到期（${isoWeek(now)} 本期已采，距上期 ${due.ageDays.toFixed(1)} 天），跳过`;
           process.stdout.write(options.json ? `${JSON.stringify([{ id: 'due', state: 'info', detail }], null, 2)}\n` : `${detail}\n`);
           return 0;
         }
