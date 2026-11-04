@@ -37,11 +37,19 @@ function stringFlag(flags: Map<string, string | true>, name: string): string | n
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-/** 窗口端点接受 epoch 毫秒或 ISO 8601；解析失败返回 null，由调用方按用法错误退出。 */
+/** 日期简写按本地日零点解析：day 列与页面是本地日语义，Date.parse 的纯日期按 UTC 会偏一个时区。 */
+function localMidnight(value: string): number {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year!, month! - 1, day).getTime();
+}
+
+/** 窗口端点接受 epoch 毫秒、ISO 8601 或日期简写；解析失败返回 null，由调用方按用法错误退出。 */
 function momentFlag(flags: Map<string, string | true>, name: string): number | null {
   const value = stringFlag(flags, name);
   if (value === null) return null;
   if (/^\d+$/.test(value)) return Number(value);
+  // 简写显式走本地构造，与 day 列同口径；非法日历（会被 Date 静默滚月）不猜。
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return isCalendarDay(value) ? localMidnight(value) : null;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }

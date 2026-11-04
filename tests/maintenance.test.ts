@@ -538,6 +538,44 @@ test('maintain verify按结构问题定退出码，派生积压不算失败', as
   }
 });
 
+test('hook-delivery窗口端点：epoch与完整ISO原样，非法简写按用法拒绝', async () => {
+  const f = fixture();
+  try {
+    const path = join(f.dir, 'trace.db');
+    const lines: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: () => {} };
+    expect(await runMaintenance(['hook-delivery', '--db', path,
+      '--since', '1793721600000', '--until', '1793808000000'], io)).toBe(0);
+    // epoch 毫秒直通，输出回显解析后的区间。
+    expect(JSON.parse(lines.at(-1)!).window).toMatchObject({ since_ms: 1793721600000, until_ms: 1793808000000 });
+    expect(await runMaintenance(['hook-delivery', '--db', path,
+      '--since', '2026-11-04T00:00:00+08:00', '--until', '2026-11-05T00:00:00+08:00'], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!).window).toMatchObject({ since_ms: 1793721600000, until_ms: 1793808000000 });
+    // 会被 Date 静默滚月的简写按用法拒绝。
+    expect(await runMaintenance(['hook-delivery', '--db', path,
+      '--since', '2026-02-31', '--until', '2026-03-01'], io)).toBe(2);
+  } finally {
+    f.close();
+  }
+});
+
+test('日期简写按本地日零点解析（TZ=Asia/Shanghai 钉住）', () => {
+  const f = fixture();
+  try {
+    const cli = join(import.meta.dir, '..', 'src', 'maintenance', 'cli.ts');
+    const result = Bun.spawnSync(['bun', cli, 'hook-delivery', '--db', join(f.dir, 'trace.db'),
+      '--since', '2026-11-04', '--until', '2026-11-05'],
+    { env: { ...process.env, TZ: 'Asia/Shanghai' } });
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout.toString());
+    // 2026-11-04 与 11-05 的本地零点（+08:00）；Date.parse 的 UTC 口径各多 8 小时。
+    expect(report.window.since_ms).toBe(1_793_721_600_000);
+    expect(report.window.until_ms).toBe(1_793_808_000_000);
+  } finally {
+    f.close();
+  }
+});
+
 test('purge-metadata拒绝非法与未来日期，全库命中要求allow-all', async () => {
   const f = fixture();
   try {

@@ -172,7 +172,7 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 
 ### hook-delivery
 
-只读窗口诊断，用独立只读连接，不取维护锁、不停采集器。`--since` 与 `--until` 都要给，接受 epoch 毫秒或 ISO 8601；`--until` 同时是观察时点。
+只读窗口诊断，用独立只读连接，不取维护锁、不停采集器。`--since` 与 `--until` 都要给，接受 epoch 毫秒、ISO 8601 或日期简写；日期简写（`YYYY-MM-DD`）按本地日零点解析，与 `day` 列同口径，非法日历按用法错误拒绝。输出里的 `window.since_ms` / `until_ms` 回显解析后的 epoch 区间，核对窗口用这个字段，不要心算时区。`--until` 同时是观察时点。
 
 请求侧按 `started_ms` 落窗，`raw_hook` 与 `ingest_issue` 按到达与观察时间落窗。输出分四组：
 

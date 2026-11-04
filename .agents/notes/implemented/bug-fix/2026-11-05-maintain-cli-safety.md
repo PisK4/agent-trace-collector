@@ -25,9 +25,13 @@ Status: implemented
 
 `verifyDatabase` 只产报告，健康结论长在 CLI：`integrity` 恰为 `['ok']`、`dangling_blocks` 与 `duplicate_evidence` 都是 0 才输出 `ok:true`、退出 0；任一不满足输出 `ok:false`、退出 1。`pending_derivations` 保持信息字段，不参与判定——停机前有积压是正常形态，把它算进失败会让每次停服都报错。损坏的库在 `verifyDatabase` 阶段抛错，经 CLI 的失败路径报 `verify_failed:<原因>`、退出 1。
 
+### hook-delivery 的日期简写按本地日解析
+
+`momentFlag` 给 `YYYY-MM-DD` 简写加了一个分支：显式按本地时区构造零点（`new Date(y, m-1, d)`），不再走 `Date.parse` 对纯日期的 UTC 口径；复用 `isCalendarDay`，`2026-02-31` 这类会被 `Date` 静默滚月的简写按用法错误（退出 2）拒绝。epoch 毫秒与完整 ISO 的解析路径不动；带时区偏移的 ISO 在 Asia/Shanghai 下与简写现在给出同一条边界。解析结果本就经 `window.since_ms` / `until_ms` 回显，运维核对以这个字段为准。`delivery.ts`、`day` 列与 `localDay` 都没动。
+
 ## Testing
 
-`tests/maintenance.test.ts` 新增 CLI 用例：非法日历（`2026-13-01`、`2026-02-31`、`2026-1-01`）与未来日退出 2，库未被改动；部分命中 `--apply` 不需要 `--allow-all`；全库命中拒绝、带 `--allow-all` 后删除数与预览一致。verify 的退出码用例：只有派生积压仍 `ok:true`、退出 0；悬空块 `ok:false`、退出 1；损坏的库经 CLI 退出 1。全部合成数据。
+`tests/maintenance.test.ts` 新增 CLI 用例：非法日历（`2026-13-01`、`2026-02-31`、`2026-1-01`）与未来日退出 2，库未被改动；部分命中 `--apply` 不需要 `--allow-all`；全库命中拒绝、带 `--allow-all` 后删除数与预览一致。verify 的退出码用例：只有派生积压仍 `ok:true`、退出 0；悬空块 `ok:false`、退出 1；损坏的库经 CLI 退出 1。日期窗口用例：epoch 与带偏移的完整 ISO 原样直通；简写解析由子进程用 `TZ=Asia/Shanghai` 钉住，断言窗口端点等于本地零点（1_793_721_600_000 / 1_793_808_000_000，UTC 口径各多 8 小时）——Bun 不认运行时改 `process.env.TZ`，进程内断言只能证同构，钉时区必须独立进程；非法简写按用法拒绝。全部合成数据。
 
 ## Alternatives considered
 
@@ -35,8 +39,12 @@ Status: implemented
 
 **F34 把 `pending_derivations` 也判失败。** 退出码全红的 verify 看起来最严格，但停机前队列有积压是正常形态，每次停服都会误报；「完整性/悬空/重复」与「队列积压」是两类事实，前者定健康，后者只是信息。落选。
 
+**F32 把 `day` 列改成 UTC 日期。** 能统一 CLI 与列的口径，但要迁移全部历史 `day`、页面日期整体偏移，还牵动按 `day` 聚合的既有查询；`day` 的本地日语义是 [format.ts](../../../../src/format.ts) 的明确定位，客户端入参解析对齐它改动面最小。落选。
+
 ## Consequences
 
 未来日期不能再用于预清理（例如提前导入的数据要按未来日截断）；真有这个需求时加显式旗标，而不是放开上界。`--before` 等于今天仍允许，「删今天之前」的语义不变，命中是否全库由计数门兜底。校验只长在 CLI 入口，直接调 `purgeMetadata` 的代码路径（目前只有 CLI 与测试）不受保护。
 
 verify 的 `ok` 字段语义从「命令执行成功」变为「库健康」：只读 `ok` 的自动化从此拿到真实结论，此前把损坏当通过的行为是本批要消灭的假阳性。以退出码判定的既有脚本若在积压场景依赖恒 0，需要确认它们没有把「结构问题」当正常。
+
+简写改按本地日解析后，一直按 UTC 心算日期调用的外部脚本会看到窗口整体平移一个时区（Asia/Shanghai 下早 8 小时开始、早 8 小时结束）；核对入口是输出里的 `window.since_ms` / `until_ms`，混用简写与无偏移 ISO 的两套口径也随之收敛成一种。
