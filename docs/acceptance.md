@@ -1680,8 +1680,8 @@ master 合并两阶段交付（e468167）后 `bun run service restart`：launchd
 
 ### 未执行
 
-- 真实流量验收：未合并 master、未部署、未重启生产采集器，也没有用真实会话文件做只读核对。各适配器对上游格式的假设（字段名、时间窗口、turn 粒度）仍待真实数据验证。
-- 生产库 v11 → v12 原地升级未在真实库上执行；只在合成库的 store 用例里覆盖。
+- 真实流量验收：第一版验收时尚未合并 master、未部署；结果见下一节。各适配器对上游格式的假设（字段名、时间窗口、turn 粒度）由真实数据复核。
+- 生产库 v11 → v12 原地升级未在合成库之外执行；真实库升级见下一节。
 - droid 尚未迁到共用摄入，仍走原路径；两边并存但不共享代码。
 - Magpie 19 种本地会话 Agent 的目录检测、`maintain source-health`、历史回填预算调大入口均未实现，留待后续阶段。
 
@@ -1690,3 +1690,54 @@ master 合并两阶段交付（e468167）后 `bun run service restart`：launchd
 - Claude 子代理的 `isSidechain` 行不建调用，子代理谱系本轮不折叠。
 - Codex 同一会话在 `sessions` 与 `archived_sessions` 各有一份时，证据 ref 幂等但不刷新正文（`mutable=false`）；`token_count` 兜底不去重重复写出的相同用量行。
 - Zcode 的 `turn_id` 粒度未用真实库核实；owner 已加同来源证据排除，同一 turn 的多笔调用不会被并成一行。
+
+## 本地 Agent 会话适配器生产部署与首轮真实流量验收（2026-11-04）
+
+范围：`feat/agent-session-adapters` 合并 master、生产 v11 → v12 原地迁移、五个适配器轮转、真实流量去重与页面读取。合成验收见上一节；本节只记真实库与真实流量。
+
+### 部署与迁移
+
+| 项 | 结果 |
+| --- | --- |
+| 合并 | `3287ab2` 合并第一版，`405bea3` 修复每轮字节预算 |
+| 备份 | `~/tracery-backups/bundle-2026-11-04-before-v12`，schema 11，manifest 校验通过 |
+| v11 → v12 | 成功：`user_version=12`，`raw_session_event` 存在，`raw_droid_event` 已删除，`i_raw_session_event_session` 存在 |
+| 服务 | `bun run service restart` 后 3 秒起；监听 127.0.0.1:8320 |
+
+### 五来源轮转（约 10 分钟）
+
+| 来源 | 证据行 | 结果 |
+| --- | --- | --- |
+| Claude Code | 24 → 54 → 68 | 全部并入既有网关/账本行，未新建 `via='session'` 行 |
+| Codex | 40 → 75 | 多数并入既有行，少量本地独有调用新建行 |
+| Zcode | 4,892 | 364 行与网关行重复，见下节；其余本地独有调用新建行 |
+| OMP | 176 | 175 笔并入既有行，1 笔新建 |
+| Pi | 593 | 全部为本地独有调用，新建行 |
+
+`ingest_issue` 只新增 5 条 `omp_message_content_invalid`，无 Zcode/Claude/Codex/Pi 新问题。
+
+### 跨来源去重缺陷与修复
+
+首轮发现 Zcode 本地行与网关行各留一份：四段 token、会话与开始时间相同，只有模型写法不同（网关 `group/auto-deepseek-v4-1-flash`，本地 `auto/deepseek-v4.1-flash`）。预检 364 对唯一匹配。
+
+`maintain dedupe-sessions` 应用后合并 364 行，`request_evidence` 总数不变，`request` 中 Zcode `via='session'` 从 4,892 降到 4,528；再次预检 `candidates=0`，`maintain verify` 的 `integrity=ok`、`dangling_blocks=0`、`duplicate_evidence=0`。第一版修复命令在 `tool_call` 的 `(req_id, ord)` 唯一键上失败并整批回滚，补上「目标同 ord 优先」后重跑成功。
+
+### Zcode 原始层重复存储
+
+Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮回填写入 5,516 行、1.59 GB，平均每条约 288 KB，数据库从 5.8 GB 涨到 6.7 GB。改为 `storesRaw: false` 后删除存量 Zcode 原始行并 `VACUUM`，库从 6,449 MB 降到 4,507 MB，耗时约 21 秒。
+
+### 页面与读取
+
+| 项 | 结果 |
+| --- | --- |
+| `GET /api/sessions?limit=20` | 200，首次 0.81 s，重启后热态 0.42–0.79 s |
+| `GET /api/sessions/<zcode conv>/requests` | 200，4.5 ms，返回 Zcode 会话行 |
+| `GET /api/requests/<merged id>/body` | 200，协议 `anthropic`，正文可读 |
+| 合并行证据 | 目标行 `have=23`（hook+账本+路由+会话），4 条证据齐全，正文保留 |
+
+### 待观察
+
+- 会话定时任务单轮回填 Zcode 时最长 25.3 s，事件循环同步最大 25.3 s；derive 单轮 9.6–33.2 s，事件循环 p99 约 370 ms。与既有 derive 长轮叠加，尚未归因到单一来源；需在后续轮次分开计时。
+- Claude 330 个文件、1.8 GB，每轮预算 64 文件/2 MiB，完整回填需要数十小时；未做全量回填验收。
+- 长时间资源占用（RSS 2.2 GB 左右）、WAL 增长与页面在回填高峰的表现未做多小时窗口采样。
+- 多来源同一调用的 OTLP 认领、direct 行入口与 Magpie 19 种 Agent 目录检测未做。
