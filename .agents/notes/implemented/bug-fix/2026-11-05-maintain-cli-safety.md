@@ -21,14 +21,22 @@ Status: implemented
 
 全库命中要求显式放行：预览后若命中数等于 `request` 全表行数且大于 0，`--apply` 必须再带 `--allow-all`，否则输出 `ok:false`、`error: allow_all_required` 并退出 1，拒绝输出里带预览计数。`--approval-id` 的语义不动，仍是执行授权；`--allow-all` 表达的是「这个范围我确认要删」。预览（不带 `--apply`）不受门限制，命中全库也照常计数。`purgeMetadata` 与删除主干 `purgeTargetsTx` 零改动。
 
+### verify 的健康口径
+
+`verifyDatabase` 只产报告，健康结论长在 CLI：`integrity` 恰为 `['ok']`、`dangling_blocks` 与 `duplicate_evidence` 都是 0 才输出 `ok:true`、退出 0；任一不满足输出 `ok:false`、退出 1。`pending_derivations` 保持信息字段，不参与判定——停机前有积压是正常形态，把它算进失败会让每次停服都报错。损坏的库在 `verifyDatabase` 阶段抛错，经 CLI 的失败路径报 `verify_failed:<原因>`、退出 1。
+
 ## Testing
 
-`tests/maintenance.test.ts` 新增 CLI 用例：非法日历（`2026-13-01`、`2026-02-31`、`2026-1-01`）与未来日退出 2，库未被改动；部分命中 `--apply` 不需要 `--allow-all`；全库命中拒绝、带 `--allow-all` 后删除数与预览一致。全部合成数据。
+`tests/maintenance.test.ts` 新增 CLI 用例：非法日历（`2026-13-01`、`2026-02-31`、`2026-1-01`）与未来日退出 2，库未被改动；部分命中 `--apply` 不需要 `--allow-all`；全库命中拒绝、带 `--allow-all` 后删除数与预览一致。verify 的退出码用例：只有派生积压仍 `ok:true`、退出 0；悬空块 `ok:false`、退出 1；损坏的库经 CLI 退出 1。全部合成数据。
 
 ## Alternatives considered
 
 **F35 只靠预览让人发现全量命中。** 预览确实把 `requests` 显示为全量，但自动化或赶时间的操作员会直接接 `--apply`；输入侧拒绝把错误挡在删除谓词之前，预览留给人核对，不承担拦截。落选。
 
+**F34 把 `pending_derivations` 也判失败。** 退出码全红的 verify 看起来最严格，但停机前队列有积压是正常形态，每次停服都会误报；「完整性/悬空/重复」与「队列积压」是两类事实，前者定健康，后者只是信息。落选。
+
 ## Consequences
 
 未来日期不能再用于预清理（例如提前导入的数据要按未来日截断）；真有这个需求时加显式旗标，而不是放开上界。`--before` 等于今天仍允许，「删今天之前」的语义不变，命中是否全库由计数门兜底。校验只长在 CLI 入口，直接调 `purgeMetadata` 的代码路径（目前只有 CLI 与测试）不受保护。
+
+verify 的 `ok` 字段语义从「命令执行成功」变为「库健康」：只读 `ok` 的自动化从此拿到真实结论，此前把损坏当通过的行为是本批要消灭的假阳性。以退出码判定的既有脚本若在积压场景依赖恒 0，需要确认它们没有把「结构问题」当正常。

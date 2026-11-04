@@ -168,7 +168,7 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 | `duplicate_evidence` | 同一 `(source_kind, ref_key)` 有多个 owner | 唯一索引本应拦住；不为 0 说明索引被绕过，先备份再查 |
 | `pending_derivations` | `derive_queue` 里的分组数 | 采集器启动后会自行清空；停服务时看到的数字只说明停机前有积压 |
 
-`integrity` 只有一项 `ok` 才算通过。损坏的库会直接抛错，不会被当成合格备份。
+`integrity` 只有一项 `ok`、且 `dangling_blocks` 与 `duplicate_evidence` 都是 0 才算通过：任一不满足时输出 `ok:false` 并退出 1，损坏的库在报告阶段直接抛错，同样不会被当成合格备份。`pending_derivations` 是信息字段，不参与判定——停机前有积压是正常的。
 
 ### hook-delivery
 

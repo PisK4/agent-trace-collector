@@ -167,8 +167,12 @@ export async function runMaintenance(argv: string[], io: {
     let lock: LockHandle | null = null;
     try {
       if (command === 'verify') {
-        out(JSON.stringify({ ok: true, ...verifyDatabase(dbPath) }));
-        return 0;
+        const report = verifyDatabase(dbPath);
+        // 健康结论与报告字段分开：pending_derivations 是信息字段，停机前有积压是正常的。
+        const ok = report.integrity.length === 1 && report.integrity[0] === 'ok'
+          && report.dangling_blocks === 0 && report.duplicate_evidence === 0;
+        out(JSON.stringify({ ok, ...report }));
+        return ok ? 0 : 1;
       }
       if (command === 'rebuild' || command === 'reparse') {
         const argument = stringFlag(flags, command === 'rebuild' ? 'session' : 'protocol');

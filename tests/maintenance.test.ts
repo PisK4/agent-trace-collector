@@ -508,6 +508,36 @@ test('维护命令在目标库上执行并返回退出码', async () => {
   }
 });
 
+test('maintain verify按结构问题定退出码，派生积压不算失败', async () => {
+  const f = fixture();
+  const path = join(f.dir, 'trace.db');
+  try {
+    // 只有派生积压：正常停机形态，仍是 ok:true、退出 0。
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
+              VALUES (1,1,'2026-10-20','hook','pending',1,1,1,1)`);
+      db.run("INSERT INTO derive_queue(conv_key,actor,from_sort) VALUES ('k','a','')");
+    });
+    const lines: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: () => {} };
+    expect(await runMaintenance(['verify', '--db', path], io)).toBe(0);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ ok: true, pending_derivations: 1 });
+
+    // 悬空块是结构问题：ok:false、退出 1，报告字段原样保留。
+    f.store.write(db => db.run("INSERT INTO block(id,hash,fingerprint,z,raw_size) VALUES (9,x'01','fp',x'02',3)"));
+    lines.length = 0;
+    expect(await runMaintenance(['verify', '--db', path], io)).toBe(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ ok: false, integrity: ['ok'], dangling_blocks: 1 });
+
+    // 损坏的库在报告阶段就抛错，经 CLI 以退出 1 拒绝。
+    f.store.close();
+    writeFileSync(path, 'this is not a database');
+    expect(await runMaintenance(['verify', '--db', path])).toBe(1);
+  } finally {
+    f.close();
+  }
+});
+
 test('purge-metadata拒绝非法与未来日期，全库命中要求allow-all', async () => {
   const f = fixture();
   try {
