@@ -1967,7 +1967,7 @@ Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮�
 
 ### 生产首轮真实流量
 
-下表是部署后首轮对账快照，采集时 backfill 仍在轮转，两家各有 1 个文件尚未到 EOF。两家的原始层形状不同：WorkBuddy 的多行按 `providerData.messageId` 归约成一笔调用，一行不是一笔调用；Grok 的 `assistant` 行各建一笔，`tool_result`、`reasoning`、`user`、`system` 行进消息窗口而不单独建调用。
+下表是部署后**首次对账时点**的快照，采集时 backfill 仍在轮转，两家各有 1 个文件尚未到 EOF；后面的增量复核是稍后另一时点，两处数字不同是回填推进所致，不是两次测量不一致。两家的原始层形状不同：WorkBuddy 的多行按 `providerData.messageId` 归约成一笔调用，一行不是一笔调用；Grok 的 `assistant` 行各建一笔，`tool_result`、`reasoning`、`user`、`system` 行进消息窗口而不单独建调用。
 
 | 项 | WorkBuddy | Grok |
 | --- | --- | --- |
@@ -1981,7 +1981,9 @@ Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮�
 | `in_tok` 为 null | 0 | 97 |
 | `session_usage` 行 | 0 | 4 |
 
-WorkBuddy 的 351 行原始层分成 `message` 65、`reasoning` 82、`function_call` 102、`function_call_result` 102，归约成 97 笔调用；Grok 的 376 行分成 `assistant` 97、`reasoning` 97、`system` 6、`tool_result` 153、`user` 23，`assistant` 与 `request` 一一对上。
+WorkBuddy 的 351 行原始层分成 `message` 65、`reasoning` 82、`function_call` 102、`function_call_result` 102，归约成 97 笔调用；Grok 的 376 行分成 `assistant` 97、`reasoning` 97、`system` 6、`tool_result` 153、`user` 23，`assistant` 与 `request` 一一对上。游标与 request 数不相等有确定解释：WorkBuddy 的 6 个游标是 2 个主会话文件加 4 个 `subagents` 文件，多行归约成一笔调用；Grok 的 6 个会话目录里只有 4 个产生调用，另 2 个没有 assistant 行。
+
+回填继续推进后重新测量，两家分别涨到 WorkBuddy 131、Grok 139 笔。这一时点复核的不变式：`request_evidence` 与不同 `ref_key` 各 131 / 139，重复 `ref_key` 0、悬空证据 0、证据指向错误 owner 0、`ingest_issue` 0，`body_state=available` 与 `parse_state=ok` 各与 request 数相等；Grok 6 个游标全到 EOF，`session_usage` 仍是 4 行。WorkBuddy 主会话文件还有 82,502 字节在轮转中，它的 `mutable` 重放会刷新正文而不是新建证据行，重复 `ref_key` 为 0 说明增量过程没有把同一回复建成两笔。终值会随使用继续增长，这里不写静态收敛数字。
 
 正文抽样走带 `read.token` 的 `/api/requests/<id>/body`：`req_id=141378`（Grok）与 `req_id=141684`、`141689`（WorkBuddy）都返回 200、`state=available`、`protocol=chat`、`parse_state=ok`。先前担心 WorkBuddy 的 `chat` 协议会吞掉 `tool_use`/`tool_result` 块，专门抽了带工具块的一笔核对：两类工具块与 `output_text` 都在响应里，页面契约没有丢内容。
 

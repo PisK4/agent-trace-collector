@@ -28,8 +28,8 @@
 | hermes | 4,778 | 2026-10-27 | 2026-11-04 | hook / ledger / route，无本地游标 |
 | pi | 3,142 | 2026-08-21 | 2026-09-02 | `pi_session_call` |
 | dsh | 2,542 | 2026-08-22 | 2026-09-04 | `dsh_session_call` |
-| workbuddy | 97（首轮，回填中） | 2026-09-03 | 2026-09-03 | `workbuddy_session_call` |
-| grok | 97（首轮，回填中） | 2026-09-23 | 2026-09-23 | `grok_session_call` |
+| workbuddy | 131（回填中） | 2026-09-03 | 2026-09-03 | `workbuddy_session_call` |
+| grok | 139（已到 EOF） | 2026-09-23 | 2026-09-23 | `grok_session_call` |
 | magpie | 413 | 2026-10-26 | 2026-11-04 | 账本 / 路由 |
 | 其它直连客户端 | 59 | 2026-10-25 | 2026-11-04 | 账本 |
 
