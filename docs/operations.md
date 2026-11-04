@@ -107,6 +107,8 @@ rm ~/Library/LaunchAgents/local.tracery-monitor.plist
 
 `bootout` 只停监控作业，采集器不受影响。`monitor/` 下的历史数据不会自动删除，需要清空时手动处理。手工验证时先跑 `sample` 再跑 `check`；`check` 依赖最新样本，单独跑不会凭空产生告警。
 
+本节讲每 300 秒的采样、判定与告警。数据质量、容量与证据链的周期性巡查（每次迭代、每周与触发式）见[巡查程序](patrol.md)；两套阈值分属两个家，`inspect` 的判据以 `scripts/monitor.ts` 为准，巡查的判据以 `scripts/patrol.ts` 为准。
+
 ## 维护命令
 
 这些命令都在 `src/maintenance/cli.ts`，通过 `bun run maintain` 调用。退出码：`0` 成功，`1` 失败，`2` 用法错误。失败时 stderr 写 `<命令>_failed:<原因码>`。

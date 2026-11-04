@@ -16,6 +16,7 @@
 | [auto-mode-classifier-research.md](auto-mode-classifier-research.md) | 对 Claude Code auto mode 分类器请求的研究证据，带采集时间与证据等级 | 本项目已交付行为的权威描述、UI 决策 |
 | [atc-real-format-research.md](atc-real-format-research.md) | 对本机真实库归档的形状研究：键名、类型、计数与窗口对照，带证据等级 | 本项目已交付行为的权威描述、实现步骤 |
 | [operations.md](operations.md) | 运维命令、错误码、备份恢复与 AVA 切换步骤 | 设计 rationale，链接到所属 note |
+| [patrol.md](patrol.md) | 巡查程序：节奏、判定口径、误报边界与执行产出；命令与阈值归 [scripts/patrol.ts](../scripts/patrol.ts) | SQL 副本、阈值常量副本、缺陷复盘（归 bug-fix note） |
 | [superpowers/plans/](superpowers/plans/) | 执行计划：步骤、复选框、验收清单 | 常备规则、已交付事实的权威 |
 | [.agents/notes/](../.agents/notes/README.md) | 活跃决策记录：why、放弃了什么、必需的验证 | 迁移计划、验收清单、spec 腔 |
 | [.agents/notes/LESSONS.md](../.agents/notes/LESSONS.md) | 工作教训池：反复踩的坑、规则、证据、可执行防护与晋升指针 | 设计决策（归 note）、单次缺陷复盘（归 bug-fix note）、稳定硬规则正文（归根 AGENTS.md 或测试） |
@@ -25,7 +26,7 @@
 | [trace-format.md](trace-format.md) | ATC trace 格式现状：主实体、身份、正文切块、派生结论、置信度与版本字段 | 对外稳定协议承诺、字段默认值清单（归 architecture-design.md） |
 | [../prototypes/README.md](../prototypes/README.md) | Demo 数据源与合成场景：两个入口加载生产页面，不维护第二套界面 | 生产契约（归 `web/` 与 architecture-design.md） |
 
-放置口诀：bug 进 postmortem；rationale 进 note；工作教训进 LESSONS.md；流程进 cookbook；包契约进 README；常备规则进根 AGENTS.md 加一行链接。
+放置口诀：bug 进 postmortem；rationale 进 note；工作教训进 LESSONS.md；流程进[巡查程序](patrol.md)这类过程文档；包契约进 README；常备规则进根 AGENTS.md 加一行链接。
 
 ### note 与架构文档的接缝
 

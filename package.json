@@ -30,6 +30,7 @@
     "demo": "bun prototypes/synthetic-server.ts",
     "service": "bun scripts/service.ts",
     "maintain": "bun src/maintenance/cli.ts",
+    "patrol": "bun scripts/patrol.ts",
     "verify-cutover": "bun scripts/verify-cutover.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
