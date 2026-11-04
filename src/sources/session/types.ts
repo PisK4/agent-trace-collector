@@ -72,7 +72,7 @@ export type SessionFile = {
 
 /** 游标快照；适配器用它在发现阶段估算 remaining，不读正文。 */
 export type SessionCursorLookup = (name: string) =>
-  { generation: string; committedOff: number; seenSize: number } | null;
+  { generation: string; committedOff: number; observedOff: number; seenSize: number } | null;
 
 export type SessionParseResult =
   | {

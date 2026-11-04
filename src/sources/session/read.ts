@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { zstdDecompressSync } from 'node:zlib';
 import { join, resolve } from 'node:path';
 import { readBatch, sealedLines } from '../files';
-import type { SourceCursor, SourceRead } from '../files';
+import type { SourceCursor, SourceLine, SourceRead } from '../files';
 import type { SessionCursorLookup, SessionFile, SessionKind } from './types';
 
 const SKIP = /(^\.)|(\.lock(\.os|\.tmp)?$)|(\.tmp$)|(\.swp$)/;
@@ -67,7 +67,10 @@ export function discoverJsonl(root: string, cursorFor: SessionCursorLookup,
       const remaining = cursor === null
         ? size
         : cursor.seenSize === size
-          ? sealed ? 0 : Math.max(0, size - cursor.committedOff)
+          ? sealed
+            // 封口文件按解压后的进度算剩余；上次只读了一个分块时还要回来。
+            ? Math.max(0, cursor.observedOff - cursor.committedOff)
+            : Math.max(0, size - cursor.committedOff)
           // 大小变了但比提交位置小（截断）或头部重写：整份重读。
           : size;
       files.push({ name: path, path, size, mtimeMs, remaining });
@@ -92,15 +95,27 @@ function decodeSealed(bytes: Uint8Array): string {
 }
 
 /**
- * 读整份封口的 `.jsonl.zst`。
+ * 封口文件每次只交一段解压后的行。
  *
- * 压缩后字节的 SHA-256 就是代际；同一代际不再解压。偏移是解压后文本的字节
- * 位置，只用于批内定位与原始层身份，不参与压缩文件定位。
+ * 单个 zip 内的会话可能解压出几 MB；整份交给写事务会把事件循环压住数秒。
+ * 分块后 `committed_off` 是本次提交到的解压偏移，`observed_off` 仍是整份长度，
+ * 发现阶段据此知道还要不要再读。下一次从 `committed_off` 继续。
+ */
+const SEALED_CHUNK_BYTES = 256 * 1024;
+const SEALED_CHUNK_LINES = 64;
+
+/**
+ * 读封口的 `.jsonl.zst` 的一个分块。
+ *
+ * 压缩后字节的 SHA-256 就是代际；同一代际且已读到末尾时不再解压。偏移是解压
+ * 后文本的字节位置，只用于批内定位与原始层身份，不参与压缩文件定位。
  */
 export function sealedJsonlRead(file: SessionFile, cursor: SourceCursor | null,
   kind: SessionKind): SourceRead {
   const bytes = readFileSync(file.path);
   const fingerprint = createHash('sha256').update(bytes).digest('hex');
+  const sameGeneration = cursor !== null && cursor.fingerprint === fingerprint;
+  const start = sameGeneration ? cursor.committedOff : 0;
   const base = {
     sourceKind: kind,
     name: file.name,
@@ -112,12 +127,13 @@ export function sealedJsonlRead(file: SessionFile, cursor: SourceCursor | null,
     headHash: null,
     fingerprint,
     issues: [],
-    startOff: 0,
+    startOff: start,
   };
-  if (cursor !== null && cursor.fingerprint === fingerprint) {
+  if (sameGeneration && cursor.observedOff <= start) {
+    // 上一轮已经提交到整份末尾；同指纹不再解压。
     return {
-      ...base, state: 'unchanged', committedOff: cursor.committedOff,
-      observedOff: cursor.committedOff, lines: [], error: null,
+      ...base, state: 'unchanged', committedOff: start,
+      observedOff: Math.max(cursor.observedOff, start), lines: [], error: null,
     };
   }
   let text: string;
@@ -127,14 +143,32 @@ export function sealedJsonlRead(file: SessionFile, cursor: SourceCursor | null,
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return {
-      ...base, state: 'error', committedOff: 0, observedOff: 0, lines: [],
+      ...base, state: 'error', committedOff: start,
+      observedOff: sameGeneration ? cursor.observedOff : 0, lines: [],
       error: code === 'ERR_BUFFER_TOO_LARGE' ? 'codex_zstd_limit' : 'codex_zstd_invalid',
     };
   }
   const decoded = sealedLines(text);
+  const total = decoded.committedOff;
+  if (sameGeneration && start >= total) {
+    return {
+      ...base, state: 'unchanged', committedOff: total, observedOff: total,
+      lines: [], error: null,
+    };
+  }
+  const lineStart = decoded.lines.findIndex(line => line.offset >= start);
+  const lines: SourceLine[] = [];
+  let committed = start;
+  for (let index = Math.max(0, lineStart); index < decoded.lines.length; index += 1) {
+    const line = decoded.lines[index]!;
+    if (lines.length > 0
+      && (line.end - start > SEALED_CHUNK_BYTES || lines.length >= SEALED_CHUNK_LINES)) break;
+    lines.push(line);
+    committed = line.end;
+  }
   return {
-    ...base, state: 'decoded', committedOff: decoded.committedOff,
-    observedOff: decoded.committedOff, lines: decoded.lines, error: null,
+    ...base, state: 'decoded', committedOff: committed, observedOff: total,
+    lines, error: null,
   };
 }
 
