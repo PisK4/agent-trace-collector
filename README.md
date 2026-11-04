@@ -64,6 +64,7 @@ The collector also reads session files written by local agents, one adapter per 
 | droid (Factory) | `~/.factory/sessions` | `FACTORY_HOME_OVERRIDE` | one assistant message |
 | Claude Code | `~/.claude/projects` | `CLAUDE_CONFIG_DIR` | one assistant response (`message.id`, content blocks merged) |
 | Codex | `~/.codex/sessions` and `~/.codex/archived_sessions` | `CODEX_HOME` | one response, settled by its usage record; plain and `.jsonl.zst` twins count once |
+| DSH | `~/.dsh/sessions/<project>/<session>` | `DSH_HOME` | one `assistant/message`; seeded forks count inherited parent calls once |
 | Zcode | `~/.zcode/cli/db/db.sqlite` | `ZCODE_HOME` | one assistant message |
 | OMP | `~/.omp/agent/sessions`, profiles, and `$XDG_DATA_HOME/omp` | `PI_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`; `OMP_HOME` as legacy | one assistant message |
 | Pi | `~/.pi/agent/sessions`, custom agent dir, and `settings.json` `sessionDir` | `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`; `PI_HOME` as legacy | one assistant message |
