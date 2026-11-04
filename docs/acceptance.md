@@ -6,6 +6,46 @@
 
 记录里的数字、端口、pid 与耗时都来自作者机器，用于说明当时怎么判断，不是可复现的基准。
 
+## 覆盖护栏（合成 + 生产真实流量，2026-11-04）
+
+前提：隔离 worktree `.codex-worktrees/atc-coverage-foundation` 的 `feat/coverage-foundation` 分支，基于 master `0f81367`。代码、测试与文档提交为 `c9485ed` 与 `d091502`，以 `--no-ff` 合并为 `073c329`；2026-11-04 18:22:09 用 `bun run service restart` 重启采集器，pid 13304，`service status` 显示 src 未落后。合成验收只进临时库；真实流量读数来自生产库只读查询与全量 `/api/ingest-metrics`，没有把正文、账号或令牌写入本记录。
+
+### 合成数据
+
+| 检查 | 结果 |
+| --- | --- |
+| 压缩转录 | `.jsonl.zst` 首次摄入；同指纹不再解压；损坏压缩记 `codex_zstd_invalid` 且不建调用；同名 twin 相等时只读 plain，zst 覆盖更长前缀时读 zst |
+| 多根 | OMP 默认、profiles、XDG、自定义 agent 目录与自定义 sessionDir；Pi 默认、自定义 agent 目录、全局 `settings.json` 的 `sessionDir`、环境变量与 legacy 根；重叠根只发现一次 |
+| 调度 | 同一轮 live 与 backfill 各摄入一家；第二轮按轮转跳过已读完来源 |
+| 原始层 TTL | 孤儿代际与过期封口代际被清；追加代际保留；第二次清理不写库 |
+| 目录 | 19 家无重复；注册表适配器都有 `implemented` 条目，`sourceKind` 一致 |
+
+自动化：`bun test` 1243 pass / 0 fail（106 个文件）；`bun run typecheck` 退出 0；`verify:notes` 通过。
+
+### 生产真实流量
+
+只读扫描与生产库查询，快照截至 18:33:15（服务启动约 11 分钟）。
+
+| 检查 | 实测 |
+| --- | --- |
+| Codex 发现 | 2 个根、688 个文件：296 plain、392 zst；293 个同名 twin、99 个仅 zst |
+| twin 裁决 | 首轮 `select` 保留 512 个（296 plain + 216 zst），丢弃 176 个重复 twin，保留 117 个内容分叉的 zst；耗时 1,502 ms |
+| zst 摄入 | 10 个 zst 游标、475 笔 request（按 `sort_key` 代际匹配）；`codex_session` issue 0；`request_evidence` 重复 0 |
+| 原始层容量 | 全量 `/api/ingest-metrics` 的 `raw_session_rows` 64,596、`raw_session_bytes` 222,602,284；孤儿代际 0，TTL 尚无删除样本 |
+| 存储 | 库 5.01 GB，WAL 1.31 MB，正文 1.87 GB |
+| 调度长尾 | 18:33:15：event loop p50 1.0 ms、p95 16.5 ms、p99 326.0 ms、滚动 max 9,036 ms；首轮 zst 批次后该样本滚出，18:34:36 滚动 max 回落至 1,567 ms。18:35:39 第 11 个 codex 写事务后滚动 max 3,474 ms、p99 321.5 ms；单文件回填仍有秒级阻塞，9 s 只在首轮多文件齐发时出现 |
+| 写入耗时 | `writer.codex` 10 次写事务，合计 5.5 s，最长 3.1 s |
+| OMP/Pi 根 | 本机只有默认根：OMP 441 个文件、Pi 46 个文件；没有 profile/XDG 真实数据 |
+| 轻量/全量口径 | `/api/metrics` 不返回 `metadata`；全量 `/api/ingest-metrics` 返回 `raw_session_rows`/`raw_session_bytes` |
+
+### 未覆盖与待观察
+
+- zst 历史回填未完成：216 个选中 zst 中已摄入 10 个，其余由 backfill 轮转推进；本记录不宣称回填完成。
+- 9 s 事件循环长尾没有修；根因指向单个封口文件整份解压后写入，批次预算按压缩字节计算，实际写入量超出 2 MiB。后续先测稳定态，再决定异步化读取、文件间让出事件循环或拆小写事务。
+- OMP/Pi 的 profile、XDG 与自定义目录只有合成样本；本机没有这些真实根。
+- raw 层 TTL 只有合成删除样本；生产库当前没有可删代际。
+- 未做长窗口 p99、RSS、全部历史回填后的容量复测；twin 分叉只核对了选择计数，没有逐调用审计重复跳过。
+
 ## Droid 会话文件摄入（合成 + 本机转录，2026-11-04）
 
 前提：隔离 worktree `.codex-worktrees/atc-droid-session`，分支 `feat/droid-session-ingestion-rebased`，基于 master `dfd9b9c`。原分支从旧里程碑分支检出，rebase 会重放数百个已合并提交，改用 cherry-pick 移到当前 master。只改代码、测试与文档；没有合并、push，没有重启生产采集器，也没有往生产库写 droid 行。全量扫描在临时目录建空库，读本机 `~/.factory/sessions` 下的 216 个转录，扫描结束后删除临时库；没有保留正文、标题或会话键。

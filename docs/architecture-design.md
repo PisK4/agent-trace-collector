@@ -1302,7 +1302,7 @@ droid 行在落库时由转录重建正文，正常为 `available`；行建好�
 
 16 GB 是硬上限。只停正文挡不住整个库的增长：`request`、`request_evidence`、`route_summary` 都是长期保留的，正文停了它们照涨。按每笔约 2 KB 的读数字段加索引，4,000 笔/天约 8 MB/天，一年 2.9 GB 左右；请求量翻十倍就是 29 GB，单靠元数据就会超过 16 GB。
 
-会话原始层单独计量：`metadataSnapshot` 在 `/api/metrics` 给出 `raw_session_rows` 与 `raw_session_bytes`，轻量快照不做全表求和。它按 7 天 TTL 清孤儿代际与封口代际，追加代际随会话增长，当前没有按年龄回收。
+会话原始层单独计量：`metadataSnapshot` 在全量 `/api/ingest-metrics` 给出 `raw_session_rows` 与 `raw_session_bytes`，轻量 `/api/metrics` 快照不做全表求和。它按 7 天 TTL 清孤儿代际与封口代际，追加代际随会话增长，当前没有按年龄回收。
 
 所以分两级：
 
