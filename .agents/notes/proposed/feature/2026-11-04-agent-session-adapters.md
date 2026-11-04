@@ -285,6 +285,7 @@ Claude 放在最前，因为它有精确响应 id，最容易验证共用缝是�
 - schema v12：`raw_droid_event` 原地改名 `raw_session_event` 并加 `source_kind`；droid 与五家适配器共用原始层。
 - 统一 owner 新增 `usage_fingerprint.v1`；`turn_ref` 线索也排除同来源证据，避免同一 user turn 的多笔调用互相认领。
 - 会话 id 在账本、路由与本地适配器入口按同一前缀口径归一；投影写用量列改为 `COALESCE`，网关迟到且无用量时不擦掉本地读数。
+- 单轮字节预算按实际读到的字节累计，不按 `remaining` 估：大文件首轮只读一个批次，按整份估会把同一轮的后续小文件挤掉（部署首轮实测只推进了一个文件）。
 
 与本文的差异与未落地项：
 

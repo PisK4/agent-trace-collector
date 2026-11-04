@@ -465,7 +465,9 @@ export async function ingestSessionBatch(
     total.invalid += result.invalid;
     total.blocked += result.blocked;
     total.bytes += result.bytes;
-    bytes += Math.min(Math.max(file.remaining, 0), adapter.batch.maxBytes);
+    // 预算按实际读到的字节记，不按 remaining 估：大文件首轮只读一个批次，
+    // 按整份估会把后续小文件全挤掉。
+    bytes += result.bytes;
   }
   return total;
 }
