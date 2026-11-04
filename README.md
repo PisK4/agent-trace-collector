@@ -7,6 +7,8 @@
 [![Tests: 1165](https://img.shields.io/badge/tests-1165%20passing-brightgreen)](tests)
 [![README: 中文](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-blue)](README.zh-CN.md)
 
+**English** ｜ [简体中文](README.zh-CN.md)
+
 **Tracery records the requests your coding agent sends, and lets you read them step by step.**
 
 A coding agent fires dozens of LLM calls per session. Your observability platform tells you the cost and the latency of each call. It does not tell you which messages were actually in the request body, how the system prompt was assembled, or what changed between request N and request N-1.

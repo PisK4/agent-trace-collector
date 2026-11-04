@@ -7,7 +7,7 @@
 [![Tests: 1165](https://img.shields.io/badge/tests-1165%20passing-brightgreen)](tests)
 [![README: English](https://img.shields.io/badge/README-English-blue)](README.md)
 
-[English](README.md) ｜ 中文
+[English](README.md) ｜ **简体中文**
 
 **Tracery 记录 Agent 发出的请求，把散落的调用织成一条可以逐步骤翻看的 trace。**
 
