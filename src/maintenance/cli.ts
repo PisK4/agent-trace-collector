@@ -2,6 +2,7 @@
 
 import { dirname } from 'node:path';
 import { Database } from 'bun:sqlite';
+import { localDay } from '../format';
 import { openStore } from '../store';
 import type { Store } from '../store';
 import { backupBundle, backupDatabase, restoreBundle } from './backup';
@@ -45,6 +46,15 @@ function momentFlag(flags: Map<string, string | true>, name: string): number | n
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** `YYYY-MM-DD` 的日历校验：真日期才通过；字段校验走 UTC 口径，与本地时区无关。 */
+function isCalendarDay(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year!, month! - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month! - 1 && date.getUTCDate() === day;
+}
+
 const USAGE = `usage:
   maintain verify --db <path>
   maintain hook-delivery --db <path> --since <ISO|ms> --until <ISO|ms>
@@ -56,7 +66,7 @@ const USAGE = `usage:
   maintain migrate-hook-identity --db <path> [--apply --approval-id <id>]
   maintain normalize-response-ids --db <path> [--apply --approval-id <id>]
   maintain dedupe-sessions --db <path> [--apply --approval-id <id>]
-  maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --approval-id <id>]
+  maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --allow-all --approval-id <id>]
   maintain purge-agent --db <path> --agent <name> [--apply --approval-id <id>]
 `;
 
@@ -272,8 +282,15 @@ export async function runMaintenance(argv: string[], io: {
         return 0;
       }
       const before = stringFlag(flags, 'before');
-      if (before === null || !/^\d{4}-\d{2}-\d{2}$/.test(before)) {
+      // 字符串比较是删除谓词（day < ?），所以上界必须先是合法日历，再不许晚于今天：
+      // 未来日或非法日会整库命中，预览挡不住赶时间的 --apply。
+      if (before === null || !isCalendarDay(before)) {
+        err(`invalid_before:${before ?? ''}`);
         err(USAGE.trimEnd());
+        return 2;
+      }
+      if (before > localDay(Date.now())) {
+        err(`before_after_today:${before}`);
         return 2;
       }
       lock = acquireMaintenanceLock(dirname(dbPath), `purge:${process.pid}`);
@@ -287,6 +304,12 @@ export async function runMaintenance(argv: string[], io: {
       if (flags.get('apply') !== true) {
         out(JSON.stringify({ ok: true, applied: false, before, ...preview }));
         return 0;
+      }
+      // 命中全库的删除必须显式放行；拒绝时带出预览计数，操作员据此改日期或加 --allow-all。
+      const total = store.read.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM request').get()?.n ?? 0;
+      if (preview.requests > 0 && preview.requests === total && flags.get('allow-all') !== true) {
+        out(JSON.stringify({ ok: false, error: 'allow_all_required', before, ...preview }));
+        return 1;
       }
       const approvalId = stringFlag(flags, 'approval-id');
       if (approvalId === null) {

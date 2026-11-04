@@ -11,6 +11,7 @@ import { backupBundle, backupDatabase, restoreBundle } from '../src/maintenance/
 import { previewAgentPurge, previewMetadataPurge, purgeAgent, purgeMetadata } from '../src/maintenance/purge';
 import { runMaintenance } from '../src/maintenance/cli';
 import { verifyDatabase } from '../src/maintenance/verify';
+import { localDay } from '../src/format';
 import { loadBoundSaltTx, loadConfig } from '../src/config';
 import { redact } from '../src/privacy';
 import { startCollector } from '../src/main';
@@ -502,6 +503,52 @@ test('维护命令在目标库上执行并返回退出码', async () => {
     expect(await runMaintenance(['purge-agent', '--db', source, '--agent', 'hermes', '--apply'])).toBe(1);
     expect(await runMaintenance(['purge-agent', '--db', source])).toBe(2);
     expect(await runMaintenance(['nope'])).toBe(2);
+  } finally {
+    f.close();
+  }
+});
+
+test('purge-metadata拒绝非法与未来日期，全库命中要求allow-all', async () => {
+  const f = fixture();
+  try {
+    seedDays(f.store);
+    const db = join(f.dir, 'trace.db');
+    const lines: string[] = [];
+    const errs: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: (line: string) => errs.push(line) };
+
+    // 非法日历与坏形状：用法错误。2026-02-31 会被 Date 构造静默滚到 3 月，必须拦下。
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-13-01'], io)).toBe(2);
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-02-31'], io)).toBe(2);
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-1-01'], io)).toBe(2);
+    expect(errs.some(line => line.startsWith('invalid_before:'))).toBe(true);
+    // 晚于今天（本地日）：没有合法的「未来清理」。
+    const tomorrow = localDay(Date.now() + 86_400_000);
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', tomorrow], io)).toBe(2);
+    expect(errs.some(line => line === `before_after_today:${tomorrow}`)).toBe(true);
+    // 预览门之前库未被改动。
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 3 });
+
+    // 部分命中不需要 --allow-all。
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-09-02', '--apply',
+      '--approval-id', 'approval-synthetic-1'], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, applied: true, deleted: 1 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 2 });
+
+    // 全库命中：预览放行，--apply 必须再带 --allow-all。
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-10-21'], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, applied: false, requests: 2 });
+    lines.length = 0;
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-10-21', '--apply',
+      '--approval-id', 'approval-synthetic-1'], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, error: 'allow_all_required', requests: 2 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 2 });
+
+    // 显式放行后整库删除。
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-10-21', '--apply',
+      '--allow-all', '--approval-id', 'approval-synthetic-1'], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, applied: true, deleted: 2 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 0 });
   } finally {
     f.close();
   }
