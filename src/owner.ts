@@ -5,7 +5,10 @@
  * 1. `response_id_norm` 精确命中；
  * 2. `turn_ref` 命中（Codex 的 thread turn 身份）；
  * 3. 同 conv_key、同 agent、±2 秒、四段用量逐段相等（本地会话与网关指纹）；
- * 4. 同 conv_key、同 agent、±60 秒时间窗、同模型。
+ * 4. 同 conv_key、同 agent、±60 秒、模型名归一后相等或缺失（弱线索，只作兜底）。
+ *
+ * 模型名跨来源不等价（网关 `group/auto-…`、本地 `auto/…`），因此第 3 条不比较
+ * 模型，第 4 条也不把模型名不同当作拒绝理由。
  *
  * 多候选与零候选都不合并：同一会话里相邻的两笔调用不该被时间窗并成一笔，
  * 所以第 4 条只作为跨来源线索，不认领已有同来源证据的行。查找本身不写库，
@@ -97,6 +100,10 @@ function byTurnRef(
 /**
  * 四段用量指纹：本地会话先到、网关/direct 后到（或反过来）时，两边对同一笔
  * 调用记下的 token 四元组逐段相等。窗口只有 ±2 秒；候选必须唯一。
+ *
+ * 模型不参与指纹：同一模型在网关是 `group/auto-deepseek-v4-1-flash`，在本地
+ * 是 `auto/deepseek-v4.1-flash`，跨来源等值比较几乎必然落空。四段用量逐段
+ * 相等已经足够具体，模型名不同不构成两笔调用。
  */
 function byUsageFingerprint(
   db: Database,
@@ -107,25 +114,17 @@ function byUsageFingerprint(
 ): RequestOwner {
   const from = query.startedMs - FINGERPRINT_WINDOW_MS;
   const to = query.startedMs + FINGERPRINT_WINDOW_MS;
-  const sql = `
+  const rows = db.query<{ req_id: number }, [string, string, number, number, number, number, number, number, string]>(`
     SELECT r.req_id FROM request r
     WHERE r.conv_key=? AND r.agent=? AND r.started_ms BETWEEN ? AND ?
       AND r.in_tok=? AND r.out_tok=? AND r.cache_read=? AND r.cache_write=?
       AND r.via<>'rejected'
       AND NOT EXISTS (
         SELECT 1 FROM request_evidence e WHERE e.req_id=r.req_id AND e.source_kind=?
-      )`;
-  const rows = query.model === null
-    ? db.query<{ req_id: number }, [string, string, number, number, number, number, number, number, string]>(`
-        ${sql}
-        ORDER BY r.started_ms, r.req_id LIMIT 2`,
-    ).all(convKey, agent, from, to, usage.input, usage.output, usage.cacheRead, usage.cacheWrite,
-      query.excludeSourceKind)
-    : db.query<{ req_id: number }, [string, string, number, number, number, number, number, number, string, string, string]>(`
-        ${sql} AND (r.model_requested=? OR r.model_served=?)
-        ORDER BY r.started_ms, r.req_id LIMIT 2`,
-    ).all(convKey, agent, from, to, usage.input, usage.output, usage.cacheRead, usage.cacheWrite,
-      query.excludeSourceKind, query.model, query.model);
+      )
+    ORDER BY r.started_ms, r.req_id LIMIT 2`,
+  ).all(convKey, agent, from, to, usage.input, usage.output, usage.cacheRead, usage.cacheWrite,
+    query.excludeSourceKind);
   if (rows.length === 1) {
     return { reqId: rows[0]!.req_id, outcome: 'matched', rule: MATCH_BY_USAGE_FINGERPRINT };
   }
@@ -135,25 +134,50 @@ function byUsageFingerprint(
   return ABSENT;
 }
 
+/**
+ * 跨来源模型名归一：`group/`、`auto/` 是网关的供应商前缀，点号与横线在
+ * 不同来源里混用。只用于比较，不改写入库的原值。
+ */
+function normalizedModel(model: string): string {
+  return model.trim().toLowerCase()
+    .replace(/^(?:(?:group|auto)[/-])+/, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * 同会话、同 agent、±60 秒的时间窗。模型名归一后相等或一方缺失才可用于
+ * 消歧；模型名不同不是拒绝理由，只在多候选时作为排序依据。
+ */
 function byConvTimeModel(
   db: Database,
   query: OwnerQuery,
   convKey: string,
   agent: string,
-  model: string,
 ): RequestOwner {
   const from = query.startedMs - TURN_DEDUPE_WINDOW_MS;
   const to = (query.endMs ?? query.startedMs) + TURN_DEDUPE_WINDOW_MS;
-  const rows = db.query<{ req_id: number }, [string, string, number, number, string, string, string]>(`
-    SELECT r.req_id FROM request r
+  const rows = db.query<{
+    req_id: number; model_requested: string | null; model_served: string | null;
+  }, [string, string, number, number, string]>(`
+    SELECT r.req_id, r.model_requested, r.model_served FROM request r
     WHERE r.conv_key=? AND r.agent=? AND r.started_ms BETWEEN ? AND ?
-      AND (r.model_requested=? OR r.model_served=?)
       AND r.via<>'rejected'
       AND NOT EXISTS (
         SELECT 1 FROM request_evidence e WHERE e.req_id=r.req_id AND e.source_kind=?
       )
-    ORDER BY r.started_ms, r.req_id LIMIT 2`,
-  ).all(convKey, agent, from, to, model, model, query.excludeSourceKind);
+    ORDER BY r.started_ms, r.req_id`,
+  ).all(convKey, agent, from, to, query.excludeSourceKind);
+  const key = query.model === null ? null : normalizedModel(query.model);
+  const sameModel = key === null ? [] : rows.filter(row =>
+    (row.model_requested !== null && normalizedModel(row.model_requested) === key)
+    || (row.model_served !== null && normalizedModel(row.model_served) === key));
+  if (sameModel.length === 1) {
+    return { reqId: sameModel[0]!.req_id, outcome: 'matched', rule: MATCH_BY_CONV_TIME_MODEL };
+  }
+  if (sameModel.length > 1) {
+    return { reqId: null, outcome: 'ambiguous', rule: MATCH_BY_CONV_TIME_MODEL };
+  }
+  // 模型名不同不是拒绝理由：没有归一后相等的候选时，唯一候选仍然合并。
   if (rows.length === 1) {
     return { reqId: rows[0]!.req_id, outcome: 'matched', rule: MATCH_BY_CONV_TIME_MODEL };
   }
@@ -179,7 +203,8 @@ export function findRequestOwnerTx(db: Database, query: OwnerQuery): RequestOwne
     const found = byUsageFingerprint(db, query, query.convKey, query.agent, query.usage);
     if (found.outcome !== 'absent') return found;
   }
-  // 模型是否相同必须两边都有值才可证；缺模型时不按时间窗猜。
-  if (query.convKey === null || query.agent === null || query.model === null) return ABSENT;
-  return byConvTimeModel(db, query, query.convKey, query.agent, query.model);
+  // 时间窗只作为弱线索：模型名归一后比较，缺失或不相等都不直接拒绝，
+  // 由候选唯一性与模型相等做最后裁决。
+  if (query.convKey === null || query.agent === null) return ABSENT;
+  return byConvTimeModel(db, query, query.convKey, query.agent);
 }

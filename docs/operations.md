@@ -141,6 +141,10 @@ bun run maintain migrate-hook-identity --db '<dataDir>/trace.db' --apply --appro
 bun run maintain normalize-response-ids --db '<dataDir>/trace.db'
 bun run maintain normalize-response-ids --db '<dataDir>/trace.db' --apply --approval-id '<你的审批标识>'
 
+# 历史会话重复行并入既有网关/账本行，默认只预览
+bun run maintain dedupe-sessions --db '<dataDir>/trace.db'
+bun run maintain dedupe-sessions --db '<dataDir>/trace.db' --apply --approval-id '<你的审批标识>'
+
 # 长期元数据淘汰，默认只预览
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --apply --approval-id '<你的审批标识>'
@@ -323,6 +327,14 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 应用时先在一个写事务里重算三个列的存量键（`raw_ledger.response_id` 原始列不动），再循环调用 `reconcilePending`。唯一候选按 `mergeHookInto` 合并，正文迁到路由行，重复行删除，多候选保持 pending。只改派生键与等待队列，不动正文、不改 schema。重复执行时三个存量计数都是 0，已合并的等待项不再出现。
 
 这条命令用于修幂等规范化之前的存量；新到的 hook 已经按新规则剥到裸键，不需要再跑。`without_id` 的等待项不会因为这条命令合并，它们没有可用于 join 的响应键。
+
+### dedupe-sessions
+
+修复本地会话来源的历史重复行：早期匹配规则要求模型名跨来源严格相等，网关的 `group/auto-…` 与本地 `auto/…` 对不上，同一笔调用会在 `request` 表里各留一行。默认只预览，输出 `scanned`、`candidates`、`merged`、`ambiguous`、`weak_only`、`already_owned` 与按来源的 `by_source`。加 `--apply` 必须同时给 `--approval-id`，否则退出码 1 且错误码 `approval_id_required`。
+
+只处理当前只有一条会话证据的请求：已经并入 hook 或账本证据的行是正式 owner，不会再被并走。身份判断复用 `findRequestOwnerTx`，只认 response id、turn ref 与四段用量指纹；只能被 ±60 秒弱时间窗配上的行只增加 `weak_only`，不在事后改行。命中后把源行的证据、正文引用、工具链接、别名与身份字段迁到目标，删除源行，重算两边的派生组；目标已有的正文与事实不覆盖。
+
+重复执行时 `candidates` 与 `merged` 为 0。修复不重置采集游标，也不重新解析会话文件；后续轮转按修正后的规则直接合并。
 
 ### purge-metadata
 

@@ -57,6 +57,19 @@ test('用量指纹唯一命中：本地先到、网关后到也能认领同一�
   }
 });
 
+test('模型写法跨来源不同仍按四段用量认领', () => {
+  const f = fixture();
+  try {
+    const reqId = seedCall(f.store, {
+      startedMs: 10_000, usage: USAGE, model: 'group/auto-deepseek-v4-1-flash',
+    });
+    expect(find(f.store, { model: 'auto/deepseek-v4.1-flash' }))
+      .toEqual({ reqId, outcome: 'matched', rule: 'usage_fingerprint.v1' });
+  } finally {
+    f.close();
+  }
+});
+
 test('用量指纹多候选不合并', () => {
   const f = fixture();
   try {
@@ -68,20 +81,77 @@ test('用量指纹多候选不合并', () => {
   }
 });
 
-test('用量不同且模型不可比时不猜', () => {
+test('时间窗按归一后的模型名认领', () => {
   const f = fixture();
   try {
-    seedCall(f.store, { startedMs: 10_000, usage: { ...USAGE, input: 101 } });
-    expect(find(f.store, { model: null })).toEqual({ reqId: null, outcome: 'absent', rule: null });
+    const reqId = seedCall(f.store, {
+      startedMs: 10_000, usage: { ...USAGE, input: 101 }, model: 'group/auto-glm-5-3-flash',
+    });
+    expect(find(f.store, { model: 'auto/GLM-5.3-Flash' }))
+      .toEqual({ reqId, outcome: 'matched', rule: 'conv_time_model.v1' });
   } finally {
     f.close();
   }
 });
 
-test('指纹窗口只有 ±2 秒', () => {
+test('时间窗模型名不同但候选唯一时仍然认领', () => {
   const f = fixture();
   try {
-    seedCall(f.store, { startedMs: 12_001, usage: USAGE });
+    const reqId = seedCall(f.store, {
+      startedMs: 10_000, usage: { ...USAGE, input: 101 }, model: 'sn-deepseek-v4-1-flash-1017',
+    });
+    expect(find(f.store, { model: 'auto/deepseek-v4.1-flash' }))
+      .toEqual({ reqId, outcome: 'matched', rule: 'conv_time_model.v1' });
+  } finally {
+    f.close();
+  }
+});
+
+test('时间窗多候选中只认归一后模型相等的那一笔', () => {
+  const f = fixture();
+  try {
+    seedCall(f.store, {
+      startedMs: 10_001, usage: { ...USAGE, input: 101 }, model: 'other-model-family',
+    });
+    const reqId = seedCall(f.store, {
+      startedMs: 10_000, usage: { ...USAGE, input: 102 }, model: 'group/auto-glm-5-3-flash',
+    });
+    expect(find(f.store, { model: 'auto/GLM-5.3-Flash' }))
+      .toEqual({ reqId, outcome: 'matched', rule: 'conv_time_model.v1' });
+  } finally {
+    f.close();
+  }
+});
+
+test('时间窗多候选且无模型线索时不合并', () => {
+  const f = fixture();
+  try {
+    seedCall(f.store, { startedMs: 9_999, usage: { ...USAGE, input: 101 }, model: 'one-model' });
+    seedCall(f.store, { startedMs: 10_001, usage: { ...USAGE, input: 102 }, model: 'other-model' });
+    expect(f.store.write(db => findRequestOwnerTx(db, {
+      responseIdNorm: null, turnRef: null, convKey: CONV, agent: 'claude',
+      startedMs: 10_000, model: null, usage: null, excludeSourceKind: 'ledger',
+    }))).toEqual({ reqId: null, outcome: 'ambiguous', rule: 'conv_time_model.v1' });
+  } finally {
+    f.close();
+  }
+});
+
+test('用量不同且一方缺模型时由唯一弱时间窗候选兜底', () => {
+  const f = fixture();
+  try {
+    const reqId = seedCall(f.store, { startedMs: 10_000, usage: { ...USAGE, input: 101 } });
+    expect(find(f.store, { model: null }))
+      .toEqual({ reqId, outcome: 'matched', rule: 'conv_time_model.v1' });
+  } finally {
+    f.close();
+  }
+});
+
+test('指纹窗口只有 ±2 秒，超出后不再按用量认领', () => {
+  const f = fixture();
+  try {
+    seedCall(f.store, { startedMs: 70_001, usage: USAGE });
     expect(find(f.store, { model: null })).toEqual({ reqId: null, outcome: 'absent', rule: null });
   } finally {
     f.close();

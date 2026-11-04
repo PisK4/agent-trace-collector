@@ -7,14 +7,9 @@ import type { BodyInput } from './body';
 import { redact } from './privacy';
 import { localDay, modelTimeTitle } from './format';
 import { normalizeResponseId } from './sources/magpie/mapping';
-import {
-  markGroupDirtyTx,
-  markRequestInputTx,
-  requestGroupTx,
-  requestPositionTx,
-  resetRequestInputEpochTx,
-} from './derive/state';
+import { markRequestInputTx } from './derive/state';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
+import { mergeRequestTx } from './merge';
 import { HAVE_BODY, MATCH_BY_RESPONSE_ID, MATCH_BY_TURN, hookConv, insertEvidenceTx, sessionIdentity } from './evidence';
 import type { ConvRef } from './evidence';
 import { codexTurnFactsOf } from './harness/codex';
@@ -357,8 +352,9 @@ export function acceptHook(
 /**
  * 把一笔 hook 请求并进保留对象（通常是账本请求）。
  *
- * 顺序不能反：先把所有指向待删请求的别名改到最终 ID，再新增本次映射；
- * 否则中间的别名会短暂指向一个不存在的请求，外键立刻报错。
+ * 行级迁移由共用 `mergeRequestTx` 完成；这里只处理 hook 特有的 pending 队列
+ * 与证据状态。顺序不能反：先把所有指向待删请求的别名改到最终 ID，再新增
+ * 本次映射；否则中间的别名会短暂指向一个不存在的请求，外键立刻报错。
  */
 function mergeHookInto(db: Database, hookId: string, targetId: number, now: number): void {
   const source = hookRequest(db, hookId);
@@ -369,91 +365,9 @@ function mergeHookInto(db: Database, hookId: string, targetId: number, now: numb
     }
     return;
   }
-  const sourceId = source.req_id;
-  // 合并前先记下两笔各自的组：源请求稍后被删，它原来那一组也少了一个成员，
-  // 必须在删行前标记，否则那一组的产物会一直停在旧结果上。
-  const sourceGroup = requestGroupTx(db, sourceId);
-  const targetGroupBefore = requestGroupTx(db, targetId);
-
-  // 1) 先把别的别名从 sourceId 改指向 targetId。
-  db.run('UPDATE request_alias SET new_id=? WHERE new_id=?', [targetId, sourceId]);
-  // 2) 再登记本次 sourceId → targetId。
-  db.run('INSERT OR REPLACE INTO request_alias(old_id,new_id) VALUES (?,?)', [sourceId, targetId]);
-
-  // 3) 迁移证据、正文引用、工具链接与前驱引用。
-  db.run('UPDATE request_evidence SET req_id=? WHERE req_id=?', [targetId, sourceId]);
-  db.run('UPDATE request_evidence SET merge_state=? WHERE source_kind=? AND ref_key=?', ['merged', 'hook', hookId]);
-  // 正文引用迁移：目标已有同 ord 时以目标为准，否则搬过来。
-  db.run(
-    `UPDATE request_block SET req_id=? WHERE req_id=? AND ord NOT IN (SELECT ord FROM request_block WHERE req_id=?)`,
-    [targetId, sourceId, targetId],
-  );
-  db.run('DELETE FROM request_block WHERE req_id=?', [sourceId]);
-  db.run('UPDATE tool_call SET req_id=? WHERE req_id=?', [targetId, sourceId]);
-  db.run('UPDATE tool_call SET result_req=? WHERE result_req=?', [targetId, sourceId]);
-  db.run('UPDATE request SET prev_req_id=? WHERE prev_req_id=?', [targetId, sourceId]);
-
-  // 4) 目标缺正文而源有正文时搬过去，不覆盖已有正文。
-  const targetBody = db.query<{ body_state: string }, [number]>('SELECT body_state FROM request WHERE req_id=?').get(targetId);
-  // adapter_version 一并搬：漏掉它会让有正文的存活请求留着 NULL 版本，
-  // 按版本筛选的回填因此跳过这些行。
-  const sourceBody = db.query<{ skeleton_z: Uint8Array | null; body_state: string; parse_state: string | null; reply_state: string | null; adapter_version: number | null; msg_count: number | null; miss_reason: string | null }, [number]>(
-    'SELECT skeleton_z, body_state, parse_state, reply_state, adapter_version, msg_count, miss_reason FROM request WHERE req_id=?',
-  ).get(sourceId);
-  let bodyState = targetBody?.body_state ?? null;
-  if (targetBody?.body_state !== 'available' && sourceBody?.skeleton_z != null) {
-    db.run(
-      `UPDATE request SET skeleton_z=?, body_state=?, parse_state=COALESCE(parse_state,?), reply_state=COALESCE(reply_state,?),
-         adapter_version=COALESCE(adapter_version,?), msg_count=COALESCE(msg_count,?) WHERE req_id=?`,
-      [sourceBody.skeleton_z, sourceBody.body_state, sourceBody.parse_state, sourceBody.reply_state,
-        sourceBody.adapter_version, sourceBody.msg_count, targetId],
-    );
-    db.run('UPDATE request SET skeleton_z=NULL WHERE req_id=?', [sourceId]);
-    bodyState = sourceBody.body_state;
-  }
-  // 原因对账：hook 证据已并入本行，"等不到 hook"类原因不再成立。正文完整时
-  // 任何缺失原因都不成立；否则降级原因随合并后的正文现实走——迁移了取源行的，
-  // 未迁移时源行的降级原因仍是本行正文现实的最好描述，源行没有就清空。
-  db.run(
-    'UPDATE request SET miss_reason=? WHERE req_id=?',
-    [bodyState === 'available' ? null : sourceBody?.miss_reason ?? null, targetId],
-  );
-
-  // 5) 归属：hook 阶段 actor 未知，账本已确认时保留账本的。
-  db.run(
-    `UPDATE request SET
-       response_id_norm=COALESCE(response_id_norm,(SELECT response_id_norm FROM request WHERE req_id=?)),
-       conv_key=COALESCE(conv_key,(SELECT conv_key FROM request WHERE req_id=?)),
-       conv_source=COALESCE(conv_source,(SELECT conv_source FROM request WHERE req_id=?)),
-       have=have|${HAVE_BODY}, updated_at=?
-     WHERE req_id=?`,
-    [sourceId, sourceId, sourceId, now, targetId],
-  );
-
-  // 6) 证据已迁到目标，按完整证据重算目标的行级事实与 Prompt 族；hook 的 model 与 success
-  // 只留在 raw_hook 里作为独立报告，不迁移成账本事实。
-  projectRequestTx(db, targetId, { now, mappingVersion: SOURCE_PROJECTION_VERSION });
-
-  // 7) 源请求即将消失：它原来那一组少了一个成员，必须在删行前标脏，
-  //    否则那一组的产物会一直停在把源请求算进去的旧结果上。边界取源行的位置。
-  if (sourceGroup !== null) {
-    markGroupDirtyTx(db, sourceGroup.convKey, sourceGroup.actor, requestPositionTx(db, sourceId));
-  }
+  db.run("UPDATE request_evidence SET merge_state='merged' WHERE source_kind='hook' AND ref_key=?", [hookId]);
+  mergeRequestTx(db, source.req_id, targetId, now);
   db.run('DELETE FROM pending_hook WHERE hook_id=?', [hookId]);
-  db.run('DELETE FROM request WHERE req_id=?', [sourceId]);
-
-  // 8) 目标的输入集合换成了两笔证据的并集：旧 epoch 下的用途结论不能复用。
-  //    先换 epoch，再推进修订并按目标当前归属标脏；归属若被源请求改过，旧组也要重算。
-  resetRequestInputEpochTx(db, targetId);
-  const targetGroupAfter = requestGroupTx(db, targetId);
-  const moved = targetGroupBefore !== null &&
-    (targetGroupAfter === null ||
-      targetGroupAfter.convKey !== targetGroupBefore.convKey || targetGroupAfter.actor !== targetGroupBefore.actor);
-  if (moved && targetGroupBefore !== null) {
-    markGroupDirtyTx(db, targetGroupBefore.convKey, targetGroupBefore.actor,
-      requestPositionTx(db, targetId));
-  }
-  markRequestInputTx(db, targetId);
 }
 
 /** 无 response_id 的孤儿回调保留期：没有它永远不可能有候选，按期淘汰（F04）。 */

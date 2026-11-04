@@ -238,3 +238,5 @@ zcode 的归一规则：去掉 `sess_` 与 `session_` 前缀，保留 `subagent`
 已落地：`canonicalSessionId` 在账本、路由与本地适配器入口统一归一；`findRequestOwnerTx` 增加 `usage_fingerprint.v1`（同 conv_key、同 agent、±2 秒、四段 token 逐段相等、候选唯一、排除同来源证据）；第 2 步 `turn_ref` 也排除同来源证据，一个 user turn 里的多笔模型调用不会互相认领；投影写用量列改为 `COALESCE`，网关迟到且无用量时不擦掉本地读数。合成覆盖在 `tests/owner-fingerprint.test.ts` 与各会话适配器测试里。
 
 未落地：第 3 步 `(agent, conversationRoot, nativeCallId)`、direct 行入口、OTLP 认领切到统一 owner、弱指纹与序列对齐兜底、旧行的 OTLP 重放/回填。真实流量的多候选比例尚未测。
+
+更新（同日修复）：`usage_fingerprint.v1` 不再比较模型名——网关 `group/auto-…` 与本地 `auto/…` 等值比较必然落空，四段用量已经足够具体。弱时间窗改为模型名归一后比较，缺失或不同都不直接拒绝，候选唯一时仍合并。已落库的重复行由 `maintain dedupe-sessions` 显式并入，来由见 [跨来源模型名不参与调用身份比较](../../implemented/bug-fix/2026-11-04-session-model-name-dedupe.md)。

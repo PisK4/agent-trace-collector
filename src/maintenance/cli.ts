@@ -9,6 +9,7 @@ import { assertWindow, hookDeliveryReport } from './delivery';
 import { acquireMaintenanceLock, type LockHandle } from './lock';
 import { previewHookIdentityMigration, migrateHookIdentity } from './identity';
 import { previewAgentPurge, previewMetadataPurge, purgeAgent, purgeMetadata } from './purge';
+import { dedupeSessionDuplicates, previewSessionDedupe } from './dedupe';
 import { rebuildSession } from './rebuild';
 import { reparseProtocol } from './reparse';
 import { normalizeStoredResponseIds, previewResponseIdNormalization } from './response-ids';
@@ -54,6 +55,7 @@ const USAGE = `usage:
   maintain reparse --db <path> --protocol <name>
   maintain migrate-hook-identity --db <path> [--apply --approval-id <id>]
   maintain normalize-response-ids --db <path> [--apply --approval-id <id>]
+  maintain dedupe-sessions --db <path> [--apply --approval-id <id>]
   maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --approval-id <id>]
   maintain purge-agent --db <path> --agent <name> [--apply --approval-id <id>]
 `;
@@ -149,7 +151,7 @@ export async function runMaintenance(argv: string[], io: {
 
   if (command === 'verify' || command === 'purge-metadata' || command === 'purge-agent'
     || command === 'rebuild' || command === 'reparse' || command === 'migrate-hook-identity'
-    || command === 'normalize-response-ids') {
+    || command === 'normalize-response-ids' || command === 'dedupe-sessions') {
     // verify 只读，不需要锁；其余命令写库，必须有。
     let store: Store | null = null;
     let lock: LockHandle | null = null;
@@ -219,6 +221,27 @@ export async function runMaintenance(argv: string[], io: {
           return 1;
         }
         const report = normalizeStoredResponseIds(store);
+        out(JSON.stringify({ ok: true, applied: true, approval_id: approvalId, ...report }));
+        return 0;
+      }
+      if (command === 'dedupe-sessions') {
+        lock = acquireMaintenanceLock(dirname(dbPath), `dedupe-sessions:${process.pid}`);
+        if (lock === null) {
+          err('maintenance_lock_held');
+          return 1;
+        }
+        store = openStore(dbPath);
+        const preview = previewSessionDedupe(store);
+        if (flags.get('apply') !== true) {
+          out(JSON.stringify({ ok: true, applied: false, ...preview }));
+          return 0;
+        }
+        const approvalId = stringFlag(flags, 'approval-id');
+        if (approvalId === null) {
+          out(JSON.stringify({ ok: false, error: 'approval_id_required', ...preview }));
+          return 1;
+        }
+        const report = dedupeSessionDuplicates(store, Date.now());
         out(JSON.stringify({ ok: true, applied: true, approval_id: approvalId, ...report }));
         return 0;
       }
