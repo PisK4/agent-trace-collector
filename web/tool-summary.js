@@ -228,3 +228,25 @@ export function toolSummary(name, inputText) {
   const parts = summaryParts(name, inputText);
   return `${parts.label} · ${parts.args}`;
 }
+
+/** 多目标参数键：文件类工具一次传多个路径时的候选键，按出现顺序取第一个。 */
+const MULTI_TARGET_KEYS = ['files', 'paths', 'file_paths', 'path', 'file_path'];
+
+/**
+ * 中栏轨迹单行的目标清单：一次调用带多个文件时只显示第一个，其余由 `+N`
+ * 按需展开。只认字符串数组，至少两项；单项仍走 `summaryParts` 的原有摘要。
+ * 显示名与单目标摘要共用末两段折算（`baseName`，第 28 行）。
+ * @param {string} inputText @returns {string[] | null}
+ */
+export function summaryTargets(inputText) {
+  let args = null;
+  try { args = JSON.parse(inputText); } catch { return null; }
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return null;
+  for (const key of MULTI_TARGET_KEYS) {
+    const value = (/** @type {Record<string, unknown>} */ (args))[key];
+    if (Array.isArray(value) && value.length > 1 && value.every(v => typeof v === 'string' && v !== '')) {
+      return value.map(v => baseName(v));
+    }
+  }
+  return null;
+}

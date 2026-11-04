@@ -34,12 +34,13 @@ import {
   toolSchemaSection, usageFoldHtml,
 } from './rail-facts.js';
 import { compact, EXEC_MS_HINT, secs } from './duration.js';
-import { summaryParts } from './tool-summary.js';
+import { summaryParts, summaryTargets } from './tool-summary.js';
 import { bodyLabelText, bodyStateText, replyCompleteness } from './row-summary.js';
 import {
-  agentLabel, clock, createLivePartition, dayTime, liveTimeCell,
+  agentLabel, clock, createLivePartition, liveTimeCell,
   railSummaryListHtml as railSummaryListView,
   sessionHead as sessionHeadView,
+  sessionHiddenItems,
   sessionsGroupLabel, sessionsListFoldHtml,
 } from './session-view.js';
 import { applyIntent } from './selection.js';
@@ -551,9 +552,8 @@ if (typeof document !== 'undefined') {
     const here = state.missingReqId !== null ? t('Request {id} 未找到', { id: state.missingReqId })
       : state.offPageReqId !== null ? t('Request {id} 未在当前窗口', { id: state.offPageReqId })
         : idx > 0 ? `Request ${String(idx).padStart(2, '0')}` : '';
-    // 面包屑先给请求位置，再跟会话标题；长标题只截断自己，不挤掉「我在哪」。
-    el('crumb').innerHTML = row === null ? (here === '' ? '' : `<b>${esc(here)}</b>`)
-      : `${here === '' ? '' : `<b>${esc(here)}</b><span class="sep">·</span>`}<span class="crumb-title">${esc(row.title)}</span>`;
+    // 面包屑只报「我在第几个请求」：会话标题已是主栏 h1，顶栏不再复述第二遍。
+    el('crumb').innerHTML = here === '' ? '' : `<b>${esc(here)}</b>`;
     document.title = row ? `${here === '' ? row.title : `${here} · ${row.title}`} — Tracery`
       : 'Tracery';
   }
@@ -726,10 +726,14 @@ if (typeof document !== 'undefined') {
     return '';
   }
 
+  /** 折叠条展开时才取清单：闭包锁住当前窗口的 rows 与 hidden，重绘即更新。
+   *  @type {(() => string) | null} */
+  let lazyHiddenItems = null;
   /** 会话头装配：store 与选择状态在此读齐，纯展示在 session-view。
    *  @param {import('../src/queries/projection').RequestRow[]} hiddenRows 默认时间线省略的空组 */
   function sessionHead(hiddenRows) {
     const summary = store.peekSummary();
+    lazyHiddenItems = () => sessionHiddenItems(currentRows(), hiddenRows);
     return sessionHeadView({
       sessionKey: state.session,
       row: state.session === null ? null : sessionRow(state.session),
@@ -875,6 +879,10 @@ if (typeof document !== 'undefined') {
    *  selectedStep 不进键——选择由提交后单独写回高亮。行对象引用只在窗口
    *  重建时更换，而重建必先清模型与缓存。 */
   const rowHtmlCache = new WeakMap();
+  /** `+N` 的完整目标清单：只在悬停/聚焦时读取，行内不落这份数据。
+   *  键是步骤稳定键；超过 500 条整体清空，只影响翻旧会话时的悬停补齐。 */
+  /** @type {Map<string, string[]>} */
+  const moreTargets = new Map();
   /** @param {RequestRow} r @param {import('./trace-view.js').TraceStep[]} steps
    *  @param {number} ordinal @param {boolean} fallback @returns {string[]} */
   function rowHtmls(r, steps, ordinal, fallback) {
@@ -882,6 +890,13 @@ if (typeof document !== 'undefined') {
     if (cached !== undefined && cached.ordinal === ordinal && cached.fallback === fallback) return cached.htmls;
     const callOf = callOfFor(steps, fallback);
     const htmls = steps.map(step => renderTraceRow(r, step, ordinal, callOf));
+    for (const step of steps) {
+      if (step.kind !== 'tool') continue;
+      const targets = summaryTargets(step.toolInput ?? '');
+      if (targets === null) continue;
+      if (moreTargets.size > 500) moreTargets.clear();
+      moreTargets.set(step.key, targets);
+    }
     rowHtmlCache.set(steps, { ordinal, fallback, htmls });
     return htmls;
   }
@@ -1074,6 +1089,8 @@ if (typeof document !== 'undefined') {
     // 结构提交才需要折叠恢复与带定位；clean/selection 跳过这两项布局读取。
     // 选中块回视野自带视野判断，保留在快路径里给轮次点选即时反馈。
     if (verdict === 'structural') {
+      // 结构重建会换掉行节点：挂在旧行上的 +N 弹层一并收起。
+      hideMore();
       restoreFolds(main);
       // 拍摄直达 ?expand=summary：每次重建后展开 cue-board 的折叠组（工具与路径的 +N）。
       if (expandSummary) {
@@ -1110,12 +1127,14 @@ if (typeof document !== 'undefined') {
       }
       return `<div class="rail-id">${t('未选择请求')}</div>`;
     }
-    const model = canonicalModel(r);
-    return `<div class="rail-id"><span>req ${r.req_id}</span><span class="muted">·</span><span>${esc(dayTime(r.started_ms))}</span>
-      ${r.agent === null ? '' : `<span class="muted">·</span><span>${esc(agentLabel(r.agent))}</span>`}
-      ${model !== null ? `<span class="muted">·</span><span class="strip-model" title="${t('实际服务模型（model_served；未关联账本时为请求模型）')}">${esc(model)}</span>` : ''}
-      <span class="grow"></span>${statusDot(r)}${statusChip(r)}</div>
-      ${contentTitle(r)}
+    // 首行身份（req id · 时间 · Agent · 模型）整行删除：时间在会话行、Agent 在主栏、
+    // 模型在「用量与上下文」；标题成为第一行，状态点并入标题右端。
+    // 无标题请求（model_time 自动标）不撑空行：状态点留在原身份行高度的单行里。
+    const title = contentTitle(r);
+    const firstLine = title === ''
+      ? `<div class="rail-id"><span class="grow"></span><span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`
+      : `<div class="rail-title-row">${title}<span class="rail-state">${statusDot(r)}${statusChip(r)}</span></div>`;
+    return `${firstLine}
       <div class="rail-tabs" role="tablist">
         <button role="tab" data-rail="facts" aria-pressed="${state.railTab === 'facts'}">${t('读数')}</button>
         <button role="tab" data-rail="body" aria-pressed="${state.railTab === 'body'}">${t('正文')}</button>
@@ -1680,6 +1699,8 @@ if (typeof document !== 'undefined') {
     setAttr('rail-resize', 'aria-label', t('调整详情栏宽度'));
     setAttr('rail-resize', 'title', t('拖动调整宽度；双击恢复默认；方向键微调'));
     setAttr('rail-col', 'aria-label', t('请求读数与正文'));
+    setAttr('refresh-sessions', 'aria-label', t('刷新会话列表'));
+    setAttr('refresh-sessions', 'title', t('重新读取会话列表第一页'));
     const title = document.querySelector('.sessions-title h2');
     if (title) title.textContent = t('会话');
     const listPulse = document.querySelector('#sessions-list > p.sess-empty.pulse');
@@ -2089,6 +2110,12 @@ if (typeof document !== 'undefined') {
 
   document.addEventListener('click', (e) => {
     const target = /** @type {HTMLElement} */ (e.target);
+    // 多目标计数：点一下就地开合弹层，且不触发行选中（触屏没有悬停，点击是唯一入口）。
+    const moreChip = /** @type {HTMLElement | null} */ (target.closest('[data-more-key]'));
+    if (moreChip !== null) {
+      if (moreAnchor === moreChip) hideMore(); else showMore(moreChip);
+      return;
+    }
     // 降级标签本身是重新读取入口，标签随读取重建，统一走委托。
     if (target.closest('#backend-state')) { void refreshBackendState(); return; }
     // 上下文明细：tile、图例与列表行带同一组 data-ctx-*，统一从这里解析范围。
@@ -2333,6 +2360,11 @@ if (typeof document !== 'undefined') {
       if (active !== null) active.classList.add('tab-fresh');
       return;
     }
+    if (target.closest('#refresh-sessions')) {
+      // 列表刷新只重读第一页并合并去重；已加载的后续页保留，滚动位置不重置。
+      void store.loadSessions().then(() => { renderSessions(); renderFilters(); });
+      return;
+    }
     if (target.closest('#load-more-sessions')) {
       void store.loadSessions(store.getSessions().cursor ?? undefined).then(() => { renderSessions(); renderFilters(); });
     }
@@ -2359,6 +2391,11 @@ if (typeof document !== 'undefined') {
     if (!(target instanceof HTMLDetailsElement)) return;
     const key = target.dataset.fold;
     if (key !== undefined) folds.set(key, target.open);
+    // 折叠条只在真正展开时构建清单：收起态与首次渲染都不带子节点。
+    if (target.open && target.dataset.lazy === 'hidden') {
+      const body = target.querySelector('.more-body');
+      if (body !== null && body.childElementCount === 0) body.innerHTML = lazyHiddenItems === null ? '' : lazyHiddenItems();
+    }
     // 单行分组板：清单开合时该行临时恢复换行，收起即回单行。
     const cueData = target.closest('.cue-data');
     if (cueData !== null) cueData.classList.toggle('open-wrap', target.open);
@@ -2372,6 +2409,78 @@ if (typeof document !== 'undefined') {
       if (read !== null && read.structure.total === null && !read.structure.loading) void loadStructure(id);
     }
   }, true);
+
+  /* ---------------- 多目标 +N 弹层 ---------------- */
+  // 行内只放计数，完整清单在悬停/聚焦时现取现渲染；收起即清空，节点不留 DOM。
+  /** @type {HTMLElement | null} */
+  let morePop = null;
+  /** @type {HTMLElement | null} */
+  let moreAnchor = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let moreHoverTimer;
+  function morePopEl() {
+    if (morePop !== null) return morePop;
+    const pop = document.createElement('div');
+    pop.className = 'more-pop';
+    pop.setAttribute('role', 'dialog');
+    pop.addEventListener('pointerover', () => { clearTimeout(moreHoverTimer); });
+    pop.addEventListener('pointerout', scheduleHideMore);
+    document.body.append(pop);
+    morePop = pop;
+    return pop;
+  }
+  function hideMore() {
+    clearTimeout(moreHoverTimer);
+    if (morePop !== null) {
+      morePop.classList.remove('show');
+      morePop.replaceChildren();
+    }
+    moreAnchor = null;
+  }
+  function scheduleHideMore() {
+    clearTimeout(moreHoverTimer);
+    moreHoverTimer = setTimeout(hideMore, 200);
+  }
+  /** @param {HTMLElement} anchor */
+  function showMore(anchor) {
+    const list = moreTargets.get(anchor.dataset.moreKey ?? '');
+    if (list === undefined) return;
+    clearTimeout(moreHoverTimer);
+    const pop = morePopEl();
+    pop.setAttribute('aria-label', t('完整目标清单'));
+    pop.innerHTML = `<div class="mp-head">${t('完整目标 {n}', { n: list.length })}</div>`
+      + list.map(item => `<div class="mp-item" title="${esc(item)}">${esc(item)}</div>`).join('');
+    pop.classList.add('show');
+    const r = anchor.getBoundingClientRect();
+    const box = pop.getBoundingClientRect();
+    let x = Math.min(r.left, window.innerWidth - box.width - 8);
+    let y = r.bottom + 6;
+    if (y + box.height > window.innerHeight - 8) y = r.top - box.height - 6;
+    pop.style.left = `${Math.max(8, x)}px`;
+    pop.style.top = `${Math.max(8, y)}px`;
+    moreAnchor = anchor;
+  }
+  document.addEventListener('pointerover', (e) => {
+    if (!(e.target instanceof Element)) return;
+    const chip = /** @type {HTMLElement | null} */ (e.target.closest('[data-more-key]'));
+    if (chip === null || chip === moreAnchor) return;
+    clearTimeout(moreHoverTimer);
+    moreHoverTimer = setTimeout(() => showMore(chip), 160);
+  });
+  document.addEventListener('pointerout', (e) => {
+    if (moreAnchor === null) return;
+    const to = e.relatedTarget;
+    if (to instanceof Element && (to.closest('[data-more-key]') !== null || to.closest('.more-pop') !== null)) return;
+    scheduleHideMore();
+  });
+  document.addEventListener('focusin', (e) => {
+    if (!(e.target instanceof Element)) return;
+    const chip = e.target.closest('[data-more-key]');
+    const row = e.target.closest('.compact-select');
+    const anchor = chip ?? (row === null ? null : row.querySelector('[data-more-key]'));
+    if (anchor instanceof HTMLElement) showMore(anchor);
+  });
+  document.addEventListener('focusout', () => { if (moreAnchor !== null) scheduleHideMore(); });
 
   // treemap tile 与内容列表行双向高亮：tile 的 data-ctx-its 列出它代表的 item 身份（iid），
   // 行的 data-ctx-key 就是 iid；悬停一方，另一方按成员关系点亮。读数页重绘重建节点，
@@ -2414,6 +2523,8 @@ if (typeof document !== 'undefined') {
     const target = /** @type {HTMLElement} */ (e.target);
     if (target.matches('input, textarea, summary')) return;
     if (e.key === 'Escape') {
+      // +N 弹层是最轻的覆盖层：先关它，再退到明细弹窗与页内视图。
+      if (moreAnchor !== null) { hideMore(); return; }
       // 明细弹窗先于一切页面内退出：它是覆盖层，Esc 语义最直接。
       if (contextMenu.isOpen()) { contextMenu.close(); return; }
       // 条目列表先于工具页退出：它是从折叠区临时打开的会话级视图。

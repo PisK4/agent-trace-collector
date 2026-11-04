@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { evidenceFoldHtml, resolveSelectedSource } from '../web/rail-facts.js';
 import { isEmptyGroup, projectSteps, projectTailReply, renderTraceRows, tailEligibleIds, toolSummary } from '../web/trace-view.js';
+import { summaryTargets } from '../web/tool-summary.js';
 
 const TOKEN = 'r1-' + 'a'.repeat(64);
 
@@ -604,6 +605,29 @@ test('HTTP 失败、缺正文与已有步骤并存', () => {
   expect(absent.find(s => s.key === '7:flag')?.text).toBe('正文未到');
   const plain = projectSteps(row({ body_state: 'pending', miss_reason: null }), read(detail(), entries, { stop_reason: 'end_turn', content: [{ type: 'text', text: 'r' }] }));
   expect(plain.find(s => s.key === '7:flag')?.text).toBe('正文未到');
+});
+
+test('多目标一次调用：行内只留第一个文件，+N 只带计数不带清单', () => {
+  expect(summaryTargets(JSON.stringify({ files: ['/a/one.ts', '/b/two.ts', '/c/three.ts'] })))
+    .toEqual(['a/one.ts', 'b/two.ts', 'c/three.ts']);
+  // 单值、非数组、坏 JSON 都退回原有摘要，不误报 +N。
+  expect(summaryTargets(JSON.stringify({ file_path: '/a/b.ts' }))).toBeNull();
+  expect(summaryTargets(JSON.stringify({ files: ['/a/one.ts'] }))).toBeNull();
+  expect(summaryTargets('not json')).toBeNull();
+  const steps = [{
+    key: '7:tool:1', kind: 'tool', toolName: 'Read', callOrd: 1,
+    toolInput: JSON.stringify({ files: ['/a/one.ts', '/b/two.ts', '/c/three.ts'] }),
+    toolArgs: 'one.ts +2',
+  }] as never[];
+  const html = renderTraceRows(row(), steps, 1, null);
+  expect(html).toContain('row-tint">Read</span>');
+  expect(html).toContain('<code>a/one.ts</code>');
+  expect(html).toContain('data-more-key="7:tool:1"');
+  expect(html).toContain('>+2<');
+  // 清单不预渲染：其余文件只出现在原样参数 tooltip 里，不进正文节点，也没有条目容器。
+  expect(html).not.toContain('<code>b/two.ts');
+  expect(html).not.toContain('<code>c/three.ts');
+  expect(html).not.toContain('mp-item');
 });
 
 test('工具摘要按工具分派：Read 行区间四种组合', () => {

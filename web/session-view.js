@@ -11,6 +11,7 @@
 import { esc } from './html.js';
 import { icon } from './icons.js';
 import { currentLocale, t } from './i18n.js';
+import { agentLogoHtml } from './agent-logos.js';
 import { kk } from './rail-facts.js';
 import { bodyStateText } from './row-summary.js';
 import { compact, EXEC_MS_HINT, secs } from './duration.js';
@@ -157,6 +158,18 @@ const AGENT_LABELS = /** @type {Record<string, string>} */ ({
 });
 /** @param {string} v */
 export const agentLabel = (v) => AGENT_LABELS[v] ?? v;
+
+/**
+ * 主栏 facts 第一格：只画 logo，名字退到悬停/聚焦浮层与 `title`/`aria-label`。
+ * 会话栏的名字常显，这一处是同一行的第三处复述，只留辅助识别。
+ * 命中区 18×18 保住键盘与触摸的可点范围；文案浮层由 CSS `::after` 读 `data-name`。
+ * @param {string} agent
+ */
+function factAgent(agent) {
+  const name = agentLabel(agent);
+  return `<span class="fact-agent" role="img" tabindex="0" data-agent="${esc(agent)}" data-name="${esc(name)}"`
+    + ` aria-label="${esc(name)}" title="${esc(name)}">${agentLogoHtml(agent)}</span>`;
+}
 
 /**
  * 折叠行：探针记录、旁路会话与工具子事件默认收起，展开只影响渲染。
@@ -390,19 +403,26 @@ export function coverageHoverText(s) {
 /** 默认对话时间线省略的请求：入口在性能组，展开清单按需打开，点条目走请求定位。
  *  这是请求记录的入口，不是第二套导航：序号与正文状态足以认出是哪一笔。
  *  @param {RequestRow[]} rows 当前窗口全部请求 @param {RequestRow[]} hidden 被省略的请求
- *  @param {string | null} sessionKey @param {boolean} open */
+ * @param {string | null} sessionKey @param {boolean} open */
 export function sessionHiddenFold(rows, hidden, sessionKey, open) {
   if (hidden.length === 0) return '';
-  const items = hidden.map(item => {
+  return `<details class="hidden-more" data-fold="hidden:${esc(sessionKey ?? '')}" data-lazy="hidden"${open ? ' open' : ''}>
+    <summary><span class="chev" aria-hidden="true"></span>${t('无正文 <b>{n}</b> 笔', { n: hidden.length })}</summary>
+    <div class="more-body">${open ? sessionHiddenItems(rows, hidden) : ''}</div>
+  </details>`;
+}
+
+/**
+ * 无正文清单的条目：只在展开时构建，收起与折叠态都不把这些节点放进 DOM。
+ * @param {RequestRow[]} rows @param {RequestRow[]} hidden @returns {string}
+ */
+export function sessionHiddenItems(rows, hidden) {
+  return hidden.map(item => {
     const ordinal = rows.findIndex(row => row.req_id === item.req_id) + 1;
     return `<button class="tool-row tool-link" data-summary-req="${item.req_id}">
       <span class="mono">${String(ordinal).padStart(2, '0')}</span><span class="muted">· ${esc(bodyStateText(item))}</span>
     </button>`;
-  });
-  return `<details class="hidden-more" data-fold="hidden:${esc(sessionKey ?? '')}"${open ? ' open' : ''}>
-    <summary><span class="chev" aria-hidden="true"></span>${t('无正文 <b>{n}</b> 笔', { n: hidden.length })}</summary>
-    <div class="more-body">${items.join('')}</div>
-  </details>`;
+  }).join('');
 }
 
 /**
@@ -471,7 +491,7 @@ export function sessionHead(input) {
       </div>
     </div>
     <div class="session-facts">
-      ${row && row.agents.length > 0 ? row.agents.map((/** @type {string} */ a) => `<span><b title="${esc(a)}">${esc(agentLabel(a))}</b></span>`).join('') : `<span class="muted">${t('归属未知')}</span>`}
+      ${row && row.agents.length > 0 ? row.agents.map(factAgent).join('') : `<span class="muted">${t('归属未知')}</span>`}
       <span class="mono" title="${esc(sessionKey ?? '')}">${esc(sessionKey === null ? '' : sessionKeyLabel(sessionKey))}</span>
       ${sessionKey !== null ? `<button class="fact-copy" id="copy-session" aria-label="${t('复制当前会话 ID')}" title="${t('复制当前会话 ID')}">${icon('copy', 14)}</button>` : ''}
       <span>${t('已加载 <b>{n}</b> 笔 Request', { n: rows.length })}</span>
