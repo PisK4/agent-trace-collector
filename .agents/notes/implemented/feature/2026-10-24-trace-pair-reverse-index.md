@@ -14,7 +14,7 @@ Status: implemented
 
 ## Alternatives considered
 
-**给 `tool_call.result_req` 建索引后直接反查。** 单次查询 O(log n)，但要动 schema；现有库按版本拒绝原地迁移，为一条读路径加索引不划算，且详情是窗口加载的热路径，组内 IN 回退的有界代价可接受。[采集期间交互延迟治理](../../bug-fix/2026-11-01-collection-interactive-latency.md)后来依据 hook 合并写扫描交付了 `i_tool_result_req`（schema v8），本记录当时的 schema 成本判断不再成立；详情读路径仍用组内 IN 回退，读语义与选择不变。
+**给 `tool_call.result_req` 建索引后直接反查。** 单次查询 O(log n)，但要动 schema；现有库按版本拒绝原地迁移，为一条读路径加索引不划算，且详情是窗口加载的热路径，组内 IN 回退的有界代价可接受。[采集期间交互延迟治理](../bug-fix/2026-11-01-collection-interactive-latency.md)后来依据 hook 合并写扫描交付了 `i_tool_result_req`（schema v8），本记录当时的 schema 成本判断不再成立；详情读路径仍用组内 IN 回退，读语义与选择不变。
 
 **`WHERE result_req = ?` 全局扫同步表。** 行为等价但随历史线性变慢；详情每笔请求读一次，窗口加载会放大。查询计划已验证：IN 子查询形态走 `SEARCH tool_call USING PRIMARY KEY` 与 request 覆盖索引。
 

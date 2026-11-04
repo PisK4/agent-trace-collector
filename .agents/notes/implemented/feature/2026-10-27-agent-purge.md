@@ -10,7 +10,7 @@ Status: implemented
 
 ## Decision
 
-新增 `maintain purge-agent --agent <name>`，与 `purge-metadata` 共用同一个删除主干。主干从原 `purgeMetadata` 里抽成 `purgeTargetsTx`：目标固定、费用观测、墓碑与事件、行级级联、路由摘要回收、受影响组结算都在一处，两个命令只负责填目标集合与各自的来源层清理。删除顺序的事实因此只有一个家。命令的预览字段、错误码与执行前提见[运维手册](../../../docs/operations.md#purge-agent)。
+新增 `maintain purge-agent --agent <name>`，与 `purge-metadata` 共用同一个删除主干。主干从原 `purgeMetadata` 里抽成 `purgeTargetsTx`：目标固定、费用观测、墓碑与事件、行级级联、路由摘要回收、受影响组结算都在一处，两个命令只负责填目标集合与各自的来源层清理。删除顺序的事实因此只有一个家。命令的预览字段、错误码与执行前提见[运维手册](../../../../docs/operations.md#purge-agent)。
 
 范围包括请求侧全部依赖，以及来源层的 `raw_ledger`、`raw_route`、`raw_hook`、对应的 `pending_hook`、指向被删请求的 `bg_job` 与 `otlp_body_ref`、派生快照里属于这些请求的逐行结果。来源层必须一起删：原始账本与路由行仍带会话、模型与目录归属，只删请求行等于把同样的信息留在另一张表。正文块经 `request_block` 引用删除后按孤儿回收，共享块不受影响。
 

@@ -25,8 +25,8 @@ Supersession check：已检索活动树中的会话导航、选择代次、页�
 - [选择状态的唯一写者](../../implemented/architecture/2026-10-25-selection-single-writer.md)继续约束选择与效果。异步守卫仍属于装配层，仍由页面入口持有，尚未集中到导航模块，也不进入选择纯转换。
 - [切窗收尾服从较新的阅读选择](../../implemented/bug-fix/2026-10-28-window-navigation-intent-guards.md)继续约束导航、用户选择和延迟滚动。这些竞态保护继续有效；本次没有集中这些规则。
 - [全部读取归一到一个生命周期与调度器](../../implemented/architecture/2026-11-02-reads-through-one-lifecycle.md)、[读取架构](../../implemented/architecture/2026-11-02-read-architecture-and-client-seams.md)和[读取功能接入规则](../../../../docs/read-feature-rules.md)继续约束网络、缓存、容量和取消。
-- [稳定的渐进式轨迹阅读](../architecture/2026-10-27-stable-progressive-trace-reader.md)仍持有正文自动补齐与阅读稳定性的讨论。本次交付只确定会话栏自动发现活动，不替它决定正文加载范围、版本拆分或显示策略。
-- [方向 A 重制提案](2026-11-02-frontend-direction-a-restyle.md)、[方向 A 对齐修正](../../implemented/bug-fix/2026-11-02-direction-a-alignment-audit.md)与[前端降噪约束](../../implemented/process/2026-10-24-frontend-denoise-standing-rule.md)继续约束样式。活动状态增加必要信息，不扩展成全页重设计。
+- [稳定的渐进式轨迹阅读](../../proposed/architecture/2026-10-27-stable-progressive-trace-reader.md)仍持有正文自动补齐与阅读稳定性的讨论。本次交付只确定会话栏自动发现活动，不替它决定正文加载范围、版本拆分或显示策略。
+- [方向 A 重制提案](../../proposed/feature/2026-11-02-frontend-direction-a-restyle.md)、[方向 A 对齐修正](../../implemented/bug-fix/2026-11-02-direction-a-alignment-audit.md)与[前端降噪约束](../../implemented/process/2026-10-24-frontend-denoise-standing-rule.md)继续约束样式。活动状态增加必要信息，不扩展成全页重设计。
 
 ## 活动事实与排序
 

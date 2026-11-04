@@ -13,11 +13,7 @@ Status: proposed
 
 深色主题的三层表面加语义色关系成立，可以当基准。需求侧的目标（Pis 原话归纳）：简洁，让用户一眼找到最重要的信息；不要很多副标题、不要冗余信息；视觉负担要低。这与仓库常备约束[前端降噪常备约束](../../implemented/process/2026-10-24-frontend-denoise-standing-rule.md)同源。Pis 同时明确认可 Apple 的设计语言，要求把 Apple HIG 纳入校准。
 
-外部参考取用截图加 token 加组件解剖的方式（Braintrust、Langfuse、Sentry 的 trace 界面；Geist Colors、Dark Developer UI、Radix Colors、Mars Dashboard 指南），链接只当索引。参考库、四方向对比页与方向 A 细节样张都在 [.archify/](../../../../.archify/style-direction-a-detail-20261101-230459/atc-geist-detail.html)：
-
-- 参考库（现状诊断与外部参考）：`.archify/explainer-atc-ui-redesign-20261101-224500/atc-ui-redesign-references.html`
-- 四方向对比（A 已选）：`.archify/style-directions-20261101-224617/atc-style-directions.html`
-- 方向 A 细节样张（本提案的规格来源，含明暗双主题切换）：`.archify/style-direction-a-detail-20261101-230459/atc-geist-detail.html`
+外部参考取用截图加 token 加组件解剖的方式（Braintrust、Langfuse、Sentry 的 trace 界面；Geist Colors、Dark Developer UI、Radix Colors、Mars Dashboard 指南），链接只当索引。本提案的规格来源是作者本地的参考库、四方向对比页与方向 A 细节样张（含明暗双主题切换），这些工作产物不随仓库发布。
 
 ## Proposal
 

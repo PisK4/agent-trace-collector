@@ -6,7 +6,7 @@ Status: implemented
 
 主检出就是生产。launchd 跑的是这份检出的 `src/main.ts`，`web/` 的文件每次请求现读（见[采集器起停走 `bun run service`](2026-10-26-service-lifecycle-commands.md)）。多步实现直接落在主检出时，改到一半的页面与接口对生产可见，回滚只能靠 revert。
 
-本仓早有 worktree：`creator-intelligence/.codex-worktrees/atc-*` 下七个，分支按 `feat/`、`fix/` 命名。但没有一条规则写明何时建、怎么合、何时清。七个分支全部已并入 `master` 且工作区干净，目录一个没删。
+本仓早有 worktree：仓库上级目录的 `.codex-worktrees/atc-*` 下七个，分支按 `feat/`、`fix/` 命名。但没有一条规则写明何时建、怎么合、何时清。七个分支全部已并入 `master` 且工作区干净，目录一个没删。
 
 并行实现也缺隔离。未完成的改动混在主检出，`bun run service status` 用进程启动时刻对比最后一次 `src/` 改动来判断落后，分不清改动的来路。
 
@@ -14,24 +14,24 @@ Status: implemented
 
 软规则，只写进根 `AGENTS.md` 的常备约定，不加闸门、不改 `verify:notes`。依据 Agent Note、`docs/superpowers/plans/` 计划或用户直接指定的实现，改动跨文件或需要多步验证时，在 worktree 分支里做；文档、Agent Note 与单文件修正留在主检出。
 
-- **位置与命名。** `creator-intelligence/.codex-worktrees/atc-<topic>`，分支 `feat/<topic>` 或 `fix/<topic>`，基线 `master`。上层 `.gitignore` 已忽略 `.codex-worktrees/`。
+- **位置与命名。** 仓库上级目录的 `.codex-worktrees/atc-<topic>`，分支 `feat/<topic>` 或 `fix/<topic>`，基线 `master`。工作树目录在仓库之外，不进版本库。
 - **依赖。** 符号链接主检出的 `node_modules`，不重复 `bun install`。软链不在 `.gitignore` 的目录模式内，要在 worktree 的 `info/exclude` 追加 `node_modules`（目录不存在时先 mkdir），否则会以未跟踪文件出现。
 - **验证隔离。** worktree 里起采集器必须给 `ATC_DATA_DIR` 临时根与 `ATC_PORT`；默认数据目录指向生产库（[配置入口](../../../../src/config.ts)）。
 - **服务归属。** `bun run service` 按 plist 的 `ProgramArguments` 认跑本检出 `src/main.ts` 的条目（[探测](../../../../scripts/service-support.ts)），worktree 里的实例归主检出，重启在合并后的主检出执行。
 - **合并与清理。** 验证通过后用 `git merge --no-ff` 进 `master`，合并提交保留 worktree 分支这一侧的历史；改动触及 `src/` 才需要 `bun run service restart`；随后只移除工作树目录，分支名保留。
 
 ```sh
-cd ../../                                                # creator-intelligence
-git -C repos/agent-trace-collector worktree add "$PWD/.codex-worktrees/atc-<topic>" -b feat/<topic> master
-ln -s "$PWD/repos/agent-trace-collector/node_modules" .codex-worktrees/atc-<topic>/node_modules
+# 以下命令在仓库根执行
+git worktree add ../.codex-worktrees/atc-<topic> -b feat/<topic> master
+ln -s "$PWD/node_modules" ../.codex-worktrees/atc-<topic>/node_modules
 
-cd .codex-worktrees/atc-<topic>                          # 在此实现与提交
+cd ../.codex-worktrees/atc-<topic>                      # 在此实现与提交
 ATC_DATA_DIR=$(mktemp -d) ATC_PORT=8399 bun run start
 
-cd ../../repos/agent-trace-collector                     # 验证通过后回主检出
+cd -                                                    # 验证通过后回主检出
 git merge --no-ff feat/<topic> -m "merge: <主题>"
-bun run service restart                                  # 仅当改动触及 src/
-git worktree remove ../../.codex-worktrees/atc-<topic>   # 目录移除，分支名保留
+bun run service restart                                 # 仅当改动触及 src/
+git worktree remove ../.codex-worktrees/atc-<topic>     # 目录移除，分支名保留
 ```
 
 ## Alternatives considered

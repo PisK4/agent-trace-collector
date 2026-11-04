@@ -15,7 +15,7 @@ Status: implemented
 - 参数键全库统一:Edit/Write/Read 用 `file_path`,Skill 用 `skill`——与 trace 视图 `toolSummary` 已认的键名同一套词汇。
 - 会话结构信号全部现成:`req_kind` 已派生;部分会话有子代理;`attempt_count>1` 共 16 笔。
 
-需求与社区证据经[独立评审](../../../docs/session-trace-summary-review.md)核实,两条口径警示写进定位:
+需求与社区证据经[独立评审](../../../../docs/session-trace-summary-review.md)核实,两条口径警示写进定位:
 
 - OpenTelemetry GenAI 的 `tool_calls` 指标按单次 agent invocation 计客户端执行的调用,与本提案「模型发出的调用、全会话累计」是不同口径,不混称一致。
 - HITL 语境的人介入包括批准、改参、拒绝、补充回答,中断只是其中一小类,本功能不把中断计数称为人介入率。

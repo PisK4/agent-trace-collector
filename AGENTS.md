@@ -24,8 +24,8 @@ bun run verify:notes   # 合并到 master 前
 ## 常备约定
 
 - **非平凡变更必须在合并到 master 之前带至少一篇 Agent Note**，判据见 [Agent Note 规则](.agents/notes/README.md)；纯机械或局部编辑豁免，bug-fix note 可以写短。
-- **落地实现代码先加载 `ponytail` Skill**：写、修、重构代码的任务动笔前先加载，按最小完整改动解决问题；纯文档改动不在此列。
-- **落地方案走 worktree 分支。** 跨文件或需多步验证的实现，在 `../../.codex-worktrees/atc-<topic>` 建 `feat/`|`fix/` 分支，提交只落分支，`master` 只以 `--no-ff` 合并前进，合并后移除 worktree 目录、分支名保留；文档与单文件修正留在主检出。见[实现走 worktree](.agents/notes/implemented/process/2026-10-28-implementation-worktree.md)。
+- **落地实现代码先加载 ponytail 技能**：写、修、重构代码的任务动笔前先加载，按最小完整改动解决问题；纯文档改动不在此列。
+- **落地方案走 worktree 分支。** 跨文件或需多步验证的实现，在 仓库上级目录的 `.codex-worktrees/atc-<topic>` 建 `feat/`|`fix/` 分支，提交只落分支，`master` 只以 `--no-ff` 合并前进，合并后移除 worktree 目录、分支名保留；文档与单文件修正留在主检出。见[实现走 worktree](.agents/notes/implemented/process/2026-10-28-implementation-worktree.md)。
 - **报告忠实**：不把重试、跳过、未执行描述为通过；合成数据验收与真实流量验收分开写。
 - 测试只用合成数据；真实请求正文、账号、令牌与用户配置不进 fixture、日志或提交。
 - **不装本地 git hook**：闸门是 `.agents/KIT-VERSION` 基线下显式执行的 `verify:notes`，kit 升级也是显式动作，见[接入 agent-kit](.agents/notes/implemented/process/2026-10-21-adopt-agent-kit-notes.md)。
@@ -47,4 +47,4 @@ bun run verify:notes   # 合并到 master 前
 
 ## 目录与上位文档
 
-目录一眼可见，只有三处不显然：`prototypes/` 只提供数据源、加载同一份生产页面；`plugins/` 是给 magpie 的薄插件；`.agents/` 是 note 规则与 kit 版本基线。工作流规格与本仓库在父知识库的引用边界见父仓库根 `../../AGENTS.md`；中文写作遵守 de-AI-writing 与 `../../规则/文档落笔风格.md`。
+目录一眼可见，只有三处不显然：`prototypes/` 只提供数据源、加载同一份生产页面；`plugins/` 是给 magpie 的薄插件；`.agents/` 是 note 规则与 kit 版本基线。中文写作遵守 de-AI-writing 风格。

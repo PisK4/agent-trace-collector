@@ -8,12 +8,12 @@
 
 **Tech Stack:** TypeScript、Bun、bun:sqlite、原生 JavaScript 与 CSS；不新增依赖。
 
-**Spec:** [方向 A 对照走查](../../../.agents/notes/implemented/bug-fix/2026-11-02-direction-a-alignment-audit.md)、主检出的 `.archify/style-direction-a-detail-20261101-230459/atc-geist-detail.html`。
+**Spec:** [方向 A 对照走查](../../../.agents/notes/implemented/bug-fix/2026-11-02-direction-a-alignment-audit.md)。
 
 ## Global Constraints
 
 - 用户指定 Sub-Agent 实施，主 Agent 负责方向和统一验收；本计划不再询问执行模式。
-- worktree：`creator-intelligence/.codex-worktrees/atc-direction-a-alignment`，分支 `fix/direction-a-alignment`。
+- worktree：仓库上级目录的 `.codex-worktrees/atc-direction-a-alignment`，分支 `fix/direction-a-alignment`。
 - 不引第三方依赖；正文、路径和工具参数一律转义。
 - 不修改生产库、配置、schema、派生版本或后台任务，不启动第二个采集器。
 - 读取继续使用现有 operation、HTTP adapter、scheduler 与 reader-store；禁止逐列表项请求正文。

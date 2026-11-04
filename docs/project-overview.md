@@ -22,11 +22,11 @@ agent ──> magpie gateway ──> provider
 
 ## 为什么重新做一个
 
-两个前身，问题不一样。
+两个前身，问题不一样。两者都是作者的私有项目，不在本仓库。
 
 AVA（agent-visualization-analysis）已经做成了一套完整的可视化系统，采集、存储、前端都有。它的问题有两处：承担的范围太大，同时对流量的把控不如 magpie。会话归属一直要 AVA 自己判定，判不准，这是当初最痛的地方。
 
-ATA 是另一个未完成的轨迹项目，定位接近，卡在展示格式上。它是事件账本，一轮对话由 `turn.started`、`message.upserted`、`tool.upserted`、`turn.ended` 等多个事件拼出来，看的时候要先还原成一次请求，才能知道模型当时看到了什么（`ata/schema.py:4-29`，路径相对 ATA 仓库）。
+ATA 是另一个未完成的轨迹项目，定位接近，卡在展示格式上。它是事件账本，一轮对话由 `turn.started`、`message.upserted`、`tool.upserted`、`turn.ended` 等多个事件拼出来，看的时候要先还原成一次请求，才能知道模型当时看到了什么（ATA 仓库未公开）。
 
 新项目算 ATA 的重写版本。不继承它的 schema，不背兼容包袱，重叠的功能按新显示单元重新设计。AVA 的存量数据不导入，切换后历史从零开始。
 

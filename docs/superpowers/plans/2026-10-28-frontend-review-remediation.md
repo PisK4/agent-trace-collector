@@ -13,7 +13,7 @@
 ## 全局约束
 
 - 非平凡变更同一提交带至少一篇 Agent Note，提交前跑 `bun run verify:notes`；纯机械改动提交信息写 `Agent-Note: none — <reason>`。
-- 跨文件实现走 worktree：`../../.codex-worktrees/atc-<topic>` 建 `fix/` 分支，提交只落分支，`master` 只以 `--no-ff` 合并；文档与单文件修正在主检出做。
+- 跨文件实现走 worktree：仓库上级目录的 `.codex-worktrees/atc-<topic>` 建 `fix/` 分支，提交只落分支，`master` 只以 `--no-ff` 合并；文档与单文件修正在主检出做。
 - 测试只用合成数据；真实请求正文、账号、令牌与用户配置不进 fixture、日志或提交。
 - 生产服务由 launchd 托管，起停只走 `bun run service stop|start|restart`，不 `kill`。
 - 维护命令（`maintain rebuild`、`maintain backup`、`--apply` 类）一律在服务已停的前提下执行；先备份，再写库。

@@ -21,7 +21,7 @@ Status: proposed
 | 备份实现 | `backupDatabase` 要求源库无连接（`source_must_be_stopped`）、目标不存在、剩余空间 ≥1.1 倍（[backup.ts:91-143](../../../../src/maintenance/backup.ts)）；`backupBundle` 还要求 `user_version ∈ [6,10]`（[backup.ts:152](../../../../src/maintenance/backup.ts)） | **关键约束：需要重建的旧库都 <6，bundle 拒绝备份** |
 | 迁移分支 | v6/7/8/9 原地加列；`version < 6` 抛 `schema_rebuild_required`（[store.ts:240-242](../../../../src/store.ts)）；`version > 10` 抛 `schema_version_unsupported`（[store.ts:208](../../../../src/store.ts)）；0 且有表抛 `schema_unknown`（[store.ts:207](../../../../src/store.ts)） | 自动重建只能绑定 `schema_rebuild_required` |
 | 失败清理 | 迁移在单事务内，失败整体回滚，`user_version` 停在旧值（[store.ts:236-239](../../../../src/store.ts)、[operations.md:549](../../../../docs/operations.md)） | 停机不会留下半迁移库，重试是可行路径 |
-| 既有决策 | 「在 `openStore` 里自动重建」曾被明确否决：隐式破坏、无法区分「想重建」与「路径写错」（[destructive-schema-replacement](../../../implemented/architecture/2026-10-23-destructive-schema-replacement.md)） | 默认路径必须延续该决策 |
+| 既有决策 | 「在 `openStore` 里自动重建」曾被明确否决：隐式破坏、无法区分「想重建」与「路径写错」（[destructive-schema-replacement](../../implemented/architecture/2026-10-23-destructive-schema-replacement.md)） | 默认路径必须延续该决策 |
 
 ## 先把「重建」拆成两个词，否则后面所有结论都会错
 
@@ -175,7 +175,7 @@ boot
 
 **A：快速失败 + 自救指令（作为唯一策略）。** 实现小、与既有决策一致，但无人值守时仍然「服务起不来直到人发现」，F01 的第二天才发现问题原样保留。只作为默认路径，不作为全部。
 
-**B：自动备份 + 自动重建 + 自动回填。** 否决。`schema_rebuild_required` 的库没有保行结构重建能力，R1 之后 request 为 0，`maintain rebuild` 无法执行；所谓回填只能靠一份不存在的导入器。若强行加导入器，就要为 v3/v4/v5 分别维护旧读口径与守恒校验，成本与风险都高于它保护的数据（该判断在 [destructive-schema-replacement](../../../implemented/architecture/2026-10-23-destructive-schema-replacement.md) 里已经成立过一次）。
+**B：自动备份 + 自动重建 + 自动回填。** 否决。`schema_rebuild_required` 的库没有保行结构重建能力，R1 之后 request 为 0，`maintain rebuild` 无法执行；所谓回填只能靠一份不存在的导入器。若强行加导入器，就要为 v3/v4/v5 分别维护旧读口径与守恒校验，成本与风险都高于它保护的数据（该判断在 [destructive-schema-replacement](../../implemented/architecture/2026-10-23-destructive-schema-replacement.md) 里已经成立过一次）。
 
 **C：备份 + 重建、但不回填（作为唯一默认）。** 否决为默认：它把「删库」变成无需人确认的隐式动作，恰好违反既有决策；且在磁盘满/锁冲突这类可修复故障上会做出最坏的响应。保留为显式开关下的逃生门。
 

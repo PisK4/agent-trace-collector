@@ -331,7 +331,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 - **严重度**：P0（迁移失败即停机；无自动重建、无自动备份）。
 - **建议**：重启顺序改为：停服 → `bun run maintain bundle --db … --out <外部路径>`（或至少 `backup`，预留 ≥4.43 GB）→ 启新代码 → 只读核对 `user_version=10`、索引、`integrity_check`；失败时保留库与 WAL，不要删除 `-wal/-shm`，按错误码处理后在低峰重试。注意备份要求停服，不能边跑边备。
 - **修复方案**：边界与状态机见 [迁移失败即停机：自动重建的边界设计（F23）](./2026-11-03-migration-failure-autorebuild.md)。结论是默认 A（快速失败 + 打印自救指令），只有显式开关（`--auto-rebuild` / `ATC_AUTO_REBUILD=1`）且唯一命中 `schema_rebuild_required` 时才允许 C（同卷改名备份后重建空库、不回填），B（自动备份 + 重建 + 回填）因 R1 之后无数据可填而否决。该篇只出设计，实现与验收未开始。
-- **状态**：已修（流程）：备份→重启→显式 rebuild→验证 写入 [operations.md 部署顺序](../../docs/operations.md#部署顺序重启只完成迁移不回填存量)；本次回归窗口按该顺序执行。
+- **状态**：已修（流程）：备份→重启→显式 rebuild→验证 写入 [operations.md 部署顺序](../../../../docs/operations.md#部署顺序重启只完成迁移不回填存量)；本次回归窗口按该顺序执行。
 
 ### F24 重启本身不会让存量 Codex 会话收敛/改标题；验收需显式 rebuild
 
@@ -366,7 +366,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
   GET /api/sessions/<urlencoded conv_key>/turns
   ```
   另建议在文档里加一条只读自检：迁移后 `user_fingerprint` 非空计数应从 0 开始增长，用于区分「迁移成功」与「回填完成」。
-- **状态**：已修：部署顺序与只读自检写入 [operations.md](../../docs/operations.md#部署顺序重启只完成迁移不回填存量)，schema 节同步到 v10。
+- **状态**：已修：部署顺序与只读自检写入 [operations.md](../../../../docs/operations.md#部署顺序重启只完成迁移不回填存量)，schema 节同步到 v10。
 
 ### F26 `/api/sessions` 跨组标题绑定写成相关标量子查询，复杂度 O(页内会话数 × request 行数)
 
@@ -634,7 +634,7 @@ F30 依赖 F26 完成；F21 依赖新实例稳定运行
 
 ## 修复记录（2026-11-04 凌晨批次）
 
-> 本节是批次摘要；决策、取舍与验证细节以 [批次修复 note](../implemented/bug-fix/2026-11-04-monitoring-health-batch-fixes.md) 为准。
+> 本节是批次摘要；决策、取舍与验证细节以 [批次修复 note](../../implemented/bug-fix/2026-11-04-monitoring-health-batch-fixes.md) 为准。
 
 分支 `fix/monitor-health-checks`（worktree `atc-monitor-health`），七个单元提交 `--no-ff` 合并 master。全量 `bun test` 1151 通过、`tsc --noEmit` 绿。纯观察项（F03/F05/F07/F15/F19/F30）不改代码；F32 按原计划另立批次。
 

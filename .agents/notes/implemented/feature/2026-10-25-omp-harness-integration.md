@@ -6,7 +6,7 @@ Status: implemented
 
 ATC 的定位是收敛 magpie 三路证据、按会话阅读 Agent Harness 的 trace。派生层是 harness 通用的骨架：工具配对、前驱链、轮次结算、标题与摘要都不绑定具体 harness；harness 特定语义只有零星几处（输入解释认 OMP 的 `job`/`file`/`chat` 标签，标题生成器兼容 OMP 的回复形状）。这意味着同一个 harness 的 feature 语义——压缩何时发生、后台作业何时唤醒、哪些请求是旁路——全部沉在正文里，阅读层看不见。
 
-用户的主力 harness 之一是 OMP（oh-my-pi，pi-mono 的 fork，Stencil Labs 维护，本机源码在 `repos-external/oh-my-pi`）。2026-10-25 对 OMP 做了一次完整调研：README 与 docs/（86 篇）、packages/（18 个包）逐个过、`~/.omp/agent` 运行数据抽样、生产库 OMP 流量逐笔解剖。结论有两层：
+用户的主力 harness 之一是 OMP（oh-my-pi，pi-mono 的 fork，Stencil Labs 维护）。2026-10-25 对 OMP 做了一次完整调研：README 与 docs/（86 篇）、packages/（18 个包）逐个过、`~/.omp/agent` 运行数据抽样、生产库 OMP 流量逐笔解剖。结论有两层：
 
 1. OMP 的一批 feature 在 wire 上留有结构化痕迹（模板文案、字段、消息形态），现有三路证据不需要扩源就能派生出展示语义。
 2. 生产上用户已经报告了阅读痛点：同一条对话被切成多个会话。根因查清了（见下文「生产实况」），定性为上游证据形状而非 ATC 缺陷，本决策用「降噪」回应它，不做无证据的归并。
@@ -20,7 +20,7 @@ ATC 的定位是收敛 magpie 三路证据、按会话阅读 Agent Harness 的 t
 三条总原则贯穿交付：
 
 1. **wire-first**。只用现有三路证据能观察到的信号。本地 session 文件、OMP extension hook、OTel 都能提供更强的信号，但它们是新证据源，见「边界外」。
-2. **规则进既有体系并带版本**。旁路识别进 purpose 规则体系（对照 [request-purpose-and-chain](../../architecture/2026-10-22-request-purpose-and-chain.md)），消息解释进输入解释层，不散落 if。
+2. **规则进既有体系并带版本**。旁路识别进 purpose 规则体系（对照 [request-purpose-and-chain](../architecture/2026-10-22-request-purpose-and-chain.md)），消息解释进输入解释层，不散落 if。
 3. **降噪不归并**。旁路会话在列表里折叠，不试图挂回母会话。归并需要线上不存在的证据。
 
 与 [Agent Profile 与请求类别注册表](../../proposed/architecture/2026-10-22-agent-request-kind-registry.md) 的关系：那篇主张把 agent 特称从通用派生管线里移出、收进 RequestKind 注册表，本决策把 OMP 规则直接写进 `classifyPurpose`，方向相反。registry 提案仍是 proposed 且自述「作为输入材料保留，不直接作为执行依据」，本决策按现行体系落地。两条专属规则后来经[Harness 语义的静态扩展](../architecture/2026-10-26-harness-semantics-adapters.md)迁入静态登记（判定在 `src/harness/omp.ts`，编排仍在 `classifyPurpose`），行为未变。
@@ -57,7 +57,7 @@ ATC 的定位是收敛 magpie 三路证据、按会话阅读 Agent Harness 的 t
 
 `classifyPurpose` 的规则链在分类器之后、来源 kind 之前加 `omp.skill-hint.v1`。判据：`agent='omp'` 且任一 user 文本块块首命中 `Compress into one routing hint of at most 12 words:` → `req_kind='skill_hint'`、`purpose_chain='exclude'`。锚点失配时规则静默不命中，退回 `participate`。
 
-取数扩了一处：`readPurposeViewTx`（`src/request-purpose.ts`）此前只解骨架、引用索引与 role=2 的 System 块；现在加读 role=0 的前 5 条 user 消息、逐块取前 200 字符的块首（`PurposeView.userBlockHeads`）。双限额让取数成本不随正文体积增长；一次按 ord 限额的单行查询，不扫全表，符合[联合评审](../../../docs/agent-request-kind-review.md)的取数成本契约。
+取数扩了一处：`readPurposeViewTx`（`src/request-purpose.ts`）此前只解骨架、引用索引与 role=2 的 System 块；现在加读 role=0 的前 5 条 user 消息、逐块取前 200 字符的块首（`PurposeView.userBlockHeads`）。双限额让取数成本不随正文体积增长；一次按 ord 限额的单行查询，不扫全表，符合[联合评审](../../../../docs/agent-request-kind-review.md)的取数成本契约。
 
 `PURPOSE_VERSION` 3→4。与 [zcode 的 Agent 支持](../../proposed/feature/2026-10-24-zcode-agent-support.md) 的 3→4 撞车按「实施时的当前值 +1」解决：OMP 先实施取 4，zcode 实施时取当时的当前值 +1，两篇各自记录。
 
@@ -140,7 +140,7 @@ PRIMARY KEY (conv_key, job_id)
 - 切片与同步的 parity 列加 `context_event` 锁两路一致
 - 回填脚本幂等补列重建视图
 
-真实数据人工验收（生产库，快照 2026-10-26 00:20，与合成验收分开呈报，全文见[验收记录](../../../docs/acceptance.md)）：
+真实数据人工验收（生产库，快照 2026-10-26 00:20，与合成验收分开呈报，全文见[验收记录](../../../../docs/acceptance.md)）：
 
 - 四个 skill 描述压缩会话全部改判 `omp.skill-hint.v1/exclude`，6 个全员 exclude 会话带 `bypass` 标志
 - 24 笔会话 req 4 判 `omp_compaction`、basis 记 `dropped_chars: 999551`、标题退化为模型时间兜底

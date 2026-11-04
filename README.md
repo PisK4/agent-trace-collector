@@ -1,38 +1,45 @@
 # Tracery
 
-> 产品名是 Tracery；仓库目录、launchd 作业与数据目录仍沿用 `agent-trace-collector`。数据格式叫 ATC trace，这是格式名，不是产品名。
+[![CI](https://github.com/PisK4/agent-trace-collector/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/PisK4/agent-trace-collector/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Runtime: Bun](https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.4-black)](https://bun.sh)
+[![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
+[![Tests: 1163](https://img.shields.io/badge/tests-1163%20passing-brightgreen)](tests)
+[![README: 中文](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-blue)](README.zh-CN.md)
 
-Tracery 收集 Agent 发出的请求，把散落的调用织成一条可以逐步骤翻看的 trace。两条上游进路收敛进同一个 SQLite 库：经过 magpie 网关的请求带来完整请求体、回复与路由决策；harness 自己的 OTLP 导出带来模型、用量与会话读数。记录单位是一笔请求，阅读单位是一个会话。
+**Tracery records the requests your coding agent sends, and lets you read them step by step.**
 
-它挂在数据面旁边，不是代理。没运行时，Agent 的请求照常走完，只是这段时间没有新记录。
+A coding agent fires dozens of LLM calls per session. Your observability platform tells you the cost and the latency of each call. It does not tell you which messages were actually in the request body, how the system prompt was assembled, or what changed between request N and request N-1.
 
-![Tracery 三栏界面：左栏会话列表，中栏轨迹，右栏读数](docs/images/session-list.png)
+Tracery keeps the raw request. It records each call as a request — the assembled protocol object, the reply, routing decisions, and usage — then reads those requests back as one session you can walk through line by line.
 
-*图 1｜会话列表。英文 csvutil 任务，26 笔请求（主链 20 / 旁路 6 / 子代理 1），标题由标题生成请求给出。*
+![Tracery's three-pane interface: session list on the left, trace in the middle, readings on the right](docs/images/session-list.png)
 
-## 为什么需要它
+It sits next to the data path, not in it. It is not a proxy: it forwards nothing, rewrites nothing, intercepts nothing. When it isn't running, your agent's requests go through exactly as before — there is just no record of them.
 
-- **看清发了什么。** 某一轮 Agent 到底给模型发了哪几条消息，system prompt 组装了哪些内容，工具结果怎么回填。
-- **定位问题。** 失败、截断与重试发生在哪一笔请求，前一笔和后一笔差在哪几条消息。
-- **横向对照。** 不同 harness 的请求放进同一套读数、同一种轨迹结构与同一个会话列表里比较。
+## Why
 
-## 从上游捕获：两条进路
+- **See what was sent.** Which messages went to the model on a given turn, what the system prompt was assembled from, how tool results were fed back.
+- **Locate the problem.** Which request failed, truncated, or retried — and which messages differ from the request before it.
+- **Compare across harnesses.** Requests from different agents land in the same readings, the same trace structure, the same session list.
 
-两条进路可以单独开，也可以同时开。
+## How it works
 
-### magpie 网关：三路证据，正文完整
+Two independent ingestion paths write into one SQLite database. You can enable either, or both.
 
-magpie 在请求发送点记录三路证据：hook 拿到客户端协议请求体与合并后的回复，用量账本给出状态、用量、`route_id` 与 `response_id`，路由历史给出候选顺序、尝试与规则。三路按 `response_id` 与 `route_id` 对账成一笔请求。
+### Path 1 — magpie gateway: three-way evidence, full request bodies
 
-拿到正文要把 [`plugins/collector.hooks.ts`](plugins/collector.hooks.ts) 注册进 magpie 的插件配置，并把首次启动生成的 `hook.token` 交给它。插件只做三件事：请求期生成 `hook_id`、完成期上报完整对象、按固定码记录投递结果；不改正文、不做关联、不做脱敏。投递预算、重试与回调丢失的处理见[运维手册](docs/operations.md)。
+[magpie](https://github.com/yetone/magpie) is an LLM gateway that records evidence at the point of send: a hook captures the client protocol request body and the merged reply, a usage ledger carries status, usage, `route_id` and `response_id`, and routing history carries candidate order, attempts and rules. Tracery reconciles all three into a single request row keyed on `response_id` and `route_id`.
 
-不装 hook 时，页面仍能读到账本与路由两路证据，但没有请求体与回复正文。
+Bodies come from the hook. Register [`plugins/collector.hooks.ts`](plugins/collector.hooks.ts) in magpie's plugin config and give it the `hook.token` that Tracery generates on first start. The plugin does three things: it tags the request with a `hook_id`, reports the complete object when the call finishes, and records delivery outcomes under fixed codes. It never rewrites bodies, never correlates, never redacts.
 
-### OTLP：harness 自己导出
+Without the hook you still get the ledger and routing evidence — just no request or reply bodies.
 
-不装 magpie 也可以。已适配 Claude Code、OMP 与 Codex CLI：把各自的 OTLP exporter 指到本机的 `POST /v1/traces` 与 `POST /v1/logs`，认证用首次启动生成的 `otlp.token`。
+### Path 2 — OTLP: the harness exports its own spans
 
-令牌文件是 32 字节裸二进制，环境变量里放它的 base64url 形式——直接 `cat` 文件会把非 ASCII 字节塞进 `Authorization`，请求在 HTTP 层就被判畸形：
+No magpie required. Claude Code, OMP and Codex CLI are supported today: point their OTLP exporter at `POST /v1/traces` and `POST /v1/logs` on the local endpoint, authenticated with the generated `otlp.token`.
+
+The token file holds 32 raw bytes. Export the base64url form as an environment variable — `cat`-ing the file puts non-ASCII bytes into `Authorization` and the request is rejected as malformed at the HTTP layer:
 
 ```sh
 ATC_TOKEN=$(base64 -i '<dataDir>/otlp.token' | tr '+/' '-_' | tr -d '\n=')
@@ -40,145 +47,157 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8320
 export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $ATC_TOKEN"
 ```
 
-- **Claude Code**：LLM span 落成请求行；要逐笔正文再加 `OTEL_LOG_RAW_API_BODIES=file`，harness 把完整请求与回复写成文件、事件里带指针，采集器按指针读入并落库，正文完整不截断。
-- **OMP**：span 落成请求行，正文一栏是结构化摘要（页面标「OTLP 摘要」）；它的 OTLP 不带逐笔正文通路。
-- **Codex**：不读环境变量，在 `~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 指向本机端点（片段见[运维手册](docs/operations.md)，`protocol` 写 `binary`）；turn span 落成请求行，有会话、模型与用量读数，不带逐笔正文。
+- **Claude Code** — LLM spans become request rows. For per-request bodies also set `OTEL_LOG_RAW_API_BODIES=file`; the harness writes full request and reply bodies to files and puts pointers in the event, and Tracery reads them in without truncation.
+- **OMP** — spans become request rows; the body pane shows a structured summary (labelled "OTLP summary"). Its OTLP export has no per-request body channel.
+- **Codex CLI** — does not read those environment variables. Configure `[otel.trace_exporter.otlp-http]` in `~/.codex/config.toml` against the local endpoint with `protocol = "binary"`. Turn spans become request rows with session, model and usage readings; no per-request bodies.
 
-同一会话同时开 magpie 与 OTLP 时，时间线里每笔调用会出现两行，一行 magpie 一行 OTLP，行上来源可区分；第一批不做自动合并。
+If a session runs both magpie and OTLP, each call appears as two rows in the timeline — one from each source, distinguishable by their source column. They are not merged automatically.
 
-## 一条 trace 长什么样
+## Quick start
 
-轨迹是中栏主体：一行一个步骤，36px 高，只有序号、参与角色与内容摘要。开头固定是协议层——system prompt（连同 `cc_version`、`anthropic-beta` 这类协议字段）、user prompt、环境注入；随后是 assistant 文本与工具调用。工具调用与结果各自成行，按 `call_id` 与消息位置配对，不按工具分样式。
+Requires [Bun](https://bun.sh) ≥ 1.4. No other runtime dependencies; SQLite is `bun:sqlite` and compression is `node:zlib`.
 
-标题生成、分类器这类旁路请求在轨迹里标成「辅助请求」，不参与主链；标题生成请求算出的正式标题会被主会话借用。子代理与主会话共用 `conv_key`，按 `actor` 各自成组，会话头里能看到子代理个数与笔数。
+### Look at the interface first (synthetic data)
 
-点任意一行，右栏定位到该步骤对应的协议来源。右栏四个页签：读数（本次回复、请求结构、能力清单、用量与上下文、身份完整性）、正文（原始消息，按 40 条一片翻页）、工具（选中一次调用后有概览、参数、配对、Schema 四页）、路由（候选顺序与尝试链）。
-
-<img src="docs/images/session-trace.png" alt="会话的轨迹列：assistant 行与工具调用、结果行交替出现" width="620">
-
-*图 2｜同一会话的轨迹列。assistant 文本行尾是推理段耗时，工具调用与结果行尾是执行段耗时；序号 6 的 Bash 调用报 exit code 1，随后的 assistant 行给出修正方案。*
-
-<img src="docs/images/tool-pair.png" alt="工具调用与结果的配对页：调用 JSON 与结果正文并排" width="520">
-
-*图 3｜另一条会话的工具「配对」页。同一个 `call_id` 的调用 JSON 与结果正文同屏并置；结果一栏注明它由「下一条请求」带回，以及具体的消息位置。*
-
-## 推理段与执行段
-
-轨迹行尾有两种耗时，归属不同：
-
-- **执行段**挂在工具调用行上，按每次调用计算：结果请求开始减调用请求结束。它含客户端处理与人工确认，因此是上界，不是工具进程自身的精确耗时。
-- **推理段**挂在 assistant 文本行上，属于整笔请求：首个文本减首 token（`reasoning_span_ms`）。同一笔请求有多段文本时，每段都标同一个数。
-
-推理是请求级的，不按工具拆分——界面不会给出「某个工具占了多少推理时间」这种数。承载这次工具调用的请求推理了多久，在同一笔的 assistant 行与右栏读数里看。
-
-## 上下文由什么组成
-
-右栏「读数 → 用量与上下文」把这一笔请求的 prompt 分解按 token 面积铺成上下文矩阵（treemap）：工具定义、技能、系统提示、记忆、对话内容、工具结果等各占一块，面积就是 token 占比，下方列表给出每类的绝对值与百分比。同一张卡还给出已用上下文、窗口总量、固定开销与缓存命中。
-
-判断「这次上下文是不是塞了不该塞的东西」，从这里看：固定开销占了多少，对话与工具结果又占了多少。
-
-<img src="docs/images/context-map.png" alt="上下文矩阵：按 token 面积铺开的请求构成" width="640">
-
-*图 4｜同一真实会话某一笔请求的上下文矩阵。矩阵下方的分类列表显示工具定义 16.0k（62%）、技能 4.4k（17%）、系统提示 3.4k（13%）；已用 25.9k / 窗口 1.0M。*
-
-## 多 Agent，同一套视图
-
-左栏会话列表装不同 harness 的会话，用 Agent 标签区分与过滤；同一会话涉及多个 Agent 时，行上显示主 Agent 与 `+N`。已适配 Claude Code、OMP 与 Codex CLI。新增 harness 的成本是一个稳定的 `service.name` 加一行选取规则，规范见 [OTLP exporter 接入 profile](docs/otlp-exporter-profile.md)。
-
-## 试一下
-
-### 只看界面（合成数据）
-
-不需要 magpie，不需要任何真实数据：
+No magpie, no real data, nothing to configure:
 
 ```sh
 bun install
 bun prototypes/synthetic-server.ts
 ```
 
-打开 `http://127.0.0.1:8770/?session=conv-synthetic-reading`。合成服务覆盖空状态排查、窗口分页、缺通道与轮次配对等场景；只监听回环，不连真实库、不读令牌。合成数据只服务界面验证，不是真实能力证明，也不参与生产验收。
+Open `http://127.0.0.1:8770/?session=conv-synthetic-reading`. The synthetic server covers empty states, windowed pagination, missing channels and turn pairing. It binds loopback only, never touches a real database, never reads a token. Its data exists to exercise the UI — it is not evidence of the collector's capability.
 
-### 接真实流量
+### Record real traffic
 
 ```sh
-bun run start        # 127.0.0.1:8320
+bun run start        # collector on 127.0.0.1:8320
 ```
 
-首次启动在数据目录生成 `read.token`、`hook.token`、`otlp.token` 与 `redaction.salt`，权限 0600，目录 0700。默认数据目录是 `~/Library/Application Support/agent-trace-collector`。可覆盖的项：`ATC_DATA_DIR`、`ATC_PORT`、`ATC_LEDGER_PATH`、`ATC_ROUTING_DIR`、`ATC_MAGPIE_URL`、`ATC_BODY_BUDGET`、`ATC_DISK_LIMIT`。监听地址写死回环，不接受配置成通配地址。
+Open `http://127.0.0.1:8320`. On first start the collector creates `read.token`, `hook.token`, `otlp.token` and `redaction.salt` in the data directory — file mode 0600, directory mode 0700. The default data directory is `~/Library/Application Support/agent-trace-collector`.
 
-之后按上面的进路选：magpie 装 hook，或把 harness 的 OTLP exporter 指到本机。两条也可以同时开。
+Override any of these with `ATC_DATA_DIR`, `ATC_PORT`, `ATC_LEDGER_PATH`, `ATC_ROUTING_DIR`, `ATC_MAGPIE_URL`, `ATC_BODY_BUDGET`, `ATC_DISK_LIMIT`. The listen address is hard-coded to loopback; it cannot be configured to a wildcard address.
 
-## 数据从哪来
+Then pick an ingestion path above: install the magpie hook, or point a harness's OTLP exporter here.
 
-| 通道 | 拿什么 | 拿不到什么 |
-| --- | --- | --- |
-| magpie hook | 客户端协议请求体、合并回复、success、agent、session、model | 请求头、流内事件、provider 尝试、`route_id`；回调可能缺失 |
-| 用量账本 | 状态、用量、`route_id`、`response_id`、provider、账户 | 请求与回复正文 |
-| 路由历史 | 候选顺序、尝试、规则、亲和性、prompt 结构 | 窗口过滤不全留痕；只读盘、30 天滚动 |
-| OTLP（harness 侧） | LLM span 的模型、用量、耗时与会话 id；Claude Code 另带正文文件指针 | 请求头、provider 尝试；OMP 只到结构化摘要，Codex 没有逐笔正文通路 |
+## What a trace looks like
 
-连接靠两个键：`response_id` 把 hook 记录接到账本行，`route_id` 把账本行接到路由历史。OTLP 行靠 span 物理身份 `(trace_id, span_id)` 自持，第一批不与 magpie 行合并。
+The middle pane is one row per step, 36px tall, showing only an index, the actor, and a summary of the content. Protocol lines come first — system prompt (including fields like `cc_version` and `anthropic-beta`), user prompt, environment injection — then assistant text and tool calls. Calls and results are separate rows, paired by `call_id` and message position, with no per-tool styling.
 
-magpie 另有自己的 OTLP 导出，但属性白名单里没有 `response_id`、`conv`、`subagent`、`archive`，正文以 `langfuse.observation.input` / `output` 两段文本发出。这些键正是三路证据的连接点，所以 magpie 的导出适合送观测平台，不能当本项目的证据源。表里第四条通道接的是 harness 侧 exporter，属性键齐全。
+Title generation and classifier calls are marked as auxiliary and stay off the main chain; the formal title computed by a title-generation request is borrowed by the main session. Sub-agents share the main session's `conv_key` and group separately per `actor`; the session header shows how many sub-agents ran and how many requests each made.
 
-## 页面怎么用
+Clicking any row points the right pane at that step's protocol source. The right pane has four tabs: readings (this reply, request structure, capability list, usage and context, identity integrity), body (raw messages, 40 per page), tools (overview, arguments, pairing and schema for the selected call), and routing (candidate order and attempt chain).
 
-- **会话列表**：按最后活动时间排，标出失败、待确认与缺正文；可按 Agent 过滤已加载列表。
-- **轨迹**：中栏主体，一行一步骤；点行看右栏。
-- **右栏**：读数、正文、工具、路由四个页签；工具页选中调用后给出概览、参数、配对与 Schema。
-- **轮次带**：贴在会话头下沿，一条用户命令到它的最终回复算一轮，跨多笔请求即时结算。
-- **会话汇总**：工具次数、失败数、中断次数、写入与读取路径、Skill、缓存命中、上下文峰值，以及覆盖缺口。
+<img src="docs/images/session-trace.png" alt="A session trace: assistant lines alternating with tool calls and results" width="620">
 
-## 边界与非目标
+Assistant lines carry reasoning-segment timings at the end; tool call and result lines carry execution-segment timings. Above, request 6's Bash call exits with code 1 and the following assistant line gives the correction.
 
-- **只记录 magpie 与已适配 harness 观察到的流量。** 不经过网关也不导 OTLP 的请求看不见。请求统计以已保存的观测范围为限，缺正文单独标明，不能把 hook 覆盖率当作总请求量。
-- **不做代理。** 不转发、不改写、不拦截任何 LLM 流量。
-- **不扫描 Agent 自己的会话文件。** 只读 magpie 自己写的三路来源；OTLP 通道唯一的文件读取是 `body_ref`，只读事件显式指到的单个文件，不列目录。
-- **不做跨 harness 的通用摄入协议。** 唯一的通用入口是 OTLP 的 `/v1/traces` 与 `/v1/logs`；其余通用 trace 协议不做。
-- **不做导出、告警、指标看板与多机聚合；不做服务端全文检索。** 页面上的搜索只按会话标题与客户端标签过滤已加载列表。
-- **正文按预算回收。** 默认正文 10 GB、总盘 16 GB，回收最旧正文到 90% 预算；总盘到 80% 只接元数据，到 95% 停止接收。回收的正文补不回来。
+<img src="docs/images/tool-pair.png" alt="Tool pairing tab: call JSON and result body side by side" width="520">
 
-运行数据不进仓库：数据库、WAL、日志与本地密钥都在数据目录。测试只用合成数据，真实请求正文、账号、令牌与用户配置不进 fixture、日志或提交。
+The pairing tab shows a call's JSON and its result body under the same `call_id`, and notes which later request carried the result back.
 
-## 与观测平台的分工
+### Two kinds of elapsed time
 
-「这不就是 Langfuse 吗」是打开这个仓库时最常见的疑问。两者都在看 LLM 流量，但记录的东西不同。
+They belong to different things, and Tracery keeps them apart:
 
-Langfuse 这类平台的记录单位是一次 LLM 调用或一个 span：`input` / `output` 两段文本、耗时、成本、评分，用来回答「我写的应用表现如何」。Tracery 的记录单位是一笔经过网关的请求：完整的脱敏协议对象、逐块可还原的消息、三路证据的对账结论，用来回答「这次会话到底发生了什么」。
+- **Execution segment** hangs on the tool call row and is measured per call: the result request's start minus the call request's end. It includes client-side processing and human confirmation, so it is an upper bound, not the tool process's own duration.
+- **Reasoning segment** hangs on the assistant text row and belongs to the whole request: first text minus first token (`reasoning_span_ms`). When a request has several text blocks, each shows the same number.
 
-能力表上的差异不如两件具体的事重要：
+Reasoning is per request and is not split per tool. The UI will not tell you "this tool consumed N seconds of reasoning" — it tells you how long the request carrying the call reasoned, on that request's assistant row and in the readings pane.
 
-- **逐笔新增消息的比对。** Tracery 保存逐条消息并按语义指纹比共同前缀，能回答「第 N 笔比第 N-1 笔多了哪几条」，并区分「另起一支」与「链断了」。观测平台以一次调用为记录单位，输入输出是发给模型的载荷，不做这一层序列比对。
-- **组装后的上下文。** Langfuse 在[自己的集成文档](https://langfuse.com/resources/engineering/coding-agent-tracing)里写明：hook 读不到 `CLAUDE.md`、技能与自动加载内容对实际 system prompt 的贡献，看到的是对话与工具调用，而不是组装后的上下文。网关在发送点，看到的就是实际发出的请求体。
+### Where the context goes
 
-这两件事以外，平台明显更强：评测与数据集、提示词版本管理、多人协作与权限、聚合仪表盘与告警、跨机器共享。这些 Tracery 都不做，也不打算做。
+The readings tab lays this request's prompt decomposition out as a token-area treemap: tool definitions, skills, system prompt, memory, conversation content, tool results. Area is token share; the list below gives absolute values and percentages, alongside used context, window size, fixed overhead and cache hit rate.
 
-分工可以直说：**趋势与共享交给平台，逐笔原文与对账留在本机。** 两边可以同时开：同一批请求，平台侧看成本趋势与团队对比，本机侧读这次会话到底发生了什么。
+<img src="docs/images/context-map.png" alt="Context map: request composition laid out by token area" width="640">
 
-## 命令
+This is where you check whether a request carried something it shouldn't have: how much is fixed overhead, how much is conversation and tool results.
+
+## Multiple agents, one set of views
+
+The session list holds sessions from different harnesses, using an Agent tag for distinction and filtering. When a session involves several agents, the row shows the primary agent and `+N`. Claude Code, OMP and Codex CLI are supported today. Adding a harness costs one stable `service.name` plus one selection rule — the contract is in the [OTLP exporter profile](docs/otlp-exporter-profile.md).
+
+## What records, and where it lives
+
+Tracery stores real request bodies. That is the point of it, and it deserves stating plainly: prompts, code, tool output and model replies — with credentials redacted by rules, not by omission — are written to a local SQLite database on your machine.
+
+| | |
+| --- | --- |
+| Data directory | `~/Library/Application Support/agent-trace-collector` (override with `ATC_DATA_DIR`) |
+| Contents | `trace.db` plus WAL, the four token/salt files, and logs |
+| Permissions | directory 0700, files 0600 |
+| Network | listens on `127.0.0.1` only, hard-coded; never a wildcard address |
+| Outbound | reads magpie's local ledger and routing files, and probes magpie's local port. Nothing is uploaded |
+| Accounts | account fields are kept out of the API surface |
+| Retention | bodies are reclaimed against a budget: 10 GB of bodies, 16 GB total. At 90% of budget the oldest bodies are reclaimed; at 80% of disk only metadata is accepted; at 95% ingestion stops. Reclaimed bodies cannot be restored |
+
+Nothing is scanned beyond those sources: Tracery does not read your agent's own session files. The one file read on the OTLP path is a `body_ref` — a single file an event points at explicitly, never a directory listing.
+
+Tests use synthetic data only. Real request bodies, accounts, tokens and user configuration never enter fixtures, logs or commits.
+
+## Scope and non-goals
+
+- **Only observed traffic.** Requests that neither pass through the gateway nor export OTLP are invisible. Request counts are bounded by what was observed; missing bodies are labelled individually. Hook coverage is not total request volume.
+- **Not a proxy.** Nothing is forwarded, rewritten or intercepted.
+- **No cross-harness ingestion protocol.** The only generic entry points are OTLP's `/v1/traces` and `/v1/logs`.
+- **No export, alerting, dashboards or multi-machine aggregation.** No server-side full-text search; the in-page search filters the session titles and client labels already loaded.
+- **Request-level resolution, not evaluation.** Tracery does not score outputs, manage prompt versions, or do anything resembling an eval framework.
+
+## How this differs from an observability platform
+
+"Isn't this just Langfuse?" is the most common question on opening this repo. Both look at LLM traffic; they record different things.
+
+A platform's unit is an LLM call or span: `input` / `output` text, latency, cost, scores — answering "how is the application I built performing". Tracery's unit is a request through the gateway: the full redacted protocol object, message-by-message recoverable content, and the reconciliation of three evidence sources — answering "what actually happened in this session".
+
+Two concrete differences matter more than a comparison table:
+
+- **Message-level diffing.** Tracery stores messages individually and compares common prefixes by semantic fingerprint, so it can answer "what did request N add over request N-1" and distinguish "a new branch" from "a broken chain". Platforms record per call, with the payload as input/output, and don't do this sequence comparison.
+- **Assembled context.** Langfuse's own [integration docs](https://langfuse.com/resources/engineering/coding-agent-tracing) note that hooks cannot see what `CLAUDE.md`, skills and auto-loaded content contribute to the real system prompt — they see conversation and tool calls, not the assembled context. The gateway sits at the point of send and sees the request body that was actually transmitted.
+
+Beyond that, platforms are clearly stronger: evaluation and datasets, prompt versioning, collaboration and permissions, aggregate dashboards and alerting, cross-machine sharing. Tracery does none of it, and doesn't intend to.
+
+The split is simple: **trends and sharing belong to the platform; per-request bodies and reconciliation stay local.** Both can run at once — same traffic, cost trends on the platform side, "what happened in this session" on the machine.
+
+## Commands
 
 ```sh
 bun install
-bun run start            # 采集器，127.0.0.1:8320
+bun run start             # collector, 127.0.0.1:8320
 bun test
 bun run typecheck
-bun run service <子命令>  # 起停与状态，走 launchd
-bun run maintain <子命令> # 离线维护，要求采集器已停
-bun run verify-cutover   # 只读比较 collector 与旧采集器的正文覆盖
-bun run verify:notes     # 提交前
+bun run maintain <cmd>    # offline maintenance; requires the collector to be stopped
+bun run service <cmd>     # start/stop/status via launchd (macOS only)
+bun run verify:notes      # change-note gate, maintainer use
 ```
 
-`service`、`maintain` 与 `verify-cutover` 必须带子命令，裸调用只打印 usage 并退出 2。
+`service` and `maintain` require a subcommand; invoked bare they print usage and exit 2.
 
-## 文档
+The production instance on the author's machine runs under launchd with `KeepAlive`; `bun run service` manages that setup and is macOS-specific. On other platforms, run `bun run start` under your own process supervisor.
 
-- [ATC trace 格式](docs/trace-format.md)：主实体、正文切块、派生结论与置信度
-- [架构设计](docs/architecture-design.md)：证据身份、存储模型、派生、容量与安全边界
-- [运维手册](docs/operations.md)：维护命令、备份恢复、容量门槛、派生切片
-- [OTLP exporter 接入 profile](docs/otlp-exporter-profile.md)：harness 作者的对接规范与登记方式
-- [验收记录](docs/acceptance.md)：各轮合成与真实流量的验收结果
-- [项目定位](docs/project-overview.md)：记录单位与阅读入口的取舍
-- [领域术语表](GLOSSARY.md)：术语定义与边界
-- [文档索引](docs/README.md)
-- [Demo 与合成场景](prototypes/README.md)
-- [Agent Note 规则与决策记录](.agents/notes/README.md)
+## Documentation
+
+All design documents are written in Chinese. The [glossary](GLOSSARY.md) pairs each term with its English form.
+
+- [ATC trace format](docs/trace-format.md) — main entities, body chunking, derived conclusions and confidence
+- [Architecture](docs/architecture-design.md) — evidence identity, storage model, derivation, capacity, security boundary
+- [Operations](docs/operations.md) — maintenance commands, backup and restore, capacity thresholds
+- [OTLP exporter profile](docs/otlp-exporter-profile.md) — the contract for harness authors
+- [Acceptance record](docs/acceptance.md) — per-round validation against synthetic and real traffic
+- [Project positioning](docs/project-overview.md) — why the unit is a request and the reading unit is a session
+- [Glossary](GLOSSARY.md)
+- [Documentation index](docs/README.md)
+- [Demo and synthetic scenarios](prototypes/README.md)
+- [Agent notes: rules and decision records](.agents/notes/README.md)
+
+## Contributing
+
+Issues and pull requests are welcome. Two conventions are unusual enough to mention up front:
+
+- **Agent notes.** Any non-trivial change ships with a note under [`.agents/notes/`](.agents/notes/README.md) recording the decision, what was rejected, and what it cost. `bun run verify:notes` checks this before a merge. Purely mechanical or local edits are exempt.
+- **Read the working agreements first.** [AGENTS.md](AGENTS.md) states the module boundaries and the standing conventions the test suite enforces.
+
+Run `bun run typecheck` and `bun test` before opening a pull request; CI runs both.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Agent icon assets are sourced from magpie; see [NOTICE](NOTICE).

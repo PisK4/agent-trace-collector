@@ -240,7 +240,7 @@ harness 面的文档级扫描（同日）：
 - OTLP 独有事实进读模型列：`query_source_safe`、Claude Code 的 `attempt`、`agent_id` / `parent_agent_id` 结构化子代理关系、工具 span 的精确起止。
 - 会话内按来源过滤或并排展示双通道重复行。
 - 跨通道按 `response_id_norm` 精确去重：锚点已实测（OMP span 属性、Claude Code logs 事件），判重机制与 hook↔账本现有关联同构，合并策略与字段优先级需单独设计。
-- 其他 harness 的接入：Codex 已交付（见交付记录，决策与对外 profile 归[两步走提案](../../implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md)）；goose 与 Gemini CLI 缓接，固定提交考察在父知识库；Cursor 企业版只导 metrics/logs 且明确不含 CLI 正文，对本通道无会话阅读增量，不接；OpenCode 无原生出口，社区插件不追。逐个按 `(service.name, 选取规则)` 白名单加。
+- 其他 harness 的接入：Codex 已交付（见交付记录，决策与对外 profile 归[两步走提案](../../implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md)）；goose 与 Gemini CLI 缓接，固定提交的考察材料不随仓库发布；Cursor 企业版只导 metrics/logs 且明确不含 CLI 正文，对本通道无会话阅读增量，不接；OpenCode 无原生出口，社区插件不追。逐个按 `(service.name, 选取规则)` 白名单加。
 - 派生层接入（用途判定、工具配对、前驱链）。
 - metrics 信号。第一批只做 traces 与 logs；`gen_ai.client.token.usage` 这类直方图对会话阅读没有增量。
 - magpie OTLP 的专门适配。

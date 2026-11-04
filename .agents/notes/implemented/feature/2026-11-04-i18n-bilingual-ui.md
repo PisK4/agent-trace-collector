@@ -15,7 +15,7 @@ Status: implemented
 - **服务端零改动协商**：只加 `/i18n.js` 与 `/i18n-en.js` 两条静态路由。两处服务端中文数据在客户端翻译：`EXEC_MS_HINT` 常量在使用点包 t；prompt reading 的 `note`（readings.ts 三条已知中文句）在使用点包 t，未知值回退中文——服务端不进字典业务。
 - **日期格式化**随当前语言（`zh-CN`/`en-US`），说明短句列表的分隔符（`；`/`; `）与成员列表 join 同样随语言。
 - **覆盖闸门**（`tests/i18n-coverage.test.ts`）：web 模块里中文引号字符串必须是 t() 直接 key、en 字典 key（key-map 经 t 间接消费）或白名单（语言钮的目标语言自称）。反引号模板不扫描——模板内中文要么是 t 的 key 要么是插值组合，行级静态分析分不清，写在测试头注。
-- **英文定名**以 [GLOSSARY](../../../GLOSSARY.md)「界面英文定名」节为准（callback、totals/summary、reasoning、attribution、index、fragment 六项是本次拍板）；英文文案遵守与中文相同的落笔风格。
+- **英文定名**以 [GLOSSARY](../../../../GLOSSARY.md)「界面英文定名」节为准（callback、totals/summary、reasoning、attribution、index、fragment 六项是本次拍板）；英文文案遵守与中文相同的落笔风格。
 - 叶子模块（tool-summary、row-summary、body-model）引入 i18n 是记录在头的唯一例外：纯数据映射，无 DOM。
 
 ## Alternatives considered

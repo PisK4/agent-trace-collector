@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-背景要从第四通道上线那天说起。[OTLP 接收端](../../implemented/feature/2026-10-25-otlp-receiver.md)交付时白名单只有两条规则：Claude Code 与 OMP，README 的受众边界随之写死在「装 magpie，或用已适配 harness」。2026-10-26 的调研（父知识库三份固定提交考察：[Codex](../../../../../../Agent知识库/Agent研究/codex/OTLP导出考察.md)、[goose](../../../../../../Agent知识库/Agent研究/goose/OTLP导出考察.md)、[Gemini CLI](../../../../../../Agent知识库/Agent研究/gemini-cli/OTLP导出考察.md)）核实三家都能走 OTLP/HTTP 直连本机端点，同时确认语义层是巴别塔：用量键四家四种写法（平铺 `input_tokens`、`gen_ai.usage.*`、`codex.turn.token_usage.*`、受门控默认不落），会话键三种，LLM span 判定键无一相同。接收方的价值全在读模型，读模型必须逐方言登记——这是[旧扩展提案](../../rejected/feature/2026-10-26-otlp-harness-expansion.md)论证过的立场，本文承接。
+背景要从第四通道上线那天说起。[OTLP 接收端](../../implemented/feature/2026-10-25-otlp-receiver.md)交付时白名单只有两条规则：Claude Code 与 OMP，README 的受众边界随之写死在「装 magpie，或用已适配 harness」。2026-10-26 的调研（三家 harness 的固定提交考察材料，不随仓库发布）核实三家都能走 OTLP/HTTP 直连本机端点，同时确认语义层是巴别塔：用量键四家四种写法（平铺 `input_tokens`、`gen_ai.usage.*`、`codex.turn.token_usage.*`、受门控默认不落），会话键三种，LLM span 判定键无一相同。接收方的价值全在读模型，读模型必须逐方言登记——这是[旧扩展提案](../../rejected/feature/2026-10-26-otlp-harness-expansion.md)论证过的立场，本文承接。
 
 同一场讨论还定了两件新事。其一，白名单外的服务原来是静默 skip：新 harness 把 exporter 指过来，数据全量落在 raw 层但一行不建，采集器毫无感知——发现新方言的入口是盲的。其二，ATC 按开源项目定位对外，接入面需要有给外部 harness 作者看的东西，而不只是本仓内部的登记表。
 
@@ -23,7 +23,7 @@ Status: implemented
 
 ### 对内：Codex 白名单条目
 
-`SPAN_RULES`（[mapping.ts](../../../../src/sources/otlp/mapping.ts)）加 Codex 条目，`OTLP_MAPPING_VERSION=3`：按 span 名 `session_task.turn` 选取，session 取 `thread.id`、模型取 `model`（无回复侧模型与终止原因字段，保持 NULL）、四项用量取 `codex.turn.token_usage.*`；`non_cached` / `reasoning` / `total` 三项留原始层。`service` 是一族取值而不是单值：Codex 的 `service.name` 取 originator，随入口变化（`codex exec` 为 `codex_exec`，交互 CLI 为 `codex_cli_rs`），`OTEL_SERVICE_NAME` 覆盖实测无效，所以 `SpanRule.service` 支持字符串数组、匹配走 `ruleOwnsService`。`session_task.compact` / `review` / `user_shell` 不建行，旁路语义留给派生层；分类逻辑、unknown 桶与不猜归属行为不动。页面 `AGENT_LABELS` 带 `codex`；[运维手册](../../../../docs/operations.md)的 OTLP 接入一节带可照抄的 TOML 配置（三个 exporter 独立配、`otlp-http` 外标签枚举、`/v1/traces` 端点、Bearer 头），README 接入段同步。键集对齐父知识库的固定提交源码考察，未抓样实测；本机真实流量验收单独一轮（`~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 指向 127.0.0.1:8320，跑真实会话核对行落位与重试、多候选下的用量回填语义），与合成验收分开记录。
+`SPAN_RULES`（[mapping.ts](../../../../src/sources/otlp/mapping.ts)）加 Codex 条目，`OTLP_MAPPING_VERSION=3`：按 span 名 `session_task.turn` 选取，session 取 `thread.id`、模型取 `model`（无回复侧模型与终止原因字段，保持 NULL）、四项用量取 `codex.turn.token_usage.*`；`non_cached` / `reasoning` / `total` 三项留原始层。`service` 是一族取值而不是单值：Codex 的 `service.name` 取 originator，随入口变化（`codex exec` 为 `codex_exec`，交互 CLI 为 `codex_cli_rs`），`OTEL_SERVICE_NAME` 覆盖实测无效，所以 `SpanRule.service` 支持字符串数组、匹配走 `ruleOwnsService`。`session_task.compact` / `review` / `user_shell` 不建行，旁路语义留给派生层；分类逻辑、unknown 桶与不猜归属行为不动。页面 `AGENT_LABELS` 带 `codex`；[运维手册](../../../../docs/operations.md)的 OTLP 接入一节带可照抄的 TOML 配置（三个 exporter 独立配、`otlp-http` 外标签枚举、`/v1/traces` 端点、Bearer 头），README 接入段同步。键集对齐上游固定提交的源码考察，未抓样实测；本机真实流量验收单独一轮（`~/.codex/config.toml` 配 `[otel.trace_exporter.otlp-http]` 指向 127.0.0.1:8320，跑真实会话核对行落位与重试、多候选下的用量回填语义），与合成验收分开记录。
 
 ### 对外：接入 profile 文档
 
@@ -43,7 +43,7 @@ ingest 接收结果带 `unknownServices` 计数；未登记 `service.name` 的�
 
 ### Supersession
 
-[旧扩展提案](../../rejected/feature/2026-10-26-otlp-harness-expansion.md)转 rejected 冻结：三家的规则草案、排序论证与验收断言留在那篇里作底，本文承接决策并把实施范围收敛为 Codex 先行加对外 profile。goose 与 Gemini CLI 缓接不拒接，届时按三份考察档案照抄即可。证据层始终在父知识库，本文不复制字段清单。
+[旧扩展提案](../../rejected/feature/2026-10-26-otlp-harness-expansion.md)转 rejected 冻结：三家的规则草案、排序论证与验收断言留在那篇里作底，本文承接决策并把实施范围收敛为 Codex 先行加对外 profile。goose 与 Gemini CLI 缓接不拒接，届时按三份考察档案照抄即可。取证材料不随仓库发布，本文不复制字段清单。
 
 ## Alternatives considered
 

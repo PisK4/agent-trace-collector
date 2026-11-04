@@ -422,9 +422,9 @@ WAL 闸门量的是整库增长，不只是这一代：别的写入把 WAL 抬�
 
 切片模式目前未启用。10,000 笔单链的实测排空是 878,696 ms（同步同输入 1,959 ms），`drain_ms` 的 120,000 ms 上限未过，门槛判 `slice_not_converged`，采集器继续走同步派生；同一轮的代际结构不变量（发布 1 代、丢弃 0 代、增量与全量逐字一致）全部成立，慢在切片入口的事务开销。跑法、逐项读数与预算出处记在[容量基线记录](superpowers/capacity/2026-10-22-atc-capacity-baseline.md#切片长组实测)。
 
-## 切换核对与 AVA 下线
+## 与旧采集器并行核对（可选）
 
-`scripts/verify-cutover.ts` 只读比较 collector 与 AVA 的正文覆盖，用来判断能不能停 AVA。
+AVA 是作者的私有前身采集器，不在本仓库。这一节只在你需要从另一个已有的采集器迁移时才有意义：`scripts/verify-cutover.ts` 只读比较 collector 与那个采集器的正文覆盖，用来判断能不能停掉旧的。
 
 ```bash
 bun run verify-cutover --from <epoch-ms> --to <epoch-ms> \
@@ -447,7 +447,7 @@ AVA 的表名不猜：脚本先读 `sqlite_master` 与 `PRAGMA table_info`，按
 
 ### 安装 collector 插件
 
-以下步骤需要**明确授权**；写在这里不等于已经执行。每一步先读实际目标，注册是合并条目，不能整份覆盖 `plugins.json`，也不能移除其他插件。
+每一步先读实际目标：注册是合并条目，不能整份覆盖 `plugins.json`，也不能移除其他插件。
 
 1. 记录现状：magpie 插件文件路径、AVA 的服务定义（label、启动命令、工作目录、端口）。备份到本地受限目录，备份内容不打印到终端、不进仓库。
 2. 令牌：32 随机字节，写本机 0600 配置文件。hook 令牌不能复用 `<dataDir>/read.token`，脱敏盐也不能当令牌用。

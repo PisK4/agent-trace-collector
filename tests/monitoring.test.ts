@@ -113,7 +113,7 @@ test('重启前后追加到同一文件时旧记录仍在且实例不同', () =>
   }
 });
 
-test('启动版本号取自本检出，不受父仓库影响', () => {
+test('启动版本号取自本检出，不受上层检出影响', () => {
   const root = dirname(import.meta.dir);
   const head = Bun.spawnSync(['git', '-C', root, 'rev-parse', '--short', 'HEAD']);
   if (head.exitCode !== 0) return;

@@ -2,7 +2,7 @@
 
 Status: rejected — 实施范围收敛为 Codex 先行与对外接入 profile，决策由 [2026-10-26-otlp-exporter-profile-and-codex](../../implemented/feature/2026-10-26-otlp-exporter-profile-and-codex.md) 承接；本文冻结留底三家规则草案与排序论证
 
-调研物证在父知识库三份固定提交考察档案里：[Gemini CLI](../../../../Agent知识库/Agent研究/gemini-cli/OTLP导出考察.md)、[Codex](../../../../Agent知识库/Agent研究/codex/OTLP导出考察.md)、[goose](../../../../Agent知识库/Agent研究/goose/OTLP导出考察.md)。本文只记决策材料：接谁、规则长什么样、正文口径到哪一档，不复述源码取证。
+调研物证是三份固定提交考察档案（Gemini CLI、Codex、goose），不随仓库发布。本文只记决策材料：接谁、规则长什么样、正文口径到哪一档，不复述源码取证。
 
 ## Problem
 
@@ -55,7 +55,7 @@ Status: rejected — 实施范围收敛为 Codex 先行与对外接入 profile�
 
 **本轮一并接 Copilot CLI。** 推迟。证据只到官方公告档，端点管理方式未核，不够写规则。
 
-**zcode 走 OTLP 接入。** 不成立。没有它具备导出能力的证据；它的流量缺口在 direct 行摄入，归[字段保真与 magpie 对标](../architecture/2026-10-22-magpie-parity-and-field-fidelity.md)那条线。
+**zcode 走 OTLP 接入。** 不成立。没有它具备导出能力的证据；它的流量缺口在 direct 行摄入，归[字段保真与 magpie 对标](../../proposed/architecture/2026-10-22-magpie-parity-and-field-fidelity.md)那条线。
 
 **每家各出一篇提案 note。** 否决。三条规则共享同一 seam、同一验收形状，合篇足够；各家的证据与边界在知识库档案里各有其家。
 

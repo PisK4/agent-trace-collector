@@ -27,7 +27,7 @@
 
 后台 derive 大事务、生产切片解冻和虚拟化属于独立子项目，不在本计划伪造完整实现。达到[性能评估](2026-11-02-interaction-performance-optimization.md)的触发条件时必须另出方案；这些未关闭分支不因客户端重构完成而消失。
 
-实施前在 `../../.codex-worktrees/atc-read-architecture` 创建 `feat/read-architecture`。主检出已有未提交材料，按实际依赖复制进 worktree，不夹带前端换肤和宣传片提案。worktree 依赖按项目规则复用主检出 node_modules。提交只落功能分支；合并 master 与生产动作均另按授权执行。
+实施前在仓库上级目录的 `.codex-worktrees/atc-read-architecture` 创建 `feat/read-architecture`。主检出已有未提交材料，按实际依赖复制进 worktree，不夹带前端换肤和宣传片提案。worktree 依赖按项目规则复用主检出 node_modules。提交只落功能分支；合并 master 与生产动作均另按授权执行。
 
 ## 文件与职责
 

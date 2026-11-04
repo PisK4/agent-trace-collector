@@ -65,7 +65,7 @@ Status: implemented
 - `/api/ingest-metrics` 的 `storage_measure` 计数在有闸门时不再随调用增长，存储新鲜度看 `storage_measured_at_ms`。
 - 14 天后 `pending_hooks` 计数会出现一次性下降（存量孤儿出队），不是丢证据：`miss_reason='hook_absent'` 已落在 request 行上。
 - single-flight 让同 key 并发共享同一快照，毫秒级差异不可见；错误响应各自生成但内容一致。
-- F24/F23 的执行层（四条 Codex 会话显式 rebuild、停服 bundle 备份、重启）随本次回归窗口执行，部署顺序固化在 [operations.md 的部署顺序一节](../../docs/operations.md#部署顺序重启只完成迁移不回填存量)。
+- F24/F23 的执行层（四条 Codex 会话显式 rebuild、停服 bundle 备份、重启）随本次回归窗口执行，部署顺序固化在 [operations.md 的部署顺序一节](../../../../docs/operations.md#部署顺序重启只完成迁移不回填存量)。
 
 ## Testing
 

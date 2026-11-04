@@ -4,6 +4,8 @@
 
 验收结果描述的是当时的代码与数据。现行行为以[架构设计](architecture-design.md)与代码为准；本文件回答的是「这条路径验证过没有、怎么验的」。
 
+记录里的数字、端口、pid 与耗时都来自作者机器，用于说明当时怎么判断，不是可复现的基准。
+
 ## 后台监控落地（合成，2026-11-03）
 
 前提：隔离 worktree `<worktrees>/atc-background-monitoring`，分支 `feat/background-monitoring`，基于 master `4a4108f`。只改代码、测试与文档；没有提交、合并、push，没有重启生产采集器，没有安装或触发新的 launchd 作业。主工作区与其他 worktree 未触碰。
@@ -1337,7 +1339,7 @@ serve-local 只读代理（生产 collector 不动），页面复核：工具 ch
 
 ### 页面交互（本机生产数据只读）
 
-serve-local 只读代理（生产 collector 不动）：工具组 `+N` 展开头部 229→249 px、`--head-h` 随 toggle 同步 249px、该行恢复换行，收起即回单行；`+N` 展开的 details 内条目带 `data-summary-tool` 可定位。组标题说明浮层、失败入口、路径定位沿用上午已复核的行为，本次未改其代码路径。单行样张（`.archify` demo）先于实现评审通过，生产渲染与样张一致。
+serve-local 只读代理（生产 collector 不动）：工具组 `+N` 展开头部 229→249 px、`--head-h` 随 toggle 同步 249px、该行恢复换行，收起即回单行；`+N` 展开的 details 内条目带 `data-summary-tool` 可定位。组标题说明浮层、失败入口、路径定位沿用上午已复核的行为，本次未改其代码路径。单行样张先于实现评审通过，生产渲染与样张一致。
 
 ## 采集期间首屏卡顿评估（生产只读 + 合成 SQL 对照，2026-11-01）
 

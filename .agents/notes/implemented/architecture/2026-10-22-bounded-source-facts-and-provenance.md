@@ -23,7 +23,7 @@ Status: implemented
 
 序列化上限是 16 KiB。超限先去掉只用于展示的 `error`/`errorType`；仍超限就抛 `source_facts_budget_exceeded`，让整个投影事务回滚。截断会留下半个对象；清空旧事实等于假装从没观测到。两者都不接受。
 
-原始行同时写 `mapping_version` 与 `privacy_version`（`PRIVACY_TRANSFORM_VERSION`），四个 raw helper 共用同一份列清单。摘要记 `summary_algorithm`/`summary_basis`/`summary_state`，工具行记 `algorithm_version`/`basis_json`/`retention_state`；`derive_version` 不被读作算法目标，它的计数口径见[展示列只写实际变化](2026-11-02-derive-apply-diff.md)。
+原始行同时写 `mapping_version` 与 `privacy_version`（`PRIVACY_TRANSFORM_VERSION`），四个 raw helper 共用同一份列清单。摘要记 `summary_algorithm`/`summary_basis`/`summary_state`，工具行记 `algorithm_version`/`basis_json`/`retention_state`；`derive_version` 不被读作算法目标，它的计数口径见[展示列只写实际变化](../simplification/2026-11-02-derive-apply-diff.md)。
 
 维护报告拆成 `target_algorithm`、`actual_algorithms`（按实际算法分组计数，null 归 `legacy`）与 `legacy_requests`，分别回答目标、实际与保留；旧的 `queued`/`unavailable`/`reasons` 保留，只表示正文状态。
 

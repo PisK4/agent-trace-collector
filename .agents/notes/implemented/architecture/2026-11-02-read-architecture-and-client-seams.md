@@ -8,7 +8,7 @@ Status: implemented
 
 后续 feature 会增加读取操作。当前页面大部分读取经过 reader-store，但它同时承担 URL 编码、HTTP 错误映射、网络排队、证据缓存和恢复。上下文明细与统计另走直接 Fetch，无法共享并发、取消与诊断规则。每次扩展都可能重新引入无界队列、迟到回写和整窗计算。
 
-[第二轮性能调研](../bug-fix/2026-11-01-interaction-latency-round2-and-rail-consistency.md)证明这些成本已经影响长会话。[性能评估](../../../../docs/superpowers/plans/2026-11-02-interaction-performance-optimization.md)给出了局部候选，但只增加两个批量端点，仍不能约束下一批 feature 怎样读取、缓存和刷新页面。
+[第二轮性能调研](../../proposed/bug-fix/2026-11-01-interaction-latency-round2-and-rail-consistency.md)证明这些成本已经影响长会话。[性能评估](../../../../docs/superpowers/plans/2026-11-02-interaction-performance-optimization.md)给出了局部候选，但只增加两个批量端点，仍不能约束下一批 feature 怎样读取、缓存和刷新页面。
 
 Pis 于 2026-11-02 明确要求从全局架构制定规则，并为中期 macOS 客户端做好准备。当前未选定 WebView、SwiftUI 或其他桌面技术，也未确认打包、更新和后台驻留方式。这些决定不应成为本轮读取优化的前置条件。
 
@@ -22,7 +22,7 @@ Pis 于 2026-11-02 明确要求从全局架构制定规则，并为中期 macOS 
 
 Supersession check：本提案部分调整[生产阅读缓存](../../implemented/feature/2026-10-24-reader-store-cache.md)的 URL/队列归属、[页面缓存单一归属](../../implemented/architecture/2026-10-24-page-cache-single-home.md)的读取接入面、[准备流水线](../../implemented/architecture/2026-10-27-trace-window-preparation.md)的逐笔通知，以及[键控提交](../../implemented/architecture/2026-10-27-keyed-trace-main-view.md)的全模型生成成本。它们的唯一缓存所有者、两套游标、版本守卫、准备资格、稳定键、焦点与视口保护继续有效；调整后的现状见各实施 note 与[架构设计](../../../../docs/architecture-design.md)。
 
-[稳定阅读提案](2026-10-27-stable-progressive-trace-reader.md)继续拥有自动读取范围、投影保留与虚拟化体验取舍。本提案不批准整场排空、不削减 20 片准备预算、不改变顶部入口。[第一轮性能治理](../../implemented/bug-fix/2026-11-01-collection-interactive-latency.md)与[派生预算工作单元](../../implemented/architecture/2026-10-24-budgeted-derive-unit.md)继续拥有单组事务、预算及线程隔离触发条件。
+[稳定阅读提案](../../proposed/architecture/2026-10-27-stable-progressive-trace-reader.md)继续拥有自动读取范围、投影保留与虚拟化体验取舍。本提案不批准整场排空、不削减 20 片准备预算、不改变顶部入口。[第一轮性能治理](../../implemented/bug-fix/2026-11-01-collection-interactive-latency.md)与[派生预算工作单元](../../implemented/architecture/2026-10-24-budgeted-derive-unit.md)继续拥有单组事务、预算及线程隔离触发条件。
 
 ### Module 与 Interface
 

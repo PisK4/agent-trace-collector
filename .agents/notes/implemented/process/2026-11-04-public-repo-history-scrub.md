@@ -29,7 +29,7 @@ Status: implemented
 - README 图注去掉会话 ID 与「真实会话」表述，只描述画面内容。
 - `.gitignore` 补本机工具目录、`data/`、`*.token`、`redaction.salt`。
 
-**历史重写**用 `git filter-repo --refs master --replace-text`，只处理 `master`。替换规则按前缀长短排序，先命中 `workspace_intelligence/creator-intelligence/repos/agent-trace-collector` 等长前缀，最后用 `/Users/<user>` 兜底成 `/Users/example`。UUID 与用量指纹用字面量逐条替换。
+**历史重写**用 `git filter-repo --refs master --replace-text`，只处理 `master`。替换规则按前缀长短排序，先命中本仓绝对路径这类长前缀，最后用 `/Users/<user>` 兜底成 `/Users/example`。UUID 与用量指纹用字面量逐条替换。
 
 **不动面**：83 个本地分支和三个 worktree 一律不重写。`atc-demo-scenario` 上有并行会话的在途暂存改动，全量重写的风险大于收益。
 

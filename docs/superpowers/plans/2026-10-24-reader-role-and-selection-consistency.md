@@ -304,7 +304,7 @@ test('多 choice 不发布只有 ord 的确定调用身份', () => {
 
 - [ ] **Step 4: 单独报告真实数据核对。** 对用户截图会话只读核对req108/110形状和System入口，真实正文不输出、不复制到仓库。将合成通过、真实只读观察、未执行项分别写清。
 
-- [ ] **Step 5: 同步文档并做最后检查。** 提案交付后移为implemented并改为Decision/Consequences；反向链接更新到新位置；仅被部分覆盖的旧Note保留。运行 `bun run verify:notes`、`git diff --check`和本轮新文档的相对链接检查。按用户授权决定是否提交，父仓库gitlink不自动更新。
+- [ ] **Step 5: 同步文档并做最后检查。** 提案交付后移为implemented并改为Decision/Consequences；反向链接更新到新位置；仅被部分覆盖的旧Note保留。运行 `bun run verify:notes`、`git diff --check`和本轮新文档的相对链接检查。按用户授权决定是否提交，上游检出不会自动更新。
 
 建议最终commit正文按实际交付和实测结果填写，不能把本评审基线的测试通过冒充修复后的验收。
 

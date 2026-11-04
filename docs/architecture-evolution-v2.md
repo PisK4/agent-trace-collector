@@ -278,7 +278,7 @@ from_sort 只用于识别受影响起点，不能据此删除更早祖先候选�
 
 ## 验收与回退
 
-字段和重建检查使用合成数据，覆盖三模型各异、req 缺失、cost 为零、err 与 err_type 不同、Prompt true/false/省略/非法、最终尝试缺失及全部失败。hook-only、直接命中、owner 合并和两源交换顺序须保留独立 hook 模型，ledger.req 缺失不抹掉该报告，success 不生成 HTTP 状态。备份恢复分别覆盖原盐、缺盐与错盐，不能静默换盐继续摄入。相同证据集以不同顺序到达，最终语义投影一致；接收时间、执行次数等运行元信息不参与断言。请求数量、证据唯一 owner、正文引用和费用观测守恒。复用现有 [magpie 测试](../tests/magpie.test.ts)、[收敛测试](../tests/reconcile.test.ts)、[派生测试](../tests/derive.test.ts)等入口补回归，新增测试以实际共享 Interface 为表面，不为转发层复制测试。
+字段和重建检查使用合成数据，覆盖三模型各异、req 缺失、cost 为零、err 与 err_type 不同、Prompt true/false/省略/非法、最终尝试缺失及全部失败。hook-only、直接命中、owner 合并和两源交换顺序须保留独立 hook 模型，ledger.req 缺失不抹掉该报告，success 不生成 HTTP 状态。备份恢复分别覆盖原盐、缺盐与错盐，不能静默换盐继续摄入。相同证据集以不同顺序到达，最终语义投影一致；接收时间、执行次数等运行元信息不参与断言。请求数量、证据唯一 owner、正文引用和费用观测守恒。复用现有 [magpie 测试](../tests/magpie.test.ts)、[收敛测试](../tests/reconcile.test.ts)、[派生测试](../tests/derive-unit.test.ts)等入口补回归，新增测试以实际共享 Interface 为表面，不为转发层复制测试。
 
 语义检查穿过实际解释与派生 Interface，覆盖普通 `<block>no` 反例、Agent 不符、缺回复、迟到 Agent、hook-only、规则优先级、保留旧判定与新规则复核的区别。输入解释测试覆盖合法相似标签、包装里真实文本、插话、畸形和分页；HTML 转义断言继续留在页面测试。
 

@@ -1,11 +1,33 @@
 {
   "name": "tracery",
+  "version": "0.1.0",
   "private": true,
   "description": "Tracery gathers Agent requests and weaves scattered calls into one readable trace.",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PisK4/agent-trace-collector.git"
+  },
+  "homepage": "https://github.com/PisK4/agent-trace-collector#readme",
+  "bugs": {
+    "url": "https://github.com/PisK4/agent-trace-collector/issues"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "keywords": [
+    "llm",
+    "tracing",
+    "coding-agent",
+    "otel",
+    "otlp",
+    "magpie",
+    "sqlite"
+  ],
   "scripts": {
     "start": "bun src/main.ts",
+    "demo": "bun prototypes/synthetic-server.ts",
     "service": "bun scripts/service.ts",
     "maintain": "bun src/maintenance/cli.ts",
     "verify-cutover": "bun scripts/verify-cutover.ts",
