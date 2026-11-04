@@ -56,6 +56,43 @@ The README has an English version, but `docs/` and the notes are Chinese, with E
 - **Harness-specific behaviour is registered, not branched.** A new harness contributes a predicate in `src/harness/<name>.ts` plus one line in the registry array; dispatch code never compares harness names.
 - **`main.ts` is wiring only.** Timer bodies, locks and configuration assembly live in the module that owns the concept.
 
+## Plugin contributions
+
+A Plugin is one registered reading capability (`src/plugins/registry.ts`). A Parser adapts one agent's tool shape to that capability's DTO. Both are contributions, but they land in different places.
+
+**Built-in Parser (in-repo PR).** Add a file under `src/plugins/<plugin>/parsers/`, one line in that plugin's `parsers` array, and a synthetic test that covers a hit, a lookalike miss, missing parameters and reclaimed bodies. Parsers import nothing outside `src/plugins/`, never fetch, never produce HTML; `tests/plugin-boundaries.test.ts` enforces it. Add the Chinese strings your tab renders to `web/i18n-en.js` (`tests/i18n-coverage.test.ts` checks this). PR template:
+
+```markdown
+## What this Parser reads
+<agent name, tool name, input shape>
+
+## DTO
+<the snapshot it returns; state words kept as-is>
+
+## Synthetic cases
+- [ ] hit / [ ] lookalike miss / [ ] missing params / [ ] reclaimed body
+- [ ] bun run typecheck / [ ] bun test tests/<plugin>.test.ts
+- [ ] bun run verify:notes:staged
+```
+
+**Community package (local install).** A package export declares `api`, `id`, `tab` and parsers. Put it in the local plugin directory listed in the manifest; the host loads it in a Bun Worker and rejects it when `api` does not match. A timeout or a thrown error hides that tab only — the four built-in tabs keep working. PR template (for the package's own repo, or an issue here documenting it):
+
+```markdown
+## Package
+<id, api version, tab key, entry file>
+
+## Trust
+This code runs in a Worker in the collector process with host permissions.
+Only install code you trust. List every file the package reads or writes.
+
+## Verification
+- [ ] api mismatch is rejected, built-in track unaffected
+- [ ] timeout / throw hides only the community tab
+- [ ] no third-party runtime dependencies
+```
+
+External code has host permissions: the Worker isolates crashes and timeouts, not privileges. Do not install packages that read credentials, tokens or real request bodies.
+
 ## Tests
 
 - **Synthetic data only.** Real request bodies, accounts, tokens and user configuration must never enter a fixture, a log or a commit.

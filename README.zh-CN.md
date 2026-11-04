@@ -125,6 +125,8 @@ assistant 文本行尾是推理段耗时，工具调用与结果行尾是执行�
 
 左栏会话列表装不同 harness 的会话，用 Agent 标签区分与过滤；同一会话涉及多个 Agent 时，行上显示主 Agent 与 `+N`。已适配 Claude Code、OMP 与 Codex CLI。新增 harness 的成本是一个稳定的 `service.name` 加一行选取规则，规范见 [OTLP exporter 接入 profile](docs/otlp-exporter-profile.md)。
 
+页面阅读能力按 Plugin 注册：`src/plugins/registry.ts` 的一项给出页签槽位与各家 Agent 的形状适配 Parser。Todo 是第一个 Plugin，两类 PR 的写法见[参与](CONTRIBUTING.md#plugin-contributions)。
+
 ## 记录什么，存在哪
 
 Tracery 存的是真实请求正文。这是它的用途，也值得直接说清：prompt、代码、工具输出与模型回复——凭证按规则脱敏，不是靠不写——都会落到本机的 SQLite 库里。

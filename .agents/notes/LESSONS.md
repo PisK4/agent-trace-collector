@@ -51,9 +51,9 @@
 - Seen 2× (2026-11-01, 2026-11-02).
 
 **带 note 的提交先跑 `bun run verify:notes:staged`；master 直提也算。**
-- 证据：2026-11-04 `a9c6d74` 在 master 直提 `proposed/bug-fix/2026-11-04-timing-safe-equal-stdlib.md`，缺 `## Proposal` / `## Acceptance criteria` / `## Risks`，全量 `verify:notes` 至今报红。
-- 防护：提交前跑 `bun run verify:notes:staged`；新增或移动 note 的 commit 不走合并也跑。
-- Seen 1× (2026-11-04).
+- 证据：2026-11-04 `a9c6d74` 在 master 直提 `proposed/bug-fix/2026-11-04-timing-safe-equal-stdlib.md`，缺 `## Proposal` / `## Acceptance criteria` / `## Risks`，全量 `verify:notes` 至今报红。2026-11-05 变体：插件机制实现批次落在 worktree 分支，方案 note 已提交进 master，`--staged` 只看暂存集，整批 32 文件被判「没有 Agent Note」；新建一篇记录已交付接缝的 implemented note 并与 proposed 主 note 双向链接才过门禁。
+- 防护：提交前跑 `bun run verify:notes:staged`；新增或移动 note 的 commit 不走合并也跑。跨 worktree 的实现批次不能指望主检出里的 note 顶数，要在同一暂存集里带一篇。
+- Seen 2× (2026-11-04, 2026-11-05).
 
 **`list.param` 是分组键，展示文案放 `label`。**
 - 证据：2026-11-02 方向 A 第 5 步第一版把 `param` 传成 `${name} 的调用`，对组永不命中、失败数恒 0；测试直接传 meta 测不到这条装配路径，真实后端同样中招，靠合成数据 curl 对比抓到。

@@ -2023,3 +2023,16 @@ Grok 的 `session_usage` 有 4 行而游标有 6 个，不是漏刷：本机 6 �
 - 没有对生产库重跑 `patrol weekly`；闸门改动只在合成状态目录上验证。生产部署与真实流量复测是另一次动作。
 - 调度器、launchd 与告警消费方仍不在仓库里，`--if-due` 只保证幂等，不保证「一周一次」真的被触发；`over` 退出码没有自动消费方。
 - F37 的 OTLP 通道修复与 `skipped` 计数不在本批；`otlp_issues` 对 `skipped` 不敏感，`otlp_yield` 只能当结果指标。
+## Plugin 机制与 Todo 页签（合成验收，2026-11-05）
+
+### 合成验收
+
+- 四家 Parser 用合成数据覆盖命中、形状相似但不命中、参数缺失、正文已回收四类反例；一轮内多次 Todo 更新按请求与 tool_use 次序 apply，末次即显示值，回退轮号由 `listTurns` 重新结算。`tests/todo-by-turn.test.ts` 6 例通过。
+- 页签登记与读取：`tests/web.test.ts` 的 URL 往返含 `todo`，`tests/selection.test.ts` 覆盖轮次态点第五栏保留 turn 并发 `read-todo`、点四栏回请求态，`tests/read-http.test.ts` 覆盖新路由编码与畸形 DTO 拒绝，`tests/http.test.ts` 覆盖缺轮号与非数字轮号 400、合法请求 200 与慢请求模板。
+- 迟到响应：`tests/reader-store.test.ts` 覆盖切轮次后旧轮响应不写回，新轮结果落地。`tests/plugin-boundaries.test.ts` 用 AST 守 Parser 不 import 核心、不 fetch、不产出 HTML，并覆盖 12 类畸形 DTO。
+- `bun run typecheck` 通过；11 个最窄测试文件 219 例通过。测试全部使用合成数据，未写生产库。
+- 真实库只读聚合用于校准 Parser 形状，不进 fixture、日志或提交。校准结果：zcode 的 `todos` 是数组，droid 是带编号的纯文本行，pi 是 `create`/`update` 增量命令，omp 是 chat `arguments` 字符串里的 `init`/`start`/`done`/`drop`。droid 形状与 11-04 交接文档记的「JSON 字符串」不符，Parser 按真实形状落地。
+
+### 真实流量验收
+
+待合并到 master 并部署后单独记录：目录改名后 hook 不丢请求、生产 `plugins.json` 生效、第五页签能读到真实 Todo、社区包 Worker 加载的失败隔离。本轮未执行，不写成通过。

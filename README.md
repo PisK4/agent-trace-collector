@@ -137,6 +137,8 @@ This is where you check whether a request carried something it shouldn't have: h
 
 The session list holds sessions from different harnesses, using an Agent tag for distinction and filtering. When a session involves several agents, the row shows the primary agent and `+N`. Claude Code, OMP and Codex CLI are supported today. Adding a harness costs one stable `service.name` plus one selection rule — the contract is in the [OTLP exporter profile](docs/otlp-exporter-profile.md).
 
+Reading capabilities are registered as Plugins: one entry in `src/plugins/registry.ts` gives a capability its rail tab and the Parsers that adapt each agent's tool shape. Todo is the first Plugin. See [Contributing](CONTRIBUTING.md#plugin-contributions) for the two PR shapes.
+
 ## What records, and where it lives
 
 Tracery stores real request bodies. That is the point of it, and it deserves stating plainly: prompts, code, tool output and model replies — with credentials redacted by rules, not by omission — are written to a local SQLite database on your machine.
