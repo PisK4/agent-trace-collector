@@ -38,7 +38,7 @@ Status: implemented
 ## Testing
 
 - `tests/owner-fingerprint.test.ts`：模型写法不同仍按四段用量认领；时间窗按归一后模型认领；模型名不同但候选唯一仍认领；多候选中只认归一后相等的；多候选无模型线索不合并。
-- `tests/session-dedupe.test.ts`：历史重复行并回网关行并迁移证据与别名；只有弱时间窗能配上的行不修；已并入其它来源证据的会话行不参与修复。
+- `tests/session-dedupe.test.ts`：历史重复行并回网关行并迁移证据与别名；同 ord 的 `tool_call` 保留目标行、源行独有链接搬过来；只有弱时间窗能配上的行不修；已并入其它来源证据的会话行不参与修复。
 - `tests/droid-dedupe.test.ts`：时间窗的模型名不同但候选唯一时合并；同窗多候选仍不合并。
 - `bun test` 全量 1232 通过；`bun run typecheck` 通过。
 - 生产验收待补：修复命令的预览与执行计数、合并后页面单行展示、后续轮转不再新增重复。
