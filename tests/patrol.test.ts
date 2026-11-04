@@ -1,13 +1,16 @@
 import { expect, test } from 'bun:test';
-import { rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  PATROL_THRESHOLDS, collectWeekly, evaluateWeekly, judgeSmoke, localDay,
+  PATROL_THRESHOLDS, collectWeekly, compareSnapshots, evaluateWeekly, isoWeek, judgeSmoke,
+  loadHistory, localDay, patrolStateDir, previousSnapshot, saveSnapshot, toSnapshot,
 } from '../scripts/patrol';
-import type { WeeklyReading } from '../scripts/patrol';
+import type { Snapshot, WeeklyReading } from '../scripts/patrol';
 import { fixture } from './fixtures';
 
 const MB = 1024 * 1024;
+const DAY_MS = 24 * 60 * 60_000;
 
 function reading(overrides: Partial<WeeklyReading> = {}): WeeklyReading {
   return {
@@ -123,4 +126,107 @@ test('空库能收集读数且不误报 OTLP 产出', () => {
   } finally {
     rmSync(f.dir, { recursive: true, force: true });
   }
+});
+
+function tempStateDir(): string {
+  return mkdtempSync(join(tmpdir(), 'patrol-state-'));
+}
+
+function snapshot(period: string, takenAt: number, fileMb: number, overrides: Partial<Snapshot> = {}): Snapshot {
+  return {
+    period,
+    takenAt,
+    fileBytes: fileMb * MB,
+    bodyBytes: 0,
+    pairs: 0,
+    over5m: 0,
+    spans: 0,
+    spanEvidence: 0,
+    convs: 0,
+    maxRequests: 0,
+    convsOver200: 0,
+    checks: [],
+    ...overrides,
+  };
+}
+
+test('首次运行没有上期，写下一期后不再说无上期', () => {
+  const dir = tempStateDir();
+  try {
+    const empty = loadHistory(dir);
+    expect(empty.corrupt).toBe(false);
+    expect(empty.periods).toHaveLength(0);
+    expect(previousSnapshot(empty, '2026-W45')).toBeNull();
+    const saved = saveSnapshot(dir, snapshot('2026-W45', Date.now(), 5_000));
+    expect(saved.periods).toHaveLength(1);
+    expect(existsSync(join(dir, 'history.json'))).toBe(true);
+    expect(previousSnapshot(loadHistory(dir), '2026-W46')?.period).toBe('2026-W45');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('周环比给出增量、占上期百分比和是否越过阈值', () => {
+  const now = Date.now();
+  const previous = snapshot('2026-W44', now - 7 * DAY_MS, 4_800, { convsOver200: 90 });
+  const current = snapshot('2026-W45', now, 5_000, { convsOver200: 94 });
+  const checks = compareSnapshots(current, previous);
+  const growth = checks.find(check => check.id === 'growth_delta');
+  expect(growth?.state).toBe('ok');
+  expect(growth?.detail).toContain('+200.0 MiB');
+  expect(growth?.detail).toContain('+4.2%');
+  expect(growth?.detail).toContain('日均 +28.6 MiB');
+  expect(checks.find(check => check.id === 'conversation_delta')?.detail).toContain('90 → 94（+4）');
+
+  const steep = compareSnapshots(snapshot('2026-W45', now, 7_800), previous);
+  expect(steep.find(check => check.id === 'growth_delta')?.state).toBe('over');
+});
+
+test('历史文件损坏时退化成无上期可比，下一次写入重建', () => {
+  const dir = tempStateDir();
+  try {
+    writeFileSync(join(dir, 'history.json'), '{ periods: [ 半截');
+    const history = loadHistory(dir);
+    expect(history.corrupt).toBe(true);
+    expect(history.periods).toHaveLength(0);
+    expect(previousSnapshot(history, '2026-W45')).toBeNull();
+    saveSnapshot(dir, snapshot('2026-W45', Date.now(), 5_000));
+    expect(loadHistory(dir).corrupt).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, 'history.json'), 'utf8')).periods).toHaveLength(1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('只保留最近 12 期', () => {
+  const dir = tempStateDir();
+  try {
+    let saved = loadHistory(dir);
+    for (let week = 1; week <= 15; week += 1) {
+      const period = `2026-W${String(week).padStart(2, '0')}`;
+      saved = saveSnapshot(dir, snapshot(period, week * DAY_MS, 4_000 + week));
+    }
+    expect(saved.periods).toHaveLength(12);
+    expect(saved.periods[0]?.period).toBe('2026-W04');
+    expect(saved.periods[11]?.period).toBe('2026-W15');
+    expect(loadHistory(dir).periods).toHaveLength(12);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('状态目录可被环境变量覆盖，期号是 ISO 周', () => {
+  expect(patrolStateDir({ ATC_PATROL_STATE_DIR: '/tmp/patrol-x' } as NodeJS.ProcessEnv)).toBe('/tmp/patrol-x');
+  expect(patrolStateDir({} as NodeJS.ProcessEnv).endsWith(join('tracery', 'patrol'))).toBe(true);
+  expect(isoWeek(new Date(2026, 10, 4).getTime())).toMatch(/^\d{4}-W\d{2}$/);
+});
+
+test('快照落下采集时间、计数、体积与当次判定', () => {
+  const checks = evaluateWeekly(reading());
+  const snap = toSnapshot(reading(), checks, new Date(2026, 10, 4).getTime());
+  expect(snap.period).toMatch(/^2026-W\d{2}$/);
+  expect(snap.fileBytes).toBe(4096 * 120_000);
+  expect(snap.bodyBytes).toBe(1_750 * MB);
+  expect(snap.convsOver200).toBe(90);
+  expect(snap.checks.map(check => check.id)).toContain('body_ratio');
 });

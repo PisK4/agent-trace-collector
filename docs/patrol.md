@@ -41,19 +41,30 @@ bun run patrol smoke --port 8396     # 临时实例
 ## B. 每周（十几分钟，只读，不起临时实例）
 
 ```bash
-bun run patrol weekly                     # 生产数据目录
-bun run patrol weekly --data-dir /path    # 副本
+bun run patrol weekly                                   # 生产数据目录
+bun run patrol weekly --data-dir /path                  # 副本
+bun run patrol weekly --state-dir /path/to/state        # 历史落到别处
 ```
 
-输出逐行给出读数、当前阈值与 `ok / over / info`；有越界项时退出码 1。把整段输出贴进周报或 issue 评论，下周与本周比较 `growth`、`conversation_size` 里的 `>200` 会话数，脚本不保存历史。
+输出逐行给出读数、当前阈值与 `ok / over / info`；有越界项时退出码 1。`weekly` 会把本期快照写进状态目录，并自动与上一期比较，周环比不再需要人算，见下面的「历史与周环比」。整段输出仍然建议贴进周报，方便人看趋势。
 
-**B1 容量与增长**（核心 1）。`body_ratio` 低于下限、`freelist` 与 `wal` 超上限、可用空间低于下限即越界；日增与周增是人工比较项，脚本只打印当前文件大小与阈值。证据：第 5 轮 F38、F39；第 1 轮 F11（raw 层 7 天 TTL 未生效）、F12（`raw_droid_event` 不在预算内）。
+**B1 容量与增长**（核心 1）。`body_ratio` 低于下限、`freelist` 与 `wal` 超上限、可用空间低于下限即越界；日增与周增由 `growth_delta` 与上一期快照比较，越过阈值才算越界。证据：第 5 轮 F38、F39；第 1 轮 F11（raw 层 7 天 TTL 未生效）、F12（`raw_droid_event` 不在预算内）。
 
 **B2 证据链**（核心 2）。`evidence_gap` 超比例、`pending_hook` 今日新增超过前 7 日均值的倍数、`hook_absent` 最近完整一天超过阈值且超过均值的倍数即越界。`hook_absent` 还要再看 agent 分布：claude 未装 hook 时持续增长是 F01 的已知行为，先排除它再定性；重启或升级窗口会临时抬高 gap；批量回填会让 `pairs` 一次跳增，不能直接做周环比。证据：第 1 轮 F09、F13、F16。
 
 **B3 摄入产出比**（核心 3）。`otlp_yield` 在 span 数达到门槛且证据比过低、或 span 存在但 `body_ref` 为 0 时越界；`otlp_issues` 按近 7 日单条理由计数。上游只发内部 span 或本就该采样时比例天然低，先用 `service`、`name` 分布确认有没有 LLM 形状的 span 再定性。证据：第 5 轮 F37。
 
-**B4 会话扇出**。`conversation_size` 只在单个会话超过上限时报越界；`>200` 的会话数只作为信息项，和上周记录比较。长跑采集与自动化任务天然产生大会话，真正要看的是翻页契约（F40）是否已修。证据：第 5 轮 F40；第 3 轮 F29。
+**B4 会话扇出**。`conversation_size` 只在单个会话超过上限时报越界；`>200` 的会话数只在 `conversation_delta` 里与上一期比较。长跑采集与自动化任务天然产生大会话，真正要看的是翻页契约（F40）是否已修。证据：第 5 轮 F40；第 3 轮 F29。
+
+**历史与周环比**
+
+- 落点：`$HOME/Library/Application Support/tracery/patrol/history.json`，与 `monitor/` 同级，不在库里、不在仓库工作区；`ATC_PATROL_STATE_DIR` 或 `--state-dir` 可以改路径；默认位置不跟随 `--data-dir`，跑副本时若要分开历史，显式指到别处。
+- 一期：ISO 周（如 `2026-W45`）。同一周重跑只覆盖本期，不会每次运行各留一条；期号之外还记 `takenAt`，跨天比较时用它算日均。
+- 内容：采集时间、文件与正文体积、成对证据、span 与证据数、会话数、`>200` 会话数、当次每条检查的状态。
+- 比较：取严格早于本期的最近一期，输出 `growth_delta`（增量、占上期百分比、日均，以及是否越过日增/周增阈值）与 `conversation_delta`（`>200` 会话数与最大请求的变化）。没有更早期时只打印 `无上期可比`。
+- 期数：只保留最近 12 期，写入时按周号从旧到新裁掉；状态目录因此不会无限增长。
+- 损坏：文件缺失、JSON 解析失败或形状不符时退化为「无上期可比」，打印 `[info] history: 历史不可读（<path>）…`，退出码语义不变（0/1/2）。下次写入会用本期重建，坏内容被覆盖，不做恢复。
+- 写入先落临时文件再改名，半写不会留下坏文件；`smoke` 不写历史。
 
 ## C. 触发式（只在动到对应代码时跑）
 
@@ -153,6 +164,7 @@ rm -rf "$TMP"
 ## 边界
 
 - `dbstat` 对大库有 IO 成本，放在低峰跑；它统计分配页（含空闲页），只比趋势不比绝对值。
+- 状态目录是巡查唯一的写点，只写 JSON 快照；数据库始终只读。状态目录与数据目录相互独立，删掉它只会丢周环比，不影响采集。
 - `sqlite3 -readonly` 在 `-shm` 缺失时可能打不开 WAL 库；生产有 `-shm`，副本要注意。
 - `weekly` 的今日读数只覆盖部分天，`pending_hook` 的今日新增会被低估；`hook_absent` 因此固定取最近一个完整日。
 - 任何 grep 到的日志都可能含绝对路径或令牌；周报只写计数与结论，不贴原文。
@@ -165,7 +177,7 @@ rm -rf "$TMP"
 
 1. 门禁：按根 AGENTS.md「命令」一节跑类型检查、测试、note 两项；任一非 0 立即停。
 2. 跑 bun run patrol smoke；limit=0/201/1.5、direction=sideways、body?from=1e20、%ZZ 路径逐项看状态码；越界项记录，F41 的 200 记作已知基线。
-3. 跑 bun run patrol weekly；把整段输出贴进周报，并和上周记录比较 growth 与 >200 会话数。
+3. 跑 bun run patrol weekly；它会写入本期快照并自动与上一期比较（首次显示「无上期可比」）；把整段输出贴进周报。
 4. 需要进程内指标时跑 bun scripts/monitor.ts inspect；它的规则是权威口径，不要用本文或记忆里的数字另立标准。
 5. 动到 schema、保留层、摄入、查询、生命周期时，按 C1–C5 对应项加跑；临时目录或 ≤300 MB 镜像，结束卸载并 rm，确认 mount 无残留。
 6. 收尾：把命令、关键数字、判定写成三行以内；越界项按「触发式」定位；没有越界就写「阴性」。

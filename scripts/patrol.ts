@@ -2,22 +2,28 @@
  * 巡检：把巡查里能计算的部分固化成只读命令。
  *
  * 数据库用只读连接打开，磁盘读数走 statfs；不写库、不写文件、不重启进程。
+ * 周快照写到维护者的状态目录（默认 <data>/patrol，可用 ATC_PATROL_STATE_DIR
+ * 或 --state-dir 改），不写库、不写仓库工作区。
  * 阈值只在这里定义，docs/patrol.md 讲节奏与误报边界，不复制数字。
  *
  * 用法：
- *   bun scripts/patrol.ts weekly [--data-dir PATH] [--json]
+ *   bun scripts/patrol.ts weekly [--data-dir PATH] [--state-dir PATH] [--json]
  *   bun scripts/patrol.ts smoke [--port N] [--data-dir PATH] [--json]
  *
  * 退出码：0 全部通过或只有信息项；1 有越界项；2 用法错误或读不到库。
  */
 import { Database } from 'bun:sqlite';
-import { existsSync, statfsSync, statSync } from 'node:fs';
+import {
+  existsSync, mkdirSync, readFileSync, renameSync, statfsSync, statSync, writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { defaultDataDir } from '../src/config';
 import { readToken } from './service-support';
 
 const MB = 1024 * 1024;
 const DAY_MS = 24 * 60 * 60_000;
+const HISTORY_FILE = 'history.json';
+const HISTORY_LIMIT = 12;
 
 /**
  * 阈值与判定口径。数字随容量策略一起改；改这里等于改巡检标准，docs/patrol.md
@@ -28,7 +34,7 @@ export const PATROL_THRESHOLDS = {
   bodyRatioMin: 0.45,
   /** 库还小于这个体量时比例没有意义，不判。 */
   bodyRatioMinBytes: 256 * MB,
-  // 周环比没有脚本可依赖的历史，按本周输出与上周记录比较。
+  // 周环比依赖状态目录里的上一期快照，见 compareSnapshots。
   growthDailyBytes: 500 * MB,
   growthWeeklyBytes: 2.5 * 1024 * MB,
   freelistPages: 200,
@@ -101,7 +107,7 @@ export function evaluateWeekly(reading: WeeklyReading): Check[] {
   checks.push({
     id: 'growth',
     state: 'info',
-    detail: `文件 ${mb(fileBytes)} MiB；与上周记录比日增（阈值 ${mb(PATROL_THRESHOLDS.growthDailyBytes)} MiB/日）与周增（阈值 ${mb(PATROL_THRESHOLDS.growthWeeklyBytes)} MiB/周）`,
+    detail: `文件 ${mb(fileBytes)} MiB；日增与周增的环比见 growth_delta`,
   });
   checks.push({
     id: 'freelist',
@@ -361,6 +367,131 @@ export async function runSmoke(dataDir: string, port: number): Promise<Check[]> 
   return judgeSmoke(probes);
 }
 
+/** 一期快照：够做周环比，不复制判定细节。 */
+export type Snapshot = {
+  period: string;
+  takenAt: number;
+  fileBytes: number;
+  bodyBytes: number;
+  pairs: number;
+  over5m: number;
+  spans: number;
+  spanEvidence: number;
+  convs: number;
+  maxRequests: number;
+  convsOver200: number;
+  checks: { id: string; state: CheckState }[];
+};
+
+export type History = { periods: Snapshot[]; corrupt: boolean; path: string };
+
+/** 状态目录默认跟着数据目录走（<data>/patrol），可被 ATC_PATROL_STATE_DIR 覆盖。 */
+export function patrolStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.ATC_PATROL_STATE_DIR;
+  return override !== undefined && override.trim() !== '' ? override : join(defaultDataDir(env), 'patrol');
+}
+
+/** 期号用 ISO 周，同一周重跑只覆盖本期。 */
+export function isoWeek(nowMs: number): string {
+  const local = new Date(nowMs);
+  const thursday = new Date(Date.UTC(local.getFullYear(), local.getMonth(), local.getDate()));
+  const day = thursday.getUTCDay() || 7;
+  thursday.setUTCDate(thursday.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((thursday.getTime() - yearStart.getTime()) / DAY_MS + 1) / 7);
+  return `${thursday.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+function isSnapshot(value: unknown): value is Snapshot {
+  if (typeof value !== 'object' || value === null) return false;
+  const row = value as Partial<Snapshot>;
+  return typeof row.period === 'string'
+    && typeof row.takenAt === 'number'
+    && typeof row.fileBytes === 'number'
+    && typeof row.bodyBytes === 'number'
+    && typeof row.pairs === 'number'
+    && typeof row.convs === 'number'
+    && typeof row.convsOver200 === 'number'
+    && Array.isArray(row.checks);
+}
+
+/** 缺失返回空历史；解析失败或形状不符记 corrupt，调用方退化成「无上期可比」。 */
+export function loadHistory(stateDir: string): History {
+  const path = join(stateDir, HISTORY_FILE);
+  if (!existsSync(path)) return { periods: [], corrupt: false, path };
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    const raw = (parsed as { periods?: unknown } | null)?.periods;
+    if (!Array.isArray(raw)) return { periods: [], corrupt: true, path };
+    const periods = raw.filter(isSnapshot);
+    return { periods, corrupt: periods.length !== raw.length, path };
+  } catch {
+    return { periods: [], corrupt: true, path };
+  }
+}
+
+/** 写入本期并裁剪到最近 HISTORY_LIMIT 期；先写临时文件再改名，避免半写。 */
+export function saveSnapshot(stateDir: string, snapshot: Snapshot, limit = HISTORY_LIMIT): History {
+  const path = join(stateDir, HISTORY_FILE);
+  mkdirSync(stateDir, { recursive: true });
+  const existing = loadHistory(stateDir);
+  const periods = [...existing.periods.filter(row => row.period !== snapshot.period), snapshot]
+    .sort((a, b) => (a.period < b.period ? 1 : -1))
+    .slice(0, limit)
+    .sort((a, b) => (a.period < b.period ? -1 : 1));
+  const temp = `${path}.tmp`;
+  writeFileSync(temp, `${JSON.stringify({ periods }, null, 2)}\n`);
+  renameSync(temp, path);
+  return { periods, corrupt: false, path };
+}
+
+/** 只比严格更早的期；同一周重跑不与自己比。 */
+export function previousSnapshot(history: History, period: string): Snapshot | null {
+  return history.periods
+    .filter(row => row.period < period)
+    .sort((a, b) => (a.period < b.period ? 1 : -1))[0] ?? null;
+}
+
+export function toSnapshot(reading: WeeklyReading, checks: Check[], nowMs = Date.now()): Snapshot {
+  return {
+    period: isoWeek(nowMs),
+    takenAt: nowMs,
+    fileBytes: reading.pageSize * reading.pageCount,
+    bodyBytes: reading.blockBytes + reading.skeletonBytes + reading.rawHookBytes,
+    pairs: reading.pairs,
+    over5m: reading.over5m,
+    spans: reading.spans,
+    spanEvidence: reading.spanEvidence,
+    convs: reading.convs,
+    maxRequests: reading.maxRequests,
+    convsOver200: reading.convsOver200,
+    checks: checks.map(check => ({ id: check.id, state: check.state })),
+  };
+}
+
+/** 周环比：增量、占上期百分比、日均，以及是否越过日增/周增阈值。 */
+export function compareSnapshots(current: Snapshot, previous: Snapshot): Check[] {
+  const days = Math.max((current.takenAt - previous.takenAt) / DAY_MS, 0.5 / 24);
+  const delta = current.fileBytes - previous.fileBytes;
+  const ratio = previous.fileBytes > 0 ? delta / previous.fileBytes : 0;
+  const perDay = delta / days;
+  const sign = (value: string): string => (value.startsWith('-') ? value : `+${value}`);
+  const convDelta = current.convsOver200 - previous.convsOver200;
+  return [
+    {
+      id: 'growth_delta',
+      state: perDay > PATROL_THRESHOLDS.growthDailyBytes || delta > PATROL_THRESHOLDS.growthWeeklyBytes
+        ? 'over' : 'ok',
+      detail: `文件 ${sign(mb(delta))} MiB（${sign(pct(ratio))}），跨 ${days.toFixed(1)} 天，日均 ${sign(mb(perDay))} MiB；阈值 ${mb(PATROL_THRESHOLDS.growthDailyBytes)} MiB/日、${mb(PATROL_THRESHOLDS.growthWeeklyBytes)} MiB/周`,
+    },
+    {
+      id: 'conversation_delta',
+      state: 'info',
+      detail: `>${PATROL_THRESHOLDS.convWarnRequests} 会话 ${previous.convsOver200} → ${current.convsOver200}（${sign(String(convDelta))}），最大请求 ${previous.maxRequests} → ${current.maxRequests}`,
+    },
+  ];
+}
+
 export function render(checks: Check[]): string {
   const lines = checks.map(check => `[${check.state}] ${check.id}: ${check.detail}`);
   const over = checks.filter(check => check.state === 'over').length;
@@ -368,12 +499,13 @@ export function render(checks: Check[]): string {
   return `${lines.join('\n')}\n`;
 }
 
-type Options = { command: string; dataDir: string; port: number; json: boolean };
+type Options = { command: string; dataDir: string; port: number; stateDir: string; json: boolean };
 
 function parseArgs(argv: string[]): Options | null {
   const command = argv[0];
   if (command !== 'weekly' && command !== 'smoke') return null;
   let dataDir = defaultDataDir(process.env);
+  let stateDir = patrolStateDir(process.env);
   let port = 8320;
   let json = false;
   for (let index = 1; index < argv.length; index += 1) {
@@ -384,6 +516,11 @@ function parseArgs(argv: string[]): Options | null {
       if (value === undefined) return null;
       dataDir = value;
       index += 1;
+    } else if (arg === '--state-dir') {
+      const value = argv[index + 1];
+      if (value === undefined) return null;
+      stateDir = value;
+      index += 1;
     } else if (arg === '--port') {
       const value = argv[index + 1];
       if (value === undefined || !/^\d+$/.test(value)) return null;
@@ -391,13 +528,13 @@ function parseArgs(argv: string[]): Options | null {
       index += 1;
     } else return null;
   }
-  return { command, dataDir, port, json };
+  return { command, dataDir, stateDir, port, json };
 }
 
 async function main(argv: string[]): Promise<number> {
   const options = parseArgs(argv);
   if (options === null) {
-    process.stderr.write('usage: patrol weekly|smoke [--data-dir PATH] [--port N] [--json]\n');
+    process.stderr.write('usage: patrol weekly [--data-dir PATH] [--state-dir PATH] [--json] | patrol smoke [--port N] [--data-dir PATH] [--json]\n');
     return 2;
   }
   const dbPath = join(options.dataDir, 'trace.db');
@@ -407,9 +544,30 @@ async function main(argv: string[]): Promise<number> {
   }
   let checks: Check[];
   try {
-    checks = options.command === 'weekly'
-      ? evaluateWeekly(collectWeekly(dbPath, options.dataDir))
-      : await runSmoke(options.dataDir, options.port);
+    if (options.command === 'weekly') {
+      const reading = collectWeekly(dbPath, options.dataDir);
+      const evaluated = evaluateWeekly(reading);
+      const now = Date.now();
+      const period = isoWeek(now);
+      const history = loadHistory(options.stateDir);
+      const current = toSnapshot(reading, evaluated, now);
+      const previous = history.corrupt ? null : previousSnapshot(history, period);
+      if (previous !== null) checks = [...evaluated, ...compareSnapshots(current, previous)];
+      else checks = evaluated;
+      const saved = saveSnapshot(options.stateDir, current);
+      const kept = saved.periods.length;
+      checks = [...checks, {
+        id: 'history',
+        state: 'info',
+        detail: history.corrupt
+          ? `历史不可读（${history.path}），本期按无上期可比处理并已记入，保留 ${kept} 期`
+          : previous === null
+            ? `无上期可比；本期 ${period} 已记入 ${saved.path}，保留 ${kept} 期`
+            : `与上一期 ${previous.period} 比较；本期 ${period} 已记入 ${saved.path}，保留 ${kept} 期`,
+      }];
+    } else {
+      checks = await runSmoke(options.dataDir, options.port);
+    }
   } catch (error) {
     process.stderr.write(`patrol_failed:${error instanceof Error ? error.message : 'unknown'}\n`);
     return 2;
