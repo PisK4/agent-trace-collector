@@ -41,6 +41,7 @@
 - 证据：2026-11-04 会话切换预览，分支基点 schema v10、生产库 v11，启动报 `schema_version_unsupported`；`bun run maintain backup` 报 `backup_failed:source_must_be_stopped`（备份要求源采集器停止）；数据目录缺 `redaction.salt` 时启动报 `redaction_salt_missing`。3.9GB 库用 `sqlite3 .backup` 约 3 分钟。
 - 防护：预览前 `git rebase master`；`sqlite3 <prod>/trace.db ".backup '<tmp>/trace.db'"`；复制生产目录的 `redaction.salt`（0600）到 `ATC_DATA_DIR`；用独立 `ATC_PORT` 起，不碰生产 8320。验收完成后删掉整个临时目录（含库与 salt），保留生产原件。
 - Seen 1× (2026-11-04).
+- 变体（2026-11-04）：临时实例要把会话源与路由目录一起指到临时目录。证据：第 6 轮已把 `ATC_DATA_DIR` 改到 `/tmp`，临时库仍混入 107 条真实 session 请求，因为会话源与 `ATC_ROUTING_DIR` 还指向默认位置。
 
 ## 验证
 
