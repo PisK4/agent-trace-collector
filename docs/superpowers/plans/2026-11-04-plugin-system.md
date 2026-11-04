@@ -29,57 +29,61 @@
 
 ### 2. 登记层与边界
 
-- [ ] `src/plugins/registry.ts` 写一份静态登记数组：插件 id、页签槽位、Parser、DTO 校验入口、是否启用
-- [ ] 登记次序即页签次序；分派与结算不写品牌分支，沿用 `src/harness/purpose.ts` 的形状
-- [ ] `tests/plugin-boundaries.test.ts` AST 检查 Parser 不 import 核心、不 fetch、不产出 HTML
-- [ ] 插件返回畸形 DTO 时核心不崩，只隐藏该页签内容
+- [x] `src/plugins/registry.ts` 写一份静态登记数组：插件 id、页签槽位、Parser、DTO 校验入口、是否启用（`38e8c05`）
+- [x] 登记次序即页签次序；分派与结算不写品牌分支，沿用 `src/harness/purpose.ts` 的形状
+- [x] `tests/plugin-boundaries.test.ts` AST 检查 Parser 不 import 核心、不 fetch、不产出 HTML
+- [x] 插件返回畸形 DTO 时核心不崩，只隐藏该页签内容（`validateTodoSnapshot` 收口 12 类畸形值）
 
 ### 3. 读取契约与查询
 
-- [ ] 按 [读取功能接入规则](../../read-feature-rules.md) 先核对 `todoByTurn` 的输入、返回事实与一致性要求，再定走新 HTTP 路由还是复用批端点
-- [ ] `src/read-contract.ts` 加 `todoByTurn` 一项
-- [ ] `src/queries/todo-by-turn.ts` 按会话、actor 与轮号查 `tool_call` 与 `request_block` 的 tool_use 参数
-- [ ] `web/read-http.js`、`web/reader-store.js` 按 `bgJobs` 模板接入具名读取
-- [ ] 迟到响应不写回：切会话后旧会话结果不污染新会话
-- [ ] 新增前端文件登记进 `src/http.ts` 的 `STATIC_FILES`，`tests/read-boundaries.test.ts` 与 `tests/http.test.ts` 双向覆盖
+- [x] 按 [读取功能接入规则](../../read-feature-rules.md) 核对：现有批端点 `readings` / `reading-ranges` 的输入是 id 列表与正文区间，与 `todoByTurn` 的（会话、actor、轮号）、返回事实（该时点列表）、一致性要求（同轮多次更新先 apply 完再显示）都不同，走新 HTTP 路由 `/api/sessions/:key/todo`，不复用批端点
+- [x] `src/read-contract.ts` 加 `todoByTurn` 一项（第 15 项）
+- [x] `src/queries/todo-by-turn.ts` 用 `listTurns` 结算轮次，`tool_call.tool_name` 定位调用，解压正文块读 `tool_use.input`；actor 为空串时服务端取 `mainActorOf()`（`request_block` 表没有参数列，参数在 `block.z`）
+- [x] `web/read-http.js`、`web/reader-store.js` 按 `bgJobs` 模板接入具名读取
+- [x] 迟到响应不写回：复合身份含会话代次、会话键、actor 与轮号，切会话或切轮次都不污染
+- [x] 新增前端文件登记进 `src/http.ts` 的 `STATIC_FILES`，`tests/read-boundaries.test.ts` 与 `tests/http.test.ts` 双向覆盖
 
 ### 4. 页面注册能力
 
-- [ ] `web/rail-tabs.js` 把五处页签硬编码收成一份登记数组
-- [ ] 页签行上提到 `state.turn !== null` 的分岔之前，请求态与轮次态都能点第五栏
-- [ ] `web/app.js` / `web/url-route.js` / `web/selection.js` 改消费登记数组，`TAB_ORDER` 与滚动保持键同步
-- [ ] `web/todo-tab.js` 只渲染 DTO，全部文本经过 `esc()`
-- [ ] `web/i18n.js` 与 `web/i18n-en.js` 同步，正常态不加装饰性说明文字
-- [ ] 合成页面验证四栏在轮次态不误读请求作用域
+- [x] `web/rail-tabs.js` 把五处页签硬编码收成一份登记数组
+- [x] 页签行上提到 `state.turn !== null` 的分岔之前，请求态与轮次态都能点第五栏
+- [x] `web/app.js` / `web/url-route.js` / `web/selection.js` 改消费登记数组，`TAB_ORDER` 从登记次序派生，滚动保持键已含 `turn` 与 `railTab`
+- [x] `web/todo-tab.js` 只渲染 DTO，全部文本经过 `esc()`
+- [x] `web/i18n-en.js` 同步新增文案，正常态不加装饰性说明文字（`web/i18n.js` 不含字典，只有 t()）
+- [x] 合成验证：轮次态点第五栏保留 turn、点四栏回请求态，四栏不误读请求作用域
 
 ### 5. 第一批 Parser：全量快照
 
-- [ ] zcode `TodoWrite` Parser，覆盖 194 次未配对 `pending`
-- [ ] droid `TodoWrite` Parser，`todos` 是 JSON 字符串
-- [ ] 一轮内多次更新先 apply 完再显示，回退轮号能还原
-- [ ] 合成数据覆盖命中、形状相似但不命中、参数缺失、正文已回收四类反例
+- [x] zcode `TodoWrite` Parser，`todos` 是数组，覆盖未配对 `pending`
+- [x] droid `TodoWrite` Parser：真实库校准后 `todos` 是带编号的纯文本行，不是交接文档记的 JSON 字符串，按真实形状解析
+- [x] 一轮内多次更新按序 apply，末次即显示值；回退轮号由 `listTurns` 重新结算
+- [x] 合成数据覆盖命中、形状相似但不命中、参数缺失、正文已回收四类反例
 
 ### 6. 社区轨
 
-- [ ] 按步骤 0 的结论写清单加载、`api` 协商、失败隔离、安装与卸载
-- [ ] `api` 不兼容时拒绝加载，内置轨照常工作
-- [ ] 社区包超时或抛错时只隐藏该页签内容，其余四栏不受影响
-- [ ] 安装入口写清外部代码拥有宿主权限，只装可信代码
+- [x] `src/plugins/runtime/manifest.ts` 读数据目录 `plugins/plugins.json`：`id`、`agent`、`api`、`entry`，被拒项给固定分类码；清单缺失按没有社区包处理
+- [x] `src/plugins/runtime/worker.ts` 照 `src/derive/worker.ts` 起 Bun Worker，补队列单飞与 1.5 s 超时；崩溃、超时、抛错都 terminate 并记死该包
+- [x] `src/plugins/runtime/worker-entry.ts` 按绝对路径动态 import 包，按 agent 认领折叠；异常文本不出线程
+- [x] `api` 不兼容时拒绝加载，被拒的包连 import 都不发生，内置轨照常工作
+- [x] 社区包超时或抛错时该轮返回 `failed`（页面显示「读取失败」），其余四栏不受影响
+- [x] 安装与卸载 = 改 `plugins.json` + 重启；写进[运维手册](../../../docs/operations.md)与 `CONTRIBUTING.md`
+- [x] 安装入口写清外部代码拥有宿主权限，只装可信代码（`CONTRIBUTING.md` 社区包 PR 模板）
 
 ### 7. 第二批 Parser：增量命令
 
-- [ ] pi `todo` Parser
-- [ ] omp `todo` Parser
-- [ ] 重放状态机按序 apply，跨 actor 不互相关闭
-- [ ] 6 个跨 actor 会话的合成对账
+- [x] pi `todo` Parser：`create` / `update` 按 subject 定位
+- [x] omp `todo` Parser：chat `arguments` 字符串里的 `init` / `start` / `done` / `drop` 按 `i` 改状态
+- [x] 重放状态机按序 apply，按 actor 独立折叠
+- [ ] 6 个跨 actor 会话的合成对账：本轮未做，只验了单会话单 actor 的折叠；按 actor 归属的 SQL 过滤已有，对账留到后续
 
 ### 8. 收尾
 
-- [ ] `CONTRIBUTING.md` 加内置 Parser 与社区包两套 PR 模板，`GLOSSARY.md` 与双 README 各归各家
-- [ ] `bun run typecheck`、最窄测试、`bun run verify:notes:staged`
-- [ ] 合成验收与真实流量验收分开写进 `docs/acceptance.md`
+- [x] `CONTRIBUTING.md` 加内置 Parser 与社区包两套 PR 模板，`GLOSSARY.md` 与双 README 各归各家（`a3887c5`）
+- [x] `bun run typecheck`、最窄测试（11 文件 219 例）、`bun run verify:notes:staged`
+- [x] 合成验收与真实流量验收分开写进 `docs/acceptance.md`；真实流量标注未执行
 - [ ] `git merge --no-ff feat/plugin-system`，合并后移除 worktree 目录，分支名保留
-- [ ] 改动触及 `src/` 时 `bun run service restart`
+- [ ] 改动触及 `src/` 时 `bun run service restart`（先查清实际托管方式，`service status` 报 not_managed）
+- [ ] 生产 `~/.config/magpie/plugins.json` 第 37 行 spec 改新绝对路径并让 magpie 宿主重新加载
 
 ## 首批 Plugin 与旧功能搬迁
 
