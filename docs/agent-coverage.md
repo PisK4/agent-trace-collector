@@ -12,7 +12,7 @@
 | 本机有数据 | 根目录存在且有会话文件，或有网关侧请求行 | 根目录扫描、`request.agent` 聚合 |
 | 已入库 | 这家的数据已经落成 `request` 行 | `request` 按 agent 分组、`request_evidence` 按 `source_kind` 分组 |
 
-三者可以两两不同。Hermes 有 4,778 笔网关侧请求，却没有本地会话游标；Qoder、Grok、WorkBuddy 在本机有数据，却没有适配器；目录里标 `unimplemented` 的几家大多连根目录都没有。把其中任何一个口径当成「已支持」，报告就会失真。
+三者可以两两不同。Hermes 有 4,778 笔网关侧请求，却没有本地会话游标；Qoder 在本机有数据，却没有适配器；目录里标 `unimplemented` 的几家大多连根目录都没有。把其中任何一个口径当成「已支持」，报告就会失真。
 
 ## 生产库现状
 
@@ -28,10 +28,12 @@
 | hermes | 4,778 | 2026-10-27 | 2026-11-04 | hook / ledger / route，无本地游标 |
 | pi | 3,142 | 2026-08-21 | 2026-09-02 | `pi_session_call` |
 | dsh | 2,542 | 2026-08-22 | 2026-09-04 | `dsh_session_call` |
+| workbuddy | 97（首轮，回填中） | 2026-09-03 | 2026-09-03 | `workbuddy_session_call` |
+| grok | 97（首轮，回填中） | 2026-09-23 | 2026-09-23 | `grok_session_call` |
 | magpie | 413 | 2026-10-26 | 2026-11-04 | 账本 / 路由 |
 | 其它直连客户端 | 59 | 2026-10-25 | 2026-11-04 | 账本 |
 
-七家本地会话来源有游标：claude 48、codex 98、omp 90、zcode 83、dsh 77、pi 46、droid 216（droid 走独立定时器，不在 `registry.ts` 轮转里）。`ingest_issue` 当前只落在 `omp_session`（28 条，消息内容与角色格式）与 `otlp_span`（8 条），其余来源为 0。DSH 回填收敛的逐项对账见[验收记录](acceptance.md#dsh-全量回填收敛对账2026-11-04)。
+九家本地会话来源有游标：claude 48、codex 98、omp 90、zcode 83、dsh 77、pi 46、droid 216、workbuddy 6、grok 6（droid 走独立定时器，不在 `registry.ts` 轮转里）。`ingest_issue` 当前只落在 `omp_session`（28 条，消息内容与角色格式）与 `otlp_span`（8 条），其余来源为 0。DSH 回填收敛与批次 A 首轮的对账见[验收记录](acceptance.md)。
 
 Hermes 的位置值得单独说明：它的 4,778 行全部由 hook、账本、路由三种网关侧证据构成，本机 `.hermes` 有 205,607 个文件、约 5.2 GB，但采集器没有读这些文件。接本地 Hermes 适配器会把同一批调用第二次送进库，先要按[多来源同一调用的身份归一](../.agents/notes/proposed/feature/2026-11-04-multi-source-call-identity.md)处理认领，不能只补一个解析器。
 
@@ -48,8 +50,8 @@ Hermes 的位置值得单独说明：它的 4,778 行全部由 hook、账本、�
 | pi | `implemented` | `~/.pi/agent/sessions` | 3,142 / 46 游标 | `pi.go`、`calls_pi.go` | 已接（第一版，共用 OMP 解析） |
 | dsh | `implemented` | `~/.dsh/sessions` 77 目录 / 32.9 MB | 2,542 / 77 游标 | `dsh.go`、`calls_dsh.go`、`frames.go` | 已接（第二版） |
 | droid | `implemented` | `~/.factory/sessions` 648 文件 | 9,582 / 216 游标 | `droid.go` | 已接（独立定时器） |
-| workbuddy | `local_data` | `~/.workbuddy/projects` 6 个 jsonl / 3.65 MB，含 4 个 subagents 文件 | 无 | `workbuddy.go`、`calls_workbuddy.go` | 批次 A |
-| grok | `local_data` | `~/.grok/sessions` 6 会话 / 23 个 jsonl（`chat_history`、`events`、`updates`、`rewind_points` 各 6 份，另有 1 份 `prompt_history`），含 `summary.json`、`usage.json` | 无 | `grok.go`（`readGrokSummary`、`parseGrok`、`grokUsage.tokens`） | 批次 A |
+| workbuddy | `implemented` | `~/.workbuddy/projects` 6 个 jsonl / 3.65 MB，含 4 个 subagents 文件 | 已接，见[验收记录](acceptance.md) | `workbuddy.go`、`calls_workbuddy.go` | 批次 A（已交付） |
+| grok | `implemented` | `~/.grok/sessions` 6 会话 / 23 个 jsonl（`chat_history`、`events`、`updates`、`rewind_points` 各 6 份，另有 1 份 `prompt_history`），含 `summary.json`、`usage.json` | 已接，见[验收记录](acceptance.md) | `grok.go`（`readGrokSummary`、`parseGrok`、`grokUsage.tokens`） | 批次 A（已交付） |
 | qoder | `local_data` | `~/.qoder/logs/sessions` 118 个 segment / 365 KB；`~/.qoder/projects` 8 目录仅 1 个 22 KB jsonl | 无 | `qoder.go`（仅 `QoderDir`，调用解析复用 `ccFiles`） | 批次 B |
 | hermes | `local_data` | `~/.hermes` 205,607 文件 / 5.2 GB，含 `state.db`、`projects.db`、`kanban.db` | 4,778（网关侧） | `hermes.go`、`hermes_display.go` | 批次 C（先解决去重） |
 | codebuddy | `unimplemented` | `~/.codebuddy` 仅 3 个日志文件；`~/Library/Application Support/CodeBuddyExtension` 存在 | 无 | `workbuddy.go` 的 `codebuddyFiles()`、`buddyFiles()`（与 WorkBuddy 共用） | 批次 B（与 WorkBuddy 同构） |
@@ -65,7 +67,7 @@ Hermes 的位置值得单独说明：它的 4,778 行全部由 hook、账本、�
 
 ## 格式差异决定工作量
 
-四家 `local_data` 的解析难度差别很大，按「一份文件能不能独立还原一笔调用」排，Hermes 另说：
+未接入的几家解析难度差别很大，按「一份文件能不能独立还原一笔调用」排。批次 A 两家的实现已交到[验收记录](acceptance.md)，下面保留格式差异作为后续批次的判据，Hermes 另说：
 
 **WorkBuddy 最接近现有适配器。** `~/.workbuddy/projects/<project>/<uuid>.jsonl` 每行是带 `id`、`timestamp`、`type`、`role`、`content` 的消息；抽样一个主会话有 45 条 `role=assistant`、15 条 `role=user`，另有 `function_call`、`function_call_result`、`reasoning`、`output_text` 等行型。`subagents/agent-*.jsonl` 与主会话同形。这与 Claude Code 适配器的消息窗口模型一致，正文协议可复用 `anthropic` 或 `chat` 的判断路径。Magpie 的 `calls_workbuddy.go` 有逐行建调用的实现可核对。
 
@@ -79,9 +81,9 @@ Hermes 是另一类：`~/.hermes` 下有多个 SQLite 库与 20 万个文件，M
 
 判据按优先级排：本机有真实会话数据、格式能还原逐笔调用、与已实现适配器同构、不需要先解决跨来源去重、有 Magpie 解析器可核对。没有真实样本的不排期，避免把「已支持」写进报告却无法验收。
 
-### 批次 A：WorkBuddy 与 Grok
+### 批次 A：WorkBuddy 与 Grok（已交付）
 
-两家都有真实会话文件，格式可还原调用，Magpie 有现成解析器。WorkBuddy 与 Claude Code 同构，先做它，把「message 行 + subagents 子目录」这条路径在共用摄入里走通；Grok 接着做，验证「一个会话多个文件、用量只在会话级累计」的形状。两家都走 `worktree` 分支、合成 fixture、生产部署与逐项对账，一次一家，不合并成一个分支。
+两家都有真实会话文件，格式可还原调用，Magpie 有现成解析器。两家各走一个 `worktree` 分支、合成 fixture、生产部署与逐项对账，共享登记面先由准备分支一次铺好，避免两处实现同时改同一批文件。WorkBuddy 按 `providerData.messageId` 把同组行归成一笔调用，子代理折叠到父会话；Grok 一个会话目录一条流，单笔用量留 null、累计值写 `session_usage`。两家的首轮生产读数与已知边界见[验收记录](acceptance.md)。
 
 ### 批次 B：Qoder 与 CodeBuddy
 

@@ -1942,3 +1942,55 @@ Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮�
 原始层按行型分开数：`assistant` 2,542、`user` 610、`session` 77、`end-seed` 70。2,542 条 assistant 与 2,542 笔 request 一一对上，说明 `<父会话>/<子代理>/seq:N` 的证据键在本机 77 个目录上不再相撞，也无需再按 `(session, seq)` 查丢行。证据总数与不同 `ref_key` 数相等，重复 owner 为 0。
 
 本轮只读 `source_cursor`、`request`、`request_evidence`、`raw_session_event` 与 `ingest_issue` 的聚合，没有重放正文，也没有重启服务；采集进程仍是上一节修复后的同一实例（pid 93709）。seeded 分叉的真实路径仍只有合成测试覆盖：本机 77 个会话头没有 `isSeeded: true`，这一条边界不随回填收敛改变。
+
+## 批次 A 本地会话适配器（合成 + 生产真实流量，2026-11-04）
+
+范围：WorkBuddy 与 Grok 两家的发现、解析、归约、生产部署与首轮回填。合成数据与真实流量分开记录；真实请求正文、账号、令牌与用户配置不进入 fixture 与本文。两家的设计依据见各自的 [WorkBuddy Agent Note](../.agents/notes/implemented/feature/2026-11-04-workbuddy-session-adapter.md) 与 [Grok Agent Note](../.agents/notes/implemented/feature/2026-11-04-grok-session-adapter.md)，19 家的位置与分批判据见[覆盖矩阵](agent-coverage.md)。
+
+### 并行实现与合并
+
+两家的实现各走一个隔离 worktree，共享登记面（`SourceKind`、`SessionKind`、`registry.ts`、`catalog.ts`）先由准备分支一次铺好，避免两处实现同时改同一批文件。准备分支 `13382eb` 放两个不解析的占位 adapter，基线 1258 pass / 0 fail、typecheck 退出 0。两个实现分支只替换自己的占位文件、写窄测试与各自的 note，不改共用摄入。
+
+合并时主检出有并发会话推进的 patrol 三条提交，另有并发会话在 `.agents/notes/LESSONS.md` 上的未提交改动。按工作教训定向 stash 这一个文件后，依次以 `--no-ff` 合并准备基线、WorkBuddy、Grok，三方 LESSONS 自动合并无冲突，stash 随后 pop，其它会话的在途文件没有代提交或清理。
+
+| 项 | 结果 |
+| --- | --- |
+| 合并 | `333d114`（基线）、`532dec9`（WorkBuddy）、`45acdb2`（Grok） |
+| 合并后 `bun test` | 1276 pass / 0 fail，111 个文件 |
+| 合并后 `bun run typecheck` | 退出 0 |
+| 合并后 `bun run verify:notes` | 通过，220 篇格式、range 批次带 note |
+| 生产重启 | `bun run service restart`，pid 71866，代码 `45acdb2` 未落后 |
+| 部署前基线 | 两家各 0 笔 request、0 个游标，`ingest_issue` 0 |
+| 生产发现 | `roots()` 与 `discover()` 在本机各找到 6 个文件，与覆盖矩阵一致 |
+
+窄测试：WorkBuddy 5 例、Grok 6 例，全为合成数据，分别覆盖首次摄入、追加读取、坏行停游标、证据键唯一，以及 WorkBuddy 的子代理折叠与同序号各建一行、Grok 的多文件组成一个会话与 `usage` 留 null。两家分支各自独立复跑过全量套件（1263 / 1264 pass），主线程合并后又跑了一次全量，三层结果一致。
+
+### 生产首轮真实流量
+
+下表是部署后首轮对账快照，采集时 backfill 仍在轮转，两家各有 1 个文件尚未到 EOF。两家的原始层形状不同：WorkBuddy 的多行按 `providerData.messageId` 归约成一笔调用，一行不是一笔调用；Grok 的 `assistant` 行各建一笔，`tool_result`、`reasoning`、`user`、`system` 行进消息窗口而不单独建调用。
+
+| 项 | WorkBuddy | Grok |
+| --- | --- | --- |
+| `request` 行 | 97 | 97 |
+| 会话数 / 子代理调用 | 2 / 8 | 4 / 0 |
+| `request_evidence` / 不同 `ref_key` | 97 / 97 | 97 / 97 |
+| 悬空证据 / `ingest_issue` | 0 / 0 | 0 / 0 |
+| `body_state=available` / `parse_state=ok` | 97 / 97 | 97 / 97 |
+| 游标 / 已到 EOF | 6 / 5 | 6 / 5 |
+| 原始层行数 | 351 | 376 |
+| `in_tok` 为 null | 0 | 97 |
+| `session_usage` 行 | 0 | 4 |
+
+WorkBuddy 的 351 行原始层分成 `message` 65、`reasoning` 82、`function_call` 102、`function_call_result` 102，归约成 97 笔调用；Grok 的 376 行分成 `assistant` 97、`reasoning` 97、`system` 6、`tool_result` 153、`user` 23，`assistant` 与 `request` 一一对上。
+
+正文抽样走带 `read.token` 的 `/api/requests/<id>/body`：`req_id=141378`（Grok）与 `req_id=141684`、`141689`（WorkBuddy）都返回 200、`state=available`、`protocol=chat`、`parse_state=ok`。先前担心 WorkBuddy 的 `chat` 协议会吞掉 `tool_use`/`tool_result` 块，专门抽了带工具块的一笔核对：两类工具块与 `output_text` 都在响应里，页面契约没有丢内容。
+
+Grok 的 `session_usage` 有 4 行而游标有 6 个，不是漏刷：本机 6 个会话目录里只有 4 个带 `usage.json`，另 2 个的 `chat_history.jsonl` 只有 system / user / text 各 1 行、没有 assistant 调用。单笔 `in_tok` 与 `out_tok` 全为空，符合逐笔用量留 null 的口径。
+
+### 已知边界
+
+- Grok 的 `usage.json` 在 `chat_history.jsonl` 静止期被单独改写时，共用摄入的 `unchanged` 分支在 `afterFile` 之前返回，会话累计值要等主流下一次推进才刷新。droid 有独立批次入口做静止期补刷，走通用 `sessions` 调度的适配器没有。本轮不改 `ingest.ts`：它会同时影响七家已接入来源，收益不抵风险。两家 note 与工作教训都记了这一条。
+- Grok 的 `started_ms` 由 `summary.created_at` 加调用序号合成，只用于排序，不是真实请求时刻；请求体是重建的，不含实际的 system prompt 与工具定义。
+- WorkBuddy 同一回复的行跨批次到达时，`mutable` 重放按偏移刷新正文，工具块排在文本块之后，与文件里的 `parentId` 链顺序不一致；内容不丢，顺序以摄入先后为准。
+- WorkBuddy 经 magpie 网关发出的调用可能与网关侧证据各建一行：Magpie 的 `models.json` 网关模型排除规则没有实现，属跨来源认领的后续议题。
+- `factory_credits` 列复用 droid 的 credits 列存 USD 近似值，列名字面与内容不完全一致；精确费用展示需要给 `session_usage` 加专门列。

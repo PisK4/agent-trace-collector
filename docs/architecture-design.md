@@ -403,9 +403,9 @@ fork 会话在 `forkedAtMessageId` 之前的行是源会话复制段：它们进
 
 解析器状态从本代际的 `raw_session_event` 按偏移重放，批次之间不靠内存。坏行记 issue、游标停在行起点；跳过一条消息会让后续每轮请求体缺一条。未知行类型与不认识的字段只落原始层，不判坏。
 
-### 本地 Agent 会话适配器（第一版）
+### 本地 Agent 会话适配器
 
-Claude Code、Codex、DSH、Zcode、OMP、Pi 与 droid 的本地会话走同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。19 家本地 Agent 的覆盖状态、本机数据与下一批接入顺序见[覆盖矩阵](agent-coverage.md)。
+Claude Code、Codex、DSH、Zcode、OMP、Pi、WorkBuddy、Grok 与 droid 的本地会话走同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。19 家本地 Agent 的覆盖状态、本机数据与下一批接入顺序见[覆盖矩阵](agent-coverage.md)。
 
 | Agent | 根 | 形态 | 调用单位 | 正文协议 |
 | --- | --- | --- | --- | --- |
@@ -415,7 +415,11 @@ Claude Code、Codex、DSH、Zcode、OMP、Pi 与 droid 的本地会话走同一�
 | Zcode | `$ZCODE_HOME` 或 `~/.zcode` 下的 `cli/db/db.sqlite` | SQLite | assistant 消息，`model_usage` 的 rowid 作游标 | `anthropic` |
 | OMP | `$PI_CONFIG_DIR` 或 `~/.omp` 下的 `agent/sessions` 与 `profiles/*/agent/sessions`；XDG 数据根下的 `sessions` 与 `profiles/*/sessions` | JSONL | assistant 消息；消息 id 或行偏移 | `anthropic` |
 | Pi | `$PI_CODING_AGENT_DIR` 或 `~/.pi/agent` 下的 `sessions`；全局 `settings.json` 的 `sessionDir` | JSONL | 同 OMP，共用解析器 | `anthropic` |
+| WorkBuddy | `$WORKBUDDY_CONFIG_DIR` 或 `~/.workbuddy` 下的 `projects`，含 `subagents/` | JSONL | `providerData.messageId`；同组行按 id 合并，组内任一行带 usage 即结算 | `chat` |
+| Grok | `$GROK_HOME` 或 `~/.grok` 下的 `sessions/<cwd>/<uuid>` | 每会话 `chat_history.jsonl` 加 `summary.json`、`usage.json` 等旁路快照 | assistant 行，行偏移作 `callId`；会话 id 从目录名取 | `chat` |
 | droid | `$FACTORY_HOME_OVERRIDE/.factory/sessions` 或 `~/.factory/sessions` | JSONL | assistant 消息；`openaiMessageId` 作响应 id | `droid-session` |
+
+WorkBuddy 的 `subagents/` 文件折叠到父会话，调用身份带子代理 id；同 `messageId` 的行跨批次到达时用 `mutable` 与 `refreshOnDuplicate` 刷新正文，内容块的顺序按重放先后，不按文件里的 `parentId` 链。Grok 的会话 id 只存在于目录名，`chat_history` 行里没有时间戳、消息 id 与逐笔用量，因此单笔 `usage` 记 null，会话累计值由 `afterFile` 写 `session_usage`；`started_ms` 用 `summary.created_at` 加调用序号合成，只用于排序。`usage.json` 在 `chat_history` 静止期被单独改写时，共用摄入的 `unchanged` 分支在 `afterFile` 之前返回，累计值要等主流下一次推进才刷新。
 
 OMP/Pi 的多根在适配器里展开：OMP 还读 `PI_CODING_AGENT_DIR`、`PI_CODING_AGENT_SESSION_DIR` 与 `OMP_HOME`；Pi 还读 `PI_CODING_AGENT_SESSION_DIR` 与 `PI_HOME`。共享发现按 `source_name` 去重，重叠根只进一次。Pi 的项目级 `.pi/settings.json` 没有可枚举的 cwd，不扫。
 
