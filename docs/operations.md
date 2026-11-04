@@ -429,6 +429,8 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 
 回收在单个事务里删引用、删孤儿块、清骨架、改状态，`have` 与历史读数不动，`body_prev_state` 保留原状态。raw 层保留 7 天，到期只删原文、给证据标 `payload_state=expired`；仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。会话原始层同样按 7 天 TTL，只清没有游标引用的孤儿代际与已封口且 7 天没有成功摄入的代际；追加文件的当前代际保留，供批次间重放。全量 `/api/ingest-metrics` 的 `raw_session_rows` 与 `raw_session_bytes` 是这两类增长的观察口径。
 
+raw 层清理按小时调度一次，单次调用在 200 批 / 200 ms 墙钟内分批执行：每批各表最多 100 行、独立提交，批间让出事件循环，不在主线程制造长写事务。超期存量大的首轮部署会在连续数个 tick 内持续回收直至归零，不会一次清空，因此不需要为清理安排停机窗口；想压低首轮的 WAL 增长与 I/O 峰值，选低流量时段部署即可。巡查按「连续多轮调用后超期计数持续下降直至归零」验收，不要按单次调用是否归零判断。
+
 ## 派生切片与代际
 
 普通启动（`bun run start`）不设切片预算，派生走同步组阶段：一次调用算完一批组，结果写回 `request` 行。切片模式由容量实验的两个入口注入预算：`long-10000-slice` 场景（`--slice-budget <预算文件>`，进程内建库）与容量实验的子进程采集器（`--slice --slice-budget <文件>`）。两者都只从预算文件的 `slice.derive_budget` 读，缺了以 `capacity_slice_budget_missing` 退出 2，不落回默认预算——那会把一条常量冒充成校准结果。运维入口的模式开关留到切片正式上线时再补。默认预算常量在 `src/config.ts` 的 `DEFAULT_DERIVE_BUDGET`，七项含义与超限时的行为：

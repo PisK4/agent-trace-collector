@@ -407,6 +407,16 @@ export function openStore(path: string, options: StoreOptions = {}): Store {
     close() {
       if (closed) return;
       closed = true;
+      // 关库前把 WAL 截断：正常停止后数据目录不留待回放的 -wal。checkpoint 忙或
+      // 失败只记一行结构化日志，不阻塞退出——已提交数据由 WAL 本身保证。
+      try {
+        const row = db.query<{ busy: number }, []>('PRAGMA wal_checkpoint(TRUNCATE)').get();
+        if (row !== null && row.busy !== 0) {
+          process.stderr.write(`${JSON.stringify({ op: 'store.close', phase: 'wal_checkpoint', code: 'busy' })}\n`);
+        }
+      } catch (error) {
+        process.stderr.write(`${JSON.stringify({ op: 'store.close', phase: 'wal_checkpoint', code: String(error) })}\n`);
+      }
       read.close();
       db.close();
     },

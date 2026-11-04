@@ -18,28 +18,35 @@ import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projectio
  * 所有回收都在一个 immediate 事务里完成；事务间没有"删了引用还没标状态"的中间态。
  */
 
-/** 只算正文逻辑占用，不扫目录；回收循环用它判断是否已降到目标。 */
+type BodySumSource = {
+  table: string;
+  expression: string;
+  /** 分块键；WITHOUT ROWID 表没有 rowid，只能整表一次求和。 */
+  key: 'rowid' | null;
+};
+
+const BODY_SUM_SOURCES: readonly BodySumSource[] = [
+  { table: 'block', expression: 'length(z)', key: 'rowid' },
+  { table: 'request', expression: 'length(skeleton_z)', key: 'rowid' },
+  { table: 'raw_hook', expression: 'length(request_z) + length(response_z)', key: 'rowid' },
+  // 追加转录的当前代际原始行：按代际清理（pruneRaw 的 session 分支），没有逐行
+  // TTL；payload 字节计入可回收口径，代际被清时随之释放。
+  { table: 'raw_session_event', expression: 'length(payload_json)', key: null },
+];
+
+/** 正文与会话原始层 payload 的逻辑占用，不扫目录；回收循环用它判断是否已降到目标。 */
 export function measureBodyBytes(store: Store): number {
-  const blockBytes = store.read.query<{ n: number }, []>(
-    'SELECT IFNULL(SUM(length(z)),0) AS n FROM block',
-  ).get()?.n ?? 0;
-  const skeletonBytes = store.read.query<{ n: number }, []>(
-    'SELECT IFNULL(SUM(length(skeleton_z)),0) AS n FROM request',
-  ).get()?.n ?? 0;
-  const rawHookBytes = store.read.query<{ n: number }, []>(
-    'SELECT IFNULL(SUM(length(request_z) + length(response_z)),0) AS n FROM raw_hook',
-  ).get()?.n ?? 0;
-  return blockBytes + skeletonBytes + rawHookBytes;
+  let bytes = 0;
+  for (const source of BODY_SUM_SOURCES) {
+    bytes += store.read.query<{ n: number }, []>(
+      `SELECT IFNULL(SUM(${source.expression}),0) AS n FROM ${source.table}`,
+    ).get()?.n ?? 0;
+  }
+  return bytes;
 }
 
 /** 分块求和的默认行宽；按本机实测块时长再调整，不要凭行数猜。 */
 export const BODY_MEASURE_CHUNK_ROWS = 1000;
-
-const BODY_SUM_SOURCES: ReadonlyArray<{ table: string; expression: string }> = [
-  { table: 'block', expression: 'length(z)' },
-  { table: 'request', expression: 'length(skeleton_z)' },
-  { table: 'raw_hook', expression: 'length(request_z) + length(response_z)' },
-];
 
 export type BodyBytesMeasurement = {
   bytes: number;
@@ -53,7 +60,7 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 /**
- * 正文逻辑占用，按 rowid 区间分块求和，块间让出事件循环。
+ * 正文逻辑占用，按 rowid 区间分块求和（没有 rowid 的表整表一次），块间让出事件循环。
  *
  * 每块各自取一次读快照，总和不对应同一时刻：并发摄入或回收会让相邻块的
  * 快照略有差异，误差等于一轮刷新期间的变动量。这里不把它包装成精确快照；
@@ -70,14 +77,24 @@ export async function measureBodyBytesChunked(
   let chunks = 0;
   let maxChunkMs = 0;
   for (const source of BODY_SUM_SOURCES) {
+    if (source.key === null) {
+      const whole = store.read.query<{ n: number }, []>(
+        `SELECT IFNULL(SUM(${source.expression}),0) AS n FROM ${source.table}`,
+      ).get();
+      bytes += whole?.n ?? 0;
+      chunks += 1;
+      await yieldToEventLoop();
+      continue;
+    }
     const bounds = store.read.query<{ lo: number | null; hi: number | null }, []>(
-      `SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM ${source.table}`,
+      `SELECT MIN(${source.key}) AS lo, MAX(${source.key}) AS hi FROM ${source.table}`,
     ).get();
     if (bounds === null || bounds.lo === null || bounds.hi === null) continue;
     for (let lo = bounds.lo; lo <= bounds.hi; lo += chunkRows) {
       const chunkStarted = performance.now();
       const row = store.read.query<{ n: number }, [number, number]>(
-        `SELECT IFNULL(SUM(${source.expression}),0) AS n FROM ${source.table} WHERE rowid>=? AND rowid<?`,
+        `SELECT IFNULL(SUM(${source.expression}),0) AS n FROM ${source.table}
+         WHERE ${source.key}>=? AND ${source.key}<?`,
       ).get(lo, lo + chunkRows);
       bytes += row?.n ?? 0;
       maxChunkMs = Math.max(maxChunkMs, performance.now() - chunkStarted);
@@ -125,6 +142,13 @@ export const RAW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const EVICT_BATCH = 100;
 const EVICT_REF_LIMIT = 10_000;
 const PRUNE_BATCH = 100;
+/**
+ * 单次有界清理的批数上限。每小时一个 tick × 每批各表 100 行 × 200 批
+ * ≈ 2 万行/表/时，覆盖观测到的日增量（otlp span 峰值单日 150,603 行）还有余量。
+ */
+export const PRUNE_MAX_BATCHES = 200;
+/** 单次有界清理的墙钟上限：批间让出事件循环，超时即停，余量留给下一个 tick。 */
+export const PRUNE_WALL_BUDGET_MS = 200;
 
 function databaseFile(store: Store): string {
   const filename = (store.db as unknown as { filename?: unknown }).filename;
@@ -605,6 +629,35 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
       session: sessionRows.length,
     };
   }, 'raw_prune');
+}
+
+export type PruneBudget = { maxBatches?: number; wallMs?: number };
+
+/**
+ * 有界的多批清理：每次调用按 PRUNE_BATCH 小批循环，每批是独立提交的小事务，
+ * 批间让出事件循环，到批数或墙钟上限即停。超期存量大的首轮靠连续多个 tick
+ * 收敛，不在单次调用里制造长写事务或 WAL 尖刺；返回各表累计删除行数，
+ * 全零表示已经没有可删行。
+ */
+export async function pruneRawBounded(store: Store, beforeMs: number,
+  budget: PruneBudget = {}): Promise<PruneResult> {
+  const maxBatches = budget.maxBatches ?? PRUNE_MAX_BATCHES;
+  const wallMs = budget.wallMs ?? PRUNE_WALL_BUDGET_MS;
+  const started = performance.now();
+  const total: PruneResult = { ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0, session: 0 };
+  for (let batch = 0; batch < maxBatches; batch++) {
+    const result = pruneRaw(store, beforeMs);
+    total.ledger += result.ledger;
+    total.route += result.route;
+    total.hook += result.hook;
+    total.otlpSpan += result.otlpSpan;
+    total.otlpLog += result.otlpLog;
+    total.session += result.session;
+    if (result.ledger + result.route + result.hook + result.otlpSpan + result.otlpLog + result.session === 0) break;
+    await yieldToEventLoop();
+    if (performance.now() - started >= wallMs) break;
+  }
+  return total;
 }
 
 /** 物理收缩：分批增量回收空闲页，再截断 WAL。不做在线全库 VACUUM。 */

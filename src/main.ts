@@ -23,14 +23,14 @@ import type { SessionAdapter } from './sources/session/types';
 import { createHandler, loadReadToken } from './http';
 import { createLiveActivity } from './activity';
 import { markHookAbsent, reconcilePending } from './hook';
-import { createDeriveUnit } from './derive/unit';
+import { createDeriveUnit, type DeriveCompute } from './derive/unit';
 import { createDeriveWorker } from './derive/worker';
 import {
   RAW_TTL_MS,
   createAdmissionGate,
   type AdmissionGate,
   enforceBodyBudget,
-  pruneRaw,
+  pruneRawBounded,
   resumeSourceGaps,
   shrinkStorage,
 } from './retention';
@@ -45,6 +45,8 @@ const PROBE_INTERVAL_MS = 60_000;
 const DERIVE_INTERVAL_MS = 2000;
 const RETENTION_INTERVAL_MS = 30_000;
 const RAW_PRUNE_INTERVAL_MS = 60 * 60_000;
+/** 停止时等在飞派生落库的上限；与 `bun run service stop` 的 30 s 轮询对齐。 */
+const STOP_DERIVE_WAIT_MS = 30_000;
 
 /**
  * 切片只供显式容量实验使用。查询已接入发布代，生产启用仍等待长组容量收敛、
@@ -56,6 +58,10 @@ const RAW_PRUNE_INTERVAL_MS = 60 * 60_000;
 export type CollectorOptions = {
   capacityExperiment?: boolean;
   deriveComputeInWorker?: boolean;
+  /** 测试注入的派生计算替换；给了就优先于 Worker 或内联计算。 */
+  deriveCompute?: DeriveCompute;
+  /** 测试注入的停止等待上限；缺省 30 s，与 `bun run service stop` 的轮询对齐。 */
+  stopDeriveWaitMs?: number;
   /** 测试注入的日志出口；缺省按启动时刻建一个写 stdout 的实例。 */
   diagnostics?: DiagnosticLog;
   /**
@@ -141,7 +147,7 @@ export async function startCollector(
   const deriveUnit = createDeriveUnit(store, {
     onBodyRead: stats => metrics.bodyRead.record(stats),
     // 计算段交给 Worker：主线程只跑落库段，事件循环不再被长组的读与计算占住。
-    compute: deriveWorker === null ? undefined : deriveWorker.compute,
+    compute: options?.deriveCompute ?? (deriveWorker === null ? undefined : deriveWorker.compute),
     // 计算与落库用同一个关联编号；空闲 tick 不进这里。
     onRound: event => {
       diagnostics.derive({
@@ -287,9 +293,9 @@ export async function startCollector(
     if (evicted > 0) process.stderr.write(`retention_evicted:${evicted}\n`);
   });
 
-  const rawPruneTick = guard('raw_prune', () => {
+  const rawPruneTick = guard('raw_prune', async () => {
     const now = Date.now();
-    const pruned = pruneRaw(store, now - RAW_TTL_MS);
+    const pruned = await pruneRawBounded(store, now - RAW_TTL_MS);
     if (pruned.ledger + pruned.route + pruned.hook + pruned.otlpSpan + pruned.otlpLog
       + pruned.session > 0) shrinkStorage(store);
   });
@@ -361,9 +367,17 @@ export async function startCollector(
     clearTimeout(deriveTimer);
     metrics.eventLoop.stop();
     // 等在飞的那一轮派生走完落库段再关：计算在 Worker 里，此时也只是拒绝新请求。
-    // shortcut: 等待没有上限，单组计算超长的会话会让 stop 变慢；超出 service stop 的
-    // 30 秒轮询就如实报 stop_failed，进程仍会自己退出。
-    await deriveLanded;
+    // 上限只包这里的等待，不砍 deriveUnit.run 的计算预算：正常大组派生可能超过
+    // 30 s，超时只是不再等、不取消在飞的计算。上限与 service stop 的 30 s 轮询
+    // 对齐，超出后进程仍会自己退出，不再依赖 launchd 补 SIGKILL。
+    const waitCapMs = options?.stopDeriveWaitMs ?? STOP_DERIVE_WAIT_MS;
+    if (deriveLanded !== null) {
+      let cap: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        deriveLanded,
+        new Promise<void>(resolve => { cap = setTimeout(resolve, waitCapMs); }),
+      ]).finally(() => clearTimeout(cap));
+    }
     // 计算线程随后终止，再关库：不留 Worker 在库关掉后继续读。
     deriveWorker?.close();
     await server.stop(true);
@@ -374,7 +388,11 @@ export async function startCollector(
   };
 
   const onSignal = () => {
-    void stop().then(() => process.exit(0));
+    // 停止失败也要退出：停在半关状态会让 launchd 以为服务还在，直到 SIGKILL。
+    void stop().then(() => process.exit(0)).catch(error => {
+      process.stderr.write(`${JSON.stringify({ op: 'service.stop', phase: 'error', code: String(error) })}\n`);
+      process.exit(1);
+    });
   };
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);

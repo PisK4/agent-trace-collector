@@ -17,6 +17,7 @@ import {
   measureStorage,
   measureStorageCheap,
   pruneRaw,
+  pruneRawBounded,
   recordPausedBatch,
   resumeSourceGaps,
   shrinkStorage,
@@ -508,6 +509,84 @@ test('原始层 TTL：孤儿代际与封口代际可清，追加代际保留重�
       ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0, session: 0,
     });
     expect(f.store.writeStats.count).toBe(before);
+  } finally {
+    f.close();
+  }
+});
+
+test('有界清理分批独立提交、批间让出，连续调用收敛到零', async () => {
+  const f = fixture();
+  try {
+    const rows = 620;
+    f.store.write(db => {
+      const insert = db.prepare(
+        `INSERT INTO raw_otlp_span(trace_id,span_id,received_at,service,name,start_ms,attributes_json,mapping_version,privacy_version)
+         VALUES (?,?,?,?,?,?,?,1,1)`);
+      for (let i = 0; i < rows; i++) {
+        const spanId = new Uint8Array(8);
+        new DataView(spanId.buffer).setUint32(0, i);
+        insert.run(new Uint8Array(16).fill(0xab), spanId, 10, 'oh-my-pi', 'chat synth', 10, '{}');
+      }
+    });
+    const expired = () => f.store.read.query<{ n: number }, []>(
+      'SELECT COUNT(*) AS n FROM raw_otlp_span WHERE received_at<100').get()!.n;
+
+    // 单次调用有批数上限：两批 × 每批各表 100 行，停在中途而不是一次清空。
+    const first = await pruneRawBounded(f.store, 100, { maxBatches: 2, wallMs: 60_000 });
+    expect(first.otlpSpan).toBe(200);
+    expect(expired()).toBe(rows - 200);
+    // 两批就是两次独立提交的 raw_prune 小事务，不是一个长写事务。
+    expect(f.store.writeStats.by_name.raw_prune?.count).toBe(2);
+
+    // 批间让出事件循环：清理期间 setImmediate 链必须获得执行机会。
+    let turns = 0;
+    let spinning = true;
+    (function spin(): void {
+      if (!spinning) return;
+      turns += 1;
+      setImmediate(spin);
+    })();
+    const second = await pruneRawBounded(f.store, 100, { maxBatches: 2, wallMs: 60_000 });
+    spinning = false;
+    expect(second.otlpSpan).toBe(200);
+    expect(turns).toBeGreaterThanOrEqual(2);
+
+    // 连续调用持续下降直至归零：累计删除等于种子行数。
+    let total = first.otlpSpan + second.otlpSpan;
+    let last = second.otlpSpan;
+    while (last > 0) {
+      const next = await pruneRawBounded(f.store, 100, { maxBatches: 2, wallMs: 60_000 });
+      total += next.otlpSpan;
+      last = next.otlpSpan;
+    }
+    expect(total).toBe(rows);
+    expect(expired()).toBe(0);
+    // 620 行 / 每调用 200 行 = 4 次调用；最后一次多一轮空查确认但不落写事务，
+    // 共 7 个 raw_prune 写事务。
+    expect(f.store.writeStats.by_name.raw_prune?.count).toBe(7);
+  } finally {
+    f.close();
+  }
+});
+
+test('body 计量纳入会话原始层 payload，分块求和与同步版一致', async () => {
+  const f = fixture();
+  try {
+    const before = measureBodyBytes(f.store);
+    const payloadSize = 2048;
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
+          line_type,event_at_ms,payload_json,privacy_version)
+         VALUES ('claude_session','g-f12',0,'s','user',10,?,1)`,
+        ['x'.repeat(payloadSize)],
+      );
+    });
+    const exact = measureBodyBytes(f.store);
+    expect(exact - before).toBe(payloadSize);
+    // WITHOUT ROWID 表没有 rowid 可分块：整表一次求和的结果必须与同步版一致。
+    const measured = await measureBodyBytesChunked(f.store);
+    expect(measured.bytes).toBe(exact);
   } finally {
     f.close();
   }

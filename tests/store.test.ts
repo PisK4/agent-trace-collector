@@ -240,6 +240,19 @@ test('auto_vacuum增量回收让物理文件收缩', () => {
   }
 });
 
+test('正常关闭把 WAL 截断到 0，重启免回放', () => {
+  const f = fixture();
+  try {
+    // 一笔写入留在 WAL 里（离 1000 页的自动 checkpoint 阈值很远）。
+    f.store.write(db => db.run("INSERT INTO collector_state(key,value_json) VALUES ('wal-truncate','1')"));
+    expect(statSync(join(f.dir, 'trace.db-wal')).size).toBeGreaterThan(0);
+    f.store.close();
+    expect(statSync(join(f.dir, 'trace.db-wal')).size).toBe(0);
+  } finally {
+    f.close();
+  }
+});
+
 test('拒绝未知的高版本schema', () => {
   const f = fixture();
   const path = join(f.dir, 'trace.db');
