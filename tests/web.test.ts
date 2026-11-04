@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
-import { restoreScroll } from '../web/app.js';
+import { createMoreTargets, restoreScroll } from '../web/app.js';
 import { backendStateHtml, backendStateText } from '../web/backend-state.js';
 import { replyCompleteness } from '../web/row-summary.js';
+import { renderTraceRows } from '../web/trace-view.js';
+import { summaryTargets } from '../web/tool-summary.js';
 import {
   cacheHitOf, contextStatsHtml,
   ledgerParts, ledgerRowsHtml, railFactsHtml, readingChangedNote,
@@ -1064,4 +1066,32 @@ test('会话标题转义后进入头部', () => {
   });
   expect(html).not.toContain('<img');
   expect(html).toContain('&lt;img');
+});
+
+test('+N 目标清单越过 500 条后，先渲染的 chip 仍能取到完整清单', () => {
+  const moreTargets = createMoreTargets();
+  const targets = summaryTargets(JSON.stringify({ files: ['/a/one.ts', '/b/two.ts', '/c/three.ts'] })) ?? [];
+  // 第一行先渲染：chip 的 data-more-key 与完整清单同键登记。
+  const firstKey = '101:call:1';
+  moreTargets.remember(firstKey, targets);
+  const steps = [{
+    key: firstKey, kind: 'tool', toolName: 'Read', callOrd: 1,
+    toolInput: JSON.stringify({ files: ['/a/one.ts', '/b/two.ts', '/c/three.ts'] }),
+  }] as never[];
+  expect(renderTraceRows({ req_id: 101 } as never, steps, 1, null)).toContain(`data-more-key="${firstKey}"`);
+  // 之后 600 个工具步骤陆续登记，越过旧实现的「超过 500 整表清空」上限。
+  for (let reqId = 102; reqId <= 701; reqId++) moreTargets.remember(`${reqId}:call:1`, targets ?? []);
+  // 旧实现在这里整表 clear，先渲染的 chip 悬停拿不到清单、静默失效；清单必须仍在。
+  expect(moreTargets.listOf(firstKey)).toEqual(targets);
+});
+
+test('+N 目标清单换会话整表重置，不跨会话累积', () => {
+  const moreTargets = createMoreTargets();
+  const targets = summaryTargets(JSON.stringify({ files: ['/a/one.ts', '/b/two.ts'] })) ?? [];
+  moreTargets.remember('1:call:1', targets);
+  expect(moreTargets.size).toBe(1);
+  // resetReading 在换会话与显式刷新时调用 reset，清单随后随渲染重新登记。
+  moreTargets.reset();
+  expect(moreTargets.size).toBe(0);
+  expect(moreTargets.listOf('1:call:1')).toBeUndefined();
 });

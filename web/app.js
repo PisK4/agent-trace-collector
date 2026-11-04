@@ -64,6 +64,28 @@ export function restoreScroll(element, previous) {
   return element.scrollTop;
 }
 
+/**
+ * `+N` 的完整目标清单生命周期：键是步骤稳定键，条目跟随当前会话的渲染行。
+ * 不按条数清空——清空会让仍在页面上的旧 chip 静默失效（弹层拿不到清单）；
+ * 行随会话整体更换，换会话与显式刷新时整表重置，不跨会话累积。
+ * 独立成工厂是为了让这条生命周期可单测：生产实例在 document 守卫内装配。
+ * @returns {{remember: (key: string, list: string[]) => void,
+ *   listOf: (key: string) => string[] | undefined, reset: () => void,
+ *   readonly size: number}}
+ */
+export function createMoreTargets() {
+  /** @type {Map<string, string[]>} */
+  const entries = new Map();
+  return {
+    /** @param {string} key @param {string[]} list */
+    remember(key, list) { entries.set(key, list); },
+    /** @param {string} key @returns {string[] | undefined} */
+    listOf(key) { return entries.get(key); },
+    reset() { entries.clear(); },
+    get size() { return entries.size; },
+  };
+}
+
 /* ---------------- 空状态插画：B1 吊丝蜘蛛 ---------------- */
 
 /**
@@ -491,11 +513,13 @@ if (typeof document !== 'undefined') {
     if (await preparation.prepareWindow(state.revealed ? null : state.reqId)) state.revealed = true;
   }
 
-  /** 换会话与显式刷新清空准备结论、保留投影与末尾回复缓存。 */
+  /** 换会话与显式刷新清空准备结论、保留投影、`+N` 目标清单与末尾回复缓存。
+   *  随后窗口整体重投影，行缓存按新步骤重建，清单随渲染重新登记。 */
   function resetReading() {
     preparation.reset();
     traceModel.reset();
     changedReads.clear();
+    moreTargets.reset();
   }
 
   /**
@@ -881,9 +905,8 @@ if (typeof document !== 'undefined') {
    *  重建时更换，而重建必先清模型与缓存。 */
   const rowHtmlCache = new WeakMap();
   /** `+N` 的完整目标清单：只在悬停/聚焦时读取，行内不落这份数据。
-   *  键是步骤稳定键；超过 500 条整体清空，只影响翻旧会话时的悬停补齐。 */
-  /** @type {Map<string, string[]>} */
-  const moreTargets = new Map();
+   *  生命周期见 createMoreTargets：跟随当前会话的渲染行，换会话整表重置。 */
+  const moreTargets = createMoreTargets();
   /** @param {RequestRow} r @param {import('./trace-view.js').TraceStep[]} steps
    *  @param {number} ordinal @param {boolean} fallback @returns {string[]} */
   function rowHtmls(r, steps, ordinal, fallback) {
@@ -895,8 +918,7 @@ if (typeof document !== 'undefined') {
       if (step.kind !== 'tool') continue;
       const targets = summaryTargets(step.toolInput ?? '');
       if (targets === null) continue;
-      if (moreTargets.size > 500) moreTargets.clear();
-      moreTargets.set(step.key, targets);
+      moreTargets.remember(step.key, targets);
     }
     rowHtmlCache.set(steps, { ordinal, fallback, htmls });
     return htmls;
@@ -2543,7 +2565,7 @@ if (typeof document !== 'undefined') {
   }
   /** @param {HTMLElement} anchor */
   function showMore(anchor) {
-    const list = moreTargets.get(anchor.dataset.moreKey ?? '');
+    const list = moreTargets.listOf(anchor.dataset.moreKey ?? '');
     if (list === undefined) return;
     clearTimeout(moreHoverTimer);
     const pop = morePopEl();
