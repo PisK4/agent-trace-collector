@@ -8,11 +8,11 @@ Status: proposed
 
 2026-11-04 按条目状态行、修复记录与提交历史重新核实的结论是：11-03 那批 **26 条已判关闭、1 条部分关闭（F28 仅 title 通道）、6 条仍未关闭**。已关闭的 26 条是 F01/F02/F04/F05/F06/F08/F09/F10/F11/F12/F13/F14/F16/F17/F18/F20/F21/F22/F23/F24/F25/F26/F27/F29/F30/F31；未关闭的是 F03/F07/F15/F19/F32 与 F28 的 `turn_ref` 子项。这些未关闭项全部承继到本篇，另有一条 11-03 遗留的 F01 残余项（`verify-cutover` 只读预检）一并承继。
 
-11-03 篇里的长派生调查（原文编号 F33）本身是 **2026-11-04** 的取证，不是 11-03 的体检结果，已完整移入本篇 **F07**。它是本篇成文时唯一的新发现；此后系统巡查又补入 **F09–F31**（均标「11-04 新发现（系统巡查）」；第一轮 F09–F17、第二轮 F18–F24、第三轮 F25–F31），F01–F08 的既有结论未因此改写；只在 F06/F09/F11/F12/F16 上追加了第二轮证据、在 F07/F22 上追加第三轮交叉印证与实测，结论不变。
+11-03 篇里的长派生调查（原文编号 F33）本身是 **2026-11-04** 的取证，不是 11-03 的体检结果，已完整移入本篇 **F07**。它是本篇成文时唯一的新发现；此后系统巡查又补入 **F09–F36**（均标「11-04 新发现（系统巡查）」；第一轮 F09–F17、第二轮 F18–F24、第三轮 F25–F31、第四轮 F32–F36），F01–F08 的既有结论未因此改写；只在 F06/F09/F11/F12/F16 上追加了第二轮证据、在 F07/F22 上追加第三轮交叉印证与实测，结论不变。
 
 编号从 F01 重新开始，每条在标题上注明「承继自 2026-11-03 #Fxx」或「11-04 新发现」。正文引用旧编号时一律写成「旧编号 Fxx」并给出旧篇链接，避免两套 F 号混用。全部证据来自只读检查与 `VACUUM INTO` 副本；未改生产库、未重启服务、未 push。
 
-## 汇总（F01–F31）
+## 汇总（F01–F36）
 
 | 编号 | 来源 | 严重度 | 一句话现象 | 证据等级 | 状态 | 修复依赖 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -47,6 +47,11 @@ Status: proposed
 | F29 | 11-04 新发现（系统巡查，第三轮） | P2 | 前端 `moreTargets` 超过 500 全表清空，旧 `+N` 弹层静默失效 | 实测+代码核查 | 待修（等统一修复窗口） | 独立前端小笔；先在最长会话复现 |
 | F30 | 11-04 新发现（系统巡查，第三轮） | P2 | 备份「恢复成功」不等于「可服务」：白名单测试只改版本号，无迁移 smoke check | 代码核查 | 待修（等统一修复窗口） | 独立小笔；先定 smoke 命令与旧库样本 |
 | F31 | 11-04 新发现（系统巡查，第三轮） | P3 | 备份注释三处口径矛盾；DB-only `backup` 无白名单/无盐，仅以 `ingestion_restorable:false` 提示 | 代码核查 | 待修（等统一修复窗口） | 独立文档小笔，与 F30 同批评审 |
+| F32 | 11-04 新发现（系统巡查，第四轮） | P3 | CLI 日期窗口按 UTC 解析，`day` 列按本地时区，Asia/Shanghai 下相差 8 小时 | 实测+代码核查 | 待修（等统一修复窗口） | 独立小笔；只改入参解析，不动 `day` 列 |
+| F33 | 11-04 新发现（系统巡查，第四轮） | P3 | `/api/stats` 缓存无 TTL，只按进程内写计数失效；外部进程写库后可无限期读旧值 | 代码核查（外部写未实测） | 待修（等统一修复窗口） | 独立小笔；与 F36 的并发写前提相关 |
+| F34 | 11-04 新发现（系统巡查，第四轮） | P2 | `maintain verify` 无论 `integrity`/悬空块/重复证据如何都输出 `ok:true`、退出 0 | 代码核查 | 待修（等统一修复窗口） | 先补 CLI 集成测试，再定 `ok`/退出码口径 |
+| F35 | 11-04 新发现（系统巡查，第四轮） | P2 | `purge-metadata --before` 只做正则校验；未来或非法日期会删掉全部 77,417 条请求 | 实测+代码核查 | 待修（等统一修复窗口） | 独立小笔；排在所有 purge 执行之前 |
+| F36 | 11-04 新发现（系统巡查，第四轮） | P2 | 两个 backfill 脚本在派生「无进展」时空转死循环；`rebuild` 有守卫，脚本没有 | 代码核查（当前 1 dirty / 0 purpose-pending，未触发） | 待修（等统一修复窗口） | 独立小笔；照抄 `derive_no_progress` 守卫 |
 
 ## 承继映射（2026-11-03 → 2026-11-04）
 
@@ -519,6 +524,68 @@ Status: proposed
 - **建议方向**：合并成一条权威注释；把字段改成 `usable_for_restore` 或让 DB-only 命令在 `ok:false` 下返回，避免只读 `ok` 的消费者误判；与 F30 同批评审。
 - **未证实点**：没有外部自动化消费这两个字段的实际样本。
 
+### F32 CLI 日期窗口按 UTC 解析，`day` 列按本地时区（11-04 新发现，系统巡查，第四轮）
+
+- **现象**：`hook-delivery` 的 `--since` / `--until` 接受「epoch 毫秒或 ISO 8601」；只写日期时 `Date.parse('2026-11-04')` 按 UTC 零点解析，而账本/路由的 `day` 列与页面都按宿主本地时区。Asia/Shanghai 下两者相差 8 小时。
+- **证据**：
+  - [src/maintenance/cli.ts L39-46](../../../../src/maintenance/cli.ts#L39-L46)：`momentFlag` 只区分纯数字与 `Date.parse`，没有时区归一；[L130-137](../../../../src/maintenance/cli.ts#L130-L137) 把它直接交给 `assertWindow`。
+  - [src/maintenance/delivery.ts L83-89](../../../../src/maintenance/delivery.ts#L83-L89)：窗口按 `started_ms`（epoch）切，`since`/`until` 不做本地日换算；[L165-168](../../../../src/maintenance/delivery.ts#L165-L168) 只校验有限值与先后。
+  - [src/format.ts L8-11](../../../../src/format.ts#L8-L11)：`localDay` 用 `getFullYear/getMonth/getDate`，明确「不引入 UTC 换算」。
+  - 实测（Asia/Shanghai）：`Date.parse('2026-11-04')` = **1793750400000**，本地 `2026-11-04 00:00` = **1793721600000**，相差 **-8 h**；生产 `request.day` 与本地日不一致 **0** 行，与 UTC 日不一致 **18,530** 行，说明 `day` 确实是本地语义。
+- **影响**：`--since 2026-11-04 --until 2026-11-05` 实际覆盖本地 **11-04 08:00 → 11-05 08:00**，漏掉本地日的前 8 小时、带入次日的前 8 小时；误报缺证据的 hook 行。混用 `'2026-11-04 00:00:00'`（V8 按本地解析）与 `'2026-11-04'`（UTC）会得到两套口径。
+- **严重度**：P3（诊断命令的窗口偏移，不改数据）。
+- **建议方向**：日期简写按本地日解析（显式拼 `T00:00:00` 或用本地构造），或在用法里要求带时区偏移的完整 ISO；测试固定 `TZ=Asia/Shanghai` 断言窗口端点。
+- **未证实点**：没有把一次真实 `hook-delivery` 输出与同窗口的本地 `day` 计数对照；运维实际输入习惯未知。
+
+### F33 `/api/stats` 缓存无 TTL，只按进程内写计数失效（11-04 新发现，系统巡查，第四轮）
+
+- **现象**：健康统计结果缓存在 `WeakMap` 里，命中条件是 `store.writeStats.count` 未变；没有时间上限，也不感知别的进程写库。
+- **证据**：
+  - [src/queries/stats.ts L42-50](../../../../src/queries/stats.ts#L42-L50)：只比较 `cached.generation === store.writeStats.count`；[L52-77](../../../../src/queries/stats.ts#L52-L77) 的 `computeStats` 在 `store.read` 上连发 **10 条**独立查询，没有包一个读事务。
+  - [src/store.ts L362-379](../../../../src/store.ts#L362-L379)：`writeStats.count` 只在 `store.write` 的 `finally` 里自增，外部进程的写不会改它。
+  - [scripts/backfill-summary-facts.ts L61-76](../../../../scripts/backfill-summary-facts.ts#L61-L76)：脚本自己 `new Database` 并 `read: db`，**不取维护锁**；同类脚本还有 `scripts/backfill-omp-semantics.ts`。运维手册要求停服，但脚本本身不强制。
+- **影响**：服务进程内 `computeStats` 是同步的，不会被本进程写打断；风险来自外部写：脚本/手工 SQL 在服务运行时写库，`count` 不变，缓存不会失效，`/api/stats` 可无限期返回旧值；若外部写恰好落在 10 条查询之间，还可能把跨快照的混合值按旧 generation 缓存住，直到下一次进程内写或重启。
+- **严重度**：P3（诊断数据过期，需外部写才触发；正常停服流程不受影响）。
+- **建议方向**：给缓存加 TTL（例如 5–10 s），或把「外部写」也纳入失效标记（持久化 generation / `PRAGMA data_version`）；至少把 `computeStats` 包进 `store.read.transaction`，避免混合快照。
+- **未证实点**：没有在服务运行时用第二个进程写库并抓取 `/api/stats` 前后值；实际混合窗口未计时。
+
+### F34 `maintain verify` 无论检查结果如何都输出 `ok:true`、退出 0（11-04 新发现，系统巡查，第四轮）
+
+- **现象**：`verify` 的 JSON 固定以 `ok:true` 开头，命令固定 `return 0`；`integrity` 只有非 `ok` 项、`dangling_blocks` 或 `duplicate_evidence` 大于 0 时也不改变成功口径。
+- **证据**：
+  - [src/maintenance/cli.ts L159-161](../../../../src/maintenance/cli.ts#L159-L161)：`out(JSON.stringify({ ok: true, ...verifyDatabase(dbPath) }))` 后直接 `return 0`。
+  - [src/maintenance/verify.ts L17-37](../../../../src/maintenance/verify.ts#L17-L37)：报告包含 `integrity`、`dangling_blocks`、`duplicate_evidence`、`pending_derivations`，函数本身不抛错。
+  - [docs/operations.md L161-169](../../../../docs/operations.md#L161-L169)：文档写明「`integrity` 只有一项 `ok` 才算通过」，悬空块/重复证据不为 0 说明有问题；[tests/maintenance.test.ts L118-138](../../../../tests/maintenance.test.ts#L118-L138) 只断言报告字段，没有 CLI 退出码用例。
+- **影响**：launchd/CI/运维脚本若以退出码或 `ok` 判定，会把「完整性损坏」「有悬空块」「有重复证据」当成通过；`pending_derivations` 非 0 可能只是停机前积压，不能单独判失败，因此需要区分「健康结论」与「报告字段」。
+- **严重度**：P2（安全门禁的假阳性；不改数据，但会让损坏库继续服务）。
+- **建议方向**：`integrity !== ['ok']`、`dangling_blocks > 0`、`duplicate_evidence > 0` 时输出 `ok:false` 并退出 1；`pending_derivations` 保持信息字段或另加 `--strict`；补一个「坏库/悬空块 → 退出 1」的 CLI 集成测试。
+- **未证实点**：没有对生产库跑完整 `integrity_check`（4.9 GB，避让 IO）；当前库是否健康未知，但本条的缺陷与当前状态无关。
+
+### F35 `purge-metadata --before` 只做正则校验，未来或非法日期会删掉全部请求（11-04 新发现，系统巡查，第四轮）
+
+- **现象**：`--before` 只校验 `YYYY-MM-DD` 形状，不校验日历合法性，也不限制「不得晚于今天」；删除条件是字符串比较 `day < ?`。
+- **证据**：
+  - [src/maintenance/cli.ts L274-278](../../../../src/maintenance/cli.ts#L274-L278)：`!/^\d{4}-\d{2}-\d{2}$/.test(before)` 之外没有上界；[L286-298](../../../../src/maintenance/cli.ts#L286-L298) 预览后直接 `purgeMetadata`，`--approval-id` 只要求非空。
+  - [src/maintenance/purge.ts L47-53](../../../../src/maintenance/purge.ts#L47-L53)：`SELECT ... FROM request WHERE day < ?`，按字符串比较，不做日期解析。
+  - 实测（只读，库仍在增长）：生产 `request` 共 **77,417** 行，`day < '2027-01-01'` 与 `day < '2026-13-01'` 都命中 **77,417** 行（100%）；当前 `day` 范围 **2026-08-21 → 2026-11-04**。
+- **影响**：一次 `--before 2027-01-01` 或 `--before 2026-13-01` 的 `--apply` 会在一个事务里删掉全部请求、证据、块与费用观测；预览只把 `requests` 显示为全量，没有硬停。`--approval-id` 不校验内容，挡不住这类输入错误。
+- **严重度**：P2（不可逆数据删除；需要 `--apply`，但输入错误很容易发生）。
+- **建议方向**：解析日期并拒绝非法日历（`2026-02-31`、`2026-13-01`）；拒绝 `before` 晚于当前本地日或晚于库内 `MAX(day)`；全量删除要求额外 `--allow-all` 或二次确认；补 CLI 用法测试。
+- **未证实点**：没有实际执行删除；「全部命中」是只读计数。没有历史误用记录。
+
+### F36 两个 backfill 脚本在派生「无进展」时空转死循环（11-04 新发现，系统巡查，第四轮）
+
+- **现象**：`backfill-summary-facts` 与 `backfill-omp-semantics` 用 `for (;;) { drainDeriveEntry; if (remaining === 0) break; }` 排空队列；没有「本轮没处理任何组」的守卫，也没有超时。
+- **证据**：
+  - [scripts/backfill-summary-facts.ts L87-92](../../../../scripts/backfill-summary-facts.ts#L87-L92) 与 [scripts/backfill-omp-semantics.ts L103-108](../../../../scripts/backfill-omp-semantics.ts#L103-L108)：只看 `result.remaining === 0`，不看 `processed` / `groups.length` / `purpose_processed`。
+  - [src/derive/unit.ts L62](../../../../src/derive/unit.ts#L62) 在 purpose 批次无进展时 `break`；[L73](../../../../src/derive/unit.ts#L73) 找不到候选组 `break`；[L88](../../../../src/derive/unit.ts#L88) 计算返回 `null` `break`；[L93](../../../../src/derive/unit.ts#L93) 落库返回 `null` `break`；[L135-137](../../../../src/derive/unit.ts#L135-L137) 重新计算 `remaining`。这些 `break` 都可能留下 `remaining > 0`。
+  - [src/maintenance/rebuild.ts L48-51](../../../../src/maintenance/rebuild.ts#L48-L51)：同类循环已有守卫——`remaining > 0 && groups.length === 0 && purpose_processed === 0` 时抛 `derive_no_progress`。
+  - 当前生产 `derive_queue`：clean **1,467** 行、dirty **1** 行（`["session","f2fea45a-..."]`，17:59:06 进入 dirty，`input_revision` 10,191 / `published_revision` 9,867）、`actor_state='known' AND purpose_pending=1` 的请求 **0** 行；没有 blocked/error 组，因此本轮未触发。
+- **影响**：一旦某个组被选中后 `computeDeriveGroup` 因 `waiting > 0`（TOCTOU 新挂入的 purpose 行）或组消失返回 `null`，脚本会在原地无限重试：CPU 空转、不退出、没有阶段输出；若与服务并行还会争抢写通道。脚本没有取维护锁，这一并发场景可达。
+- **严重度**：P2（触发后无退出、无超时；当前 1 个 dirty、0 个 purpose-pending，未进入 blocked 分支）。
+- **建议方向**：照抄 `rebuild` 的三元守卫并抛 `derive_no_progress`；加最大轮次或墙钟超时；脚本入口取维护锁或至少拒绝服务运行时的调用。
+- **未证实点**：没有构造出「选中后变 waiting」的测试用例；当前 dirty 组可正常排队，未实际跑到该分支。
+
 ## 前提更正
 
 早前笔记写的备份门槛「`1.1×` + 64 MiB」与代码不符：实际门槛是 **`1.1×`（DB 备份）** 与 **`1.1×` + 4,096 B（bundle）**，见 [src/maintenance/backup.ts L116](../../../../src/maintenance/backup.ts#L116) 与 [L270](../../../../src/maintenance/backup.ts#L270)；单位是**字节**，不是 MiB。本条只在新篇记录，**不改 11-03 归档篇与 F23 设计笔记的正文**。
@@ -536,6 +603,9 @@ Status: proposed
 5. 全仓无 `.skip` / `.todo` / `.only`（用文本扫描确认）。
 6. 备份恢复的白名单测试是「改版本号」而非真旧 schema：[tests/maintenance.test.ts L674-675](../../../../tests/maintenance.test.ts#L674-L675) / [L688-689](../../../../tests/maintenance.test.ts#L688-L689) 只 `PRAGMA user_version=7/6`，结构仍是 v12；v8/9/10/11 无用例（对应 F30）。
 7. 前端 `+N` 无大数据量 DOM 测试：全仓没有超过 500 个 `moreTargets` 目标的用例，`clear()` 与 `showMore` 静默返回都只能在真实最长会话（4,433 请求）里触发（对应 F29）。
+8. `maintain` 的 CLI 退出码没有集成测试：[tests/maintenance.test.ts L118-138](../../../../tests/maintenance.test.ts#L118-L138) 只断言报告字段，不断言 `verify` 在坏库/悬空块时退出 1，也没有 `purge-metadata` 的日期非法用例（对应 F34/F35）。
+9. 时区边界无用例：`localDay`、`momentFlag`、`assertWindow` 没有固定 `TZ` 的测试，日期简写与本地日窗口的偏移（对应 F32）只能靠人工发现。
+10. 缓存与脚本无进展无用例：没有「外部进程写库后 `/api/stats` 是否刷新」的测试，也没有 backfill 排空「无进展即失败」的测试（对应 F33/F36）。
 
 ## 本轮判为正常（巡查结论）
 
@@ -567,9 +637,18 @@ Status: proposed
 - 备份与 `event_loop_max` **无因果证据**：仓库无自动备份任务，`backupBundle/backupDatabase` 都要求服务停写；`monitor/samples` 只从 11-03 开始，11-01 22:35 那次手工 `.backup` 不在样本内。最多只能算 IO 争用，不能算出服务内事件循环长尾，**证据不足，只登记不定性**。
 - 前端极端数据主路径正常：最长会话 `/summary` **52,207 B / 226.8 ms**，数组最大 `paths` 180、`read_paths` 162、`failures` 80（均未触 1000/200 上限）；`requests?limit=100` **106,750 B / 5.9 ms**；`/turns` **1,036 B / 238.3 ms**（与 F10/F15 同源，不另立条目）。
 
+第四轮补充（时间语义 / 读快照 / CLI）：
+
+- `day` 与本地日一致：生产 `request` **77,417** 行，`day` 与 `localDay(started_ms)` 不一致 **0** 行；与 UTC 日不一致 **18,530** 行，说明 `day` 是有意的本地语义（范围 **2026-08-21 → 2026-11-04**）。
+- 同毫秒排序稳定：`started_ms` 相同的分组 **313** 组、最大 **12** 行；会话列表按 `(last_ms, conv_key)`、请求分页按 `(started_ms, req_id)`、turn 与淘汰按 `req_id` 兜底；`positionKey` 用严格 `<`，同毫秒行被排除在前缀发布之外（保守，不乱序）。
+- 读接口单快照：`listSessions` 用 `.deferred()` 读事务（[src/queries/sessions.ts L247-253](../../../../src/queries/sessions.ts#L247-L253)）；请求/回合/摘要/正文读取都在各自的 `store.read.transaction` 内；唯一跨 10 条查询的是 `getStats`（见 F33），正文字节分块测量则是**有意近似**（注释已写明）。
+- 维护锁现状正常：`maintenance.lock` 当前不存在；CLI 遇 pid 已死的陈旧锁会清理，服务启动遇锁则拒绝并要求人工确认，与 [docs/operations.md L375-381](../../../../docs/operations.md#L375-L381) 一致。
+- 脚本退出码正常的部分：`scripts/monitor.ts` 陈旧样本退 1、`scripts/service.ts stop` 等到 socket 消失才返回；异常路径都有非零退出（F36 的 backfill 是例外）。
+- 派生队列现状：`derive_queue` clean **1,467**、dirty **1**、blocked/error **0**；`actor_state='known' AND purpose_pending=1` **0** 行，F36 的触发条件未出现。
+
 ## Proposal
 
-按「先补证据、再动写窗口、最后做结构性性能与可验证性」排序。F03/F04/F05/F08 与 F13/F16/F18/F22 的取证都是只读工作，可与任何写窗口并行。**F09 是唯一涉及历史数据重判的写操作，单列在性能波之前。** 第二轮条目按性质归口：F19 并入 F11+F12 的保留/隐私批，F20/F21 合为「HTTP 契约小修」，F23 归派生可观测性，F24 归 `maintain purge` 估算修正，F22 只观察。第三轮：F25+F26+F27+F28 归「身份/合并不变量」，F29 是前端独立小笔，F30+F31 是备份可验证性与口径。
+按「先补证据、再动写窗口、最后做结构性性能与可验证性」排序。F03/F04/F05/F08 与 F13/F16/F18/F22 的取证都是只读工作，可与任何写窗口并行。**F09 是唯一涉及历史数据重判的写操作，单列在性能波之前。** 第二轮条目按性质归口：F19 并入 F11+F12 的保留/隐私批，F20/F21 合为「HTTP 契约小修」，F23 归派生可观测性，F24 归 `maintain purge` 估算修正，F22 只观察。第三轮：F25+F26+F27+F28 归「身份/合并不变量」，F29 是前端独立小笔，F30+F31 是备份可验证性与口径。第四轮：F35/F34/F36 是 CLI 与脚本失败路径（F35 先于任何 purge 执行），F32 是时间窗口口径，F33 是读侧缓存失效口径；五条彼此独立，但都排在结构性性能改动之前。
 
 ### 修复顺序
 
@@ -613,16 +692,24 @@ Status: proposed
 21. **F20 + F21（P2，HTTP 契约小修）**：`decodeURIComponent` 失败映射 400；`writer_failed` 响应只给固定枚举码，原文只进结构化日志。两条同批、各一笔。
 22. **F24（P2，`maintain purge` 估算修正）**：merge 时一并写 `body_bytes`，或 purge 用块表反算；验收用「可回收字节 vs 实际释放」对照。
 
+**第 3.5 波（CLI 失败路径与时间语义，独立小笔）**
+
+23. **F35（P2，purge 日期上界）**：解析并校验日历日期，拒绝未来日与非法日；全量命中要求额外 `--allow-all` 或二次确认；**排在所有 purge 执行之前**，补 CLI 用法测试。
+24. **F34（P2，verify 退出码）**：`integrity !== ['ok']`、`dangling_blocks > 0`、`duplicate_evidence > 0` 时输出 `ok:false`、退出 1；`pending_derivations` 保持信息字段；补「坏库/悬空块 → 退出 1」的 CLI 集成测试。
+25. **F36（P2，backfill 无进展）**：照抄 `rebuild` 的 `derive_no_progress` 守卫，加最大轮次或墙钟超时；脚本入口取维护锁，或至少拒绝服务运行时调用。
+26. **F32（P3，日期窗口）**：日期简写按本地日解析，或要求带时区偏移的完整 ISO；测试固定 `TZ=Asia/Shanghai` 断言窗口端点；不改 `day` 列。
+27. **F33（P3，`/api/stats` 缓存）**：加 TTL，或把外部写纳入失效标记；把 `computeStats` 包进读事务，避免跨快照混合；不改读模型。
+
 **第 4 波（前端与备份可验证性，独立小笔）**
 
-23. **F29（P2，前端 `+N`）**：把 `moreTargets` 改成有界 LRU 或按可见行清理，会话切换重置；补 600 条目标的 DOM 测试，并在最长会话（4,433 请求）复现一次。
-24. **F30（P2，备份 smoke）**：`restoreBundle` 末尾加只读 `openStore` + `user_version` + 关键表计数；测试补真正的 v6/8/10/11 旧 schema 样本，不再只改版本号。
-25. **F31（P3，备份口径）**：合并三处矛盾注释；DB-only 输出改用 `usable_for_restore` 或 `ok:false`；与 F30 同批评审。
+28. **F29（P2，前端 `+N`）**：把 `moreTargets` 改成有界 LRU 或按可见行清理，会话切换重置；补 600 条目标的 DOM 测试，并在最长会话（4,433 请求）复现一次。
+29. **F30（P2，备份 smoke）**：`restoreBundle` 末尾加只读 `openStore` + `user_version` + 关键表计数；测试补真正的 v6/8/10/11 旧 schema 样本，不再只改版本号。
+30. **F31（P3，备份口径）**：合并三处矛盾注释；DB-only 输出改用 `usable_for_restore` 或 `ok:false`；与 F30 同批评审。
 
 **第 5 波（排查型）**
 
-26. **F01（P2，hook 缺失）**：排查 claude 侧 hook 安装与 `response_id` 回传；与 F06 的孤儿队列同一排查线。
-27. **F02（P1，探针尖峰）**：给探针加分段计时；用 F07-a 的组标识把长派生轮次与 17:20–17:24 的停顿窗口对齐。
+31. **F01（P2，hook 缺失）**：排查 claude 侧 hook 安装与 `response_id` 回传；与 F06 的孤儿队列同一排查线。
+32. **F02（P1，探针尖峰）**：给探针加分段计时；用 F07-a 的组标识把长派生轮次与 17:20–17:24 的停顿窗口对齐。
 
 ### 依赖图（文字版）
 
@@ -641,6 +728,11 @@ F27 独立小笔（写窗口）；与 F25/F26 同属身份层，但不合并
 F28 独立小笔；先确认上游是否写裸 32 hex，未确认只锁现状
 F29 前端独立小笔，不依赖后端；先用最长会话复现 500 触顶
 F30 + F31 同批评审：F30 加 restore smoke，F31 改注释与 DB-only 口径；不涉生产数据
+F32 独立小笔；只改 CLI 日期解析与 TZ 测试，不动 `day` 列
+F33 独立小笔；加 TTL 与读事务即可，外部写前提与 F36 同源但不合并
+F35 独立小笔；先于任何 purge 执行，日期校验 + 全量门槛
+F34 独立小笔；先补 CLI 集成测试，再改 `ok`/退出码
+F36 独立小笔；照抄 `rebuild` 的 `derive_no_progress` 守卫，与服务并发前提同 F33
 F13（同槽重复）要等 response id 证据补齐才能断言同源；未确认前不改 ingest
 F16 要等客户端重试策略确认；未确认前不假定无数据损失
 F06（unknown-actor 进派生）→ 存量 ["request" 卡数据层收敛（展示已由 tool_event 折叠兜住）
@@ -682,6 +774,11 @@ F02（探针尖峰）与 F01（hook 缺失）只在排查层关联，互不阻�
 - **F29**：最长会话翻页超过 500 个目标后，先前渲染的 `+N` 仍能弹出；会话切换后 Map 重置；有 600 条目标的 DOM 测试。
 - **F30**：`restore` 后自动 smoke（`openStore` + `user_version` + 关键表计数）；v6/8/10/11 至少各有真实旧 schema 用例；恢复失败在 `restore` 阶段暴露。
 - **F31**：`RESTORABLE_SCHEMA_VERSIONS` 只保留一条权威注释；DB-only 输出不再单靠 `ok:true` 表达可用性；读 `ok` 的消费者不会误判。
+- **F32**：`--since 2026-11-04 --until 2026-11-05` 在 `TZ=Asia/Shanghai` 下覆盖本地 **11-04 00:00 → 11-05 00:00**；日期简写与完整 ISO 的口径写进用法；测试固定时区断言端点。
+- **F33**：外部进程写库后，`/api/stats` 在 **≤10 s** 内反映新值；`computeStats` 的 10 条查询落在同一读快照；无 TTL 的旧缓存不再存在。
+- **F34**：`integrity` 非 `ok`、`dangling_blocks > 0`、`duplicate_evidence > 0` 任一成立时，`maintain verify` 输出 `ok:false`、退出 **1**；`pending_derivations > 0` 不单独判失败；CLI 集成测试覆盖坏库与悬空块。
+- **F35**：`--before 2027-01-01`、`2026-13-01`、`2026-02-31` 均被拒绝（用法错误、退出非 0）；全量命中必须额外确认；只读计数与执行前预览一致。
+- **F36**：无进展时脚本在 **≤1 轮** 或 **≤30 s** 内以 `derive_no_progress` 退出，不再无限空转；当前 1,467 个 clean + 1 个 dirty、0 个 purpose-pending 的基线不变。
 
 ## Risks
 
@@ -710,6 +807,11 @@ F02（探针尖峰）与 F01（hook 缺失）只在排查层关联，互不阻�
 - **F30 加 smoke 会改变 `restore` 的语义**：恢复后自动 `openStore` 会触发迁移，也就意味着 `restore` 从「复制」变成「复制 + 首开」，失败点前移；要确认运维流程能接受这一点（恢复失败在 restore 阶段暴露，而不是首次启动）。
 - **F30 的旧 schema fixture 成本高**：要真正覆盖 6/8/10/11，需要保留历史 schema 建表脚本或快照；只改版本号的做法看似省事，正是本轮 F30 的成因，不能再用它凑覆盖。
 - **F31 改字段名会影响现有消费者**：`ok` 改成 `usable_for_restore` 或让 DB-only 返回 `ok:false`，可能破坏只读 `ok` 的脚本；本轮没有外部消费样本，改之前先确认调用方。
+- **F32 改成本地日会改变已有脚本的窗口**：如果外部脚本一直按 UTC 日期调用，改成按本地日会让同一条命令多覆盖/少覆盖 8 小时；要同时给出迁移说明，或在输出里回显解析后的 epoch 区间。
+- **F33 只加 TTL 仍会读到混合快照**：TTL 解决「无限期旧值」，不解决 10 条查询跨快照；两者要一起做，否则只是把不一致窗口缩短。
+- **F34 把 `pending_derivations` 也算失败会误伤停机场景**：停机前队列有积压是正常的，门禁若把它算红会让每次停服都报错；必须把「完整性/悬空/重复」与「队列积压」分开。
+- **F35 加「不得晚于今天」会挡掉合法的未来日预清理**：若确实需要提前清理未来日期（例如导入数据已知），要留显式 `--allow-future`，不能一刀切。
+- **F36 加超时可能把慢但正常的组判死**：大组派生本身可能超过 30 s；超时应按「连续无进展轮次」而不是总墙钟，否则会误报。
 
 ## Alternatives considered
 
@@ -737,7 +839,13 @@ F02（探针尖峰）与 F01（hook 缺失）只在排查层关联，互不阻�
 - **F30 不在 `restore` 里加 smoke，另开 `verify-restore` 命令**：把「复制」和「可用性判断」分开，语义更干净，但运维多一步、容易跳过；落选为次选，若运维流程不接受自动迁移，再退回这条。
 - **F30 只把白名单缩到 `[12]`**：能立刻消除「声明可恢复但没测过」的口径，但会把真实旧库挡在门外；落选，先补真实旧 schema 测试再决定白名单宽度。
 - **F31 只改注释、保留 DB-only 的 `ok:true`**：文档不再矛盾，但自动化仍会误判；落选，注释与字段口径一起改。
+- **F32 把 `day` 列改成 UTC 日期**：能统一 CLI 与列口径，但要迁移全部历史 `day`，且页面日期会整体偏移；落选，只改 CLI 入参解析。
+- **F33 每次 `/api/stats` 都全量重算**：彻底消除缓存不一致，但把 10 条查询压到每个请求上，监控轮询会放大 IO；落选，加 TTL + 读事务。
+- **F33 只把 `statsCache` 删掉、不做 TTL**：等价于全量重算，代价同上；落选。
+- **F34 让 `verify` 遇到任何非零计数都退出 1**：把 `pending_derivations` 也当失败，停机场景会误报；落选，按「完整性/悬空/重复」三项判定。
+- **F35 只靠预览让人发现全量命中**：预览确实显示 `requests=77,417`（测量时），但自动化/赶时间的操作员会直接 `--apply`；落选，输入侧必须拒绝。
+- **F36 只给脚本加 `sleep`**：空转变慢转，仍不退出；落选，必须有「无进展即失败」的判据。
 
-## 第四轮起的前置提醒
+## 下一轮起的前置提醒
 
-本轮没有第四轮条目；以上 F25–F31 的「未证实点」应作为下一轮巡查的输入：弱规则正反例、裸 32 hex 上游形态、真实旧 schema 恢复、最长会话 `+N` 触顶，四项都只需要只读数据或合成样本即可补齐。
+第四轮已补入 F32–F36；此前 F25–F31 的「未证实点」仍应作为下一轮巡查的输入：弱规则正反例、裸 32 hex 上游形态、真实旧 schema 恢复、最长会话 `+N` 触顶。第四轮新增的四项未证实点：真实 `hook-delivery` 窗口与本地日计数对照、外部进程写库后的 `/api/stats` 陈旧窗口、生产库 `integrity_check` 当前状态、backfill「选中后变 waiting」的复现；前两项可用只读/临时实例补齐，后两项需要一次维护窗口。
