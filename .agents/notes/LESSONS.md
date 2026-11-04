@@ -105,6 +105,11 @@
 - 防护：预算用 `fileCount`/`bytes` 独立变量，`total.*` 只做输出；内层循环用 `counted` 标记首块；新增循环后先跑 `bun run typecheck` 与多块集成测试。
 - Seen 1× (2026-11-04).
 
+**延迟发调用的适配器开 `mutable` 后，同组行跨批次到达会按重放顺序刷新正文。**
+- 证据：2026-11-04 WorkBuddy 把同一 `messageId` 的 reasoning / function_call / assistant 归成一笔；测试让 function_call 下一批才追加，重放按 `byte_offset` 排序，刷新后的 `replyContent` 把 tool_use 排在 output_text 之后，与文件里的 `parentId` 链顺序相反。
+- 防护：窄测试加一条「同 reply 的行分批到达」，断言刷新后正文含全部内容块，别把内容块顺序写成精确相等；真要按原始链还原顺序，先确认链是否指向稳定的回复根，别默认重放等于文件顺序。
+- Seen 1× (2026-11-04).
+
 ## 查询与并发
 
 **守卫类修复要按「守卫放行后的每组成本 × 预计放行面」复测退化，不能只测零命中态。**
