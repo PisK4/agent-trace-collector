@@ -161,6 +161,7 @@ export const dict = {
 
   /* rail-facts:计时与用量读数 */
   '首 token': 'First token',
+  '首个文本': 'First text',
   'TTFT：到第一个内容；第一个内容可能是文本、推理或工具调用': 'TTFT: to the first content; the first content may be text, reasoning, or a tool call',
   '总': 'Total',
   '从请求到回复结束': 'From request to reply end',
@@ -298,6 +299,9 @@ export const dict = {
   '缺失原因：{reason}。': 'Missing reason: {reason}.',
   '在中间选择一个 Request。': 'Pick a request in the middle column.',
   '（未在窗口）': '(not in window)',
+  'req {id}': 'req {id}',
+  '轮次不可用': 'Turn unavailable',
+  '重新结算后这一轮不在列表里；点击轨迹任意行返回请求态。': 'After re-settlement this turn is no longer in the list; click any trace row to return to the request view.',
 
   /* app.js:读数页与工具页 */
   '本次回复': 'This reply',
@@ -374,6 +378,7 @@ export const dict = {
   '<i>首字</i> <b>{v}</b>': '<i>First token</i> <b>{v}</b>',
   '<i>平均</i> <b>{v}</b>': '<i>Average</i> <b>{v}</b>',
   '{n} 失败': '{n} failed',
+  '{n} 次失败': '{n} failed',
   '点击定位 {name} 的 {n} 次调用': ({ name, n }) => `Click to locate ${n === 1 ? '1 call' : `${n} calls`} of ${name}`,
   '{n} 次未配对': ({ n }) => (n === 1 ? '1 unpaired' : `${n} unpaired`),
   '{n} 次结果未判定（不计入失败）': ({ n }) => `${n === 1 ? '1 result' : `${n} results`} undetermined (not counted as failures)`,
