@@ -14,6 +14,8 @@ const MESSAGES_KEY: Record<string, MessagesKey> = {
   anthropic: 'messages',
   chat: 'messages',
   responses: 'input',
+  // droid 转录重建的消息数组与 Anthropic Messages 同形。
+  'droid-session': 'messages',
 };
 
 /** 已知协议各有一行；名单外协议沿用 `messages`，只在未适配状态使用。 */
@@ -203,7 +205,7 @@ function responsesCalls(reply: unknown): WireCall[] {
 
 /** 回复侧工具调用。名单外协议不猜，返回空表。 */
 export function wireCallsOf(protocol: string, reply: unknown): WireCall[] {
-  if (protocol === 'anthropic') return anthropicCalls(reply);
+  if (protocol === 'anthropic' || protocol === 'droid-session') return anthropicCalls(reply);
   if (protocol === 'chat') return chatCalls(reply);
   if (protocol === 'responses') return responsesCalls(reply);
   return [];
@@ -265,7 +267,7 @@ function responsesResults(items: readonly unknown[]): WireResult[] {
  * 没有完整请求对象，所以形状表要能脱离 `request` 单独工作。
  */
 export function wireResultsIn(protocol: string, items: readonly unknown[]): WireResult[] {
-  if (protocol === 'anthropic') return anthropicResults(items);
+  if (protocol === 'anthropic' || protocol === 'droid-session') return anthropicResults(items);
   if (protocol === 'chat') return chatResults(items);
   if (protocol === 'responses') return responsesResults(items);
   return [];

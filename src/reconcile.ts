@@ -192,7 +192,7 @@ function ingestRouteFileTx(
   };
 }
 
-function recordIssue(
+export function recordIssue(
   db: Database,
   sourceKind: string,
   refKey: string,
@@ -214,7 +214,7 @@ function recordIssue(
  * 防止并发或迟到的读把游标拉回去；代际或重写计数变了说明已经是另一份内容，
  * 旧偏移不限制新游标。封口 gz 的代际就是整份指纹，换代即重读。
  */
-function upsertSourceCursorTx(db: Database, cursor: SourceCursor, now: number): void {
+export function upsertSourceCursorTx(db: Database, cursor: SourceCursor, now: number): void {
   db.run(
     `INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,seen_size,head_len,head_hash,fingerprint,last_ok_ms,rewrite_epoch,observed_off)
      VALUES (?,?,?,?,?,?,?,?,?,?,?)

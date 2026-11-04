@@ -45,6 +45,11 @@ export type SourceFacts = {
   kinds: SourceKinds;
   hook: { models: BoundedValues; successes: boolean[] };
   selected: SelectedFacts | null;
+  /**
+   * 会话文件来源的长期事实：用量只有会话级、思考档位与工作目录。
+   * 该块不参与来源投影，只在 droid 合并与重投影之间保留。
+   */
+  session?: { usageScope: 'session'; reasoningEffort: string | null; cwd: string | null };
 };
 
 export type FamilyMetaState = 'recomputed' | 'retained' | 'missing';
@@ -148,6 +153,8 @@ export function mergeSourceFacts(left: SourceFacts, right: SourceFacts): SourceF
         .sort((a, b) => Number(a) - Number(b)),
     },
     selected: right.selected,
+    ...(right.session !== undefined || left.session !== undefined
+      ? { session: right.session ?? left.session } : {}),
   };
 }
 
@@ -214,6 +221,7 @@ export function buildSourceFacts(projection: RequestProjection, old: SourceFacts
     kinds,
     hook,
     selected: selectedFactsOf(projection, old?.selected ?? null),
+    ...(old?.session !== undefined ? { session: old.session } : {}),
   };
 }
 
