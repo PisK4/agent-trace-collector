@@ -12,11 +12,13 @@
  * - 用量一律归一到 magpie 口径：`input` 不含 cache read/write。
  */
 
+import type { Database } from 'bun:sqlite';
 import type { SourceKind } from '../files';
 import { canonicalSessionId } from '../../evidence';
 
 export type SessionKind = Extract<SourceKind,
-  'claude_session' | 'codex_session' | 'omp_session' | 'pi_session' | 'zcode_session'>;
+  'claude_session' | 'codex_session' | 'omp_session' | 'pi_session' | 'zcode_session'
+  | 'droid_transcript'>;
 
 /** magpie 口径的四段用量；缺任一段的调用记 null，不用 0 冒充。 */
 export type SessionUsage = {
@@ -48,6 +50,8 @@ export type SessionCall = {
   turnRef: string | null;
   usage: SessionUsage | null;
   reasoning: string | null;
+  /** 来源记录的思考档位；只进 source_facts，不写 reasoning 列。 */
+  reasoningEffort?: string | null;
   /** 调用发生前的完整上下文，形状按 bodyProtocol 解释。 */
   requestMessages: unknown[];
   replyContent: unknown[];
@@ -97,11 +101,15 @@ export type SessionAdapter = {
   sourceKind: SessionKind;
   /** ingest_issue.source_kind。 */
   issueKind: string;
+  /** 读取失败时的 issue reason；默认 'session_source_unreadable'。 */
+  unreadableReason?: string;
   /** request_evidence.source_kind；同来源相邻调用靠它排除认领。 */
   evidenceKind: string;
-  bodyProtocol: 'anthropic' | 'chat' | 'responses';
+  bodyProtocol: 'anthropic' | 'chat' | 'responses' | 'droid-session';
   /** request.sort_source。 */
   sortSource: string;
+  /** request.attempt_state 初值；默认 'known'。转录没有 attempt 语义时用 'not_applicable'。 */
+  attemptState?: 'known' | 'not_applicable';
   /** 行可原地更新（SQLite 物化行）时为 true：同一 ref 的新 payload 刷新既有行。 */
   mutable: boolean;
   /** 延迟发调用的适配器在批末可能补发同一 ref：重复证据也要刷新正文。 */
@@ -114,7 +122,7 @@ export type SessionAdapter = {
    */
   storesRaw?: boolean;
   /** 单轮取件预算；Zcode 按会话计，不受字节预算约束。 */
-  batch: { maxFiles: number; maxBytes: number };
+  batch: { maxFiles: number; maxBytes: number; order?: 'mtime' | 'remaining' };
   roots(env: Record<string, string | undefined>, home: string): string[];
   discover(root: string, cursorFor: SessionCursorLookup): SessionFile[] | Promise<SessionFile[]>;
   read(file: SessionFile, cursor: import('../files').SourceCursor | null): Promise<import('../files').SourceRead>;
@@ -124,6 +132,8 @@ export type SessionAdapter = {
   apply(state: unknown, event: SessionParseResult & { kind: 'event' }): SessionApplyResult;
   /** 批末补发仍挂起的调用；只有延迟发调用的适配器需要。 */
   flush?(state: unknown): SessionApplyResult;
+  /** 批内来源私有副作用（如 droid 的 settings 用量）；写事务内调用，返回变更数。 */
+  afterFile?(db: Database, state: unknown, file: SessionFile, now: number): number;
 };
 
 /** 会话键的唯一形状：与账本、OTLP 的 sessionRef 逐字相同。 */

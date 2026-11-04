@@ -1,10 +1,12 @@
 import { expect, test } from 'bun:test';
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture } from './fixtures';
 import { readBodyWithMessagesTx } from '../src/body';
 import { ingestDroidBatch } from '../src/sources/droid/ingest';
+import { droidSessionAdapter } from '../src/sources/session/adapters/droid';
+import { ingestSessionBatch } from '../src/sources/session/ingest';
 
 const T0 = Date.parse('2026-08-24T10:00:00.000Z');
 const SALT = new Uint8Array(32);
@@ -67,7 +69,8 @@ test('普通会话落库：逐 assistant 建行、正文可读、证据/原始�
     const rows = f.store.read.query(`
       SELECT req_id, via, agent, session, conv_key, conv_source, actor, actor_state, subagent,
         parent_agent, started_ms, model_requested, model_served, response_id_norm, in_tok, out_tok,
-        have, body_state, parse_state, reply_state, msg_count, sort_source, source_facts_json
+        have, body_state, parse_state, reply_state, msg_count, sort_source, attempt_state,
+        source_facts_json
       FROM request ORDER BY req_id`).all() as Record<string, unknown>[];
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
@@ -76,6 +79,7 @@ test('普通会话落库：逐 assistant 建行、正文可读、证据/原始�
       parent_agent: null, started_ms: T0, model_requested: 'synth-model', model_served: null,
       response_id_norm: 'gen-1779000000000-abc', have: 16, body_state: 'available',
       parse_state: 'ok', reply_state: 'ok', msg_count: 1, sort_source: 'droid_session',
+      attempt_state: 'not_applicable',
     });
     expect(rows[0]!.in_tok).toBeNull();
     expect(rows[0]!.out_tok).toBeNull();
@@ -305,6 +309,40 @@ test('原始层脱敏：敏感片段不进 raw_session_event 与正文块', asyn
     expect(raw.some(row => row.payload_json.includes(secret))).toBe(false);
     const body = readBodyWithMessagesTx(f.store.read, 1);
     expect(JSON.stringify(body!.messages)).not.toContain(secret);
+  } finally {
+    f.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test('取件次序：order=remaining 时先读积压大的文件，不看 mtime', async () => {
+  const root = makeRoot();
+  const f = fixture();
+  try {
+    const big = writeSession(root, 'big.jsonl', [
+      json({ type: 'session_start', id: 'big', title: 'synth', cwd: '/work/a', version: 2 }),
+      json({
+        type: 'message', id: 'big-u1', timestamp: iso(T0),
+        message: { role: 'user', content: [{ type: 'text', text: 'prompt' }] },
+      }),
+      ...Array.from({ length: 3 }, (_, index) => json({
+        type: 'message', id: `big-a${index}`, timestamp: iso(T0 + 1_000 + index),
+        message: {
+          role: 'assistant', content: [{ type: 'text', text: 'reply' }], modelId: 'synth-model',
+        },
+      })),
+    ]);
+    const small = writeSession(root, 'small.jsonl', [
+      json({ type: 'session_start', id: 'small', title: 'synth', cwd: '/work/a', version: 2 }),
+      USER_A, ASSISTANT_1,
+    ]);
+    utimesSync(big, new Date(T0 - 10_000), new Date(T0 - 10_000));
+    utimesSync(small, new Date(T0 + 10_000), new Date(T0 + 10_000));
+    const result = await ingestSessionBatch(f.store, {
+      ...droidSessionAdapter,
+      batch: { maxFiles: 1, maxBytes: 8 * 1024 * 1024, order: 'remaining' },
+    }, [root], SALT, Date.now());
+    expect(result.files).toBe(1);
+    expect(f.store.read.query('SELECT DISTINCT session FROM request').all()).toEqual([{ session: 'big' }]);
   } finally {
     f.close();
     rmSync(root, { recursive: true, force: true });

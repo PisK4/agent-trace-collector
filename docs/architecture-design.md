@@ -183,7 +183,7 @@ magpie gateway
   ├─ 路由文件（只读）───────> route tailer ──┼─> reconciler ─> SQLite（WAL）
   └─ 用量接口（只读）───────> direct 回填 ───┘                   ▲
                                                                 │
-droid 会话文件（只读）──────> droid 摄入 ───────────────────────┤
+droid 会话文件（只读）──────> 会话摄入（droid 适配器）───────────┤
 harness OTLP exporter（Claude Code / OMP / Codex）
   └─ POST /v1/traces、/v1/logs ─────────────────────────────────┘
 
@@ -196,7 +196,7 @@ harness OTLP exporter（Claude Code / OMP / Codex）
 | --- | --- | --- |
 | ingest | HTTP 请求 | 脱敏、分块、入块库、写 `raw_hook` 头与 `request`，事务提交后返回；OTLP 端点同走这里：解码、映射、落 `raw_otlp_*` 与 `otlp_body_ref` |
 | tailer | 定时（账本 5 秒，路由 2 秒） | 按文件代际与完整行偏移增量读两个来源 |
-| droid 摄入 | 定时（默认 60 秒） | 增量读 droid 会话转录，落原始层、请求行、重建正文与会话累计 |
+| droid 摄入 | 定时（默认 60 秒） | 经共用会话摄入增量读 droid 转录；原始层、请求行、正文、证据与游标走同一写路径，droid 私有部分只剩 settings 累计刷新 |
 | reconciler | 定时（1 秒）加 ingest 完成事件 | 合并证据、补前驱、重算受影响派生 |
 | query | HTTP 请求 | 只读查询 |
 
@@ -391,6 +391,8 @@ CREATE TABLE source_cursor (
 
 droid（Factory 的编码 Agent）不经过 magpie 网关。转录放在 `$FACTORY_HOME_OVERRIDE/.factory/sessions`，没有覆盖变量时取 `~/.factory/sessions`；根目录与一层按工作目录分的子目录里的 `.jsonl` 都是转录，`.settings.json` 不在转录发现里。每轮按剩余字节从大到小取最多 64 个文件或 8 MiB，未读完的文件靠游标在下一轮继续；默认每 60 秒一轮。
 
+写入路径与本地 Agent 适配器共用 `src/sources/session/ingest.ts`：`src/sources/droid/` 保留发现、纯解析与会话累计刷新，`src/sources/session/adapters/droid.ts` 把解析结果接到共用契约，`ingestDroidBatch` 只是批次入口与结果映射。droid 原有的取件次序（剩余字节优先）、`attempt_state='not_applicable'` 与 `reasoningEffort` 事实由适配器字段保留，共用摄入里没有 droid 分支；`.settings.json` 的刷新挂在 `afterFile` 上，仍在同一写事务内。
+
 一条 assistant `message` 行算一次调用。请求体是截至该行之前的全部消息，回复取该行 `content`。`started_ms` 取该行之前最近一条消息的时间，缺时间时退回该行自身时间；这是消息时间，只用于排序，不当作请求发出时刻。`agent='droid'`、`session=session_start.id`、`conv_source='droid-session'`、`via='session'`。`response_id_norm` 由 `openaiMessageId` 经同一套前缀规范化得到，`model_requested` 取 `message.modelId`；`model_served`、`provider`、`status`、`stop` 与逐笔读数列保持 NULL，不拿相邻字段顶替。
 
 fork 会话在 `forkedAtMessageId` 之前的行是源会话复制段：它们进消息窗口，不建请求行；越过锚点后才按 assistant 行建行。带 `callingSessionId` 的子代理会话照常建行，`actor` 与 `subagent` 取自身 session id，`parent_agent` 取调用者 id。
@@ -403,7 +405,7 @@ fork 会话在 `forkedAtMessageId` 之前的行是源会话复制段：它们进
 
 ### 本地 Agent 会话适配器（第一版）
 
-Claude Code、Codex、Zcode、OMP 与 Pi 的本地会话走与 droid 同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。
+Claude Code、Codex、Zcode、OMP、Pi 与 droid 的本地会话走同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。
 
 | Agent | 根 | 形态 | 调用单位 | 正文协议 |
 | --- | --- | --- | --- | --- |
@@ -412,8 +414,9 @@ Claude Code、Codex、Zcode、OMP 与 Pi 的本地会话走与 droid 同一条�
 | Zcode | `$ZCODE_HOME` 或 `~/.zcode` 下的 `cli/db/db.sqlite` | SQLite | assistant 消息，`model_usage` 的 rowid 作游标 | `anthropic` |
 | OMP | `$OMP_HOME` 或 `~/.omp` 下的 `agent/sessions` | JSONL | assistant 消息；消息 id 或行偏移 | `anthropic` |
 | Pi | `$PI_HOME` 或 `~/.pi` 下的 `agent/sessions` | JSONL | 同 OMP，共用解析器 | `anthropic` |
+| droid | `$FACTORY_HOME_OVERRIDE/.factory/sessions` 或 `~/.factory/sessions` | JSONL | assistant 消息；`openaiMessageId` 作响应 id | `droid-session` |
 
-调度只加一个 `sessions` 定时器，每 60 秒轮转一家；每家每轮最多 64 个文件或 2 MiB，未读完的靠游标留到下一轮，新文件按 mtime 从新到旧取。单家抛错只冻结这一家。启动后的第一轮异步跑，不挡 HTTP 监听。测试用 `CollectorOptions.sessionAdapters` 与 `sessionRoots` 注入合成根，不读真实主目录。
+五个非 droid 适配器共用一个 `sessions` 定时器，每 60 秒轮转一家；每家每轮最多 64 个文件或 2 MiB，未读完的靠游标留到下一轮，新文件按 mtime 从新到旧取。droid 保留独立 `droid` 定时器与 8 MiB 预算，按剩余字节从大到小取，不放进轮转，避免同一来源被两个定时器重复摄入。单家抛错只冻结这一家。启动后的第一轮异步跑，不挡 HTTP 监听。测试用 `CollectorOptions.sessionAdapters` 与 `sessionRoots` 注入合成根，不读真实主目录。
 
 调用身份：有精确 response id 的用 id（Claude 的 `message.id` 去掉 `msg_`，Codex 的 `response_id`）；没有的优先用同来源稳定的物化身份（OMP/Pi 的行偏移、Zcode 的消息 id）。用量一律归一到 magpie 口径（`input` 不含 cache read/write）；Codex 的 `input_tokens` 与 Zcode 的 `input_tokens` 都含缓存，要减掉。四段用量齐全时进 `usage_fingerprint.v1`，与网关行去重；指纹不比较模型名，跨来源写法不同不构成两笔调用。没有指纹时按同会话 ±60 秒、模型名归一后比较的弱线索兜底。
 

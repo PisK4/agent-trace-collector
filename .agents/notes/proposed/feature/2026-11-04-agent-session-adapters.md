@@ -292,4 +292,4 @@ Claude 放在最前，因为它有精确响应 id，最容易验证共用缝是�
 - 正文协议按实际形状收敛为 `anthropic` 与 `responses` 两种，没有新增 `chat`。
 - Claude 的 `isSidechain` 行本轮不建调用，子代理谱系未折叠；Codex 的跨根副本只靠证据幂等吸收，`mutable=false` 下不刷新正文。
 - Zcode 的 `turn_id` 粒度未用真实库核实；owner 的同来源排除保证了即使一轮多调用也不会少建行。
-- droid 仍走自己的摄入路径，没有迁到共用缝；Magpie 19 种 Agent 的目录检测、`maintain source-health`、多根副本裁决与真实流量验收都未做。
+- droid 已并入共用摄入（[droid 会话摄入并入共用写路径](../../implemented/architecture/2026-11-04-droid-shared-session-ingest.md)），保留独立 60 秒定时器与 8 MiB 预算；Magpie 19 种 Agent 的目录检测、`maintain source-health` 与多根副本裁决未做。首轮真实流量验收见[验收记录](../../../../docs/acceptance.md)。
