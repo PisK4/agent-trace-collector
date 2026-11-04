@@ -11,6 +11,7 @@ import { backupBundle, backupDatabase, restoreBundle } from '../src/maintenance/
 import { previewAgentPurge, previewMetadataPurge, purgeAgent, purgeMetadata } from '../src/maintenance/purge';
 import { runMaintenance } from '../src/maintenance/cli';
 import { verifyDatabase } from '../src/maintenance/verify';
+import { localDay } from '../src/format';
 import { loadBoundSaltTx, loadConfig } from '../src/config';
 import { redact } from '../src/privacy';
 import { startCollector } from '../src/main';
@@ -502,6 +503,168 @@ test('维护命令在目标库上执行并返回退出码', async () => {
     expect(await runMaintenance(['purge-agent', '--db', source, '--agent', 'hermes', '--apply'])).toBe(1);
     expect(await runMaintenance(['purge-agent', '--db', source])).toBe(2);
     expect(await runMaintenance(['nope'])).toBe(2);
+  } finally {
+    f.close();
+  }
+});
+
+test('maintain verify按结构问题定退出码，派生积压不算失败', async () => {
+  const f = fixture();
+  const path = join(f.dir, 'trace.db');
+  try {
+    // 只有派生积压：正常停机形态，仍是 ok:true、退出 0。
+    f.store.write(db => {
+      db.run(`INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
+              VALUES (1,1,'2026-10-20','hook','pending',1,1,1,1)`);
+      db.run("INSERT INTO derive_queue(conv_key,actor,from_sort) VALUES ('k','a','')");
+    });
+    const lines: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: () => {} };
+    expect(await runMaintenance(['verify', '--db', path], io)).toBe(0);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ ok: true, pending_derivations: 1 });
+
+    // 悬空块是结构问题：ok:false、退出 1，报告字段原样保留。
+    f.store.write(db => db.run("INSERT INTO block(id,hash,fingerprint,z,raw_size) VALUES (9,x'01','fp',x'02',3)"));
+    lines.length = 0;
+    expect(await runMaintenance(['verify', '--db', path], io)).toBe(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ ok: false, integrity: ['ok'], dangling_blocks: 1 });
+
+    // 损坏的库在报告阶段就抛错，经 CLI 以退出 1 拒绝。
+    f.store.close();
+    writeFileSync(path, 'this is not a database');
+    expect(await runMaintenance(['verify', '--db', path])).toBe(1);
+  } finally {
+    f.close();
+  }
+});
+
+test('hook-delivery窗口端点：epoch与完整ISO原样，非法简写按用法拒绝', async () => {
+  const f = fixture();
+  try {
+    const path = join(f.dir, 'trace.db');
+    const lines: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: () => {} };
+    expect(await runMaintenance(['hook-delivery', '--db', path,
+      '--since', '1793721600000', '--until', '1793808000000'], io)).toBe(0);
+    // epoch 毫秒直通，输出回显解析后的区间。
+    expect(JSON.parse(lines.at(-1)!).window).toMatchObject({ since_ms: 1793721600000, until_ms: 1793808000000 });
+    expect(await runMaintenance(['hook-delivery', '--db', path,
+      '--since', '2026-11-04T00:00:00+08:00', '--until', '2026-11-05T00:00:00+08:00'], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!).window).toMatchObject({ since_ms: 1793721600000, until_ms: 1793808000000 });
+    // 会被 Date 静默滚月的简写按用法拒绝。
+    expect(await runMaintenance(['hook-delivery', '--db', path,
+      '--since', '2026-02-31', '--until', '2026-03-01'], io)).toBe(2);
+  } finally {
+    f.close();
+  }
+});
+
+test('日期简写按本地日零点解析（TZ=Asia/Shanghai 钉住）', () => {
+  const f = fixture();
+  try {
+    const cli = join(import.meta.dir, '..', 'src', 'maintenance', 'cli.ts');
+    const result = Bun.spawnSync(['bun', cli, 'hook-delivery', '--db', join(f.dir, 'trace.db'),
+      '--since', '2026-11-04', '--until', '2026-11-05'],
+    { env: { ...process.env, TZ: 'Asia/Shanghai' } });
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout.toString());
+    // 2026-11-04 与 11-05 的本地零点（+08:00）；Date.parse 的 UTC 口径各多 8 小时。
+    expect(report.window.since_ms).toBe(1_793_721_600_000);
+    expect(report.window.until_ms).toBe(1_793_808_000_000);
+  } finally {
+    f.close();
+  }
+});
+
+test('precheck按schema版本三态放行或拒绝，且不做迁移写入', async () => {
+  const f = fixture();
+  const path = join(f.dir, 'trace.db');
+  const setVersion = (version: number) => {
+    const db = new Database(path);
+    db.run(`PRAGMA user_version=${version}`);
+    db.close();
+  };
+  try {
+    f.store.close();
+    const lines: string[] = [];
+    const errs: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: (line: string) => errs.push(line) };
+    // 新装库是当前版本：直接可启动。store.ts 升版而 CODE_SCHEMA_VERSION 没跟时，这条先报红。
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toEqual({ ok: true, state: 'in_place', db_version: 12, code_version: 12 });
+    // 有原地升级路径的旧版本放行，且预检不写库：user_version 原样保留。
+    setVersion(11);
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, state: 'in_place', db_version: 11 });
+    const reopened = new Database(path, { readonly: true });
+    expect(reopened.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
+    reopened.close();
+    // 没有升级路径的更早版本：需重建。
+    setVersion(5);
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'rebuild_required', db_version: 5 });
+    // 比代码新与带表的空版本：不支持。
+    setVersion(13);
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'unsupported', db_version: 13 });
+    setVersion(0);
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'unsupported', db_version: 0 });
+    // 空文件按新建放行；损坏的文件报 precheck_failed。
+    const empty = join(f.dir, 'empty.db');
+    writeFileSync(empty, '');
+    expect(await runMaintenance(['precheck', '--db', empty], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, state: 'in_place', db_version: 0 });
+    const garbage = join(f.dir, 'garbage.db');
+    writeFileSync(garbage, 'this is not a database');
+    expect(await runMaintenance(['precheck', '--db', garbage], io)).toBe(1);
+    expect(errs.some(line => line.startsWith('precheck_failed:'))).toBe(true);
+  } finally {
+    f.close();
+  }
+});
+
+test('purge-metadata拒绝非法与未来日期，全库命中要求allow-all', async () => {
+  const f = fixture();
+  try {
+    seedDays(f.store);
+    const db = join(f.dir, 'trace.db');
+    const lines: string[] = [];
+    const errs: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: (line: string) => errs.push(line) };
+
+    // 非法日历与坏形状：用法错误。2026-02-31 会被 Date 构造静默滚到 3 月，必须拦下。
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-13-01'], io)).toBe(2);
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-02-31'], io)).toBe(2);
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-1-01'], io)).toBe(2);
+    expect(errs.some(line => line.startsWith('invalid_before:'))).toBe(true);
+    // 晚于今天（本地日）：没有合法的「未来清理」。
+    const tomorrow = localDay(Date.now() + 86_400_000);
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', tomorrow], io)).toBe(2);
+    expect(errs.some(line => line === `before_after_today:${tomorrow}`)).toBe(true);
+    // 预览门之前库未被改动。
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 3 });
+
+    // 部分命中不需要 --allow-all。
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-09-02', '--apply',
+      '--approval-id', 'approval-synthetic-1'], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, applied: true, deleted: 1 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 2 });
+
+    // 全库命中：预览放行，--apply 必须再带 --allow-all。
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-10-21'], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, applied: false, requests: 2 });
+    lines.length = 0;
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-10-21', '--apply',
+      '--approval-id', 'approval-synthetic-1'], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, error: 'allow_all_required', requests: 2 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 2 });
+
+    // 显式放行后整库删除。
+    expect(await runMaintenance(['purge-metadata', '--db', db, '--before', '2026-10-21', '--apply',
+      '--allow-all', '--approval-id', 'approval-synthetic-1'], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, applied: true, deleted: 2 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 0 });
   } finally {
     f.close();
   }

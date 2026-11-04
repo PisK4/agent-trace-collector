@@ -2,6 +2,7 @@
 
 import { dirname } from 'node:path';
 import { Database } from 'bun:sqlite';
+import { localDay } from '../format';
 import { openStore } from '../store';
 import type { Store } from '../store';
 import { backupBundle, backupDatabase, restoreBundle } from './backup';
@@ -13,7 +14,7 @@ import { dedupeSessionDuplicates, previewSessionDedupe } from './dedupe';
 import { rebuildSession } from './rebuild';
 import { reparseProtocol } from './reparse';
 import { normalizeStoredResponseIds, previewResponseIdNormalization } from './response-ids';
-import { verifyDatabase } from './verify';
+import { verifyDatabase, precheckDatabase } from './verify';
 
 function parseArgs(argv: string[]): Map<string, string | true> {
   const flags = new Map<string, string | true>();
@@ -36,17 +37,35 @@ function stringFlag(flags: Map<string, string | true>, name: string): string | n
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-/** 窗口端点接受 epoch 毫秒或 ISO 8601；解析失败返回 null，由调用方按用法错误退出。 */
+/** 日期简写按本地日零点解析：day 列与页面是本地日语义，Date.parse 的纯日期按 UTC 会偏一个时区。 */
+function localMidnight(value: string): number {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year!, month! - 1, day).getTime();
+}
+
+/** 窗口端点接受 epoch 毫秒、ISO 8601 或日期简写；解析失败返回 null，由调用方按用法错误退出。 */
 function momentFlag(flags: Map<string, string | true>, name: string): number | null {
   const value = stringFlag(flags, name);
   if (value === null) return null;
   if (/^\d+$/.test(value)) return Number(value);
+  // 简写显式走本地构造，与 day 列同口径；非法日历（会被 Date 静默滚月）不猜。
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return isCalendarDay(value) ? localMidnight(value) : null;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** `YYYY-MM-DD` 的日历校验：真日期才通过；字段校验走 UTC 口径，与本地时区无关。 */
+function isCalendarDay(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year!, month! - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month! - 1 && date.getUTCDate() === day;
+}
+
 const USAGE = `usage:
   maintain verify --db <path>
+  maintain precheck --db <path>
   maintain hook-delivery --db <path> --since <ISO|ms> --until <ISO|ms>
   maintain backup --db <path> --out <new-path>
   maintain bundle --dir <dataDir> --out <new-dir>
@@ -56,7 +75,7 @@ const USAGE = `usage:
   maintain migrate-hook-identity --db <path> [--apply --approval-id <id>]
   maintain normalize-response-ids --db <path> [--apply --approval-id <id>]
   maintain dedupe-sessions --db <path> [--apply --approval-id <id>]
-  maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --approval-id <id>]
+  maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --allow-all --approval-id <id>]
   maintain purge-agent --db <path> --agent <name> [--apply --approval-id <id>]
 `;
 
@@ -149,6 +168,18 @@ export async function runMaintenance(argv: string[], io: {
     }
   }
 
+  if (command === 'precheck') {
+    // 只读预检：换机、回滚或指向旧数据目录时，把 schema 不兼容的发现时机提前到部署前。
+    try {
+      const report = precheckDatabase(dbPath);
+      out(JSON.stringify(report));
+      return report.ok ? 0 : 1;
+    } catch (error) {
+      err(`precheck_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
+    }
+  }
+
   if (command === 'verify' || command === 'purge-metadata' || command === 'purge-agent'
     || command === 'rebuild' || command === 'reparse' || command === 'migrate-hook-identity'
     || command === 'normalize-response-ids' || command === 'dedupe-sessions') {
@@ -157,8 +188,12 @@ export async function runMaintenance(argv: string[], io: {
     let lock: LockHandle | null = null;
     try {
       if (command === 'verify') {
-        out(JSON.stringify({ ok: true, ...verifyDatabase(dbPath) }));
-        return 0;
+        const report = verifyDatabase(dbPath);
+        // 健康结论与报告字段分开：pending_derivations 是信息字段，停机前有积压是正常的。
+        const ok = report.integrity.length === 1 && report.integrity[0] === 'ok'
+          && report.dangling_blocks === 0 && report.duplicate_evidence === 0;
+        out(JSON.stringify({ ok, ...report }));
+        return ok ? 0 : 1;
       }
       if (command === 'rebuild' || command === 'reparse') {
         const argument = stringFlag(flags, command === 'rebuild' ? 'session' : 'protocol');
@@ -272,8 +307,15 @@ export async function runMaintenance(argv: string[], io: {
         return 0;
       }
       const before = stringFlag(flags, 'before');
-      if (before === null || !/^\d{4}-\d{2}-\d{2}$/.test(before)) {
+      // 字符串比较是删除谓词（day < ?），所以上界必须先是合法日历，再不许晚于今天：
+      // 未来日或非法日会整库命中，预览挡不住赶时间的 --apply。
+      if (before === null || !isCalendarDay(before)) {
+        err(`invalid_before:${before ?? ''}`);
         err(USAGE.trimEnd());
+        return 2;
+      }
+      if (before > localDay(Date.now())) {
+        err(`before_after_today:${before}`);
         return 2;
       }
       lock = acquireMaintenanceLock(dirname(dbPath), `purge:${process.pid}`);
@@ -287,6 +329,12 @@ export async function runMaintenance(argv: string[], io: {
       if (flags.get('apply') !== true) {
         out(JSON.stringify({ ok: true, applied: false, before, ...preview }));
         return 0;
+      }
+      // 命中全库的删除必须显式放行；拒绝时带出预览计数，操作员据此改日期或加 --allow-all。
+      const total = store.read.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM request').get()?.n ?? 0;
+      if (preview.requests > 0 && preview.requests === total && flags.get('allow-all') !== true) {
+        out(JSON.stringify({ ok: false, error: 'allow_all_required', before, ...preview }));
+        return 1;
       }
       const approvalId = stringFlag(flags, 'approval-id');
       if (approvalId === null) {
