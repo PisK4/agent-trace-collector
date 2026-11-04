@@ -1883,4 +1883,23 @@ Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮�
 
 ### 生产真实流量
 
-待部署后补：DSH 发现与首轮回填的 `request`、证据、游标、issue 与重复证据读数，以及本轮事件循环。合成通过不替代这一节。
+部署与首轮 DSH 回填：
+
+| 项 | 结果 |
+| --- | --- |
+| 合并 | `7dcc073`（分支提交 `cad53f8`），README 补 DSH 行为 `c6963d1` |
+| 重启 | `bun run service restart`，pid 62483，3 秒起，代码未落后 |
+| 重启前基线 | `agent='dsh'` 与 `dsh_session` 游标、issue 均为 0；request 总数 83,042 |
+| 首轮 DSH turn | 启动约 2 分钟；13 个游标，469 笔 request，6 个会话，603 行原始层（2.93 MB） |
+| 子代理折叠 | 91 笔挂在 3 个 subagent 上，`session` 与 `parent_agent` 都指向根会话；其余 378 笔是根会话自己的调用 |
+| 证据 | 469 条 `dsh_session_call`，覆盖 469 个 req_id，重复 owner 0 |
+| issue | `dsh_session` 0 |
+| 正文 | 469 笔全部 `available`；抽样 `req_id=127933` 走 `/api/requests/<id>/body` 返回 `protocol='chat'` |
+| 读取进度 | 12 / 13 个游标到文件末尾；剩余 233,477 字节集中在一个 2.34 MB 文件，下轮从上一 frame 继续 |
+| 页面 | 该会话的 `/api/sessions/<conv_key>/requests` 返回 200 与 request 行；会话最后活动在 9 月，未进入按活跃排序的前 100 条 |
+
+首轮后本机还有 64 个会话目录没有游标。发现阶段共 77 个会话文件、32,852,739 字节；backfill 每次只轮一家、每家 2 MiB，DSH 要等其它来源各轮一次，完整回填需要数小时，不在本轮验收内。
+
+事件循环（启动后 204 秒，含首轮 DSH turn）：p50 1.77 ms / p95 21.07 ms / p99 397.46 ms / 最大 3,018 ms；同一窗口 `sessions` 任务 4 轮、最长 7,025 ms，`derive` 最长 21,241 ms，writer 最长 577 ms。最大停顿从 DSH turn 前的 2,575 ms 升到 3,018 ms，但同窗口还有 derive 与其它适配器的回填，无法把这一增量单独归给 DSH。本轮 DSH 实际只读约 2.1 MB，没有出现 issue、重复证据或正文缺失。
+
+真实流量走到的是插入路径、追加读取与子代理折叠（3 个非空 subagent）；跨来源认领与去重没有在首轮触发。分叉 seed 与格式 1 的字段判断仍只有合成测试覆盖。
