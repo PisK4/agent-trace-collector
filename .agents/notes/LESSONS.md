@@ -95,6 +95,11 @@
 - 防护：容器读取用 `SessionAdapter.lineCommit=false` 让游标只认读取层的 `committedOff`，用 `SourceLine.restartOff` 给坏行一个 frame 起点；集成测试同时断言 `committed_off===observed_off` 与追加后还能再读出一笔。新适配器若偏移只是原始层身份，先写这两条声明再跑追加测试。
 - Seen 1× (2026-11-04).
 
+**子来源各自编号时，共享证据键必须带子来源身份。**
+- 证据：2026-11-04 DSH 子代理的 `seq` 是各自文件内的序号；同父的三个子代理都出现 `seq:477`，证据键 `<父会话>/seq:477` 相撞，首轮 684 条 assistant 只建了 670 笔 request，14 笔被当成重复丢掉。
+- 防护：折叠到父会话的调用，callId 与 `ref_key` 带 subagent id；验收时把原始层 assistant 数与 request/duplicate 数对账，并测两个使用相同 seq 的子代理各建一行。
+- Seen 1× (2026-11-04).
+
 **给逐项循环加分块内层循环时，预算计数与结果累计分开，物理条目只在首块计一次。**
 - 证据：2026-11-04 封口分块把 `ingestSessionFiles` 改成每文件多事务，直接把累计 `total.files` 当预算计数器会让分块放大文件数；局部计数器又与参数 `files` 同名，typecheck 报 TS2300 才发现。
 - 防护：预算用 `fileCount`/`bytes` 独立变量，`total.*` 只做输出；内层循环用 `counted` 标记首块；新增循环后先跑 `bun run typecheck` 与多块集成测试。

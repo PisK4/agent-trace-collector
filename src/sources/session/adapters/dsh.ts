@@ -135,11 +135,13 @@ function applyAssistant(
   const session = state.sessionId;
   if (session === null) return applyResult(state, [], 'dsh_session_missing');
   if (event.atMs === null) return applyResult(state, [], 'dsh_time_missing');
+  // seq 只在单个会话文件内递增，同父的多个子代理会重复；调用身份带上子代理 id。
+  const suffix = seq === null ? `off:${event.offset}` : `seq:${seq}`;
   const call: SessionCall = {
     sessionId: session,
     subagentId: state.subagentId,
     convKey: sessionConvKey(session),
-    callId: seq === null ? `off:${event.offset}` : `seq:${seq}`,
+    callId: state.subagentId === null ? suffix : `${state.subagentId}/${suffix}`,
     sortOffset: event.offset,
     parentSessionId: state.parentSessionId,
     startedMs: event.atMs,
@@ -176,8 +178,8 @@ function applyEvent(
     case 'assistant':
       return applyAssistant(state, event, line.data, line.seq);
     case 'end-seed':
-      // 分叉的前缀到此为止；窗口保留，后续自己的调用仍需要这段上下文。
-      if (state.seeding && line.data.inherited === true) state.seedDone = true;
+      // 分叉的前缀到此为止；真实格式的 data 是空对象，事件本身就是边界。
+      if (state.seeding) state.seedDone = true;
       return applyResult(state);
     default:
       return applyResult(state);
