@@ -24,7 +24,7 @@
 - [x] `scripts/service.ts:34`、`docs/operations.md:472` 的注册片段示例
 - [x] `README.md:36`、`README.zh-CN.md:36`、根 `AGENTS.md:50`
 - [x] implemented note 里 3 处 `plugins/collector.hooks.ts` 相对链接、2 处目录描述改为新路径，只改事实；另同步 `docs/agent-request-kind-review.md` 两处路径引用、proposed hermes note 一处相对链接、change-note-gate 决策记录里的路径清单
-- [ ] 生产 `~/.config/magpie/plugins.json` 第 37 行 spec 改新绝对路径，重启 magpie 宿主（仓库外动作，合并到 master 时办，改前先看目标）
+- [x] 生产 `~/.config/magpie/plugins.json` 第 37 行 spec 改新绝对路径，重启 magpie 宿主（2026-11-05 01:48:13 完成，hook 恢复投递）
 - [x] `bun run typecheck`、`tests/hook.test.ts`（44 pass）、`bun run verify:notes:staged`、全部 `collector.hooks.ts` 相对链接存活
 
 ### 2. 登记层与边界
@@ -80,10 +80,10 @@
 
 - [x] `CONTRIBUTING.md` 加内置 Parser 与社区包两套 PR 模板，`GLOSSARY.md` 与双 README 各归各家（`a3887c5`）
 - [x] `bun run typecheck`、最窄测试（11 文件 219 例）、`bun run verify:notes:staged`
-- [x] 合成验收与真实流量验收分开写进 `docs/acceptance.md`；真实流量标注未执行
-- [ ] `git merge --no-ff feat/plugin-system`，合并后移除 worktree 目录，分支名保留
-- [ ] 改动触及 `src/` 时 `bun run service restart`（先查清实际托管方式，`service status` 报 not_managed）
-- [ ] 生产 `~/.config/magpie/plugins.json` 第 37 行 spec 改新绝对路径并让 magpie 宿主重新加载
+- [x] 合成验收与真实流量验收分开写进 `docs/acceptance.md`；真实流量验收 2026-11-05 已执行（hook、生产配置、第五页签、社区轨现状与轮次覆盖边界）
+- [x] `git merge --no-ff feat/plugin-system`（959dc70），合并后移除 worktree 目录，分支名保留
+- [x] 改动触及 `src/` 时 `bun run service restart`（pid 52927，启动 01:49:32，最后一次 src 改动 01:35:26，未落后）
+- [x] 生产 `~/.config/magpie/plugins.json` 第 37 行 spec 改新绝对路径并重启 magpie 宿主（01:48:13）
 
 ## 首批 Plugin 与旧功能搬迁
 

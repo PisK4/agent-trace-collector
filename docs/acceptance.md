@@ -2023,7 +2023,8 @@ Grok 的 `session_usage` 有 4 行而游标有 6 个，不是漏刷：本机 6 �
 - 没有对生产库重跑 `patrol weekly`；闸门改动只在合成状态目录上验证。生产部署与真实流量复测是另一次动作。
 - 调度器、launchd 与告警消费方仍不在仓库里，`--if-due` 只保证幂等，不保证「一周一次」真的被触发；`over` 退出码没有自动消费方。
 - F37 的 OTLP 通道修复与 `skipped` 计数不在本批；`otlp_issues` 对 `skipped` 不敏感，`otlp_yield` 只能当结果指标。
-## Plugin 机制与 Todo 页签（合成验收，2026-11-05）
+
+## Plugin 机制与 Todo 页签（2026-11-05）
 
 ### 合成验收
 
@@ -2040,6 +2041,9 @@ Grok 的 `session_usage` 有 4 行而游标有 6 个，不是漏刷：本机 6 �
 - 失败隔离：包内抛错、`while(true)` 超时（timeoutMs=100）、交回畸形 DTO 三种情况都返回 `failed` 且 `snapshot=null`，不冒充「本轮没有待办」；超时路径由 terminate 终止线程。
 - `bun run typecheck` 通过；`tests/todo-by-turn.test.ts`、`tests/plugin-community.test.ts`、`tests/plugin-boundaries.test.ts` 共 14 例通过。测试全部使用合成数据与临时目录，未读真实数据目录。
 
-### 真实流量验收
+### 真实流量验收（2026-11-05）
 
-待合并到 master 并部署后单独记录：目录改名后 hook 不丢请求、生产 `plugins.json` 生效、第五页签能读到真实 Todo、社区包 Worker 加载的失败隔离。本轮未执行，不写成通过。
+- 目录改名与 hook：生产 `~/.config/magpie/plugins.json` 第 37 行的 spec 指向 `integrations/magpie-hook/collector.hooks.ts`，magpie 宿主于 01:48:13 重启。重启后 `raw_hook` 持续写入，截至 02:05 共 131 行，最近一条距读 1 秒，`parse_state` 全为 `ok`。hook 改名后没有停在旧路径。
+- 生产社区轨：数据目录下没有 `plugins/`，加载器按没有社区包处理，采集日志没有 `plugins.*` 报错。社区包在生产安装后的 Worker 超时、崩溃与畸形 DTO 隔离未在本轮执行，不写成通过。
+- 第五页签：02:11 在浏览器打开 zcode 会话 `["session","90daf16a-1b12-4a1c-8c74-39666b3a2aed"]` 的 `?tab=todo`。请求态没有轮号，右栏显示「选择轮次后查看待办」；点轮次 chip 1 后读到 11 项真实 Todo，页签行渲染为「轮 1 读数 正文 工具 路由 待办」。同一会话的服务端只读复核：turn 1 为 11 项、turn 4 为 8 项，其余轮 `absent`。
+- 轮次结算覆盖率：截至 02:08，真实库含 Todo 调用的有 131 个会话、139 个 `(conv_key, actor)` 组；只有 3 个会话结算出轮次（zcode 1 个共 12 轮、omp 2 个共 5 轮），其中只有 zcode 那个组在轮次里读得到 Todo。pi 6 个与 droid 73 个会话没有任何 `reply_shape='final'` 记录（全是 `tools` 与 `unknown`），轮次结算不出终点；omp 的 19 个会话里有 5 个带 `final`，但已结算轮内没有 Todo 调用。第五页签依赖轮次结算，当前真实流量下多数会话只会看到选轮提示；这是既有轮次结算覆盖面问题，Parser 与读取链路按已结算轮工作。计数随采集增长，不是固定值。
