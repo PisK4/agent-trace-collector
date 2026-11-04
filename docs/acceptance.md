@@ -1860,9 +1860,9 @@ Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮�
 
 | 项 | 结果 |
 | --- | --- |
-| `bun test tests/session-dsh.test.ts` | 4 pass / 0 fail |
-| 全部会话适配器测试（9 个文件） | 34 pass / 0 fail |
-| `bun test` | 1257 pass / 0 fail，109 个文件 |
+| `bun test tests/session-dsh.test.ts` | 5 pass / 0 fail |
+| 全部会话适配器测试（9 个文件） | 35 pass / 0 fail |
+| `bun test` | 1258 pass / 0 fail，109 个文件 |
 | `bun run typecheck` | 退出 0 |
 
 窄测试覆盖：同目录多版本只取最高版本；半写 frame 不提交、补齐后从上一 frame 继续；父会话 + 分叉子会话首轮不重复建父调用，追加 `session/end-seed` 后只建子会话自己的一笔；格式 1 的 `seedLength` 只把 seed 段放进消息窗口。合成验收只证明读取与归约路径，不代表本机真实 DSH 数据已经全部入库。
@@ -1903,3 +1903,23 @@ Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮�
 事件循环（启动后 204 秒，含首轮 DSH turn）：p50 1.77 ms / p95 21.07 ms / p99 397.46 ms / 最大 3,018 ms；同一窗口 `sessions` 任务 4 轮、最长 7,025 ms，`derive` 最长 21,241 ms，writer 最长 577 ms。最大停顿从 DSH turn 前的 2,575 ms 升到 3,018 ms，但同窗口还有 derive 与其它适配器的回填，无法把这一增量单独归给 DSH。本轮 DSH 实际只读约 2.1 MB，没有出现 issue、重复证据或正文缺失。
 
 真实流量走到的是插入路径、追加读取与子代理折叠（3 个非空 subagent）；跨来源认领与去重没有在首轮触发。分叉 seed 与格式 1 的字段判断仍只有合成测试覆盖。
+
+### 子代理调用身份缺陷与修复
+
+对账发现首轮 13 个文件的原始层有 483 条 `assistant/message`，request 只有 469 笔；第二轮结束后是 684 对 670，差 14。原因是 DSH 的 `seq` 只在各自会话文件内递增：同父的多个子代理文件出现相同 `seq`（3 个文件都有 `seq:477`），证据键 `<父会话>/seq:N` 相撞，唯一索引把后到的调用当成重复丢掉。这些事件的 `time` 与用量都不同，是不同调用。
+
+修复 `1931ca6`（合并 `90d4ca1`）给子代理的 callId 加上 subagent id，证据键变为 `<父会话>/<子代理>/seq:N`。同一轮把 `session/end-seed` 改成事件本身结束 seed：本机 13 条结束事件的 `data` 都是空对象，原先要求的 `inherited:true` 在真实格式里不存在。新增两个同 seq 子代理各建一行的回归测试。
+
+修复前又完成了一轮回填，request 达到 985。停机后在一个事务里把 91 条子代理证据键迁移到新格式，并删除 DSH 游标与原始层；重启后首个 DSH turn 重读 13 个文件，原始层 483 条 assistant，补回 14 笔被挤掉的调用。
+
+| 项 | 修复后 |
+| --- | --- |
+| `agent='dsh'` request | 999 |
+| `dsh_session_call` 证据 | 999，`dangling=0`，重复 owner 0 |
+| 子代理调用 | 105 笔，证据键全部带 subagent id |
+| `dsh_session` issue | 0 |
+| 游标 | 13，重读批次已到文件末尾 |
+
+修复后 249 秒窗口的事件循环 p50 1.94 ms / p95 26.19 ms / p99 391.17 ms / 最大 1,531 ms；`sessions` 任务 5 轮、最长 7,411 ms，仍无法把单轮停顿单独归给 DSH。
+
+本机 77 个会话头里没有 `isSeeded: true`（70 个 version 0 没有该字段，7 个 version 4 为 false），所以 seeded 分叉的真实路径本轮没有走到；剩余 3 个曾读文件与 61 个未读目录继续由 backfill 推进。

@@ -82,7 +82,7 @@ DSH 每写完一批事件就追加一个完整 frame，文件长度单调增长�
 - 同父的两个子代理使用相同 seq 时各建一行，证据各自带 subagent id，不互相挤掉。
 - 格式 1 的 `seedLength: 2` 只把前两条 assistant 放进窗口，自己那笔调用的 `msg_count` 为 3、用量取自己的 7/3。
 
-`bun test` 1257 pass / 0 fail（109 个文件），`bun run typecheck` 退出 0。真实流量与生产回填读数见[验收记录](../../../../docs/acceptance.md#dsh-会话适配器合成--生产真实流量2026-11-04)，本 note 不复制读数。
+`bun test` 1258 pass / 0 fail（109 个文件），`bun run typecheck` 退出 0。真实流量与生产回填读数见[验收记录](../../../../docs/acceptance.md#dsh-会话适配器合成--生产真实流量2026-11-04)，本 note 不复制读数。
 
 ## Consequences
 
