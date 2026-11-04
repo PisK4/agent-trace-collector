@@ -10,10 +10,12 @@
  * 结算时把回复项追加进窗口，避免请求体在轮次之间断裂。
  */
 
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { zstdDecompress } from 'node:zlib';
 import { normalizeResponseId } from '../../magpie/mapping';
-import { discoverJsonl, jsonlBatch, jsonlRead } from '../read';
+import { discoverJsonl, jsonlBatch, jsonlRead, sealedJsonlRead } from '../read';
 import type { SourceCursor, SourceRead } from '../../files';
 import type {
   SessionAdapter, SessionApplyResult, SessionCall, SessionFile, SessionParseResult, SessionUsage,
@@ -211,6 +213,84 @@ function applyEvent(state: CodexState, event: SessionParseResult & { kind: 'even
   }
 }
 
+type TwinRelation = 'equal' | 'plain-prefix' | 'sealed-prefix' | 'differ';
+type TwinCacheEntry = {
+  plainSize: number;
+  plainMtime: number;
+  sealedSize: number;
+  sealedMtime: number;
+  relation: TwinRelation;
+};
+const twinCache = new Map<string, TwinCacheEntry>();
+
+/** 同名 plain 与 .zst 的内容关系；同大小同 mtime 的原地替换不会被发现。 */
+async function twinRelation(plain: SessionFile, sealed: SessionFile): Promise<TwinRelation> {
+  const key = `${plain.path}\0${sealed.path}`;
+  const cached = twinCache.get(key);
+  if (cached !== undefined
+    && cached.plainSize === plain.size && cached.plainMtime === plain.mtimeMs
+    && cached.sealedSize === sealed.size && cached.sealedMtime === sealed.mtimeMs) {
+    return cached.relation;
+  }
+  let relation: TwinRelation = 'differ';
+  try {
+    const [plainText, sealedBytes] = await Promise.all([
+      readFile(plain.path, 'utf8'),
+      readFile(sealed.path),
+    ]);
+    const sealedText = await new Promise<string>((resolve, reject) => {
+      zstdDecompress(sealedBytes, { maxOutputLength: 256 * 1024 * 1024 }, (error, result) => {
+        if (error !== null) reject(error);
+        else resolve(result.toString('utf8'));
+      });
+    });
+    relation = plainText === sealedText ? 'equal'
+      : sealedText.startsWith(plainText) ? 'plain-prefix'
+        : plainText.startsWith(sealedText) ? 'sealed-prefix' : 'differ';
+  } catch {
+    relation = 'differ';
+  }
+  twinCache.set(key, {
+    plainSize: plain.size, plainMtime: plain.mtimeMs,
+    sealedSize: sealed.size, sealedMtime: sealed.mtimeMs, relation,
+  });
+  return relation;
+}
+
+/**
+ * Codex 把旧 rollout 压缩成同名 `.jsonl.zst`。两者内容相等或互为前缀时只留
+ * 覆盖更全的一份；内容分叉时都保留，交给共用写路径按调用身份去重。
+ */
+async function selectSnapshots(files: readonly SessionFile[]): Promise<SessionFile[]> {
+  const groups = new Map<string, SessionFile[]>();
+  for (const file of files) {
+    const key = file.name.endsWith('.jsonl.zst') ? file.name.slice(0, -4) : file.name;
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [file]);
+    else group.push(file);
+  }
+  const kept: SessionFile[] = [];
+  for (const group of groups.values()) {
+    if (group.length === 2) {
+      const plain = group.find(file => !file.name.endsWith('.jsonl.zst'));
+      const sealed = group.find(file => file.name.endsWith('.jsonl.zst'));
+      if (plain !== undefined && sealed !== undefined) {
+        const relation = await twinRelation(plain, sealed);
+        if (relation === 'equal' || relation === 'sealed-prefix') {
+          kept.push(plain);
+          continue;
+        }
+        if (relation === 'plain-prefix') {
+          kept.push(sealed);
+          continue;
+        }
+      }
+    }
+    kept.push(...group);
+  }
+  return kept;
+}
+
 export const codexAdapter: SessionAdapter = {
   agent: 'codex',
   sourceKind: 'codex_session',
@@ -230,11 +310,15 @@ export const codexAdapter: SessionAdapter = {
   },
 
   discover(root, cursorFor) {
-    return discoverJsonl(root, cursorFor);
+    return discoverJsonl(root, cursorFor, { extensions: ['.jsonl', '.jsonl.zst'] });
   },
 
+  select: selectSnapshots,
+
   read(file: SessionFile, cursor: SourceCursor | null): Promise<SourceRead> {
-    return jsonlRead(file, cursor, 'codex_session');
+    return file.path.endsWith('.jsonl.zst')
+      ? Promise.resolve(sealedJsonlRead(file, cursor, 'codex_session'))
+      : jsonlRead(file, cursor, 'codex_session');
   },
 
   parse(text: string): SessionParseResult {

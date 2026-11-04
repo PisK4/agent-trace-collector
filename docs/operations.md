@@ -410,7 +410,7 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 
 页面顶栏在降级时显示标签：`metadata_only` 出「存储降级 · 正文暂停」，`paused` 出「存储降级 · 采集暂停」，正常态不占位。标签在启动、显式刷新与点按时各读一次 `/api/stats` 的 `admission`，不轮询，所以切换后可能滞后，点按即重新读取。标签只说明当前准入与原因；哪些正文没保存，看每笔记录的 `miss_reason`。
 
-回收在单个事务里删引用、删孤儿块、清骨架、改状态，`have` 与历史读数不动，`body_prev_state` 保留原状态。raw 层保留 7 天，到期只删原文、给证据标 `payload_state=expired`；仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。
+回收在单个事务里删引用、删孤儿块、清骨架、改状态，`have` 与历史读数不动，`body_prev_state` 保留原状态。raw 层保留 7 天，到期只删原文、给证据标 `payload_state=expired`；仍带正文又没完成关联的 hook 原文不按到期删，只在 `ingest_issue` 记 `raw_hook_body_unlinked`。会话原始层同样按 7 天 TTL，只清没有游标引用的孤儿代际与已封口且 7 天没有成功摄入的代际；追加文件的当前代际保留，供批次间重放。`/api/metrics` 的 `raw_session_rows` 与 `raw_session_bytes` 是这两类增长的观察口径。
 
 ## 派生切片与代际
 
@@ -558,7 +558,7 @@ sqlite3 "$HOME/Library/Application Support/tracery/trace.db" \
 
 当前 `user_version=12`。空数据目录首次启动直接建到 v12；v6 到 v11 库打开时在单个事务里原地升到 v12，更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 到 v12，旧版本包恢复后首次打开同样原地升级。
 
-v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列，五个本地 Agent 适配器与 droid 共用一张原始层。旧行保留并补 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若因旧脚本同时存在两张表，旧表行先并入再删除。升级不扫描正文，停顿是毫秒级。升级后 `sessions` 定时器每 60 秒轮转一家适配器，从偏移 0 开始按每家 64 个文件或 2 MiB 追历史；页面上 `via='session'` 的行按 `agent` 区分来源。
+v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列，五个本地 Agent 适配器与 droid 共用一张原始层。旧行保留并补 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若因旧脚本同时存在两张表，旧表行先并入再删除。升级不扫描正文，停顿是毫秒级。升级后 `sessions` 定时器从偏移 0 开始按每家 64 个文件或 2 MiB 追历史；当前调度改为 live/backfill 两档，见[架构设计](architecture-design.md)。页面上 `via='session'` 的行按 `agent` 区分来源。
 
 v11 在 v10 之上新增 `raw_droid_event` 与 `session_usage` 两张表及一条索引，建表与索引全是 `IF NOT EXISTS`，不扫描存量、不回填，升级停顿是毫秒级。升级后的第一轮 droid 扫描从各转录的偏移 0 开始，按每轮 64 个文件或 8 MiB 分批摄入历史；已有行由统一 owner 规则认领，不重复建行。
 

@@ -17,7 +17,7 @@ import { syncCosts } from './sources/magpie/costs';
 import { probeMagpie, saveProbe } from './sources/magpie/probe';
 import { ingestDroidBatch } from './sources/droid/ingest';
 import { droidSessionsRoot } from './sources/droid/discover';
-import { ingestSessionBatch } from './sources/session/ingest';
+import { runSessionScheduler, type SessionSchedulerState } from './sources/session/scheduler';
 import { SESSION_ADAPTERS } from './sources/session/registry';
 import type { SessionAdapter } from './sources/session/types';
 import { createHandler, loadReadToken } from './http';
@@ -246,15 +246,18 @@ export async function startCollector(
     await ingestDroidBatch(store, droidRoot, salt, Date.now());
   });
 
-  // 五家会话适配器共用一个定时器：每轮轮转一家，单家失败只冻结自己。
+  // 所有适配器每分钟发现一次；活跃文件走 live 小预算，历史积压轮转回填。
   const sessionAdapters = options?.sessionAdapters ?? SESSION_ADAPTERS;
-  let sessionCursor = 0;
+  const sessionState: SessionSchedulerState = { backfillCursor: 0 };
   const sessionsTick = guard('sessions', async () => {
-    if (sessionAdapters.length === 0) return;
-    const adapter = sessionAdapters[sessionCursor % sessionAdapters.length]!;
-    sessionCursor += 1;
-    const roots = options?.sessionRoots?.(adapter) ?? adapter.roots(process.env, homedir());
-    await ingestSessionBatch(store, adapter, roots, salt, Date.now());
+    await runSessionScheduler(
+      store,
+      sessionAdapters,
+      adapter => options?.sessionRoots?.(adapter) ?? adapter.roots(process.env, homedir()),
+      salt,
+      Date.now(),
+      sessionState,
+    );
   });
 
   const costTick = guard('cost', async () => {
@@ -287,7 +290,8 @@ export async function startCollector(
   const rawPruneTick = guard('raw_prune', () => {
     const now = Date.now();
     const pruned = pruneRaw(store, now - RAW_TTL_MS);
-    if (pruned.ledger + pruned.route + pruned.hook + pruned.otlpSpan + pruned.otlpLog > 0) shrinkStorage(store);
+    if (pruned.ledger + pruned.route + pruned.hook + pruned.otlpSpan + pruned.otlpLog
+      + pruned.session > 0) shrinkStorage(store);
   });
 
   const gapTick = guard('gap', () => {

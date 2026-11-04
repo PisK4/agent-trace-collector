@@ -219,6 +219,8 @@ export function metadataSnapshot(store: Store): {
   projection_meta_json_bytes: number;
   queue_clean_bytes: number;
   result_metadata_bytes: number;
+  raw_session_rows: number;
+  raw_session_bytes: number;
   total_bytes: number;
   per_clean_group_bytes: number | null;
   per_request_bytes: number | null;
@@ -241,6 +243,10 @@ export function metadataSnapshot(store: Store): {
         'basis_json', 'delta_ordinals', 'purpose_chain'],
       'JOIN derive_queue q ON q.published_generation=derive_request_result.generation');
   const requestCount = numeric(store.read, 'SELECT COUNT(*) FROM request');
+  const rawSessionRows = hasTable(store.read, 'raw_session_event')
+    ? numeric(store.read, 'SELECT COUNT(*) FROM raw_session_event') : 0;
+  const rawSessionBytes = hasTable(store.read, 'raw_session_event')
+    ? byteSum(store.read, 'raw_session_event', ['payload_json']) : 0;
   const total = queueCleanBytes + sourceFactsBytes + projectionMetaBytes + resultMetadataBytes;
   return {
     clean_groups: cleanGroups,
@@ -248,6 +254,8 @@ export function metadataSnapshot(store: Store): {
     projection_meta_json_bytes: projectionMetaBytes,
     queue_clean_bytes: queueCleanBytes,
     result_metadata_bytes: resultMetadataBytes,
+    raw_session_rows: rawSessionRows,
+    raw_session_bytes: rawSessionBytes,
     total_bytes: total,
     per_clean_group_bytes: cleanGroups === 0 ? null : total / cleanGroups,
     per_request_bytes: requestCount === 0 ? null : total / requestCount,

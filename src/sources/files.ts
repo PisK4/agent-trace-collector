@@ -220,7 +220,7 @@ export async function readBatch(
 }
 
 /** 解压后的文本切成完整行，并算出已提交的解压字节数。 */
-function sealedLines(text: string): { lines: SourceLine[]; committedOff: number } {
+export function sealedLines(text: string): { lines: SourceLine[]; committedOff: number } {
   const parts = text.split('\n');
   if (parts.length > 0 && parts[parts.length - 1] === '') parts.pop();
   let offset = 0;

@@ -183,7 +183,7 @@ magpie gateway
   ├─ 路由文件（只读）───────> route tailer ──┼─> reconciler ─> SQLite（WAL）
   └─ 用量接口（只读）───────> direct 回填 ───┘                   ▲
                                                                 │
-droid 会话文件（只读）──────> 会话摄入（droid 适配器）───────────┤
+droid 与本地 Agent 会话文件（只读）──> 会话摄入（适配器）───────────┤
 harness OTLP exporter（Claude Code / OMP / Codex）
   └─ POST /v1/traces、/v1/logs ─────────────────────────────────┘
 
@@ -196,7 +196,7 @@ harness OTLP exporter（Claude Code / OMP / Codex）
 | --- | --- | --- |
 | ingest | HTTP 请求 | 脱敏、分块、入块库、写 `raw_hook` 头与 `request`，事务提交后返回；OTLP 端点同走这里：解码、映射、落 `raw_otlp_*` 与 `otlp_body_ref` |
 | tailer | 定时（账本 5 秒，路由 2 秒） | 按文件代际与完整行偏移增量读两个来源 |
-| droid 摄入 | 定时（默认 60 秒） | 经共用会话摄入增量读 droid 转录；原始层、请求行、正文、证据与游标走同一写路径，droid 私有部分只剩 settings 累计刷新 |
+| 会话摄入 | 定时（默认 60 秒，live/backfill 两档） | 每轮先对所有适配器做只读发现；10 分钟内活跃的文件走 live，最多 4 家；其余历史积压按轮转走一家 backfill。droid 保留独立 60 秒定时器与 8 MiB 预算 |
 | reconciler | 定时（1 秒）加 ingest 完成事件 | 合并证据、补前驱、重算受影响派生 |
 | query | HTTP 请求 | 只读查询 |
 
@@ -410,13 +410,22 @@ Claude Code、Codex、Zcode、OMP、Pi 与 droid 的本地会话走同一条采�
 | Agent | 根 | 形态 | 调用单位 | 正文协议 |
 | --- | --- | --- | --- | --- |
 | Claude Code | `$CLAUDE_CONFIG_DIR` 或 `~/.claude` 下的 `projects` | JSONL | assistant 行的 `message.id`；同一响应的多行按 id 合并 | `anthropic` |
-| Codex | `$CODEX_HOME` 或 `~/.codex` 下的 `sessions` 与 `archived_sessions` | JSONL | `token_usage_record` 或 `event_msg/token_count` | `responses` |
+| Codex | `$CODEX_HOME` 或 `~/.codex` 下的 `sessions` 与 `archived_sessions` | JSONL 与 `.jsonl.zst` | `token_usage_record` 或 `event_msg/token_count` | `responses` |
 | Zcode | `$ZCODE_HOME` 或 `~/.zcode` 下的 `cli/db/db.sqlite` | SQLite | assistant 消息，`model_usage` 的 rowid 作游标 | `anthropic` |
-| OMP | `$OMP_HOME` 或 `~/.omp` 下的 `agent/sessions` | JSONL | assistant 消息；消息 id 或行偏移 | `anthropic` |
-| Pi | `$PI_HOME` 或 `~/.pi` 下的 `agent/sessions` | JSONL | 同 OMP，共用解析器 | `anthropic` |
+| OMP | `$PI_CONFIG_DIR` 或 `~/.omp` 下的 `agent/sessions` 与 `profiles/*/agent/sessions`；XDG 数据根下的 `sessions` 与 `profiles/*/sessions` | JSONL | assistant 消息；消息 id 或行偏移 | `anthropic` |
+| Pi | `$PI_CODING_AGENT_DIR` 或 `~/.pi/agent` 下的 `sessions`；全局 `settings.json` 的 `sessionDir` | JSONL | 同 OMP，共用解析器 | `anthropic` |
 | droid | `$FACTORY_HOME_OVERRIDE/.factory/sessions` 或 `~/.factory/sessions` | JSONL | assistant 消息；`openaiMessageId` 作响应 id | `droid-session` |
 
-五个非 droid 适配器共用一个 `sessions` 定时器，每 60 秒轮转一家；每家每轮最多 64 个文件或 2 MiB，未读完的靠游标留到下一轮，新文件按 mtime 从新到旧取。droid 保留独立 `droid` 定时器与 8 MiB 预算，按剩余字节从大到小取，不放进轮转，避免同一来源被两个定时器重复摄入。单家抛错只冻结这一家。启动后的第一轮异步跑，不挡 HTTP 监听。测试用 `CollectorOptions.sessionAdapters` 与 `sessionRoots` 注入合成根，不读真实主目录。
+OMP/Pi 的多根在适配器里展开：OMP 还读 `PI_CODING_AGENT_DIR`、`PI_CODING_AGENT_SESSION_DIR` 与 `OMP_HOME`；Pi 还读 `PI_CODING_AGENT_SESSION_DIR` 与 `PI_HOME`。共享发现按 `source_name` 去重，重叠根只进一次。Pi 的项目级 `.pi/settings.json` 没有可枚举的 cwd，不扫。
+
+Codex 归档的 `.jsonl.zst` 按整份内容读取：压缩字节的 SHA-256 作为代际与指纹，同指纹不再解压；解压失败记 `codex_zstd_invalid`，超过 256 MiB 记 `codex_zstd_limit`，游标不前进。压缩文件按单个 zstd frame 处理。同名 plain 与 zst 先比较解压内容；相等或互为前缀时只留覆盖更全的一份，分叉时都保留。
+
+五个非 droid 适配器共用一个 `sessions` 定时器，每 60 秒跑一轮。每轮先对全部适配器做一次只读发现，只 stat；发现后 Codex 对同名 plain/zst twin 读两份比较内容，结果按大小与 mtime 缓存。
+
+- live：mtime 在 10 分钟内的文件，按 mtime 从新到旧，最多 4 家，每家 2 个文件或 256 KiB；
+- backfill：从轮转游标选一家仍有剩余的来源，重新发现后按该适配器自己的预算摄入，每家每轮最多 64 个文件或 2 MiB；没有剩余的来源跳过。
+
+live 先于 backfill，活跃会话不用等轮转；第 5 家活跃来源要等下一轮，历史积压仍由 backfill 覆盖。droid 保留独立 `droid` 定时器与 8 MiB 预算，按剩余字节从大到小取，不放进轮转，避免同一来源被两个定时器重复摄入。单家抛错只冻结这一家。启动后的第一轮异步跑，不挡 HTTP 监听。测试用 `CollectorOptions.sessionAdapters` 与 `sessionRoots` 注入合成根，不读真实主目录。
 
 调用身份：有精确 response id 的用 id（Claude 的 `message.id` 去掉 `msg_`，Codex 的 `response_id`）；没有的优先用同来源稳定的物化身份（OMP/Pi 的行偏移、Zcode 的消息 id）。用量一律归一到 magpie 口径（`input` 不含 cache read/write）；Codex 的 `input_tokens` 与 Zcode 的 `input_tokens` 都含缓存，要减掉。四段用量齐全时进 `usage_fingerprint.v1`，与网关行去重；指纹不比较模型名，跨来源写法不同不构成两笔调用。没有指纹时按同会话 ±60 秒、模型名归一后比较的弱线索兜底。
 
@@ -660,7 +669,7 @@ CREATE TABLE session_usage (
 ) WITHOUT ROWID;
 ```
 
-`raw_session_event` 是追加文件在批次之间重放解析状态的唯一来源，当前不参与 rawPrune；转录整份落原始层后，纳入回收前要先另存解析位点。`source_kind` 区分 droid 与各本地适配器；物理主键仍是 `(file_generation, byte_offset)`，Zcode 的 offset 用 `model_usage` 的 rowid。Zcode 不落这张表：物化行可重读，`storesRaw: false`，避免把每条调用携带的整段上下文重复存一遍。`session_usage` 每个 `(agent, session)` 一行，覆盖写按 `source_hash` 判变化，`source_path` 与 `source_hash` 留作来源审计。
+`raw_session_event` 是追加文件在批次之间重放解析状态的唯一来源。回收只清两类代际：没有任何 `source_cursor` 引用的孤儿代际，以及 `fingerprint IS NOT NULL`、`last_ok_ms` 超过 7 天的封口代际。追加文件的当前代际保留，重放要从本代际第一行开始，按年龄删会让后续批次缺历史消息。`source_kind` 区分 droid 与各本地适配器；物理主键仍是 `(file_generation, byte_offset)`，Zcode 的 offset 用 `model_usage` 的 rowid。Zcode 不落这张表：物化行可重读，`storesRaw: false`，避免把每条调用携带的整段上下文重复存一遍。`session_usage` 每个 `(agent, session)` 一行，覆盖写按 `source_hash` 判变化，`source_path` 与 `source_hash` 留作来源审计。
 
 ### 路由摘要长期层
 
@@ -1293,6 +1302,8 @@ droid 行在落库时由转录重建正文，正常为 `available`；行建好�
 
 16 GB 是硬上限。只停正文挡不住整个库的增长：`request`、`request_evidence`、`route_summary` 都是长期保留的，正文停了它们照涨。按每笔约 2 KB 的读数字段加索引，4,000 笔/天约 8 MB/天，一年 2.9 GB 左右；请求量翻十倍就是 29 GB，单靠元数据就会超过 16 GB。
 
+会话原始层单独计量：`metadataSnapshot` 在 `/api/metrics` 给出 `raw_session_rows` 与 `raw_session_bytes`，轻量快照不做全表求和。它按 7 天 TTL 清孤儿代际与封口代际，追加代际随会话增长，当前没有按年龄回收。
+
 所以分两级：
 
 | 水位 | 动作 |
@@ -1331,7 +1342,8 @@ OTLP 摄入走同一梯度：80% 档 span 与摘要照收，body_ref 停止读�
    body_state = 'evicted'，body_evicted_at = now，
    body_evict_reason = 'budget'
 5. 清空这些 req_id 在 raw_hook 里未清空的正文副本
-6. 超过保留期的 raw_ledger / raw_route / raw_hook 按天删除
+6. 超过保留期的 raw_ledger / raw_route / raw_hook / raw_otlp_* 按天删除；
+   会话层只删孤儿代际与过期封口代际，追加代际保留
 7. PRAGMA incremental_vacuum，随后 PRAGMA wal_checkpoint(TRUNCATE)
 ```
 
@@ -1482,7 +1494,7 @@ hook 拿到的是脱敏前的正文。collector 自己实现一层，规则分�
 11. droid 的 `openaiMessageId` 与 magpie `response_id` 是否同值空间。本机 droid 不走 magpie，无法用真实流量核对；若不同值，droid 接入 magpie 后仍会双行，需要扩展规范化前缀表并升匹配规则版本。
 12. droid 子代理 settings 是否独立计数。本机样本的 `childInclusiveTokenUsageBySessionId` 为空，当前只记主会话累计；更多样本确认前不改口径。
 13. 一条 assistant 消息是否恒为一次模型调用。thinking-only 或空回复的边界未覆盖；`agent_turn_outcome` 的失败形状本机只有 completed 与 cancelled，原始层先保留。
-14. `raw_session_event` 的回收点。它当前是批次间重放的唯一来源，不参与 rawPrune；要回收必须先另存解析位点，否则重放会缺消息窗口。
+14. 追加代际的原始层回收点。当前只清孤儿代际与封口代际；追加文件的当前代际仍保留，因为重放要从本代际第一行开始。要按年龄清它，得先设计清原始层时重置游标、下次从头重读的路径。
 
 ## 两轮修正的记录
 

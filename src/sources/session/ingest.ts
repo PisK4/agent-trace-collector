@@ -440,29 +440,47 @@ export async function ingestSessionFile(
   return result;
 }
 
-/** 发现、取件并摄入一批；单轮上限归适配器。 */
-export async function ingestSessionBatch(
+/** 发现一家适配器当前可取的文件；根读不出只冻结这一家。 */
+export async function discoverSessionFiles(
   store: Store,
   adapter: SessionAdapter,
   roots: readonly string[],
-  salt: Uint8Array,
   now: number,
-): Promise<SessionIngestResult> {
+): Promise<SessionFile[]> {
   const cursorFor = (name: string) => {
     const cursor = readFileCursor(store, adapter.sourceKind, name);
     return cursor === null ? null
       : { generation: cursor.generation, committedOff: cursor.committedOff, seenSize: cursor.seenSize };
   };
   const files: SessionFile[] = [];
+  // source_name 是游标身份：文件是绝对路径，Zcode 是 `<db>#<session>`；
+  // 同一根下的多个 Zcode 会话共用 path，不能用 path 去重。
+  const seen = new Set<string>();
   for (const root of roots) {
     try {
-      files.push(...await adapter.discover(root, cursorFor));
+      for (const file of await adapter.discover(root, cursorFor)) {
+        if (seen.has(file.name)) continue;
+        seen.add(file.name);
+        files.push(file);
+      }
     } catch {
       // 根存在但本轮读不出：冻结这一家，不影响其余适配器。
       store.write(db => recordIssue(db, adapter.issueKind, root, 'session_root_unreadable', now, null),
         adapter.agent);
     }
   }
+  return adapter.select === undefined ? files : await adapter.select(files);
+}
+
+/** 摄入已发现的一批文件；调用方决定取件范围与单轮预算。 */
+export async function ingestSessionFiles(
+  store: Store,
+  adapter: SessionAdapter,
+  files: readonly SessionFile[],
+  salt: Uint8Array,
+  now: number,
+  batch: { maxFiles: number; maxBytes: number } = adapter.batch,
+): Promise<SessionIngestResult> {
   const selected = [...files]
     .filter(file => file.remaining > 0)
     // 默认新文件优先：历史回填期间，正在写入的会话先出现。droid 保持按
@@ -473,7 +491,7 @@ export async function ingestSessionBatch(
   const total = emptySessionIngestResult();
   let bytes = 0;
   for (const file of selected) {
-    if (total.files >= adapter.batch.maxFiles || bytes >= adapter.batch.maxBytes) break;
+    if (total.files >= batch.maxFiles || bytes >= batch.maxBytes) break;
     const result = await ingestSessionFile(store, adapter, file, salt, now);
     total.files += result.files;
     total.calls += result.calls;
@@ -489,4 +507,16 @@ export async function ingestSessionBatch(
     bytes += result.bytes;
   }
   return total;
+}
+
+/** 发现、取件并摄入一批；单轮上限归适配器。 */
+export async function ingestSessionBatch(
+  store: Store,
+  adapter: SessionAdapter,
+  roots: readonly string[],
+  salt: Uint8Array,
+  now: number,
+): Promise<SessionIngestResult> {
+  const files = await discoverSessionFiles(store, adapter, roots, now);
+  return ingestSessionFiles(store, adapter, files, salt, now);
 }
