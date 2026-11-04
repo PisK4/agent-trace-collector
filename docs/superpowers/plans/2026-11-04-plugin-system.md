@@ -17,15 +17,15 @@
 
 ### 1. 目录改名
 
-- [ ] `plugins/collector.hooks.ts` 移到 `integrations/magpie-hook/collector.hooks.ts`
-- [ ] `tests/hook.test.ts` 两处 import 改路径
-- [ ] `tsconfig.json:13` 的 include 加 `integrations/**/*.ts`
-- [ ] `scripts/verify-change-notes.mjs:20` 的 `TRIGGER_PREFIXES` 同步
-- [ ] `scripts/service.ts:34`、`docs/operations.md:470` 的路径注释
-- [ ] `README.md:36`、`README.zh-CN.md:36`、根 `AGENTS.md:50`
-- [ ] implemented note 里 3 处 `plugins/collector.hooks.ts` 相对链接、2 处目录描述改为新路径，只改事实
-- [ ] 生产 `~/.config/magpie/plugins.json` 第 37 行 spec 改新绝对路径，重启 magpie 宿主
-- [ ] `bun run typecheck`、`tests/hook.test.ts`、`bun run verify:notes:staged`
+- [x] `plugins/collector.hooks.ts` 移到 `integrations/magpie-hook/collector.hooks.ts`（`52744e8`）
+- [x] `tests/hook.test.ts` 两处 import 改路径
+- [x] `tsconfig.json:13` 的 include 加 `integrations/**/*.ts`
+- [x] `scripts/verify-change-notes.mjs:20` 的 `TRIGGER_PREFIXES` 同步
+- [x] `scripts/service.ts:34`、`docs/operations.md:472` 的注册片段示例
+- [x] `README.md:36`、`README.zh-CN.md:36`、根 `AGENTS.md:50`
+- [x] implemented note 里 3 处 `plugins/collector.hooks.ts` 相对链接、2 处目录描述改为新路径，只改事实；另同步 `docs/agent-request-kind-review.md` 两处路径引用、proposed hermes note 一处相对链接、change-note-gate 决策记录里的路径清单
+- [ ] 生产 `~/.config/magpie/plugins.json` 第 37 行 spec 改新绝对路径，重启 magpie 宿主（仓库外动作，合并到 master 时办，改前先看目标）
+- [x] `bun run typecheck`、`tests/hook.test.ts`（44 pass）、`bun run verify:notes:staged`、全部 `collector.hooks.ts` 相对链接存活
 
 ### 2. 登记层与边界
 
