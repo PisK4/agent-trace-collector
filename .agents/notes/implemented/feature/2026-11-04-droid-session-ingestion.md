@@ -1,6 +1,6 @@
 # Agent Note: Droid 会话文件摄入与跨来源去重
 
-Status: proposed
+Status: implemented
 
 ## Problem
 
@@ -12,7 +12,7 @@ Droid（Factory 的编码 Agent）属于完全未接入的一类。它的调用�
 
 ### 本机 droid 的数据形状
 
-`~/.factory/sessions/` 下 216 个 `.jsonl` 转录、114 MB，另有 183 个 `.settings.json`。文件按工作目录分目录，旧版直接放在根目录。抽样一个 270 行会话（2026-08-24）：
+`~/.factory/sessions/` 下 216 个 `.jsonl` 转录（111.7 MiB），每个转录各带一份 `.settings.json`（共 216 份、354 KB）。文件按工作目录分目录，旧版直接放在根目录。抽样一个 270 行会话（2026-08-24）：
 
 | 行类型 | 数量 | 内容 |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ Droid（Factory 的编码 Agent）属于完全未接入的一类。它的调用�
 
 ### 为什么第一版选 droid
 
-droid 完全未接入，不会与现有 magpie 行产生重叠，去重压力最小；转录带完整正文、逐条时间、逐条模型与响应 id，是「尽量还原」能拿到的最好材料；本机有 114 MB 真实数据可用于验收。Claude Code 与 Codex 已走 magpie，扫描它们的第一价值是历史回填，牵涉的跨来源去重更重，放在后续。
+droid 完全未接入，不会与现有 magpie 行产生重叠，去重压力最小；转录带完整正文、逐条时间、逐条模型与响应 id，是「尽量还原」能拿到的最好材料；本机有 111.7 MiB 真实数据可用于验收。Claude Code 与 Codex 已走 magpie，扫描它们的第一价值是历史回填，牵涉的跨来源去重更重，放在后续。
 
 ### 还原度
 
@@ -37,11 +37,11 @@ droid 完全未接入，不会与现有 magpie 行产生重叠，去重压力最
 
 请求体是重建的：每轮的消息数组按转录拼接，不含 droid 发给模型的 system prompt 与工具定义。界面必须标明「会话文件还原」，不能把它当成与 hook 正文同等的原始请求。
 
-## Proposal
+## Decision
 
 ### 来源与发现
 
-新增 `src/sources/droid/`，三个文件：`discover.ts` 找文件与游标，`parse.ts` 把转录行解析成调用，`ingest.ts` 落库。第一版不做多 Agent 通用注册表；第二个来源接入时再抽公共接口，避免现在为一种格式写适配层。
+新增 `src/sources/droid/`，三个文件：`discover.ts` 找文件与游标，`parse.ts` 把转录行解析成调用，`ingest.ts` 落库。当前不做多 Agent 通用注册表；第二个来源接入时再抽公共接口，避免现在为一种格式写适配层。
 
 扫描根目录取 `$FACTORY_HOME_OVERRIDE/.factory/sessions`，否则 `~/.factory/sessions`，与 magpie 的 `FactoryDir` 一致（[droid.go:35](https://github.com/yetone/magpie/blob/3173440ca3be3eb0a855870d92faeadea6785aaa/internal/sessions/droid.go#L35-L43)）。匹配 `*.jsonl` 与 `*/*.jsonl`，忽略 `.settings.json`。
 
@@ -59,7 +59,7 @@ droid 完全未接入，不会与现有 magpie 行产生重叠，去重压力最
 
 fork 处理：`forkedAtMessageId` 之前的行是源会话的复制。它们进消息窗口（fork 的上下文包含它们），但不建 request 行；遇到该 id 之后的 assistant 行才开始建行。子代理处理：`callingSessionId` 非空时，`subagent` 与 `actor` 取自身 session id，`parent_agent` 取调用者 id；子代理的调用照常建行。
 
-`agent_turn_outcome` 第一版只落原始层，不解析成败。本机样本只有 completed 与 cancelled，失败形状未覆盖，先不猜。
+`agent_turn_outcome` 当前只落原始层，不解析成败。本机样本只有 completed 与 cancelled，失败形状未覆盖，先不猜。
 
 ### 落库与正文
 
@@ -89,7 +89,7 @@ schema v11 增加两张表。`raw_droid_event` 存脱敏后的整行原文与物
 
 多候选或零候选都不合并，独立成行，记 `match_ambiguous` 或 `match_absent`。这沿用仓库「不按相邻时间猜」的规则。`via='rejected'` 的行不参与任何一条线索：被上游拒绝的调用没有走到模型，不是同一笔调用的另一份证据。droid 写入前调用这个查找；`mergeLedgerRow` 在 `route_id` 未命中时也调用，账本迟到就能认领 OTLP 或 droid 已建的行，双份消失。
 
-`normalizeResponseId` 的前缀表目前是 `chatcmpl-`、`msg_resp_`、`msg_`、`resp_`（[mapping.ts:217](../../../../src/sources/magpie/mapping.ts)）。droid 的 `gen-` 是否应加入，取决于它是否与 magpie 账本的 `response_id` 同值；本机 droid 不走 magpie，无法验证。第一版按原样比较，验证后再决定是否升匹配规则版本。
+`normalizeResponseId` 的前缀表目前是 `chatcmpl-`、`msg_resp_`、`msg_`、`resp_`（[mapping.ts:217](../../../../src/sources/magpie/mapping.ts)）。droid 的 `gen-` 是否应加入，取决于它是否与 magpie 账本的 `response_id` 同值；本机 droid 不走 magpie，无法验证。当前按原样比较，验证后再决定是否升匹配规则版本。
 
 投影层仍只把 ledger、route、hook 作为字段来源；`otlp_span` 与 `session_call` 只贡献证据位与缺失标记。这样避免为一种新来源改动整个投影家族，也不会用低置信字段覆盖账本读数。合并到既有行时，droid 只补空字段，不覆盖已有值。
 
@@ -97,16 +97,7 @@ schema v11 增加两张表。`raw_droid_event` 存脱敏后的整行原文与物
 
 droid 行建好或合并后调用 `markRequestInputTx` 进派生队列。标题、前驱、工具配对走现有派生内核；重建的消息数组与 Claude Code 的形状一致，块序列比较可以直接使用。
 
-请求详情页在来源处标「droid 会话文件」；请求列表沿用现有 `via` 展示，不新增二级标签。会话头部显示「会话累计」用量，与逐笔用量的视觉分开。第一版不做 Agent 总览页；它等 direct 回填与第二个来源接入后再定。
-
-### 实施顺序
-
-1. schema v11：`raw_droid_event`、`session_usage`、`HAVE_SESSION`、`source_kind='session_call'`。
-2. `src/sources/droid/` 的发现、解析与单测，先只产出内存中的调用列表。
-3. 摄入接缝：游标、原始层、request 行、正文、派生入队。
-4. 统一 owner 查找与账本迟到合并，补 OTLP 双份用例。
-5. 查询与会话用量展示，来源标注。
-6. 本机全量验收，部署后再做真实流量核对。
+请求详情页在来源处标「droid 会话文件」；请求列表沿用现有 `via` 展示，不新增二级标签。会话头部显示「会话累计」用量，与逐笔用量的视觉分开。当前不做 Agent 总览页；它等 direct 回填与第二个来源接入后再定。
 
 ## Alternatives considered
 
@@ -120,29 +111,36 @@ droid 行建好或合并后调用 `markRequestInputTx` 进派生队列。标题�
 
 **现在抽多 Agent 通用解析器接口。** 只有一个来源时抽象是空转；第二个来源接入时按真实差异抽，代价更低。
 
-## Risks
+## Consequences
 
-- droid 没有逐笔用量，界面必须长期区分「会话累计」与「逐笔读数」，否则会被误读成每轮都没有用量。
+droid 的调用现在进了同一个 request 账本：转录按 assistant 消息建行，正文可按轮阅读，会话身份、fork 与子代理关系保留。去重不再靠来源各自建行，droid 写入与账本迟到都先走统一 owner 查找。
+
+代价是几类事实只能缺失或标注，不能补：
+
+- droid 没有逐笔用量。界面必须长期区分「会话累计」与「逐笔读数」，否则会被误读成每轮都没有用量。
 - 重建的请求体缺 system prompt 与工具定义，不能与 hook 正文同等对待；详情页要标来源。
 - `openaiMessageId` 与 magpie `response_id` 是否同值未验证。若不同值，droid 接入 magpie 后仍会双份，需要扩展匹配键。
 - 账本先到、OTLP 后到时，OTLP 仍按既有启发式独立建行；span 不带会话 id 或时间、模型对不上时两行并存。统一 owner 查找只覆盖 droid 写入与账本迟到，未改动 OTLP 的认领路径。
-- `raw_droid_event` 保存脱敏原文供每批重放，当前没有回收路径，体积随转录与改写代际线性增长。回收前要先有解析状态检查点，否则下一批会丢失会话与消息窗口。
+
+还有几条长期代价：
+
+- `raw_droid_event` 保存脱敏原文供每批重放，当前没有回收路径。全量扫描后原文合计 103.1 MiB，临时库 336 MB；体积随转录与改写代际线性增长。回收前要先有解析状态检查点，否则下一批会丢失会话与消息窗口。
 - 坏行停在原地会阻塞该文件后续所有调用，直到原文修复；这是为了后续请求体不缺点而做的取舍，issue 与游标位置可查。
-- droid 转录没有版本契约，`session_start.version` 目前为 2。格式变化时解析器要跟着改，错误行进 `ingest_issue`，不能让坏行推进游标。
-- 首次全量扫描 114 MB、216 个文件，会在启动后占用一段后台时间；分批读取把单轮代价压在 8 MiB 内。
+- 转录没有版本契约，`session_start.version` 目前为 2。格式变化时解析器要跟着改，错误行进 `ingest_issue`，不能让坏行推进游标。
+- 首次全量扫描 216 个文件、111.7 MiB，会占用一段后台时间；分批读取把单轮代价压在 8 MiB 内，生产上约一分钟一批。
 
-## Acceptance criteria
+## Testing
 
-合成 fixture 覆盖：普通会话、fork、子代理、截断文件、settings 缺失、assistant 消息缺 modelId。断言 assistant 消息数与 request 行数守恒，fork 复制段零建行，子代理归属正确。
+`tests/droid-parse.test.ts`、`droid-ingest.test.ts`、`droid-dedupe.test.ts` 与 `droid-acceptance.test.ts` 锁定这些行为：每条 assistant 消息一行、fork 复制段零建行、子代理归属、坏行停在行起点、截断末行等待、settings 覆盖写与停止增长时刷新、正文脱敏与可读、双向迟到认领、多候选不合并、`via='rejected'` 不被认领。
 
-去重用合成数据验证双向：droid 先建行、账本晚到；账本先建行、droid 晚到；两者 response id 相同；同会话时间窗内模型不同（断言不合并）。OTLP 与账本的迟到合并用同一组用例，断言最终只有一行、证据位齐全。
+全量 `bun test` 1200 pass / 0 fail（97 个文件），`tsc --noEmit` 退出 0。本机全量扫描的做法与读数记在[验收记录](../../../../docs/acceptance.md)，合成结果与真实转录结果分开记录。
 
-本机全量验收：扫描 216 个转录，统计建行数、正文可读率、`ingest_issue` 原因分布、单轮耗时与内存峰值。生产部署后只用只读查询核对 droid 行的数量与形状，不接受把合成结果写成真实流量通过。
-
-## 开放问题
+## Deferred
 
 - droid 接入 magpie 后，请求头里的 session id 是否等于 `session_start.id`。
 - `openaiMessageId` 与上游响应 id、magpie 账本 `response_id` 的对应关系。
 - 子代理 settings 是否真的不独立计数，需要更多样本或 droid 文档确认。
 - 一条 assistant 消息是否恒为一次模型调用，thinking-only 或空回复的边界未覆盖。
 - `agent_turn_outcome` 的失败形状，本机样本只有 completed 与 cancelled。
+- `raw_droid_event` 的回收要等解析状态检查点；回收策略与保留窗口尚未定。
+- OTLP 后到的认领路径尚未切到统一 owner 查找。
