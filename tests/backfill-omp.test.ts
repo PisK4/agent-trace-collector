@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
-import { migrateOmpSemantics } from '../scripts/backfill-omp-semantics';
+import { emptyBodyReadStats } from '../src/body-cache';
+import type { DrainResult } from '../src/derive/sync';
+import type { Store } from '../src/store';
+import { drainToEmpty, migrateOmpSemantics } from '../scripts/backfill-omp-semantics';
 
 test('migrateOmpSemantics 给缺列缺表的库补齐并重建视图，重复执行幂等', () => {
   const f = fixture();
@@ -31,4 +34,36 @@ test('migrateOmpSemantics 给缺列缺表的库补齐并重建视图，重复执
     migrateOmpSemantics(db);
     expect(columns('request').filter(name => name === 'context_event').length).toBe(1);
   } finally { f.close(); }
+});
+
+/** 合成派生轮次：drainToEmpty 的守卫只读这四个字段。 */
+function backfillRound(overrides: {
+  processed?: number; remaining?: number; groups?: { conv_key: string; actor: string }[];
+  purpose_processed?: number;
+}): DrainResult {
+  return {
+    processed: 0, remaining: 0, groups: [], recomputed: 0, retained: 0,
+    purpose_processed: 0, purpose_remaining: 0, discarded: 0,
+    body_read: emptyBodyReadStats(), batch_ms: 0, ...overrides,
+  };
+}
+
+test('drainToEmpty 有剩余组但一轮零进展时抛 derive_no_progress，不再空转', async () => {
+  let rounds = 0;
+  // 派生引擎在组消失、compute 返回 null 或用途滞留时会给出这种「有剩余、无完成」的轮次。
+  await expect(drainToEmpty({} as Store, 50, async () => {
+    rounds += 1;
+    return backfillRound({ remaining: 3 });
+  })).rejects.toThrow('derive_no_progress');
+  expect(rounds).toBe(1);
+});
+
+test('drainToEmpty 有进展的轮次继续排空，用途判定也算进展', async () => {
+  const rounds = [
+    backfillRound({ processed: 2, remaining: 1, groups: [{ conv_key: 'a', actor: 'b' }] }),
+    backfillRound({ purpose_processed: 1, remaining: 1, groups: [] }),
+    backfillRound({ processed: 1, remaining: 0, groups: [{ conv_key: 'a', actor: 'b' }] }),
+  ];
+  const processed = await drainToEmpty({} as Store, 50, async () => rounds.shift()!);
+  expect(processed).toBe(3);
 });

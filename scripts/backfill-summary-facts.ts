@@ -14,6 +14,7 @@ import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { GROUP_ALGORITHM } from '../src/derive/state';
 import { enqueueDerive } from '../src/derive/sync';
+import type { DrainResult } from '../src/derive/sync';
 import { drainDeriveEntry } from '../src/derive/unit';
 import type { Store } from '../src/store';
 import { defaultDataDir } from '../src/config';
@@ -54,6 +55,26 @@ export function migrateSummaryFacts(db: Database): void {
   }).immediate();
 }
 
+/**
+ * 排空到队列清空，返回累计完成组数。有剩余组的一轮既没完成组也没判用途时，
+ * 再跑同一份库不会有进展（compute 返回 null、组消失或用途滞留），抛
+ * derive_no_progress——守卫与 rebuild 同款。上限按连续无进展轮次计，不按
+ * 墙钟：慢但正常的大组单轮可能远超 30 秒。`drain` 供测试注入合成轮次。
+ */
+export async function drainToEmpty(store: Store, limit = 50,
+  drain: (store: Store, limit: number) => Promise<DrainResult> = drainDeriveEntry,
+): Promise<number> {
+  let processed = 0;
+  for (;;) {
+    const result = await drain(store, limit);
+    processed += result.processed;
+    if (result.remaining === 0) return processed;
+    if (result.groups.length === 0 && result.purpose_processed === 0) {
+      throw new Error('derive_no_progress');
+    }
+  }
+}
+
 // openStore 会拒绝版本低于当前的库；这个脚本的职责是给既有 v6 库补列，
 // 所以自己开连接。schema.sql 已带全部新列，这里只处理还没升级的旧库。
 // 主体收在 import.meta.main 里：tests 只导入 migrateSummaryFacts，
@@ -84,12 +105,7 @@ export async function runBackfill(): Promise<void> {
 
   for (const group of groups) enqueueDerive(store, group.conv_key, group.actor, '');
 
-  let processed = 0;
-  for (;;) {
-    const result = await drainDeriveEntry(store, 50);
-    processed += result.processed;
-    if (result.remaining === 0) break;
-  }
+  const processed = await drainToEmpty(store);
   process.stderr.write(`derived:${processed}\n`);
 
   // 分布速览：为验收核对提供一屏数字。
