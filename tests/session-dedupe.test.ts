@@ -50,6 +50,14 @@ test('模型名不同导致的历史重复行按指纹并回网关行', () => {
       via: 'session', evidence: 'zcode_session_call', ref: 'session-1', startedMs: 10_050,
       usage: USAGE, model: 'auto/deepseek-v4.1-flash',
     });
+    f.store.write(db => {
+      db.run("INSERT INTO tool_call(call_id,req_id,ord,tool_name,state) VALUES ('target-call',?,0,'Read','paired')",
+        [target]);
+      db.run("INSERT INTO tool_call(call_id,req_id,ord,tool_name,state) VALUES ('source-call',?,0,'Bash','paired')",
+        [source]);
+      db.run("INSERT INTO tool_call(call_id,req_id,ord,tool_name,state) VALUES ('source-only',?,1,'Bash','paired')",
+        [source]);
+    });
 
     expect(previewSessionDedupe(f.store)).toMatchObject({
       scanned: 1, candidates: 1, merged: 0, by_source: {},
@@ -67,6 +75,10 @@ test('模型名不同导致的历史重复行按指纹并回网关行', () => {
     const evidence = f.store.read.query<{ source_kind: string }, [number]>(
       'SELECT source_kind FROM request_evidence WHERE req_id=? ORDER BY source_kind').all(target);
     expect(evidence.map(row => row.source_kind)).toEqual(['ledger', 'zcode_session_call']);
+    // 工具链接同理：同 ord 保留目标行，源行独有的链接搬过来。
+    const tools = f.store.read.query<{ call_id: string; ord: number }, [number]>(
+      'SELECT call_id,ord FROM tool_call WHERE req_id=? ORDER BY ord').all(target);
+    expect(tools).toEqual([{ call_id: 'target-call', ord: 0 }, { call_id: 'source-only', ord: 1 }]);
   } finally {
     f.close();
   }

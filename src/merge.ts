@@ -76,8 +76,14 @@ export function mergeRequestTx(
     [targetId, sourceId, targetId],
   );
   db.run('DELETE FROM request_block WHERE req_id=?', [sourceId]);
-  db.run('UPDATE tool_call SET req_id=? WHERE req_id=?', [targetId, sourceId]);
+  // 工具链接同理：目标已有同 ord 时以目标为准，其余搬过来；result_req 先改指，
+  // 它不参与 (req_id, ord) 主键。
   db.run('UPDATE tool_call SET result_req=? WHERE result_req=?', [targetId, sourceId]);
+  db.run(
+    `UPDATE tool_call SET req_id=? WHERE req_id=? AND ord NOT IN (SELECT ord FROM tool_call WHERE req_id=?)`,
+    [targetId, sourceId, targetId],
+  );
+  db.run('DELETE FROM tool_call WHERE req_id=?', [sourceId]);
   db.run('UPDATE request SET prev_req_id=? WHERE prev_req_id=?', [targetId, sourceId]);
 
   const source = db.query<SourceRow, [number]>(`
