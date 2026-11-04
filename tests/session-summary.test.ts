@@ -1,13 +1,16 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixtures';
 import { persistBody } from '../src/body';
+import { emptyBodyReadStats } from '../src/body-cache';
 import { drainDerive, enqueueDerive } from '../src/derive/sync';
+import type { DrainResult } from '../src/derive/sync';
 import {
   interruptCountOf, replyCallsOf, requestResultsOf,
 } from '../src/derive/decision';
 import { isUserInterruptMessage } from '../src/input-interpretation';
 import { DERIVE_ALGORITHM, GROUP_ALGORITHM } from '../src/derive/state';
-import { migrateSummaryFacts } from '../scripts/backfill-summary-facts';
+import { drainToEmpty, migrateSummaryFacts } from '../scripts/backfill-summary-facts';
+import type { Store } from '../src/store';
 import {
   getSummaryEntries, getSessionSummary,
 } from '../src/queries/session-summary';
@@ -685,4 +688,36 @@ test('会话汇总：会话文件累计用量按会话键读出，非会话键�
     });
     expect(getSessionSummary(f.store, JSON.stringify(['request', 'x'])).session_usage).toBeNull();
   } finally { f.close(); }
+});
+
+/** 合成派生轮次：drainToEmpty 的守卫只读这四个字段。 */
+function backfillRound(overrides: {
+  processed?: number; remaining?: number; groups?: { conv_key: string; actor: string }[];
+  purpose_processed?: number;
+}): DrainResult {
+  return {
+    processed: 0, remaining: 0, groups: [], recomputed: 0, retained: 0,
+    purpose_processed: 0, purpose_remaining: 0, discarded: 0,
+    body_read: emptyBodyReadStats(), batch_ms: 0, ...overrides,
+  };
+}
+
+test('drainToEmpty 有剩余组但一轮零进展时抛 derive_no_progress，不再空转', async () => {
+  let rounds = 0;
+  // 派生引擎在组消失、compute 返回 null 或用途滞留时会给出这种「有剩余、无完成」的轮次。
+  await expect(drainToEmpty({} as Store, 50, async () => {
+    rounds += 1;
+    return backfillRound({ remaining: 3 });
+  })).rejects.toThrow('derive_no_progress');
+  expect(rounds).toBe(1);
+});
+
+test('drainToEmpty 有进展的轮次继续排空，用途判定也算进展', async () => {
+  const rounds = [
+    backfillRound({ processed: 2, remaining: 1, groups: [{ conv_key: 'a', actor: 'b' }] }),
+    backfillRound({ purpose_processed: 1, remaining: 1, groups: [] }),
+    backfillRound({ processed: 1, remaining: 0, groups: [{ conv_key: 'a', actor: 'b' }] }),
+  ];
+  const processed = await drainToEmpty({} as Store, 50, async () => rounds.shift()!);
+  expect(processed).toBe(3);
 });

@@ -182,22 +182,29 @@ function reportFailure(entry: ServiceEntry, reason: string): void {
   const last = readServiceState(entry.label);
   err(`${reason}:state_${last?.state ?? 'not_loaded'}:pid_${last?.pid ?? 'none'}`
     + `:runs_${last?.runs ?? 'unknown'}:last_exit_${last?.lastExitCode ?? 'unknown'}`);
-  for (const row of logTail(entry)) err(`  ${row}`);
+  const tail = logTail(entry);
+  for (const row of tail.lines) err(`  ${row}`);
+  if (tail.unreadable !== null) err(`  日志不可读：${tail.unreadable}`);
 }
 
-/** 日志尾部的连续重复折叠掉：采集器按周期重复写同一行，原样打出来只有噪声。 */
-function logTail(entry: ServiceEntry): string[] {
-  if (entry.stderrPath === null) return [];
-  return collapse(tailLines(entry.stderrPath, LOG_TAIL_LINES)).slice(-LOG_TAIL_GROUPS);
+/** 日志尾部的连续重复折叠掉：采集器按周期重复写同一行，原样打出来只有噪声。
+ *  读失败不与空日志混形：`unreadable` 带原因，调用方显式标出。 */
+function logTail(entry: ServiceEntry): { lines: string[]; unreadable: string | null } {
+  if (entry.stderrPath === null) return { lines: [], unreadable: null };
+  const tail = tailLines(entry.stderrPath, LOG_TAIL_LINES);
+  return { lines: collapse(tail.lines).slice(-LOG_TAIL_GROUPS), unreadable: tail.error };
 }
 
 async function commandStatus(entry: ServiceEntry): Promise<number> {
   field('服务', [entry.label, entry.plist].join(' · '));
   const healthy = await reportService(entry);
   const tail = logTail(entry);
-  if (tail.length > 0) {
+  if (tail.unreadable !== null) {
+    // 读失败与「没有日志内容」不同形：显式报原因，别让排障走错方向。
+    field('日志', `${entry.stderrPath} 不可读：${tail.unreadable}`);
+  } else if (tail.lines.length > 0) {
     field('日志', `${entry.stderrPath} 尾部`);
-    for (const row of tail) out(`      ${row}`);
+    for (const row of tail.lines) out(`      ${row}`);
   }
   return healthy ? 0 : 1;
 }
