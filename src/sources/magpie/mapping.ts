@@ -1,6 +1,13 @@
 /** magpie 记录的字段映射：字段读取原语、时间与响应 ID 规范化、账本与路由映射。 */
 
 import { localDay } from '../../format';
+import { canonicalSessionId } from '../../evidence';
+
+/** 会话 id 在入口归一一次：账本、路由与本地适配器共用同一个组键口径。 */
+function sessionField(record: Record<string, unknown>, key: string): string | null {
+  const value = optionalString(record, key);
+  return value === null ? null : canonicalSessionId(value);
+}
 
 /**
  * 来源字段的读取状态。
@@ -284,7 +291,7 @@ export function mapLedgerRow(row: Record<string, unknown>): LedgerFields | null 
     responseIdNorm: normalizeResponseId(responseId),
     rid: optionalString(row, 'rid'),
     ep: optionalString(row, 'ep'),
-    session: optionalString(row, 'session'),
+    session: sessionField(row, 'session'),
     nativeSession: optionalString(row, 'native_session'),
     subagent: optionalString(row, 'subagent'),
     parentAgent: optionalString(row, 'parent_agent'),
@@ -328,7 +335,7 @@ export function mapRouteRow(record: Record<string, unknown>): RouteFields | null
     timeMs,
     day: localDay(timeMs),
     agent: optionalString(record, 'agent'),
-    session: optionalString(record, 'session'),
+    session: sessionField(record, 'session'),
     conv: optionalString(record, 'conv'),
     folder: optionalString(record, 'folder'),
     subagentId: optionalString(record, 'subagent_id') ?? optionalString(record, 'subagentId'),

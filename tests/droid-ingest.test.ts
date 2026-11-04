@@ -92,7 +92,7 @@ test('普通会话落库：逐 assistant 建行、正文可读、证据/原始�
       { req_id: 2, source_kind: 'session_call', ref_key: 's1/m-a2', merge_state: 'merged', match_rule: 'match_absent' },
     ]);
 
-    expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_droid_event').get()).toEqual({ n: 6 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_session_event').get()).toEqual({ n: 6 });
     const usage = f.store.read.query(
       'SELECT agent, session, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, thinking_tokens, factory_credits FROM session_usage').get();
     expect(usage).toEqual({
@@ -290,7 +290,7 @@ test('转录不增长时只改 settings：会话累计仍刷新', async () => {
   }
 });
 
-test('原始层脱敏：敏感片段不进 raw_droid_event 与正文块', async () => {
+test('原始层脱敏：敏感片段不进 raw_session_event 与正文块', async () => {
   const root = makeRoot();
   const f = fixture();
   try {
@@ -301,7 +301,7 @@ test('原始层脱敏：敏感片段不进 raw_droid_event 与正文块', async 
     });
     writeSession(root, 's1.jsonl', [SESSION, user, ASSISTANT_1]);
     await ingestDroidBatch(f.store, root, SALT, Date.now());
-    const raw = f.store.read.query('SELECT payload_json FROM raw_droid_event').all() as { payload_json: string }[];
+    const raw = f.store.read.query('SELECT payload_json FROM raw_session_event').all() as { payload_json: string }[];
     expect(raw.some(row => row.payload_json.includes(secret))).toBe(false);
     const body = readBodyWithMessagesTx(f.store.read, 1);
     expect(JSON.stringify(body!.messages)).not.toContain(secret);

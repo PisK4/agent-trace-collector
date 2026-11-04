@@ -64,6 +64,11 @@
 - 防护：按 SQL 占位符数量逐个传参；带参数的断言先跑同一查询的无参版本核对总行数，再收紧到参数形状。
 - Seen 1× (2026-11-04).
 
+**新增常驻采集路径时，先给它留测试注入点，测试不能落回真实 home。**
+- 证据：2026-11-04 会话适配器接入 `sessions` 定时器后，`startCollector` 直接读 `process.env`/`homedir()`，三个既有 main 测试在开发机上把真实 `~/.claude` 的行写进合成库，断言从 droid 行变成 claude 行；改成 `CollectorOptions.sessionAdapters`/`sessionRoots` 注入后才隔离。
+- 防护：凡是启动时读本机目录或环境变量的路径，同时提供 options 注入；单测一律传合成根，缺省值只在生产与显式启动里生效。
+- Seen 1× (2026-11-04).
+
 **门禁报红先确认文件是否属于本批改动，再判断是否自己引入。**
 - 证据：2026-11-03 全量 `verify:notes` 在 `.agents/notes/implemented/feature/2026-11-03-live-session-activity-and-navigation.md` 报 implemented 格式错，该文件是并发会话尚未跟踪的迁移中途产物；本批改动在 `--staged` 与 `--range` 两处均通过。同一轮还有 7 个历史批次真的缺 note，不能因为存在并发文件就全部当成误报。
 - 防护：报红文件先跑 `git ls-files <path>`，输出为空说明未跟踪、归并发会话；本批范围单独跑 `node scripts/verify-change-notes.mjs --range origin/master..HEAD`；历史缺口逐批看提交信息里有没有 `Agent-Note: none`。

@@ -104,7 +104,7 @@ test('合成验收：消息守恒、fork 复制段零建行、子代理归属与
     expect(f.store.read.query('SELECT agent, session, input_tokens FROM session_usage').all())
       .toEqual([{ agent: 'droid', session: 'main', input_tokens: 4000 }]);
     // 原始层不因 fork 复制段或未知行类型丢数据：主 9 + fork 7 + 子 6 = 22 行。
-    expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_droid_event').get()).toEqual({ n: 22 });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_session_event').get()).toEqual({ n: 22 });
   } finally {
     f.close();
     rmSync(root, { recursive: true, force: true });

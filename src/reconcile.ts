@@ -495,7 +495,15 @@ function mergeLedgerRow(
     ).get(fields.routeId);
     if (existing != null) reqId = existing.req_id;
   }
-  // route_id 未命中时再按统一 owner 规则找：账本迟到也能认领 OTLP 或 droid 已建的行。
+  // route_id 未命中时再按统一 owner 规则找：账本迟到也能认领 OTLP、droid 或
+  // 本地会话已建的行。四段用量齐全时先走指纹，同会话相邻调用才能分开。
+  const ledgerUsage = fields.inTok !== null && fields.outTok !== null
+    && fields.cacheRead !== null && fields.cacheWrite !== null
+    ? {
+      input: fields.inTok, output: fields.outTok,
+      cacheRead: fields.cacheRead, cacheWrite: fields.cacheWrite,
+    }
+    : null;
   const owner = reqId === null && !rejected
     ? findRequestOwnerTx(db, {
       responseIdNorm: fields.responseIdNorm,
@@ -504,6 +512,7 @@ function mergeLedgerRow(
       agent: fields.agent,
       startedMs: fields.tMs,
       model: fields.requested ?? fields.model ?? fields.served,
+      usage: ledgerUsage,
       excludeSourceKind: 'ledger',
     })
     : null;

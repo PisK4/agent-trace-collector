@@ -20,13 +20,31 @@ export const HAVE_SESSION = 16;
 /** 会话归属引用：key 是 JSON 数组形状的组键，source 记录归属来源。 */
 export type ConvRef = { key: string; source: string };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
- * 上游把"没有会话"写成空串。空串不是会话身份：组键、session 列与 actor
- * 都按缺失处理；原始值只在 raw_hook 保留。账本与路由的映射层已经先转成
- * null，这条规则服务于保留原值的 hook 入口。
+ * 会话 id 的前缀归一口径：本地库与网关对同一个会话可能写 `session_`/`sess_`
+ * 前缀或裸 UUID。只剥掉可与 UUID 对上的前缀，不认识的前缀原样保留。
+ */
+export function canonicalSessionId(raw: string): string {
+  const value = raw.trim();
+  for (const prefix of ['session_', 'sess_']) {
+    if (value.startsWith(prefix) && UUID_RE.test(value.slice(prefix.length))) {
+      return value.slice(prefix.length);
+    }
+  }
+  return value;
+}
+
+/**
+ * 会话身份的唯一入口：空串不是会话身份，按缺失处理；非空值按
+ * `canonicalSessionId` 去掉能与 UUID 对上的前缀。原始值只在 raw_hook 保留。
+ * 账本与路由的映射层在映射时归一，hook envelope 在 `insertHookRequest`
+ * 读取时经这里归一，三条入口落在同一个组键上。
  */
 export function sessionIdentity(session: string | null): string | null {
-  return session !== null && session.length > 0 ? session : null;
+  const identity = session === null ? null : canonicalSessionId(session);
+  return identity !== null && identity.length > 0 ? identity : null;
 }
 
 /**
@@ -81,6 +99,9 @@ export const MATCH_BY_SPAN_IDENTITY = 'trace_span.v1';
 
 /** 同会话 ±60 秒窗口 + 同模型认领：只在唯一命中时使用。 */
 export const MATCH_BY_CONV_TIME_MODEL = 'conv_time_model.v1';
+
+/** 同会话 ±2 秒、四段用量逐段相等：本地会话与网关/direct 的去重指纹。 */
+export const MATCH_BY_USAGE_FINGERPRINT = 'usage_fingerprint.v1';
 
 /** 统一 owner 查找的零候选结果：独立成行，没有可认领的既有行。 */
 export const MATCH_ABSENT = 'match_absent';
