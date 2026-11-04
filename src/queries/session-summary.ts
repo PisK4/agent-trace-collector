@@ -7,6 +7,19 @@ import type { Store } from '../store';
 /** 汇总条目共用的失败定位：回到支撑记录的最小身份。 */
 export type SummaryCallRef = { req_id: number; ord: number; tool_name: string | null };
 
+export type SessionUsage = {
+  agent: string;
+  session: string;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_creation_tokens: number | null;
+  cache_read_tokens: number | null;
+  thinking_tokens: number | null;
+  factory_credits: number | null;
+  observed_at: number;
+};
+
 export type SessionSummary = {
   /** 会话里任一 actor 组还没算完；数字是已发布代或同步旧列的事实。 */
   dirty: boolean;
@@ -36,6 +49,13 @@ export type SessionSummary = {
     /** Σcache_read ÷ Σ(in_tok + cache_read)，只计两个读数都在的请求；无分母为 null。 */
     cache_hit: number | null;
   };
+  /**
+   * 会话文件报告的累计读数（droid 的 settings）。
+   *
+   * 口径与逐笔 totals 分开：input 不含缓存读、output 含思考，不能相加冒充总量。
+   * 同一个 session id 混有多个 agent 的读数时返回 null，不挑一份当当次事实。
+   */
+  session_usage: SessionUsage | null;
   structure: {
     requests_total: number;
     /** 参与主链（purpose_chain='participate'）；旁路是分类器与标题生成等排除请求。 */
@@ -124,6 +144,17 @@ function groupCounts<T extends string>(pairs: Iterable<[T, number]>): { name: T;
   return [...pairs]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([name, count]) => ({ name, count }));
+}
+
+/** 会话组键 `["session", id]` 里的 id；其他回退键没有会话文件可读。 */
+function sessionIdOfKey(key: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    return Array.isArray(parsed) && parsed[0] === 'session' && typeof parsed[1] === 'string'
+      ? parsed[1] : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 行存在即计数；缺口如实进 coverage，不补不猜。 */
@@ -219,6 +250,14 @@ export function getSessionSummary(store: Store, key: string): SessionSummary {
         SELECT COUNT(DISTINCT actor) AS actors, COUNT(*) AS requests FROM request
         WHERE conv_key=? AND actor IS NOT NULL AND actor_state='known' AND actor<>?`).get(key, mainActor)!;
 
+    // 会话文件累计用量只按会话键读；键不是会话形状时不猜来源。
+    const sessionId = sessionIdOfKey(key);
+    const usageRows = sessionId === null ? [] : store.read.query<SessionUsage, [string]>(`
+      SELECT agent,session,model,input_tokens,output_tokens,cache_creation_tokens,cache_read_tokens,
+             thinking_tokens,factory_credits,observed_at
+      FROM session_usage WHERE session=? ORDER BY agent LIMIT 2`).all(sessionId);
+    const sessionUsage = usageRows.length === 1 ? usageRows[0]! : null;
+
     return {
       dirty,
       tools: [...toolCounts.entries()]
@@ -235,6 +274,7 @@ export function getSessionSummary(store: Store, key: string): SessionSummary {
         cost_absent: totals.cost_absent,
         cache_hit: cache.den !== null && cache.den > 0 && cache.num !== null ? cache.num / cache.den : null,
       },
+      session_usage: sessionUsage,
       structure: {
         requests_total: structure.requests_total,
         main: structure.main, bypass: structure.bypass,

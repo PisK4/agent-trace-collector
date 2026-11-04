@@ -669,3 +669,20 @@ test('migrateSummaryFacts 给缺列的库补列并重建视图，重复执行幂
     ]);
   } finally { f.close(); }
 });
+
+test('会话汇总：会话文件累计用量按会话键读出，非会话键不给', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(`
+      INSERT INTO session_usage(agent,session,model,input_tokens,output_tokens,
+        cache_creation_tokens,cache_read_tokens,thinking_tokens,factory_credits,
+        source_path,source_hash,observed_at)
+      VALUES ('droid','summary','synth-model',1200,340,50,900,40,1.25,'/synth/settings.json','h',7)`));
+    expect(getSessionSummary(f.store, GROUP).session_usage).toEqual({
+      agent: 'droid', session: 'summary', model: 'synth-model',
+      input_tokens: 1200, output_tokens: 340, cache_creation_tokens: 50,
+      cache_read_tokens: 900, thinking_tokens: 40, factory_credits: 1.25, observed_at: 7,
+    });
+    expect(getSessionSummary(f.store, JSON.stringify(['request', 'x'])).session_usage).toBeNull();
+  } finally { f.close(); }
+});
