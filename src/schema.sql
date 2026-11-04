@@ -277,7 +277,10 @@ CREATE INDEX i_otlp_body_ref_pending ON otlp_body_ref(trace_id) WHERE state='pen
 
 -- Droid 转录原始层：物理身份 (file_generation, byte_offset)，存脱敏后的整行原文；
 -- 解析状态从这些行按偏移重放，坏行不推进游标。
-CREATE TABLE raw_droid_event (
+-- 会话来源的脱敏原文与批次间重放：source_kind 区分 droid 与五个本地 Agent 适配器；
+-- 物理身份仍是 (file_generation, byte_offset)，SQLite 适配器的 byte_offset 是库内 rowid。
+CREATE TABLE raw_session_event (
+  source_kind      TEXT NOT NULL,
   file_generation TEXT NOT NULL,
   byte_offset      INTEGER NOT NULL,
   session_id       TEXT,
@@ -287,7 +290,7 @@ CREATE TABLE raw_droid_event (
   privacy_version  INTEGER NOT NULL,
   PRIMARY KEY (file_generation, byte_offset)
 ) WITHOUT ROWID;
-CREATE INDEX i_raw_droid_event_session ON raw_droid_event(session_id);
+CREATE INDEX i_raw_session_event_session ON raw_session_event(source_kind, session_id);
 
 -- 会话级累计用量：droid 只给总量，不拆到轮；主键 (agent, session)。
 CREATE TABLE session_usage (

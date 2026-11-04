@@ -3,7 +3,7 @@
  *
  * 不变量：
  * - 一行 assistant 消息一条 request；fork 复制段只进消息窗口，不建行。
- * - 解析状态从本代际的 raw_droid_event 按偏移重放，批次之间不靠内存状态。
+ * - 解析状态从本代际的 raw_session_event 按偏移重放，批次之间不靠内存状态。
  * - 坏行记 issue 且游标停在坏行起点：跳过一条消息会让后续每轮请求体缺一条。
  * - 正文与原文字段先脱敏再落库；正文 protocol='droid-session'，消息数组与
  *   Anthropic 同形，标题、前驱与工具配对复用现有派生内核。
@@ -306,10 +306,11 @@ export async function ingestDroidTranscript(
 
     // 重放本代际已提交的行，恢复 session、消息窗口与 fork 位置。
     let state = emptyDroidState();
-    const replay = db.query<{ payload_json: string }, [string]>(
-      'SELECT payload_json FROM raw_droid_event WHERE file_generation=? ORDER BY byte_offset',
+    const replay = db.query<{ payload_json: string; source_kind: string }, [string]>(
+      'SELECT payload_json, source_kind FROM raw_session_event WHERE file_generation=? ORDER BY byte_offset',
     ).all(read.generation);
     for (const row of replay) {
+      if (row.source_kind !== SOURCE_KIND) continue;
       const parsed = parseDroidLine(row.payload_json);
       if (parsed.kind === 'invalid') continue;
       state = applyDroidLine(state, parsed).state;
@@ -323,11 +324,11 @@ export async function ingestDroidTranscript(
       const sanitized = sanitizedPayload(line.text, parsed, salt);
       const step = applyDroidLine(state, sanitized.parsed);
       db.run(
-        `INSERT OR IGNORE INTO raw_droid_event(
-           file_generation,byte_offset,session_id,line_type,event_at_ms,payload_json,privacy_version)
-         VALUES (?,?,?,?,?,?,?)`,
+        `INSERT OR IGNORE INTO raw_session_event(
+           source_kind,file_generation,byte_offset,session_id,line_type,event_at_ms,payload_json,privacy_version)
+         VALUES (?,?,?,?,?,?,?,?)`,
         [
-          read.generation, line.offset, step.state.session?.id ?? state.session?.id ?? null,
+          SOURCE_KIND, read.generation, line.offset, step.state.session?.id ?? state.session?.id ?? null,
           parsed.lineType, parsed.atMs, sanitized.payloadJson, PRIVACY_TRANSFORM_VERSION,
         ],
       );

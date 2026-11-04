@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { loadReadToken } from '../src/http';
 import { DEFAULT_DERIVE_BUDGET, loadBoundSaltTx, loadConfig } from '../src/config';
 import { startCollector } from '../src/main';
+import { claudeAdapter } from '../src/sources/session/adapters/claude';
 import { fixture } from './fixtures';
 import { persistBody } from '../src/body';
 
@@ -32,7 +33,7 @@ test('在线来源共用摄入入口，自定义账本路径仍沿用固定身�
       ledgerPath: `${f.dir}/custom-ledger.jsonl`, routingDir: `${f.dir}/routing`,
       magpieUrl: `http://127.0.0.1:${upstream.port}`,
       intervals: { ledger: 5, route: 5 },
-    });
+    }, { sessionAdapters: [] });
     const port = collector.port;
     const token = loadReadToken(f.dir);
     const snapshot = async () => {
@@ -142,7 +143,7 @@ test('SIGTERM停止后不再响应请求', async () => {
       ledgerPath: `${f.dir}/missing.jsonl`,
       routingDir: `${f.dir}/missing-routing`,
     };
-    const collector = await startCollector(config);
+    const collector = await startCollector(config, { sessionAdapters: [] });
     const response = await fetch(`http://127.0.0.1:${collector.port}/api/stats`, {
       headers: { origin: `http://127.0.0.1:${collector.port}` },
     });
@@ -184,7 +185,7 @@ test('启动时逐项运行各任务，回收不受其它任务占锁影响', as
         redact_version: 1,
       });
     }
-    const collector = await startCollector(config);
+    const collector = await startCollector(config, { sessionAdapters: [] });
     try {
       // 启动那一轮是同步发起的；给事件循环一个机会跑完。
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -224,7 +225,7 @@ test('droid 定时任务接入：按注入间隔读取合成转录', async () =>
       ledgerPath: `${f.dir}/missing.jsonl`,
       routingDir: `${f.dir}/missing-routing`,
       intervals: { droid: 5, ledger: 60_000, route: 60_000 },
-    });
+    }, { sessionAdapters: [] });
     for (let attempt = 0; attempt < 100; attempt++) {
       if ((f.store.read.query('SELECT count(*) AS n FROM request').get() as { n: number }).n > 0) break;
       await Bun.sleep(5);
@@ -236,6 +237,49 @@ test('droid 定时任务接入：按注入间隔读取合成转录', async () =>
     await collector?.stop();
     if (previous === undefined) delete process.env.FACTORY_HOME_OVERRIDE;
     else process.env.FACTORY_HOME_OVERRIDE = previous;
+    f.close();
+  }
+});
+
+test('会话定时任务接入：按注入根轮转适配器并读合成会话', async () => {
+  const f = fixture();
+  const root = `${f.dir}/claude-projects/synthetic-project`;
+  mkdirSync(root, { recursive: true });
+  const t0 = Date.parse('2026-08-25T10:00:00.000Z');
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  const sessionId = '22222222-3333-4444-5555-666666666666';
+  const row = (type: string, message: unknown): string => JSON.stringify({
+    type, sessionId, timestamp: iso(t0), cwd: '/work/synth', message,
+  });
+  writeFileSync(join(root, `${sessionId}.jsonl`), [
+    row('user', { role: 'user', content: [{ type: 'text', text: 'prompt' }] }),
+    row('assistant', {
+      id: 'msg_synth-main', model: 'synth-model', role: 'assistant', content: [{ type: 'text', text: 'reply' }],
+      usage: { input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    }),
+  ].join('\n') + '\n');
+  let collector: Awaited<ReturnType<typeof startCollector>> | undefined;
+  try {
+    collector = await startCollector({
+      ...loadConfig({}),
+      port: 0,
+      dataDir: f.dir,
+      ledgerPath: `${f.dir}/missing.jsonl`,
+      routingDir: `${f.dir}/missing-routing`,
+      intervals: { sessions: 5, droid: 60_000, ledger: 60_000, route: 60_000 },
+    }, {
+      sessionAdapters: [claudeAdapter],
+      sessionRoots: () => [root],
+    });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((f.store.read.query('SELECT count(*) AS n FROM request').get() as { n: number }).n > 0) break;
+      await Bun.sleep(5);
+    }
+    expect(f.store.read.query('SELECT via, agent, session, model_requested FROM request').get()).toEqual({
+      via: 'session', agent: 'claude', session: sessionId, model_requested: 'synth-model',
+    });
+  } finally {
+    await collector?.stop();
     f.close();
   }
 });

@@ -645,7 +645,10 @@ function writeProjectionTx(db: Database, reqId: number, projection: RequestProje
     const fields = projection.selected?.fields ?? null;
     sets.push(
       'status=?', 'stop=?', 'model_requested=?', 'model_served=?', 'provider=?', 'response_id_norm=?',
-      'in_tok=?', 'out_tok=?', 'cache_read=?', 'cache_write=?', 'reasoning=?',
+      // 用量按段补空：本地会话先到、网关后到但没带用量时，不能把已有值擦掉。
+      'in_tok=COALESCE(?,in_tok)', 'out_tok=COALESCE(?,out_tok)',
+      'cache_read=COALESCE(?,cache_read)', 'cache_write=COALESCE(?,cache_write)',
+      'reasoning=COALESCE(?,reasoning)',
       'ms=?', 'ttft_ms=?', 'flow_ms=?', 'first_text_ms=?', 'started_ms=?', 'day=?',
       'attempt_billed=?', 'attempt_in=?', 'attempt_out=?', 'attempt_cache_read=?',
       'attempt_cache_write=?', 'attempt_reasoning=?',

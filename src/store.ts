@@ -143,7 +143,8 @@ const SCHEMA_V8 = readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf
 const SCHEMA_V9 = readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8');
 const SCHEMA_V10 = readFileSync(new URL('./schema-v10.sql', import.meta.url), 'utf8');
 const SCHEMA_V11 = readFileSync(new URL('./schema-v11.sql', import.meta.url), 'utf8');
-const SCHEMA_VERSION = 11;
+const SCHEMA_V12 = readFileSync(new URL('./schema-v12.sql', import.meta.url), 'utf8');
+const SCHEMA_VERSION = 12;
 
 function tableNames(db: Database): string[] {
   return (db.query(
@@ -193,6 +194,36 @@ function execAdditiveV11(db: Database): void {
   db.exec(SCHEMA_V11);
 }
 
+/**
+ * v12 把 droid 原始层改名成共享的会话原始层，并加来源列。
+ *
+ * 半迁移状态（已改名但没加列、索引没重建）由第二步补齐；旧行默认
+ * 'droid_transcript'，不扫描、不回填。
+ */
+function execAdditiveV12(db: Database): void {
+  const tables = tableNames(db);
+  if (!tables.includes('raw_session_event')) {
+    if (tables.includes('raw_droid_event')) db.exec(SCHEMA_V12);
+    return;
+  }
+  // 新装库的 schema.sql 已经建了 raw_session_event，而 v11 脚本还会建旧名表；
+  // 半迁移库也可能两张表并存。把旧表的行并入新表后删掉旧表，两边都不丢数据。
+  if (tables.includes('raw_droid_event')) {
+    db.exec(`INSERT OR IGNORE INTO raw_session_event(
+      source_kind,file_generation,byte_offset,session_id,line_type,event_at_ms,payload_json,privacy_version)
+      SELECT 'droid_transcript',file_generation,byte_offset,session_id,line_type,event_at_ms,payload_json,privacy_version
+      FROM raw_droid_event`);
+    db.exec('DROP TABLE raw_droid_event');
+  }
+  const columns = (db.query('PRAGMA table_info(raw_session_event)').all() as { name: string }[])
+    .map(row => row.name);
+  if (!columns.includes('source_kind')) {
+    db.exec("ALTER TABLE raw_session_event ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'droid_transcript'");
+  }
+  db.exec('DROP INDEX IF EXISTS i_raw_droid_event_session');
+  db.exec('CREATE INDEX IF NOT EXISTS i_raw_session_event_session ON raw_session_event(source_kind, session_id)');
+}
+
 function migrate(db: Database): void {
   const version = pragmaNumber(db, 'user_version');
   const tables = tableNames(db);
@@ -207,6 +238,7 @@ function migrate(db: Database): void {
       db.exec(SCHEMA_V9);
       execAdditiveV10(db);
       execAdditiveV11(db);
+      execAdditiveV12(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
     return;
@@ -215,10 +247,10 @@ function migrate(db: Database): void {
   if (version > SCHEMA_VERSION) {
     throw new Error(`schema_version_unsupported: db v${version} > code v${SCHEMA_VERSION}`);
   }
-  // v6→v11、…、v10→v11 都是纯新增（OTLP 原始层表、部分反向
+  // v6→v12、…、v11→v12 都是纯新增或原地改名（OTLP 原始层表、部分反向
   // 索引、队列的 claim_from_sort 列、请求的内容指纹与 turn 身份、droid 原始层
-  // 与会话用量），原地执行即可；更低的库没有升级路径：普通启动不做 ALTER，也
-  // 不搬旧数据，旧库由运维显式删除后重建。
+  // 与会话用量、会话原始层统一），原地执行即可；更低的库没有升级路径：普通启动
+  // 不做 ALTER，也不搬旧数据，旧库由运维显式删除后重建。
   if (version === 6) {
     db.transaction(() => {
       db.exec(SCHEMA_V7);
@@ -226,6 +258,7 @@ function migrate(db: Database): void {
       execAdditiveV9(db);
       execAdditiveV10(db);
       execAdditiveV11(db);
+      execAdditiveV12(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version === 7) {
@@ -234,6 +267,7 @@ function migrate(db: Database): void {
       execAdditiveV9(db);
       execAdditiveV10(db);
       execAdditiveV11(db);
+      execAdditiveV12(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version === 8) {
@@ -241,17 +275,25 @@ function migrate(db: Database): void {
       execAdditiveV9(db);
       execAdditiveV10(db);
       execAdditiveV11(db);
+      execAdditiveV12(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version === 9) {
     db.transaction(() => {
       execAdditiveV10(db);
       execAdditiveV11(db);
+      execAdditiveV12(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version === 10) {
     db.transaction(() => {
       execAdditiveV11(db);
+      execAdditiveV12(db);
+      db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+    }).immediate();
+  } else if (version === 11) {
+    db.transaction(() => {
+      execAdditiveV12(db);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     }).immediate();
   } else if (version < SCHEMA_VERSION) {

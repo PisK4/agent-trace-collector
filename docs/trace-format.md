@@ -1,12 +1,12 @@
 # ATC trace 格式（内部读模型 v0）
 
-本文件描述 ATC 把一次 LLM 请求结构化成什么样：主实体、它的身份与读数、正文怎么切块、派生结论有哪些、每条结论的置信度怎么表达。它描述的是当前代码与 schema v11 的现状，不是对外承诺的稳定协议。
+本文件描述 ATC 把一次 LLM 请求结构化成什么样：主实体、它的身份与读数、正文怎么切块、派生结论有哪些、每条结论的置信度怎么表达。它描述的是当前代码与 schema v12 的现状，不是对外承诺的稳定协议。
 
 三个限定先说清楚：
 
 - **不是交换格式。** 目前没有导出、没有版本化的对外 schema、没有跨工具互操作。本文件描述的是本库自己的读模型，外部读者可以据此理解数据形状，但接口只服务本机页面。
-- **多条进路。** 记录的对象主要是经过 magpie 网关的请求；harness 侧 OTLP 导出的 LLM span 也建行（`via='otlp'`），droid 会话文件按转录重建请求行（`via='session'`）。OTLP 先到、账本后到时，账本按统一 owner 规则认领该行；账本先到、OTLP 后到时两行并存。`agent` 标签对 magpie 行来自 magpie（`claude`、`omp` 等），对 OTLP 行按 `service.name` 映射到同一值域；派生规则是 harness 通用的，识别某个 harness 的 wire 痕迹是个别规则，不是插件体系。
-- **版本会变。** v6 到 v10 的库打开时原地升到 v11，更早的 schema 拒绝启动、由操作者重建；派生算法号变化会让旧结论标成 `legacy` 或 `retained`，不冒充新结论。
+- **多条进路。** 记录的对象主要是经过 magpie 网关的请求；harness 侧 OTLP 导出的 LLM span 也建行（`via='otlp'`），本地 Agent 会话文件按转录重建请求行（`via='session'`，含 droid、Claude Code、Codex、Zcode、OMP 与 Pi）。OTLP 先到、账本后到时，账本按统一 owner 规则认领该行；账本先到、OTLP 后到时两行并存。`agent` 标签对 magpie 行来自 magpie（`claude`、`omp` 等），对 OTLP 行按 `service.name` 映射到同一值域；派生规则是 harness 通用的，识别某个 harness 的 wire 痕迹是个别规则，不是插件体系。
+- **版本会变。** v6 到 v11 的库打开时原地升到 v12，更早的 schema 拒绝启动、由操作者重建；派生算法号变化会让旧结论标成 `legacy` 或 `retained`，不冒充新结论。
 
 字段清单、值域细节与默认值的权威在[架构设计](architecture-design.md)；术语定义与边界在 [GLOSSARY.md](../GLOSSARY.md)。
 

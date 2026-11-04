@@ -3,8 +3,10 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { basename, join } from 'node:path';
 
-/** 来源在库里的标识：账本、可追加的当日路由文件、封口的 gz 路由文件、droid 转录。 */
-export type SourceKind = 'ledger' | 'route_file' | 'route_gz' | 'droid_transcript';
+/** 来源在库里的标识：账本、路由文件、droid 转录与五个本地 Agent 会话。 */
+export type SourceKind =
+  | 'ledger' | 'route_file' | 'route_gz' | 'droid_transcript'
+  | 'claude_session' | 'codex_session' | 'omp_session' | 'pi_session' | 'zcode_session';
 
 /** 文件形态：可以按偏移续读的追加流，或整份替换、只能按指纹识别的封口文件。 */
 export type SourceMode = 'appendable' | 'sealed';
@@ -90,7 +92,7 @@ function fileIdentity(stat: ReturnType<typeof fstatSync> & { dev: bigint; ino: b
 export async function readBatch(
   path: string,
   cursor: SourceCursor | null,
-  source: { kind: 'ledger' | 'route_file' | 'droid_transcript'; name: string } = {
+  source: { kind: Exclude<SourceKind, 'route_gz'>; name: string } = {
     kind: cursor?.sourceKind === 'route_file' ? 'route_file' : 'ledger',
     name: cursor?.name ?? basename(path),
   },

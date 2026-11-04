@@ -1,6 +1,6 @@
 # 运维手册
 
-采集器把账本、路由、hook、OTLP 与 droid 会话文件五路证据写进同一个 SQLite 库。在线读取走独立只读连接，写入全部走单写者事务。下面这些操作都在**采集器已停止**的前提下进行，停服务用 `bun run service stop`，见[起停与状态](#起停与状态)。
+采集器把账本、路由、hook、OTLP 与本地 Agent 会话文件（droid、Claude Code、Codex、Zcode、OMP、Pi）五路证据写进同一个 SQLite 库。在线读取走独立只读连接，写入全部走单写者事务。下面这些操作都在**采集器已停止**的前提下进行，停服务用 `bun run service stop`，见[起停与状态](#起停与状态)。
 
 ## 数据目录
 
@@ -544,7 +544,9 @@ sqlite3 "$HOME/Library/Application Support/tracery/trace.db" \
 
 ## schema 版本
 
-当前 `user_version=11`。空数据目录首次启动直接建到 v11；v6、v7、v8、v9 与 v10 库打开时在单个事务里原地升到 v11（纯新增，不动旧行），更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 到 v11，旧版本包恢复后首次打开同样原地升级。
+当前 `user_version=12`。空数据目录首次启动直接建到 v12；v6 到 v11 库打开时在单个事务里原地升到 v12，更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 到 v12，旧版本包恢复后首次打开同样原地升级。
+
+v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列，五个本地 Agent 适配器与 droid 共用一张原始层。旧行保留并补 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若因旧脚本同时存在两张表，旧表行先并入再删除。升级不扫描正文，停顿是毫秒级。升级后 `sessions` 定时器每 60 秒轮转一家适配器，从偏移 0 开始按每家 64 个文件或 2 MiB 追历史；页面上 `via='session'` 的行按 `agent` 区分来源。
 
 v11 在 v10 之上新增 `raw_droid_event` 与 `session_usage` 两张表及一条索引，建表与索引全是 `IF NOT EXISTS`，不扫描存量、不回填，升级停顿是毫秒级。升级后的第一轮 droid 扫描从各转录的偏移 0 开始，按每轮 64 个文件或 8 MiB 分批摄入历史；已有行由统一 owner 规则认领，不重复建行。
 
@@ -563,4 +565,4 @@ v8 在 v7 之上加的两条部分索引（`i_req_prev`、`i_tool_result_req`）
 1. **备份**：`maintain bundle` 要求源库已停，所以先 `bun run service stop`，bundle 到数据目录之外，再启动新代码。失败时保留库与 WAL 文件，按错误码处理后在低峰重试。
 2. **重启**：`openStore` 在启动路径里完成原地迁移（一次性索引扫描停顿，见上）。重启后先只读核对：`PRAGMA user_version` 到目标版本、`integrity_check` 为 ok。
 3. **显式 rebuild**：迁移只加表、列或索引，不回填存量；需要让存量会话按新判据收敛时，逐会话（或分批）跑 `bun run maintain rebuild --session '<conv_key>'`。不要在重启窗口顺手跑全量 rebuild——大会话的升级在秒级，会占主线程。
-4. **验证**：区分「迁移成功」与「回填完成」。迁移成功的只读自检是本批新增表或列随新流量开始出现行（例如 v11 的 `raw_droid_event` 与 `session_usage`）；回填完成的验收是 `GET /api/sessions` 的标题、flags 与 request_count 符合新规则预期。重启后立刻看会话列表，看到旧行为是「还没 rebuild」，不是「功能没生效」。
+4. **验证**：区分「迁移成功」与「回填完成」。迁移成功的只读自检是本批新增表或列随新流量开始出现行（例如 v12 的 `raw_session_event.source_kind` 与各 `*_session` 游标）；回填完成的验收是 `GET /api/sessions` 的标题、flags 与 request_count 符合新规则预期。重启后立刻看会话列表，看到旧行为是「还没 rebuild」，不是「功能没生效」。

@@ -385,7 +385,7 @@ CREATE TABLE source_cursor (
 
 所以读模型保留 `subagent` 与 `parent_agent` 两列。会话导航仍按 `conv_key` 统一，但前驱计算与工具配对按 `(conv_key, actor)` 做，`actor` 取 `subagent` 优先、否则是会话本身。身份不足以判定归属时明确标不确定，不按名称或时间猜。
 
-空串是上游对"没有会话"的写法。会话身份在入口按缺失处理：`session`、`actor` 都留 NULL，组键回退到该条证据自己的前缀（hook 用 `["hook", id]`），`raw_hook.session` 保留上游原值。账本与路由的映射层先把空串转 NULL；hook envelope 保留原值，规范化在 `insertHookRequest` 读取时完成。旧行落在 `["session",""]` 空桶，只能用显式身份迁移拆回各自的 hook 回退键，见[运维手册](operations.md#migrate-hook-identity)。
+空串是上游对"没有会话"的写法。会话身份在入口按缺失处理：`session`、`actor` 都留 NULL，组键回退到该条证据自己的前缀（hook 用 `["hook", id]`），`raw_hook.session` 保留上游原值。非空会话 id 在入口去掉可与 UUID 对上的 `session_`/`sess_` 前缀，账本、路由、hook 与本地适配器落在同一个组键上。账本与路由的映射层在映射时归一；hook envelope 保留原值，规范化在 `insertHookRequest` 读取时完成。旧行落在 `["session",""]` 空桶，只能用显式身份迁移拆回各自的 hook 回退键，见[运维手册](operations.md#migrate-hook-identity)。
 
 ### 会话文件来源（droid）
 
@@ -399,11 +399,29 @@ fork 会话在 `forkedAtMessageId` 之前的行是源会话复制段：它们进
 
 转录只给会话累计 `tokenUsage`，没有逐笔用量。`request` 行的四件读数列留 NULL；`session_usage` 按 `(agent, session)` 存累计值，只读主会话的 `.settings.json`，子代理 settings 不另计，避免双算。`inputTokens` 不含缓存读、`outputTokens` 含思考，累计值按最后一条消息的日期归属，不能摊到轮次或按天拆开。会话页把累计值单列「会话累计」，与逐笔合计分开。
 
-解析器状态从本代际的 `raw_droid_event` 按偏移重放，批次之间不靠内存。坏行记 issue、游标停在行起点；跳过一条消息会让后续每轮请求体缺一条。未知行类型与不认识的字段只落原始层，不判坏。
+解析器状态从本代际的 `raw_session_event` 按偏移重放，批次之间不靠内存。坏行记 issue、游标停在行起点；跳过一条消息会让后续每轮请求体缺一条。未知行类型与不认识的字段只落原始层，不判坏。
+
+### 本地 Agent 会话适配器（第一版）
+
+Claude Code、Codex、Zcode、OMP 与 Pi 的本地会话走与 droid 同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。
+
+| Agent | 根 | 形态 | 调用单位 | 正文协议 |
+| --- | --- | --- | --- | --- |
+| Claude Code | `$CLAUDE_CONFIG_DIR` 或 `~/.claude` 下的 `projects` | JSONL | assistant 行的 `message.id`；同一响应的多行按 id 合并 | `anthropic` |
+| Codex | `$CODEX_HOME` 或 `~/.codex` 下的 `sessions` 与 `archived_sessions` | JSONL | `token_usage_record` 或 `event_msg/token_count` | `responses` |
+| Zcode | `$ZCODE_HOME` 或 `~/.zcode` 下的 `cli/db/db.sqlite` | SQLite | assistant 消息，`model_usage` 的 rowid 作游标 | `anthropic` |
+| OMP | `$OMP_HOME` 或 `~/.omp` 下的 `agent/sessions` | JSONL | assistant 消息；消息 id 或行偏移 | `anthropic` |
+| Pi | `$PI_HOME` 或 `~/.pi` 下的 `agent/sessions` | JSONL | 同 OMP，共用解析器 | `anthropic` |
+
+调度只加一个 `sessions` 定时器，每 60 秒轮转一家；每家每轮最多 64 个文件或 2 MiB，未读完的靠游标留到下一轮，新文件按 mtime 从新到旧取。单家抛错只冻结这一家。启动后的第一轮异步跑，不挡 HTTP 监听。测试用 `CollectorOptions.sessionAdapters` 与 `sessionRoots` 注入合成根，不读真实主目录。
+
+调用身份：有精确 response id 的用 id（Claude 的 `message.id` 去掉 `msg_`，Codex 的 `response_id`）；没有的优先用同来源稳定的物化身份（OMP/Pi 的行偏移、Zcode 的消息 id）。用量一律归一到 magpie 口径（`input` 不含 cache read/write）；Codex 的 `input_tokens` 与 Zcode 的 `input_tokens` 都含缓存，要减掉。四段用量齐全时进 `usage_fingerprint.v1`，与网关行去重。
+
+原始层与 droid 共用 `raw_session_event`，`source_kind` 区分来源；JSONL 适配器按代际重放本来源的行恢复消息窗口，Zcode 返回自包含调用行（`replaysState: false`），不需要重放。会话 id 在入口统一按 UUID 前缀归一，账本、路由与本地适配器同口径。
 
 ### 合并规则
 
-每个 `req_id` 维护一个来源位图 `have`：1 为 hook，2 为账本，4 为路由，8 为 OTLP span，16 为 droid 会话文件。
+每个 `req_id` 维护一个来源位图 `have`：1 为 hook，2 为账本，4 为路由，8 为 OTLP span，16 为本地会话文件（droid 与各适配器）。
 
 ```text
 through 请求：期望 1|2|4
@@ -482,11 +500,11 @@ SQLite，WAL，单文件，放仓库外。默认路径按平台惯例落在数�
 
 ### 版本与破坏式替换
 
-当前结构版本是 v11。空库在同一个事务里建到 v11。存量库的原地升级路径：v6 到 v10 打开时在单个事务里升到 v11（纯新增表、列与索引，不动旧行），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
+当前结构版本是 v12。空库在同一个事务里建到 v12。存量库的原地升级路径：v6 到 v11 打开时在单个事务里升到 v12（纯新增表、列与索引，不动旧行；v12 例外见下），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
 
-首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6 起不走这条路，原因是仓库已有本机真实数据且各步变更纯新增，原地升级可执行、可验证。备份白名单收 v6 到 v11，低版本包恢复后首次打开时同样原地升级。
+首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6 起不走这条路，原因是仓库已有本机真实数据且各步变更纯新增，原地升级可执行、可验证。备份白名单收 v6 到 v12，低版本包恢复后首次打开时同样原地升级。
 
-v11 在 v10 之上加的是 droid 原始层 `raw_droid_event` 与会话累计 `session_usage` 两张表，建表与索引全是 `IF NOT EXISTS`，不扫描存量。v10 在 v9 之上给 `request` 加 `user_fingerprint` 与 `turn_ref` 两列和两条按非空值的部分索引。v9 在 v8 之上给 `derive_queue` 加 `claim_from_sort` 列，带常量默认值。v8 在 v7 之上加的是两条部分反向索引：`i_req_prev`（`request(prev_req_id) WHERE prev_req_id IS NOT NULL`）与 `i_tool_result_req`（`tool_call(result_req) WHERE result_req IS NOT NULL`）。hook 合并按旧 id 反向改指前驱与工具结果位置，这两条 UPDATE 没有索引时是全表扫描（[采集期间交互延迟](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)）；部分形状匹配写路径，两个更新绑定的参数都非空。存量库建索引的启动停顿与失败恢复归[运维手册](operations.md#schema-版本)。
+v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列：五个本地 Agent 适配器复用同一张原始层，不再各建一张同形表。改名与加列在同一事务里，旧行保留并补上 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若同时存在两张表，旧表行按 `INSERT OR IGNORE` 并入后删除。v11 在 v10 之上加的是 droid 原始层 `raw_droid_event` 与会话累计 `session_usage` 两张表，建表与索引全是 `IF NOT EXISTS`，不扫描存量。v10 在 v9 之上给 `request` 加 `user_fingerprint` 与 `turn_ref` 两列和两条按非空值的部分索引。v9 在 v8 之上给 `derive_queue` 加 `claim_from_sort` 列，带常量默认值。v8 在 v7 之上加的是两条部分反向索引：`i_req_prev`（`request(prev_req_id) WHERE prev_req_id IS NOT NULL`）与 `i_tool_result_req`（`tool_call(result_req) WHERE result_req IS NOT NULL`）。hook 合并按旧 id 反向改指前驱与工具结果位置，这两条 UPDATE 没有索引时是全表扫描（[采集期间交互延迟](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)）；部分形状匹配写路径，两个更新绑定的参数都非空。存量库建索引的启动停顿与失败恢复归[运维手册](operations.md#schema-版本)。
 
 v7 在 v6 之上加的是 OTLP 三张表：`raw_otlp_span`（span 原始层，主键 `(trace_id, span_id)`）、`raw_otlp_log`（logs 原始层，按记录内容哈希判重）与 `otlp_body_ref`（Claude Code 正文指针状态机）。v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，切片模式不写它们，同步模式照旧写。
 
@@ -606,10 +624,11 @@ CREATE TABLE otlp_body_ref (              -- Claude Code 正文指针状态机
 
 白名单外的 span（agent 层、工具层）只落 `raw_otlp_span`，不建 `request` 行。`otlp_body_ref` 按 `request_body_id` 聚 Claude Code 的 `api_request_body` / `api_response_body` 事件，traces 先到或 logs 先到都能收敛：span 行落库时回接 pending 指针，双指针齐后读文件、脱敏、走既有 `persistBodyTx` 落正文，`body_state` 从 `summary` 转 `available`。同 trace 多 attempt 撞出多候选时记 `span_ambiguous`，不猜。指针读取只认事件指到的单个普通文件，非普通文件、符号链接、超 32 MiB 或读不到分别记因，读失败行保持 `summary` 并写 `miss_reason='body_ref_read_failed'`。
 
-droid 通道另有两张表。转录与 settings 都先脱敏再落原始层：
+droid 通道另有两张表，本地 Agent 适配器与 droid 共用原始层。转录与 settings 都先脱敏再落原始层：
 
 ```sql
-CREATE TABLE raw_droid_event (
+CREATE TABLE raw_session_event (
+  source_kind      TEXT NOT NULL,     -- droid_transcript / claude_session / codex_session / …
   file_generation TEXT NOT NULL,
   byte_offset      INTEGER NOT NULL,
   session_id       TEXT,
@@ -619,7 +638,7 @@ CREATE TABLE raw_droid_event (
   privacy_version  INTEGER NOT NULL,
   PRIMARY KEY (file_generation, byte_offset)
 ) WITHOUT ROWID;
-CREATE INDEX i_raw_droid_event_session ON raw_droid_event(session_id);
+CREATE INDEX i_raw_session_event_session ON raw_session_event(source_kind, session_id);
 
 CREATE TABLE session_usage (
   agent                 TEXT NOT NULL,
@@ -638,7 +657,7 @@ CREATE TABLE session_usage (
 ) WITHOUT ROWID;
 ```
 
-`raw_droid_event` 是批次之间重放解析状态的唯一来源，当前不参与 rawPrune；转录整份落原始层后，纳入回收前要先另存解析位点。`session_usage` 每个 `(agent, session)` 一行，覆盖写按 `source_hash` 判变化，`source_path` 与 `source_hash` 留作来源审计。
+`raw_session_event` 是批次之间重放解析状态的唯一来源，当前不参与 rawPrune；转录整份落原始层后，纳入回收前要先另存解析位点。`source_kind` 区分 droid 与各本地适配器；物理主键仍是 `(file_generation, byte_offset)`，Zcode 的 offset 用 `model_usage` 的 rowid。`session_usage` 每个 `(agent, session)` 一行，覆盖写按 `source_hash` 判变化，`source_path` 与 `source_hash` 留作来源审计。
 
 ### 路由摘要长期层
 
@@ -1460,7 +1479,7 @@ hook 拿到的是脱敏前的正文。collector 自己实现一层，规则分�
 11. droid 的 `openaiMessageId` 与 magpie `response_id` 是否同值空间。本机 droid 不走 magpie，无法用真实流量核对；若不同值，droid 接入 magpie 后仍会双行，需要扩展规范化前缀表并升匹配规则版本。
 12. droid 子代理 settings 是否独立计数。本机样本的 `childInclusiveTokenUsageBySessionId` 为空，当前只记主会话累计；更多样本确认前不改口径。
 13. 一条 assistant 消息是否恒为一次模型调用。thinking-only 或空回复的边界未覆盖；`agent_turn_outcome` 的失败形状本机只有 completed 与 cancelled，原始层先保留。
-14. `raw_droid_event` 的回收点。它当前是批次间重放的唯一来源，不参与 rawPrune；要回收必须先另存解析位点，否则重放会缺消息窗口。
+14. `raw_session_event` 的回收点。它当前是批次间重放的唯一来源，不参与 rawPrune；要回收必须先另存解析位点，否则重放会缺消息窗口。
 
 ## 两轮修正的记录
 

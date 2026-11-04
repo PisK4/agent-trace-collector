@@ -1,4 +1,5 @@
 import { dirname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { Config } from './config';
 import { loadBoundSaltTx, loadLocalSecret } from './config';
@@ -16,6 +17,9 @@ import { syncCosts } from './sources/magpie/costs';
 import { probeMagpie, saveProbe } from './sources/magpie/probe';
 import { ingestDroidBatch } from './sources/droid/ingest';
 import { droidSessionsRoot } from './sources/droid/discover';
+import { ingestSessionBatch } from './sources/session/ingest';
+import { SESSION_ADAPTERS } from './sources/session/registry';
+import type { SessionAdapter } from './sources/session/types';
 import { createHandler, loadReadToken } from './http';
 import { createLiveActivity } from './activity';
 import { markHookAbsent, reconcilePending } from './hook';
@@ -35,6 +39,7 @@ import { maintenanceLockPresent } from './maintenance/lock';
 const LEDGER_INTERVAL_MS = 5000;
 const ROUTE_INTERVAL_MS = 2000;
 const DROID_INTERVAL_MS = 60_000;
+const SESSIONS_INTERVAL_MS = 60_000;
 const COST_INTERVAL_MS = 60_000;
 const PROBE_INTERVAL_MS = 60_000;
 const DERIVE_INTERVAL_MS = 2000;
@@ -53,6 +58,12 @@ export type CollectorOptions = {
   deriveComputeInWorker?: boolean;
   /** 测试注入的日志出口；缺省按启动时刻建一个写 stdout 的实例。 */
   diagnostics?: DiagnosticLog;
+  /**
+   * 测试注入的会话适配器与根解析。缺省用注册表与各适配器自己的环境变量：
+   * 单测不能读真实主目录，注入空数组即关闭这一路。
+   */
+  sessionAdapters?: readonly SessionAdapter[];
+  sessionRoots?: (adapter: SessionAdapter) => string[];
 };
 
 /** 当前检出的代码版本；读不到 git 时退回环境变量，再退回 unknown（不编造版本）。 */
@@ -235,6 +246,17 @@ export async function startCollector(
     await ingestDroidBatch(store, droidRoot, salt, Date.now());
   });
 
+  // 五家会话适配器共用一个定时器：每轮轮转一家，单家失败只冻结自己。
+  const sessionAdapters = options?.sessionAdapters ?? SESSION_ADAPTERS;
+  let sessionCursor = 0;
+  const sessionsTick = guard('sessions', async () => {
+    if (sessionAdapters.length === 0) return;
+    const adapter = sessionAdapters[sessionCursor % sessionAdapters.length]!;
+    sessionCursor += 1;
+    const roots = options?.sessionRoots?.(adapter) ?? adapter.roots(process.env, homedir());
+    await ingestSessionBatch(store, adapter, roots, salt, Date.now());
+  });
+
   const costTick = guard('cost', async () => {
     const today = new Date();
     const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
@@ -309,6 +331,7 @@ export async function startCollector(
   timers.push(setInterval(ledgerTick, intervalOf(config, 'ledger', LEDGER_INTERVAL_MS)));
   timers.push(setInterval(routeTick, intervalOf(config, 'route', ROUTE_INTERVAL_MS)));
   timers.push(setInterval(droidTick, intervalOf(config, 'droid', DROID_INTERVAL_MS)));
+  timers.push(setInterval(sessionsTick, intervalOf(config, 'sessions', SESSIONS_INTERVAL_MS)));
   timers.push(setInterval(costTick, intervalOf(config, 'cost', COST_INTERVAL_MS)));
   timers.push(setInterval(probeTick, intervalOf(config, 'probe', PROBE_INTERVAL_MS)));
   timers.push(setInterval(pendingTick, intervalOf(config, 'pending', LEDGER_INTERVAL_MS)));
@@ -323,6 +346,8 @@ export async function startCollector(
   void gapTick();
   // 启动时就评估一次：上一个进程可能是在暂停状态下退出的，不必等一个周期。
   void retentionTick();
+  // 监听已起来，第一轮会话扫描异步跑，不挡页面读已有库。
+  void sessionsTick();
 
   const stop = async (): Promise<void> => {
     if (stopped) return;

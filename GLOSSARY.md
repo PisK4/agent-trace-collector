@@ -5,10 +5,10 @@
 ## 基础名词
 
 **请求（request）**：
-本项目的主记录单位，表示来源报告的一笔调用；网关请求可包含多次上游尝试。magpie、harness OTLP 与 droid 会话文件都可提供请求记录，同一调用经多条通道分别记录时，请求行数不等于去重后的调用数。
+本项目的主记录单位，表示来源报告的一笔调用；网关请求可包含多次上游尝试。magpie、harness OTLP 与本地 Agent 会话文件（droid、Claude Code、Codex、Zcode、OMP、Pi）都可提供请求记录，同一调用经多条通道分别记录时，请求行数不等于去重后的调用数。
 
 **session**：
-客户端或 harness 声明的会话标识，由 magpie 转报、从 OTLP 属性映射或从 droid 会话文件读出；标识缺失时不凭空推定会话归属。
+客户端或 harness 声明的会话标识，由 magpie 转报、从 OTLP 属性映射或从本地 Agent 会话文件读出；标识缺失时不凭空推定会话归属。
 
 **conv**：
 magpie 根据首条用户消息生成的会话指纹，只在没有 session 时用于会话归属；它不等同于本项目通用的会话分组键 conv_key。
@@ -30,7 +30,7 @@ magpie 账本对调用路径的分类，对应 raw_ledger.source；它与请求�
 _Avoid_: via
 
 **出生通路（via）**：
-创建本地请求记录的通路，对应 request.via；后续证据汇入不使它变成证据来源的完整集合。hook 暂存请求可被折叠进账本请求；OTLP 与 droid 会话文件各有自己的证据位，账本晚到时可按统一 owner 规则认领已建行，具体规则见[合并规则](docs/architecture-design.md#合并规则)。
+创建本地请求记录的通路，对应 request.via；后续证据汇入不使它变成证据来源的完整集合。hook 暂存请求可被折叠进账本请求；OTLP 与本地 Agent 会话文件各有自己的证据位，账本晚到时可按统一 owner 规则认领已建行，具体规则见[合并规则](docs/architecture-design.md#合并规则)。
 _Avoid_: 当作流量种类或全部证据通道读
 
 **关联（association）**：

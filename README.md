@@ -53,13 +53,24 @@ export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $ATC_TOKEN"
 - **OMP** — spans become request rows; the body pane shows a structured summary (labelled "OTLP summary"). Its OTLP export has no per-request body channel.
 - **Codex CLI** — does not read those environment variables. Configure `[otel.trace_exporter.otlp-http]` in `~/.codex/config.toml` against the local endpoint with `protocol = "binary"`. Turn spans become request rows with session, model and usage readings; no per-request bodies.
 
-If a session runs both magpie and OTLP, a ledger row that arrives late claims the OTLP row through the shared owner rule. When the ledger row lands first and the OTLP span arrives later, the two rows stay separate and the source column tells them apart. droid and ledger rows claim each other the same way.
+If a session runs both magpie and OTLP, a ledger row that arrives late claims the OTLP row through the shared owner rule. When the ledger row lands first and the OTLP span arrives later, the two rows stay separate and the source column tells them apart. Local session rows claim ledger and OTLP rows the same way.
 
-### Path 3 — droid session files: rebuilt from the transcript
+### Path 3 — local agent session files: rebuilt from the transcript
 
-droid (Factory) neither goes through magpie nor exports OTLP. By default the collector scans `~/.factory/sessions` every 60 seconds (`FACTORY_HOME_OVERRIDE` points it at another Factory home) and splits each `.jsonl` transcript into one request per assistant message. The request body is rebuilt from the messages up to that turn, and the reply is that message's content. The system prompt and tool definitions are not in the transcript; the page labels the source "droid session file".
+The collector also reads session files written by local agents, one adapter per agent:
 
-The transcript carries cumulative usage per session, not per call: per-call readings stay empty and the session header shows the cumulative total. Forked sessions and subagents are restored from `forkedAtMessageId` and `callingSessionId`.
+| Agent | Default root | Environment override | Call unit |
+| --- | --- | --- | --- |
+| droid (Factory) | `~/.factory/sessions` | `FACTORY_HOME_OVERRIDE` | one assistant message |
+| Claude Code | `~/.claude/projects` | `CLAUDE_CONFIG_DIR` | one assistant response (`message.id`, content blocks merged) |
+| Codex | `~/.codex/sessions` and `~/.codex/archived_sessions` | `CODEX_HOME` | one response, settled by its usage record |
+| Zcode | `~/.zcode/cli/db/db.sqlite` | `ZCODE_HOME` | one assistant message |
+| OMP | `~/.omp/agent/sessions` | `OMP_HOME` | one assistant message |
+| Pi | `~/.pi/agent/sessions` | `PI_HOME` | one assistant message |
+
+Each adapter rotates once per 60-second timer; a single adapter failing freezes only that agent. The request body is rebuilt from the messages up to that call, and the reply is that call's content. System prompts and tool definitions are not in these files; the page labels the source per agent.
+
+droid's transcript carries cumulative usage per session, not per call: per-call readings stay empty and the session header shows the cumulative total. Forked sessions and subagents are restored from `forkedAtMessageId` and `callingSessionId`. The other adapters read per-call usage from the session record.
 
 ## Quick start
 
@@ -135,17 +146,17 @@ Tracery stores real request bodies. That is the point of it, and it deserves sta
 | Contents | `trace.db` plus WAL, the four token/salt files, and logs |
 | Permissions | directory 0700, files 0600 |
 | Network | listens on `127.0.0.1` only, hard-coded; never a wildcard address |
-| Outbound | reads magpie's local ledger and routing files, droid's local transcripts, and probes magpie's local port. Nothing is uploaded |
+| Outbound | reads magpie's local ledger and routing files, local session files of the six agents above, and probes magpie's local port. Nothing is uploaded |
 | Accounts | account fields are kept out of the API surface |
 | Retention | bodies are reclaimed against a budget: 10 GB of bodies, 16 GB total. At 90% of budget the oldest bodies are reclaimed; at 80% of disk only metadata is accepted; at 95% ingestion stops. Reclaimed bodies cannot be restored |
 
-Beyond those sources, Tracery reads droid's transcripts under `~/.factory/sessions` on a timer. It does not read any other agent-owned session data. The one file read on the OTLP path is a `body_ref` — a single file an event points at explicitly, never a directory listing.
+Beyond those sources, Tracery reads local session files for the agents listed under Path 3, each on a timer. It does not read any other agent-owned session data. The one file read on the OTLP path is a `body_ref` — a single file an event points at explicitly, never a directory listing.
 
 Tests use synthetic data only. Real request bodies, accounts, tokens and user configuration never enter fixtures, logs or commits.
 
 ## Scope and non-goals
 
-- **Only observed traffic.** Requests that pass through neither magpie, OTLP, nor a scanned droid transcript are invisible. Request counts are bounded by what was observed; missing bodies are labelled individually. Hook coverage is not total request volume.
+- **Only observed traffic.** Requests that pass through neither magpie, OTLP, nor a scanned local session file are invisible. Request counts are bounded by what was observed; missing bodies are labelled individually. Hook coverage is not total request volume.
 - **Not a proxy.** Nothing is forwarded, rewritten or intercepted.
 - **No cross-harness ingestion protocol.** The only generic entry points are OTLP's `/v1/traces` and `/v1/logs`.
 - **No export, alerting, dashboards or multi-machine aggregation.** No server-side full-text search; the in-page search filters the session titles and client labels already loaded.

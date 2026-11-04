@@ -53,7 +53,10 @@ export type Config = {
   deriveBudget?: DeriveBudget;
 };
 
-const INTERVAL_KEYS = ['ledger', 'route', 'droid', 'cost', 'probe', 'pending', 'derive', 'retention', 'rawPrune', 'gap'] as const;
+const INTERVAL_KEYS = [
+  'ledger', 'route', 'droid', 'sessions', 'cost', 'probe', 'pending', 'derive', 'retention',
+  'rawPrune', 'gap',
+] as const;
 export type IntervalKey = typeof INTERVAL_KEYS[number];
 
 /**

@@ -1659,3 +1659,34 @@ master 合并两阶段交付（e468167）后 `bun run service restart`：launchd
 ### 结论
 
 列表查询项按[提案](../.agents/notes/implemented/bug-fix/2026-11-01-session-list-query.md)验收标准关闭：查询中位与 p95/p99 达标、列表返回后独立显示、采集速率与积压无回退。整体首屏交互问题保持开放：HTML 首字节等待与后台同步长任务不因列表 SQL 达标而关闭，按第一轮 Deferred 继续（pending 批次、派生重复工作、前端队列、线程隔离）。
+
+## 本地 Agent 会话适配器第一版（合成数据，2026-11-04）
+
+范围：Claude Code、Codex、Zcode、OMP、Pi 五套适配器、共用摄入 `src/sources/session/`、`sessions` 定时器、schema v12（`raw_droid_event` 改名 `raw_session_event` 并加 `source_kind`）、统一 owner 的 `usage_fingerprint.v1` 与会话 id 前缀归一。
+
+### 已执行
+
+| 项 | 结果 |
+| --- | --- |
+| `bun run typecheck` | 通过 |
+| `tests/session-claude.test.ts` | 5 pass：多行内容块合并、批界刷新、坏行停游标、代际重读、脱敏 |
+| `tests/session-codex.test.ts` | 4 pass：用量与正文形状、老会话 `token_count` 兜底、子代理折叠、坏行停游标 |
+| `tests/session-omp.test.ts` | 3 pass：OMP 文件名兜底、Pi 的 `session.id` 与缺 cache 字段、坏行停游标 |
+| `tests/session-zcode.test.ts` | 5 pass：逐调用建行、追加窗口、跨来源指纹认领、子代理折叠、running 行不越过 |
+| `tests/owner-fingerprint.test.ts` | 6 pass：唯一命中、多候选、用量不等、±2 秒窗口、同来源排除、缺用量回退 |
+| `tests/main.test.ts` 新增会话定时任务用例 | 通过：注入合成根，按间隔轮转适配器并建行 |
+| store、droid 回归 | v12 迁移与 `raw_session_event` 相关用例全部通过 |
+| 全量 `bun test` | 1224 pass / 0 fail |
+
+### 未执行
+
+- 真实流量验收：未合并 master、未部署、未重启生产采集器，也没有用真实会话文件做只读核对。各适配器对上游格式的假设（字段名、时间窗口、turn 粒度）仍待真实数据验证。
+- 生产库 v11 → v12 原地升级未在真实库上执行；只在合成库的 store 用例里覆盖。
+- droid 尚未迁到共用摄入，仍走原路径；两边并存但不共享代码。
+- Magpie 19 种本地会话 Agent 的目录检测、`maintain source-health`、历史回填预算调大入口均未实现，留待后续阶段。
+
+### 已知边界
+
+- Claude 子代理的 `isSidechain` 行不建调用，子代理谱系本轮不折叠。
+- Codex 同一会话在 `sessions` 与 `archived_sessions` 各有一份时，证据 ref 幂等但不刷新正文（`mutable=false`）；`token_count` 兜底不去重重复写出的相同用量行。
+- Zcode 的 `turn_id` 粒度未用真实库核实；owner 已加同来源证据排除，同一 turn 的多笔调用不会被并成一行。
