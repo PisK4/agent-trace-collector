@@ -1245,8 +1245,8 @@ droid 行在落库时由转录重建正文，正常为 `available`；行建好�
 
 | 接口 | 用途 | 分页 |
 | --- | --- | --- |
-| `GET /api/sessions?limit=50&cursor=` | 会话列表，含笔数、最后时间、异常标记 | keyset，(last_ms, conv_key) |
-| `GET /api/sessions/:key/requests?limit=100&cursor=&direction=older` | 会话内请求列表，只返回列字段；direction 省略为 forward | keyset，(started_ms, req_id)；older 游标绑定会话与方向 |
+| `GET /api/sessions?limit=50&cursor=` | 会话列表，含笔数、最后时间、异常标记 | keyset，(last_ms, conv_key)；翻页期间有新请求的会话会移到游标之前，本轮不再出现，刷新首屏自愈 |
+| `GET /api/sessions/:key/requests?limit=100&cursor=&direction=older` | 会话内请求列表，只返回列字段；direction 省略为 forward | keyset，(started_ms, req_id)，req_id 是不可变键；两个方向的游标都绑定会话与方向，跨会话复用、方向混用与缺绑定的旧游标返回 400。`started_ms` 会被账本投影改写，翻页窗口内的改写与合并可能漏行或重复，刷新首屏自愈 |
 | `GET /api/sessions/:key/summary` | 会话口径汇总：工具、路径、Skill、中断、资源合计、会话累计用量、结构与覆盖度；查询时聚合 | 无 |
 | `GET /api/sessions/:key/summary/entries?kind=&name=/path=` | 汇总条目点击后的按组支撑记录，带配对状态、执行段耗时与已有参数摘要；kind 取 tool/written/read/skill/interrupts | 上限 1000 |
 | `GET /api/requests/:id` | 单笔读数、费用状态、正文状态 | 无 |
