@@ -37,3 +37,4 @@ Status: implemented
 ## Testing
 
 - `tests/retention.test.ts`「有界清理分批独立提交、批间让出，连续调用收敛到零」：620 行超期 span、`maxBatches=2` 的合成种子——单次调用删 200 行停手、两次独立的 `raw_prune` 写事务、批间 `setImmediate` 链获得执行机会、4 次调用共 7 个写事务后累计删除等于种子行数且超期计数归零。
+- `tests/retention.test.ts`「body 计量纳入会话原始层 payload，分块求和与同步版一致」：插入 2,048 B 的 `raw_session_event` payload 后同步计量恰好多出 2,048，分块路径对该 WITHOUT ROWID 表整表求和的结果与同步版一致。

@@ -569,6 +569,29 @@ test('有界清理分批独立提交、批间让出，连续调用收敛到零',
   }
 });
 
+test('body 计量纳入会话原始层 payload，分块求和与同步版一致', async () => {
+  const f = fixture();
+  try {
+    const before = measureBodyBytes(f.store);
+    const payloadSize = 2048;
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
+          line_type,event_at_ms,payload_json,privacy_version)
+         VALUES ('claude_session','g-f12',0,'s','user',10,?,1)`,
+        ['x'.repeat(payloadSize)],
+      );
+    });
+    const exact = measureBodyBytes(f.store);
+    expect(exact - before).toBe(payloadSize);
+    // WITHOUT ROWID 表没有 rowid 可分块：整表一次求和的结果必须与同步版一致。
+    const measured = await measureBodyBytesChunked(f.store);
+    expect(measured.bytes).toBe(exact);
+  } finally {
+    f.close();
+  }
+});
+
 test('带正文且无法迁移的hook原文不被过期规则删掉', () => {
   const f = fixture();
   try {
