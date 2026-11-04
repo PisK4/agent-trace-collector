@@ -12,8 +12,9 @@ import { fingerprintHash, messageFingerprint } from '../src/fingerprint';
 import { enqueueDerive } from '../src/derive/sync';
 import { drainDeriveEntry } from '../src/derive/unit';
 import type { Store } from '../src/store';
+import { defaultDataDir } from '../src/config';
 
-const path = process.env.ATC_BACKFILL_DB ?? `${process.env.HOME}/Library/Application Support/agent-trace-collector/trace.db`;
+const path = process.env.ATC_BACKFILL_DB ?? `${defaultDataDir(process.env)}/trace.db`;
 
 function columnsOf(db: Database, table: string): string[] {
   return (db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(row => row.name);

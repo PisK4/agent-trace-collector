@@ -1,0 +1,69 @@
+name: Bug report
+description: Something is wrong in the collector or the reading interface
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste real request bodies, tokens or account names.** The collector stores your actual prompts, code and model replies; reproduce with synthetic input instead. Security issues go through [SECURITY.md](https://github.com/PisK4/agent-trace-collector/blob/master/SECURITY.md), not this form.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Smallest steps that show it. Synthetic data, or a description of the data shape if the bug needs real traffic.
+      placeholder: |
+        1. bun prototypes/synthetic-server.ts
+        2. Open http://127.0.0.1:8770/?session=conv-synthetic-reading
+        3. Click ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ingestion
+    attributes:
+      label: Ingestion path
+      options:
+        - Synthetic demo server
+        - magpie hook
+        - OTLP (Claude Code)
+        - OTLP (OMP)
+        - OTLP (Codex CLI)
+        - No data / empty interface
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or version
+      description: Output of `git rev-parse --short HEAD`, or the release you run.
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and `bun --version`.
+      placeholder: macOS 15.3, Bun 1.4.4
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Collector diagnostics only. Strip anything that came from a request body.
+      render: shell
+    validations:
+      required: false

@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Runtime: Bun](https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.4-black)](https://bun.sh)
 [![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
-[![Tests: 1163](https://img.shields.io/badge/tests-1163%20passing-brightgreen)](tests)
+[![Tests: 1165](https://img.shields.io/badge/tests-1165%20passing-brightgreen)](tests)
 [![README: English](https://img.shields.io/badge/README-English-blue)](README.md)
 
 [English](README.md) ｜ 中文
@@ -76,7 +76,7 @@ bun prototypes/synthetic-server.ts
 bun run start        # 采集器，127.0.0.1:8320
 ```
 
-打开 `http://127.0.0.1:8320`。首次启动在数据目录生成 `read.token`、`hook.token`、`otlp.token` 与 `redaction.salt`，权限 0600，目录 0700。默认数据目录是 `~/Library/Application Support/agent-trace-collector`。
+打开 `http://127.0.0.1:8320`。首次启动在数据目录生成 `read.token`、`hook.token`、`otlp.token` 与 `redaction.salt`，权限 0600，目录 0700。默认数据目录在 macOS 上是 `~/Library/Application Support/agent-trace-collector`，其他平台是 `${XDG_DATA_HOME:-~/.local/share}/agent-trace-collector`。支持 macOS 与 Linux；不支持 Windows——采集器依赖的文件权限位在 Windows 上不成立。
 
 可覆盖的项：`ATC_DATA_DIR`、`ATC_PORT`、`ATC_LEDGER_PATH`、`ATC_ROUTING_DIR`、`ATC_MAGPIE_URL`、`ATC_BODY_BUDGET`、`ATC_DISK_LIMIT`。监听地址写死回环，不接受配置成通配地址。
 
@@ -125,7 +125,7 @@ Tracery 存的是真实请求正文。这是它的用途，也值得直接说清
 
 | | |
 | --- | --- |
-| 数据目录 | `~/Library/Application Support/agent-trace-collector`（可用 `ATC_DATA_DIR` 覆盖） |
+| 数据目录 | macOS 为 `~/Library/Application Support/agent-trace-collector`，其他平台为 `${XDG_DATA_HOME:-~/.local/share}/agent-trace-collector`（可用 `ATC_DATA_DIR` 覆盖） |
 | 内容 | `trace.db` 与 WAL、四个令牌与盐文件、日志 |
 | 权限 | 目录 0700，文件 0600 |
 | 网络 | 只监听 `127.0.0.1`，写死；不接受通配地址 |
@@ -191,12 +191,14 @@ bun run verify:notes      # 变更 note 闸门，维护者用
 
 ## 参与
 
-欢迎提 issue 与 pull request。两条约定不太常见，先说在前面：
+欢迎提 issue 与 pull request，动笔前先读 [CONTRIBUTING.md](CONTRIBUTING.md)。两条约定不太常见，先说在前面：
 
 - **Agent Note。** 非平凡改动要附一篇 [`.agents/notes/`](.agents/notes/README.md) 下的 note，记下决策、否决了什么、代价是什么；`bun run verify:notes` 在合并前检查这一条。纯机械或局部编辑豁免。
 - **先读工作约定。** [AGENTS.md](AGENTS.md) 写明模块边界与测试守住的常备约定。
 
 提交 pull request 前跑 `bun run typecheck` 与 `bun test`；CI 也跑这两项。
+
+安全问题走 [SECURITY.md](SECURITY.md)，不要开公开 issue。变更记在 [CHANGELOG](CHANGELOG.md)。
 
 ## 许可
 

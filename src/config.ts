@@ -94,10 +94,29 @@ function parsePort(raw: string): number {
   return port;
 }
 
+/**
+ * 数据目录的默认位置，按平台惯例选根。
+ *
+ * 之前写死 macOS 布局，Linux 上会把数据落进 `~/Library`。目录名沿用仓库名，
+ * 与产品名 Tracery 分开：改名会让已有数据的用户找不到自己的库。
+ *
+ * 不设 Windows 分支：密钥文件的 0600 校验在 Windows 上不成立（见
+ * `readLocalSecret`），那条路径跑不通，写出来只会误导。
+ */
+export function defaultDataDir(
+  env: Record<string, string | undefined>,
+  platform: string = process.platform,
+  home: string = homedir(),
+): string {
+  const name = 'agent-trace-collector';
+  if (platform === 'darwin') return join(home, 'Library', 'Application Support', name);
+  return join(env.XDG_DATA_HOME?.trim() || join(home, '.local', 'share'), name);
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
   const home = homedir();
   const config: Config = {
-    dataDir: env.ATC_DATA_DIR?.trim() || join(home, 'Library', 'Application Support', 'agent-trace-collector'),
+    dataDir: env.ATC_DATA_DIR?.trim() || defaultDataDir(env, process.platform, home),
     port: env.ATC_PORT === undefined ? DEFAULT_PORT : parsePort(env.ATC_PORT),
     ledgerPath: env.ATC_LEDGER_PATH?.trim() || join(home, '.config', 'magpie', 'usage.jsonl'),
     routingDir: env.ATC_ROUTING_DIR?.trim() || join(home, '.config', 'magpie', 'routing'),

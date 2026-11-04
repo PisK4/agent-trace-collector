@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Runtime: Bun](https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.4-black)](https://bun.sh)
 [![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
-[![Tests: 1163](https://img.shields.io/badge/tests-1163%20passing-brightgreen)](tests)
+[![Tests: 1165](https://img.shields.io/badge/tests-1165%20passing-brightgreen)](tests)
 [![README: 中文](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-blue)](README.zh-CN.md)
 
 **Tracery records the requests your coding agent sends, and lets you read them step by step.**
@@ -74,7 +74,7 @@ Open `http://127.0.0.1:8770/?session=conv-synthetic-reading`. The synthetic serv
 bun run start        # collector on 127.0.0.1:8320
 ```
 
-Open `http://127.0.0.1:8320`. On first start the collector creates `read.token`, `hook.token`, `otlp.token` and `redaction.salt` in the data directory — file mode 0600, directory mode 0700. The default data directory is `~/Library/Application Support/agent-trace-collector`.
+Open `http://127.0.0.1:8320`. On first start the collector creates `read.token`, `hook.token`, `otlp.token` and `redaction.salt` in the data directory — file mode 0600, directory mode 0700. The default data directory is `~/Library/Application Support/agent-trace-collector` on macOS and `${XDG_DATA_HOME:-~/.local/share}/agent-trace-collector` elsewhere. macOS and Linux are supported; Windows is not, because the file-mode checks the collector relies on do not apply there.
 
 Override any of these with `ATC_DATA_DIR`, `ATC_PORT`, `ATC_LEDGER_PATH`, `ATC_ROUTING_DIR`, `ATC_MAGPIE_URL`, `ATC_BODY_BUDGET`, `ATC_DISK_LIMIT`. The listen address is hard-coded to loopback; it cannot be configured to a wildcard address.
 
@@ -123,7 +123,7 @@ Tracery stores real request bodies. That is the point of it, and it deserves sta
 
 | | |
 | --- | --- |
-| Data directory | `~/Library/Application Support/agent-trace-collector` (override with `ATC_DATA_DIR`) |
+| Data directory | `~/Library/Application Support/agent-trace-collector` on macOS, `${XDG_DATA_HOME:-~/.local/share}/agent-trace-collector` elsewhere (override with `ATC_DATA_DIR`) |
 | Contents | `trace.db` plus WAL, the four token/salt files, and logs |
 | Permissions | directory 0700, files 0600 |
 | Network | listens on `127.0.0.1` only, hard-coded; never a wildcard address |
@@ -191,12 +191,14 @@ All design documents are written in Chinese. The [glossary](GLOSSARY.md) pairs e
 
 ## Contributing
 
-Issues and pull requests are welcome. Two conventions are unusual enough to mention up front:
+Issues and pull requests are welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) first. Two conventions are unusual enough to mention up front:
 
 - **Agent notes.** Any non-trivial change ships with a note under [`.agents/notes/`](.agents/notes/README.md) recording the decision, what was rejected, and what it cost. `bun run verify:notes` checks this before a merge. Purely mechanical or local edits are exempt.
 - **Read the working agreements first.** [AGENTS.md](AGENTS.md) states the module boundaries and the standing conventions the test suite enforces.
 
 Run `bun run typecheck` and `bun test` before opening a pull request; CI runs both.
+
+Security issues go through [SECURITY.md](SECURITY.md), never a public issue. Changes are tracked in the [changelog](CHANGELOG.md).
 
 ## License
 

@@ -4,7 +4,7 @@
 
 ## 数据目录
 
-默认 `~/Library/Application Support/agent-trace-collector`，用 `ATC_DATA_DIR` 覆盖。目录权限 0700，里面的数据库、WAL、日志与三个令牌文件都是 0600。
+默认按平台惯例：macOS 为 `~/Library/Application Support/agent-trace-collector`，其他平台为 `${XDG_DATA_HOME:-~/.local/share}/agent-trace-collector`，用 `ATC_DATA_DIR` 覆盖。目录权限 0700，里面的数据库、WAL、日志与三个令牌文件都是 0600。
 
 | 文件 | 用途 |
 | --- | --- |

@@ -449,7 +449,7 @@ hook 是 best-effort 通道，缺证据有三种来源：回调没发生、回�
 
 ## 存储模型
 
-SQLite，WAL，单文件，放仓库外。默认路径 `~/Library/Application Support/agent-trace-collector/trace.db`，可用环境变量或配置改。
+SQLite，WAL，单文件，放仓库外。默认路径按平台惯例落在数据目录下（macOS `~/Library/Application Support/agent-trace-collector/trace.db`，其他平台 `${XDG_DATA_HOME:-~/.local/share}/agent-trace-collector/trace.db`），可用环境变量或配置改。
 
 ### 版本与破坏式替换
 
