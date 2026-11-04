@@ -421,7 +421,7 @@ OMP/Pi 的多根在适配器里展开：OMP 还读 `PI_CODING_AGENT_DIR`、`PI_C
 
 Codex 归档的 `.jsonl.zst` 先整份解压，再按解压后的字节省份提交：压缩字节的 SHA-256 作为代际与指纹，同指纹不再解压；每次写事务最多提交 256 KiB 或 64 行，`committed_off` 是本块末尾，`observed_off` 是整份长度，发现阶段用两者之差判断还有没有剩余。解压失败记 `codex_zstd_invalid`，超过 256 MiB 记 `codex_zstd_limit`，游标不前进。压缩文件按单个 zstd frame 处理。同名 plain 与 zst 先比较解压内容；相等或互为前缀时只留覆盖更全的一份，分叉时都保留。
 
-DSH 的 `.zstd` 是追加式多 frame 流，不能整份当归档。读取器逐个 frame 校验长度后再解压，只有累计文本以换行结尾的 frame 才提交；`committed_off` 是压缩偏移，`observed_off` 是压缩文件长度，写了一半的尾帧留到下一轮。行的 offset 是合成身份（frame 起点乘 stride 加行号），只用于原始层主键与排序；适配器以 `lineCommit:false` 让共用摄入把读取层的批末位置写进游标，坏行则退回所在 frame 的起点。同一会话目录只取版本最高、同版本最后写入的一份。分叉会话在 `session/end-seed` 之前只把父会话事件放进消息窗口，不重复建调用；格式 1 用 `seedLength` 判断边界。子代理折叠到直接父会话。
+DSH 的 `.zstd` 是追加式多 frame 流，不能整份当归档。读取器逐个 frame 校验长度后再解压，只有累计文本以换行结尾的 frame 才提交；`committed_off` 是压缩偏移，`observed_off` 是压缩文件长度，写了一半的尾帧留到下一轮。行的 offset 是合成身份（frame 起点乘 stride 加行号），只用于原始层主键与排序；适配器以 `lineCommit:false` 让共用摄入把读取层的批末位置写进游标，坏行则退回所在 frame 的起点。同一会话目录只取版本最高、同版本最后写入的一份。分叉会话在 `session/end-seed` 之前只把父会话事件放进消息窗口，不重复建调用；格式 1 用 `seedLength` 判断边界。子代理折叠到直接父会话，调用证据键再带上 subagent id，避免同父多个子代理的文件内 seq 相撞。
 
 六个非 droid 适配器共用一个 `sessions` 定时器，每 60 秒跑一轮。每轮先对全部适配器做一次只读发现，只 stat；发现后 Codex 对同名 plain/zst twin 读两份比较内容，结果按大小与 mtime 缓存。
 

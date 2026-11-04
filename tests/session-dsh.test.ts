@@ -56,7 +56,7 @@ function assistant(seq: number, text: string,
 }
 
 function endSeed(seq: number): string {
-  return json({ type: 'session/end-seed', seq, time: T0 + seq * 1_000, data: { inherited: true } });
+  return json({ type: 'session/end-seed', seq, time: T0 + seq * 1_000, data: {} });
 }
 
 function frame(lines: string[]): Buffer {
@@ -186,7 +186,7 @@ test('DSH 摄入：父会话调用、分叉 seed 不重复、结束标记后才�
       'SELECT source_kind, ref_key FROM request_evidence ORDER BY req_id').all();
     expect(evidence).toEqual([
       { source_kind: 'dsh_session_call', ref_key: `${PARENT}/seq:1` },
-      { source_kind: 'dsh_session_call', ref_key: `${PARENT}/seq:4` },
+      { source_kind: 'dsh_session_call', ref_key: `${PARENT}/${CHILD}/seq:4` },
     ]);
 
     const parentBody = readBodyWithMessagesTx(f.store.read, 1)!;
@@ -229,6 +229,40 @@ test('DSH 格式 1：seedLength 之前的事件只进窗口，不建调用', asy
     const rowValue = f.store.read.query(`
       SELECT started_ms, in_tok, out_tok, msg_count FROM request`).get();
     expect(rowValue).toEqual({ started_ms: T0 + 3_000, in_tok: 7, out_tok: 3, msg_count: 3 });
+  } finally {
+    f.close();
+    rmSync(join(root, '..'), { recursive: true, force: true });
+  }
+});
+
+test('DSH 子代理：同父的两个子代理都能建行，seq 不互相挤掉', async () => {
+  const f = fixture();
+  const root = makeRoot();
+  const first = 'dsh-synthetic-child-a';
+  const second = 'dsh-synthetic-child-b';
+  try {
+    for (const id of [first, second]) {
+      writeFrames(sessionDir(root, id), 'session.v4.jsonl.zstd', [
+        [head(id, { parentSession: PARENT, delegationDepth: 1 })],
+        [user(0, 'synthetic prompt'), assistant(1, 'synthetic reply')],
+      ]);
+    }
+
+    const result = await ingestSessionBatch(f.store, dshAdapter, [root], SALT, T0);
+    expect(result.calls).toBe(2);
+    expect(result.duplicates).toBe(0);
+    const rows = f.store.read.query(
+      'SELECT session, actor, subagent, parent_agent FROM request ORDER BY actor').all();
+    expect(rows).toEqual([
+      { session: PARENT, actor: first, subagent: first, parent_agent: PARENT },
+      { session: PARENT, actor: second, subagent: second, parent_agent: PARENT },
+    ]);
+    const evidence = f.store.read.query(
+      'SELECT ref_key FROM request_evidence ORDER BY ref_key').all();
+    expect(evidence).toEqual([
+      { ref_key: `${PARENT}/${first}/seq:1` },
+      { ref_key: `${PARENT}/${second}/seq:1` },
+    ]);
   } finally {
     f.close();
     rmSync(join(root, '..'), { recursive: true, force: true });

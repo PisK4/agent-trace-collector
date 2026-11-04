@@ -42,9 +42,9 @@ DSH 每写完一批事件就追加一个完整 frame，文件长度单调增长�
 
 - 首行 `type: 'session'` 是头，取 `id`、`cwd`、`version`、`isSeeded`、`seedLength`、`parentSession` 与 `delegationDepth`。
 - `user/message` 进消息窗口；`assistant/message` 建一笔调用，`data.content` 是回复，`data.message.source.model` 是模型，`data.usage` 的 `inputTokens`/`outputTokens` 已是 magpie 口径，缓存读写另计。
-- 调用身份优先用事件的 `seq`（`seq:<n>`）；没有 seq 时用行偏移（`off:<offset>`）。证据 `ref_key` 是 `<session>/<callId>`。
+- 调用身份优先用事件的 `seq`（`seq:<n>`）；没有 seq 时用行偏移（`off:<offset>`）。子代理的 seq 只在各自文件内递增，调用 id 再带上 subagent id，证据 `ref_key` 是 `<会话>/<callId>`。
 - 正文协议是 `chat`：请求侧是此前的 user/assistant 消息数组，回复侧包成 `choices[0].message`。
-- 分叉：`version >= 2 && isSeeded` 时，`session/end-seed`（`inherited: true`）之前的 assistant 只进窗口不建调用；`version < 2` 用 `seq < seedLength` 判断。副本结束后自己的调用照常建行。
+- 分叉：`version >= 2 && isSeeded` 时，`session/end-seed` 之前的 assistant 只进窗口不建调用；真实格式的结束事件 `data` 是空对象，事件本身就是边界。`version < 2` 用 `seq < seedLength` 判断。副本结束后自己的调用照常建行。
 - 子代理：`delegationDepth > 0` 时 `session` 取 `parentSession`，`subagent` 取自己的 id，`parent_agent` 取直接父会话；父链再往上不追，发现阶段不为确定根会话去读每个文件的头。
 - 未知事件类型只落原始层，不判坏。会话头缺失 id、assistant 缺会话或时间、payload 不是对象时记 `dsh_session_missing` / `dsh_time_missing` / `dsh_payload_invalid`，游标停在 frame 起点。
 
@@ -78,7 +78,8 @@ DSH 每写完一批事件就追加一个完整 frame，文件长度单调增长�
 
 - 会话目录有 v3 与 v4 两份时只取 v4；低版本即使 mtime 更新也被版本号淘汰；游标存在时剩余按大小差计算。
 - 截断在第二个 frame 中间时只提交第一个 frame；补齐后从上一 frame 边界继续，不重复第一段。
-- 父会话 + 分叉子会话首轮只建父会话调用；追加 `session/end-seed` 与子会话自己的 assistant 后，下一轮建一笔子会话调用，`session` 归父、`subagent` 归己、证据是 `<parent>/seq:4`。
+- 父会话 + 分叉子会话首轮只建父会话调用；追加 `session/end-seed`（空 `data`）与子会话自己的 assistant 后，下一轮建一笔子会话调用，`session` 归父、`subagent` 归己、证据是 `<parent>/<child>/seq:4`。
+- 同父的两个子代理使用相同 seq 时各建一行，证据各自带 subagent id，不互相挤掉。
 - 格式 1 的 `seedLength: 2` 只把前两条 assistant 放进窗口，自己那笔调用的 `msg_count` 为 3、用量取自己的 7/3。
 
 `bun test` 1257 pass / 0 fail（109 个文件），`bun run typecheck` 退出 0。真实流量与生产回填读数见[验收记录](../../../../docs/acceptance.md#dsh-会话适配器合成--生产真实流量2026-11-04)，本 note 不复制读数。
