@@ -73,9 +73,10 @@ const PAGE_MAX = 40;
 /**
  * 纯区间规则：返回错误原因或 null。HTTP 层用它映射 400，
  * getBodyPage 的 parseRange 用它做直接防御，两层共用同一条规则。
+ * 偏移要求安全整数：超出 2^53 的值会被浮点坍缩（from+40===from），不能放行。
  */
 export function bodyRangeError(from: number, to: number): string | null {
-  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) {
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from) {
     return 'invalid_body_range';
   }
   if (to - from > PAGE_MAX) return 'invalid_body_range';

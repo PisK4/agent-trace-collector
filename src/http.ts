@@ -178,7 +178,19 @@ function parseIndex(url: URL, name: string, fallback: number): number {
   const raw = url.searchParams.get(name);
   if (raw === null) return fallback;
   if (!/^\d+$/.test(raw)) throw new QueryInputError('invalid_body_range');
-  return Number(raw);
+  const value = Number(raw);
+  // 超出安全整数的偏移会被浮点坍缩（from+40===from 得到零宽窗口），解析即拒绝。
+  if (!Number.isSafeInteger(value)) throw new QueryInputError('invalid_body_range');
+  return value;
+}
+
+/** 路径参数解码：畸形百分号编码是客户端错误，统一映射进 QueryInputError 的 400 通道。 */
+function decodeParam(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new QueryInputError('invalid_path_param');
+  }
 }
 
 /** 批读 URL 上限：客户端发送前按同一界限折半重试（414 → batch_too_large）。 */
@@ -266,6 +278,13 @@ async function serveStatic(path: string): Promise<Response> {
   });
 }
 
+/** 容量写满的双形态：准入闸门的 'disk_full' 字符串与真实 SQLite 的 SQLITE_FULL 同判。 */
+function isDiskFull(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.message === 'disk_full') return true;
+  return 'code' in error && error.code === 'SQLITE_FULL';
+}
+
 /**
  * hook 接收端点。
  *
@@ -278,6 +297,7 @@ async function handleHookIngest(
   config: Config,
   hook: { token: string; salt: Uint8Array; admission?: () => HookAdmission } | undefined,
   metrics: IngestMetrics,
+  diagnostics?: DiagnosticLog,
 ): Promise<Response> {
   if (hook === undefined) {
     metrics.reject('hook_unavailable');
@@ -349,13 +369,14 @@ async function handleHookIngest(
       });
       return json(result, 200);
     } catch (error) {
-      const code = error instanceof Error ? error.message : 'unknown';
-      if (code === 'disk_full') {
+      // 原始错误只进结构化日志（errorCode 把自由文本归 unclassified）；响应体只带固定枚举。
+      diagnostics?.error('hook.write', { code: error });
+      if (isDiskFull(error)) {
         metrics.reject('insufficient_storage');
         return json({ error: 'insufficient_storage' }, 507);
       }
       metrics.reject('writer_failed');
-      return json({ error: 'writer_failed', code }, 503);
+      return json({ error: 'writer_failed', code: 'write_failed' }, 503);
     }
   } finally {
     ingesting = false;
@@ -403,6 +424,7 @@ async function handleOtlpIngest(
   otlp: { token: string; salt: Uint8Array; admission?: () => HookAdmission } | undefined,
   metrics: IngestMetrics,
   signal: 'traces' | 'logs',
+  diagnostics?: DiagnosticLog,
 ): Promise<Response> {
   if (otlp === undefined) {
     metrics.reject('otlp_unavailable');
@@ -464,13 +486,14 @@ async function handleOtlpIngest(
         metrics.reject('invalid_otlp');
         return json({ error: 'invalid_otlp', code: error.code }, 400);
       }
-      const code = error instanceof Error ? error.message : 'unknown';
-      if (code === 'disk_full') {
+      // 与 hook 入口同一契约：原始错误只进结构化日志，响应体只带固定枚举。
+      diagnostics?.error('otlp.write', { code: error });
+      if (isDiskFull(error)) {
         metrics.reject('insufficient_storage');
         return json({ error: 'insufficient_storage' }, 507);
       }
       metrics.reject('writer_failed');
-      return json({ error: 'writer_failed', code }, 503);
+      return json({ error: 'writer_failed', code: 'write_failed' }, 503);
     }
   } finally {
     ingesting = false;
@@ -497,13 +520,13 @@ export function createHandler(
   const handle = async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     if (url.pathname === '/hook/ingest') {
-      return await handleHookIngest(req, store, config, hook, ingestMetrics);
+      return await handleHookIngest(req, store, config, hook, ingestMetrics, diagnostics);
     }
     if (url.pathname === '/v1/traces') {
-      return await handleOtlpIngest(req, store, config, otlp, ingestMetrics, 'traces');
+      return await handleOtlpIngest(req, store, config, otlp, ingestMetrics, 'traces', diagnostics);
     }
     if (url.pathname === '/v1/logs') {
-      return await handleOtlpIngest(req, store, config, otlp, ingestMetrics, 'logs');
+      return await handleOtlpIngest(req, store, config, otlp, ingestMetrics, 'logs', diagnostics);
     }
     const isNavigation = !url.pathname.startsWith('/api/');
     const verdict = checkAccess(req, config.port, readToken, isNavigation);
@@ -551,7 +574,7 @@ export function createHandler(
 
       const requestsMatch = /^\/api\/sessions\/([^/]+)\/requests$/.exec(path);
       if (requestsMatch !== null) {
-        const key = decodeURIComponent(requestsMatch[1]!);
+        const key = decodeParam(requestsMatch[1]!);
         const limit = parseLimit(url, 100);
         const rawDirection = url.searchParams.get('direction');
         // 缺参数保持 forward；未知方向显式 400，不静默忽略。
@@ -564,7 +587,7 @@ export function createHandler(
 
       const turnsMatch = /^\/api\/sessions\/([^/]+)\/turns$/.exec(path);
       if (turnsMatch !== null) {
-        const key = decodeURIComponent(turnsMatch[1]!);
+        const key = decodeParam(turnsMatch[1]!);
         // from 是累计窗口下界（浏览器已加载的最早请求）；缺参数按全会话结算。
         const rawFrom = url.searchParams.get('from');
         let from: number | null = null;
@@ -577,17 +600,17 @@ export function createHandler(
 
       const bgJobsMatch = /^\/api\/sessions\/([^/]+)\/bg-jobs$/.exec(path);
       if (bgJobsMatch !== null) {
-        return json(listBgJobs(store, decodeURIComponent(bgJobsMatch[1]!)));
+        return json(listBgJobs(store, decodeParam(bgJobsMatch[1]!)));
       }
 
       const summaryMatch = /^\/api\/sessions\/([^/]+)\/summary$/.exec(path);
       if (summaryMatch !== null) {
-        return json(getSessionSummary(store, decodeURIComponent(summaryMatch[1]!)));
+        return json(getSessionSummary(store, decodeParam(summaryMatch[1]!)));
       }
 
       const summaryEntriesMatch = /^\/api\/sessions\/([^/]+)\/summary\/entries$/.exec(path);
       if (summaryEntriesMatch !== null) {
-        const key = decodeURIComponent(summaryEntriesMatch[1]!);
+        const key = decodeParam(summaryEntriesMatch[1]!);
         const query = summaryEntriesQuery(url);
         if (query === null) return json({ error: 'invalid_entries_query' }, 400);
         return json(getSummaryEntries(store, key, query));
@@ -665,7 +688,7 @@ export function createHandler(
         }
         const ids = parseBatchIds(url);
         if (ids === null) return json({ error: 'invalid_input' }, 400);
-        return json(getReadingBatch(store, decodeURIComponent(readingsMatch[1]!), ids));
+        return json(getReadingBatch(store, decodeParam(readingsMatch[1]!), ids));
       }
 
       const readingRangesMatch = /^\/api\/sessions\/([^/]+)\/reading-ranges$/.exec(path);
@@ -675,12 +698,14 @@ export function createHandler(
         }
         const ranges = parseBatchRanges(url);
         if (ranges === null) return json({ error: 'invalid_input' }, 400);
-        return json(getReadingRangeBatch(store, decodeURIComponent(readingRangesMatch[1]!), ranges));
+        return json(getReadingRangeBatch(store, decodeParam(readingRangesMatch[1]!), ranges));
       }
 
       return json({ error: 'not_found' }, 404);
     } catch (error) {
       if (error instanceof QueryInputError) return json({ error: error.message }, 400);
+      // 解码助手之外的 URIError 也按客户端错误处理，统一 500 分支不再吞它。
+      if (error instanceof URIError) return json({ error: 'invalid_path_param' }, 400);
       if (error instanceof ReadingConflictError) return json({ error: 'reading_changed' }, 409);
       return json({ error: 'internal_error' }, 500);
     }

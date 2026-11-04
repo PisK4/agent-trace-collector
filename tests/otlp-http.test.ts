@@ -185,3 +185,23 @@ test('logs 端点受理 protobuf 与 JSON，OMP 汇总记录落原始层', async
     f.close();
   }
 });
+
+test('真实 SQLITE_FULL 写失败与准入 disk_full 同映射 507（F44）', async () => {
+  const f = fixture();
+  try {
+    const full = new Error('database or disk is full');
+    (full as { code?: string }).code = 'SQLITE_FULL';
+    const broken = Object.assign(Object.create(f.store), {
+      write: () => { throw full; },
+    }) as typeof f.store;
+    const handler = makeHandler(broken);
+    const headers = { authorization: `Bearer ${OTLP_TOKEN}`, 'content-type': 'application/json' };
+    const response = await handler(otlpRequest('/v1/traces',
+      JSON.stringify(tracesJson([{ resource: { service: 'claude-code' }, spans: [OMP_CHAT_SPAN] }])), headers));
+    expect(response.status).toBe(507);
+    expect(await response.json()).toEqual({ error: 'insufficient_storage' });
+    expect((f.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(0);
+  } finally {
+    f.close();
+  }
+});
