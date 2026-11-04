@@ -6,7 +6,7 @@
 
 ## 一句话
 
-一个本机 LLM 请求记录器：主力输入是 magpie 网关的三路证据，另收 harness 侧 OTLP；每笔请求在这里留一条记录，详情页展示的就是那笔请求本身。
+一个本机 LLM 请求记录器：主力输入是 magpie 网关的三路证据，另收 harness 侧 OTLP 与 droid 会话文件；每笔请求在这里留一条记录，详情页展示的就是那笔请求本身。
 
 ## 它挂在什么位置
 
@@ -16,6 +16,8 @@ agent ──> magpie gateway ──> provider
                ├── gateway hook ──────> 本项目（请求体与回复）
                ├── usage ledger ──────> 本项目（状态、用量、路由 id）
                └── routing/*.jsonl ───> 本项目（路由决策）
+
+droid ──> ~/.factory/sessions/*.jsonl ──> 本项目（重建请求体与会话累计）
 ```
 
 它挂在数据面的旁边。没在运行时，Agent 的请求照常走完，只是这一段时间没有新记录，查询页停在最后一次写入的位置。名字里的 collector 指汇聚，不指代理。
@@ -34,7 +36,7 @@ ATA 是另一个未完成的轨迹项目，定位接近，卡在展示格式上�
 
 主实体是 LLM request，顶层一条记录对应一笔客户端发给 magpie 的请求，带上请求体、回复、agent、会话、模型、状态、用量、耗时、路由去向。magpie 内部可能多次尝试 provider；这些尝试作为请求的明细保存，不额外增加顶层请求数。账本中的 `handed_on` 行也是尝试明细，不能每行算一笔请求，或按 `route_id` 去重时丢掉费用。源码依据见 [机制与复用边界](magpie-mechanisms-research.md) 的多次尝试一节。
 
-会话、Agent、模型、日期都是查询出来的视图，不存聚合行。界面左侧选择一段对话，主区默认按对话顺序展示整段会话：每一笔新增的用户消息，紧跟该笔的 assistant 回复，工具调用与结果各自收成一行，点击回到对应请求。切换「请求账本」后，每笔请求收成一行，展开可读该笔的完整请求结构、本次回复、路由与尝试。右侧固定显示当前选中的 Request 的 Response 读数：首字、总时长、输出速度、用量与缓存、上下文组成、路由去向与三条通道的完整性。页面标明当前第几笔及共记录几笔 Request。未确认会话归属的请求独立列出，不因字段都为空而合并。
+会话、Agent、模型、日期都是查询出来的视图，不存聚合行。界面左侧选择一段对话，主区默认按对话顺序展示整段会话：每一笔新增的用户消息，紧跟该笔的 assistant 回复，工具调用与结果各自收成一行，点击回到对应请求。切换「请求账本」后，每笔请求收成一行，展开可读该笔的完整请求结构、本次回复、路由与尝试。右侧固定显示当前选中的 Request 的 Response 读数：首字、总时长、输出速度、用量与缓存、上下文组成、路由去向与证据完整性。页面标明当前第几笔及共记录几笔 Request。未确认会话归属的请求独立列出，不因字段都为空而合并。
 
 请求是保存与检查的单位，对话是默认导航入口。最新请求可能包含重发的历史，但压缩、裁剪或上游前序响应引用会使它缺少完整对话原文，不能将其称为完整会话。更早请求的失败、重试与用量仍保留在各自记录中。最新 Trace 缺正文时显示缺失原因，不自动用旧请求替代。要看某个 Agent 一天的用量，把它当天的请求加起来。
 
@@ -48,17 +50,20 @@ ATA 是另一个未完成的轨迹项目，定位接近，卡在展示格式上�
 
 ## 数据从哪来
 
-三条通道，各自补别人的缺失。
+各条通道，各自补别人的缺失。
 
 | 通道 | 拿到什么 | 拿不到什么 |
 | --- | --- | --- |
 | magpie gateway hook | 客户端协议请求体、合并后的回复、success、agent、session、model、stream、cwd；失败时回复可能为 null | 请求头、流内事件、每次 provider 尝试、route_id、conv、subagent；回调也可能缺失 |
 | 用量账本 `/v1/magpie/usage/requests` | 状态、用量、route_id、response_id、provider、账户 | 请求与回复正文 |
 | 路由历史 `~/.config/magpie/routing/` | 已记录的候选顺序、尝试、规则、亲和性与 prompt 结构 | 窗口过滤并非全部留痕；只能读盘，30 天滚动 |
+| droid 会话文件 | 会话身份、逐轮消息、模型、响应 id、会话累计用量 | 逐笔用量与费用、状态码、provider 与 served 模型、路由决策、system prompt 与工具定义 |
 
 当前方案由 hook 拿客户端协议的请求对象与合并回复，账本补权威元数据，路由历史补决策与上下文分析。实时 `/v1/magpie/trace` 也有路由结构，但环形缓冲很短。magpie 另有可选的归一化会话录制、OTLP 正文导出与 S3 归档，各有内容、保留和部署限制，不能把当前三路方案解释成 magpie 只有这三种能力。详见 [机制与复用边界](magpie-mechanisms-research.md)。
 
-三路之外还有第四条输入：harness 侧 OTLP。Claude Code 与 OMP 的 exporter 把 LLM span 发到本机端点，带模型、用量、耗时与会话 id；Claude Code 另在 logs 事件里带正文文件指针，采集器按指针读文件落正文。OTLP 行独立建行、不与 magpie 行合并，形状与取舍见[架构设计](architecture-design.md)。它把受众从「装 magpie 的人」放宽到「装 magpie 或用已适配 harness 的人」。
+三路之外还有两条输入。harness 侧 OTLP 由 Claude Code 与 OMP 的 exporter 把 LLM span 发到本机端点，带模型、用量、耗时与会话 id；Claude Code 另在 logs 事件里带正文文件指针，采集器按指针读文件落正文。OTLP 行独立建行；账本晚到时会按统一 owner 规则认领它，账本先到、OTLP 后到时仍保留两行。形状与取舍见[架构设计](architecture-design.md)。它把受众从「装 magpie 的人」放宽到「装 magpie 或用已适配 harness 的人」。
+
+droid 会话文件是第二条额外输入。Factory 的 droid 不经过 magpie，也不会出现在账本里；采集器直接读 `~/.factory/sessions` 下的转录，按 assistant 消息重建逐轮请求体，并用 settings 里的累计用量填会话头。转录不含 system prompt 与工具定义，逐笔用量也不可得。形状见[架构设计](architecture-design.md)。
 
 连接靠两个键：
 
@@ -69,7 +74,7 @@ ATA 是另一个未完成的轨迹项目，定位接近，卡在展示格式上�
 
 账本里的 direct 行是 magpie 从 Codex、Pi、ZCode 等 Agent 自己的会话文件里读出来的调用，本机约占账本的三分之二。这类行照样建记录，但没有正文、没有 route_id，只有约两成带 response_id。界面上要标出这一类，不能当成采集失败。
 
-本项目不读 Agent 自己的会话文件。direct 行是 magpie 读完之后写进账本的，本项目读的是账本。这顺带满足了 AVA 那条禁止扫描 `~/.claude` 与 `~/.codex` 的约束：确实没有扫，扫的是 magpie。
+除 droid 外，本项目不读 Agent 自己的会话文件。direct 行是 magpie 读完之后写进账本的，本项目读的是账本；其他 Agent 的私有目录不扫。droid 转录按明确登记接入。
 
 ## 与 magpie 的绑定有多深
 

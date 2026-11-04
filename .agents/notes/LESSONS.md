@@ -54,6 +54,11 @@
 - 防护：改 `summaryList` 的取数后，用合成页面 curl 对比 chip 与页头计数；参数摘要从 `arg_path`/`arg_skill` 读，不从 `param` 反解。
 - Seen 1× (2026-11-02).
 
+**`bun:sqlite` 的 `get`/`all` 参数按位置逐个展开传，不能塞进一个数组。**
+- 证据：2026-11-04 droid 摄入测试把组键写成 `.get([JSON.stringify(['session','s1'])])`，SQL 只收到一个数组参数，查询恒 0 行，误判成派生队列没入队；改成 `.get(JSON.stringify([...]))` 才命中。
+- 防护：按 SQL 占位符数量逐个传参；带参数的断言先跑同一查询的无参版本核对总行数，再收紧到参数形状。
+- Seen 1× (2026-11-04).
+
 **门禁报红先确认文件是否属于本批改动，再判断是否自己引入。**
 - 证据：2026-11-03 全量 `verify:notes` 在 `.agents/notes/implemented/feature/2026-11-03-live-session-activity-and-navigation.md` 报 implemented 格式错，该文件是并发会话尚未跟踪的迁移中途产物；本批改动在 `--staged` 与 `--range` 两处均通过。同一轮还有 7 个历史批次真的缺 note，不能因为存在并发文件就全部当成误报。
 - 防护：报红文件先跑 `git ls-files <path>`，输出为空说明未跟踪、归并发会话；本批范围单独跑 `node scripts/verify-change-notes.mjs --range origin/master..HEAD`；历史缺口逐批看提交信息里有没有 `Agent-Note: none`。

@@ -1,12 +1,12 @@
 # ATC trace 格式（内部读模型 v0）
 
-本文件描述 ATC 把一次 LLM 请求结构化成什么样：主实体、它的身份与读数、正文怎么切块、派生结论有哪些、每条结论的置信度怎么表达。它描述的是当前代码与 schema v7 的现状，不是对外承诺的稳定协议。
+本文件描述 ATC 把一次 LLM 请求结构化成什么样：主实体、它的身份与读数、正文怎么切块、派生结论有哪些、每条结论的置信度怎么表达。它描述的是当前代码与 schema v11 的现状，不是对外承诺的稳定协议。
 
 三个限定先说清楚：
 
 - **不是交换格式。** 目前没有导出、没有版本化的对外 schema、没有跨工具互操作。本文件描述的是本库自己的读模型，外部读者可以据此理解数据形状，但接口只服务本机页面。
-- **两个进路。** 记录的对象主要是经过 magpie 网关的请求；harness 侧 OTLP 导出的 LLM span 也建行（`via='otlp'`），独立存在、不与 magpie 行合并。`agent` 标签对 magpie 行来自 magpie（`claude`、`omp` 等），对 OTLP 行按 `service.name` 映射到同一值域；派生规则是 harness 通用的，识别某个 harness 的 wire 痕迹是个别规则，不是插件体系。
-- **版本会变。** v6 库打开时原地升到 v7，更早的 schema 拒绝启动、由操作者重建；派生算法号变化会让旧结论标成 `legacy` 或 `retained`，不冒充新结论。
+- **多条进路。** 记录的对象主要是经过 magpie 网关的请求；harness 侧 OTLP 导出的 LLM span 也建行（`via='otlp'`），droid 会话文件按转录重建请求行（`via='session'`）。OTLP 先到、账本后到时，账本按统一 owner 规则认领该行；账本先到、OTLP 后到时两行并存。`agent` 标签对 magpie 行来自 magpie（`claude`、`omp` 等），对 OTLP 行按 `service.name` 映射到同一值域；派生规则是 harness 通用的，识别某个 harness 的 wire 痕迹是个别规则，不是插件体系。
+- **版本会变。** v6 到 v10 的库打开时原地升到 v11，更早的 schema 拒绝启动、由操作者重建；派生算法号变化会让旧结论标成 `legacy` 或 `retained`，不冒充新结论。
 
 字段清单、值域细节与默认值的权威在[架构设计](architecture-design.md)；术语定义与边界在 [GLOSSARY.md](../GLOSSARY.md)。
 
@@ -22,10 +22,11 @@
 | 账本 | 状态、用量、`route_id`、`response_id`、provider、账户 | 请求与回复正文 |
 | 路由历史 | 候选顺序、尝试、规则、亲和性、prompt 结构 | 窗口过滤不全部留痕；只读盘、30 天滚动 |
 | OTLP span | 模型、用量、耗时、会话 id；Claude Code 另带正文文件指针 | 请求头、provider 尝试；OMP 只到摘要 |
+| droid 会话文件 | 会话身份、逐轮消息、模型、响应 id、会话累计用量 | 逐笔用量与费用、状态码、provider 与 served 模型、路由决策、system prompt 与工具定义 |
 
-`have` 是这些通道的位图（1 hook、2 账本、4 路由、8 OTLP span），回答「收到过哪几路证据」。它与 `body_state` 分开：回收正文不会把收到过的证据改写成没收到。OTLP 行只有第 4 位，会话的缺正文判定对它只期望这一位。
+`have` 是这些通道的位图（1 hook、2 账本、4 路由、8 OTLP span、16 droid 会话文件），回答「收到过哪几路证据」。它与 `body_state` 分开：回收正文不会把收到过的证据改写成没收到。OTLP 行只有第 4 位，session 行只有第 5 位，会话的缺正文判定对它们只期望各自的位。
 
-magpie 另有 OTLP 导出，不作为证据源。它只发 `gen_ai.*`、`magpie.*` 与 `langfuse.*` 三类属性键，其中没有 `response_id`、`conv`、`subagent`、`archive`（`开源源码@magpie-2374ffe`，`internal/otlp/otel_wire.go`）；正文以 `langfuse.observation.input` / `output` 两段文本发出。这几项正是三路证据的连接点，缺了就合并不起来。表里的第四行接的是 harness 进程自己的 exporter，属性键齐全，与 magpie 网关侧那套导出是两个东西。
+magpie 另有 OTLP 导出，不作为证据源。它只发 `gen_ai.*`、`magpie.*` 与 `langfuse.*` 三类属性键，其中没有 `response_id`、`conv`、`subagent`、`archive`（`开源源码@magpie-2374ffe`，`internal/otlp/otel_wire.go`）；正文以 `langfuse.observation.input` / `output` 两段文本发出。这几项正是三路证据的连接点，缺了就合并不起来。表里的 OTLP 行接的是 harness 进程自己的 exporter，属性键齐全，与 magpie 网关侧那套导出是两个东西。
 
 ## 身份与归属
 
@@ -37,7 +38,7 @@ magpie 另有 OTLP 导出，不作为证据源。它只发 `gen_ai.*`、`magpie.
 | `conv_key` | 归属键，JSON 数组形状，来源见 `conv_source` | 优先 `session`，缺失时依次退到 `conv`、hook 自身或账本行引用 |
 | `actor` | 组身份：`subagent` 优先，否则等于会话 | 同一 `conv_key` 下的子代理按 actor 各自成组 |
 | `actor_state` | `known` / `unknown` | 未知归属的请求不进派生队列，不产生关系结论 |
-| `via` | 出生通路：`through` / `hook` / `rejected` / `otlp` | 回答这一行从哪条通路生出来，不是流量种类；账本 `direct` 行的摄入当前未启用。`otlp` 行独立存在，不参与 magpie 三路合并 |
+| `via` | 出生通路：`through` / `hook` / `rejected` / `otlp` / `session` | 回答这一行从哪条通路生出来，不是流量种类；账本 `direct` 行的摄入当前未启用。`otlp` 与 `session` 行各有自己的证据位，账本晚到可认领已建行 |
 
 归属未知的请求照样保存、照样能在页面读到，只是没有前驱关系、增量与链角色。这是设计选择：缺归属不等于缺记录。
 
@@ -63,7 +64,7 @@ magpie 另有 OTLP 导出，不作为证据源。它只发 `gen_ai.*`、`magpie.
 
 两个哈希分工明确。`hash` 只在字节完全相同时复用块；`fingerprint` 去掉 `cache_control`、`signature` 这类传输标记、键排序、统一消息片段形状后取 sha256，用来判断「这一笔是不是上一笔的续写」。拿 `hash` 做比对会把整条链读断：缓存断点移动、`content` 从数组换成字符串、harness 重新包装都会换掉字节。
 
-`body_state` 四态：`pending`（等 hook）、`available`（可读）、`partial`（只拿到部分，原因在 `miss_reason`）、`evicted`（按预算回收，原状态留在 `body_prev_state`）。类型里还声明了第五个值 `unsupported`，当前没有写入方；协议认不出的正文照样保存，`parse_state` 记 `unsupported`。OTLP 行出生时是 `summary`：只有 span 摘要，Claude Code 的 body_ref 接线成功后转 `available`，读不到指针则停在 `summary` 并记 `body_ref_read_failed`。`msg_count` 为 NULL 或块引用不连续的正文不可比较，派生记 `unknown` 而不是猜。
+`body_state` 四态：`pending`（等 hook）、`available`（可读）、`partial`（只拿到部分，原因在 `miss_reason`）、`evicted`（按预算回收，原状态留在 `body_prev_state`）。类型里还声明了第五个值 `unsupported`，当前没有写入方；协议认不出的正文照样保存，`parse_state` 记 `unsupported`。OTLP 行出生时是 `summary`：只有 span 摘要，Claude Code 的 body_ref 接线成功后转 `available`，读不到指针则停在 `summary` 并记 `body_ref_read_failed`。droid 行的正文在落库时由转录重建，正常为 `available`。`msg_count` 为 NULL 或块引用不连续的正文不可比较，派生记 `unknown` 而不是猜。
 
 ## 派生结论
 

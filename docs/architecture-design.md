@@ -183,24 +183,26 @@ magpie gateway
   ├─ 路由文件（只读）───────> route tailer ──┼─> reconciler ─> SQLite（WAL）
   └─ 用量接口（只读）───────> direct 回填 ───┘                   ▲
                                                                 │
+droid 会话文件（只读）──────> droid 摄入 ───────────────────────┤
 harness OTLP exporter（Claude Code / OMP / Codex）
   └─ POST /v1/traces、/v1/logs ─────────────────────────────────┘
 
 浏览器 ─────────────────────────────────────────> /api/*
 ```
 
-进程内分四个职责，跑在同一个 Bun 事件循环里：
+进程内分五个职责，跑在同一个 Bun 事件循环里：
 
 | 职责 | 触发方式 | 作用 |
 | --- | --- | --- |
 | ingest | HTTP 请求 | 脱敏、分块、入块库、写 `raw_hook` 头与 `request`，事务提交后返回；OTLP 端点同走这里：解码、映射、落 `raw_otlp_*` 与 `otlp_body_ref` |
 | tailer | 定时（账本 5 秒，路由 2 秒） | 按文件代际与完整行偏移增量读两个来源 |
+| droid 摄入 | 定时（默认 60 秒） | 增量读 droid 会话转录，落原始层、请求行、重建正文与会话累计 |
 | reconciler | 定时（1 秒）加 ingest 完成事件 | 合并证据、补前驱、重算受影响派生 |
 | query | HTTP 请求 | 只读查询 |
 
 两个摄入端点 `POST /v1/traces` 与 `POST /v1/logs` 收 harness 侧 OTLP。Bearer 认证用独立的 `otlp.token`，与 `hook.token` 分开——一份密钥不进两份上游配置。content-type 只收 `application/x-protobuf` 与 `application/json`，非白名单的简单请求形态直接 415：浏览器防线三件套（预检、Host 校验、显式拒绝非白名单 content-type）与 hook 共用同一段。解码失败 400 带原因码，单飞守卫共用（429），整批上限 64 MiB（413），95% 磁盘档整批拒绝（507），成功回 OTLP 规范的 `{"partialSuccess":{}}`。
 
-span 选取按 `(service.name, 规则)` 白名单：Claude Code 按 span 名 `claude_code.llm_request`，OMP 按 `gen_ai.operation.name='chat'`，Codex CLI 按 span 名 `session_task.turn`（用量键是自有 `codex.turn.token_usage.*` 族，无正文与回复侧模型；`service.name` 取 originator，按 `codex_exec` / `codex_cli_rs` 等一族取值收）。白名单外的服务不建行：span 只落原始层，并按服务与日聚合记 `service_not_registered` issue，未登记 harness 指向端点这件事可被发现（对外规范见[接入 profile](otlp-exporter-profile.md)）。OTLP 行不参与三路合并，独立建 `request`（`via='otlp'`，`have` 第 4 位）。同一会话双通道并存时每笔调用出现两行，行上来源可区分；跨通道精确锚点（`gen_ai.response.id` 等）已实测存在，合并策略另评。
+span 选取按 `(service.name, 规则)` 白名单：Claude Code 按 span 名 `claude_code.llm_request`，OMP 按 `gen_ai.operation.name='chat'`，Codex CLI 按 span 名 `session_task.turn`（用量键是自有 `codex.turn.token_usage.*` 族，无正文与回复侧模型；`service.name` 取 originator，按 `codex_exec` / `codex_cli_rs` 等一族取值收）。白名单外的服务不建行：span 只落原始层，并按服务与日聚合记 `service_not_registered` issue，未登记 harness 指向端点这件事可被发现（对外规范见[接入 profile](otlp-exporter-profile.md)）。OTLP 行不参与三路加法合并，独立建 `request`（`via='otlp'`，`have` 第 4 位）。OTLP 先到、账本后到时，账本按统一 owner 规则认领该行；账本先到、OTLP 后到时，OTLP 仍独立建行，行上来源可区分。跨来源认领规则见[跨来源认领](#跨来源认领)。
 
 写操作全部走一个 writer，避免 SQLite 的 `database is locked`。实测第二个连接在写事务期间写会被拒绝，读不受影响。查询用独立只读连接。
 
@@ -385,15 +387,30 @@ CREATE TABLE source_cursor (
 
 空串是上游对"没有会话"的写法。会话身份在入口按缺失处理：`session`、`actor` 都留 NULL，组键回退到该条证据自己的前缀（hook 用 `["hook", id]`），`raw_hook.session` 保留上游原值。账本与路由的映射层先把空串转 NULL；hook envelope 保留原值，规范化在 `insertHookRequest` 读取时完成。旧行落在 `["session",""]` 空桶，只能用显式身份迁移拆回各自的 hook 回退键，见[运维手册](operations.md#migrate-hook-identity)。
 
+### 会话文件来源（droid）
+
+droid（Factory 的编码 Agent）不经过 magpie 网关。转录放在 `$FACTORY_HOME_OVERRIDE/.factory/sessions`，没有覆盖变量时取 `~/.factory/sessions`；根目录与一层按工作目录分的子目录里的 `.jsonl` 都是转录，`.settings.json` 不在转录发现里。每轮按剩余字节从大到小取最多 64 个文件或 8 MiB，未读完的文件靠游标在下一轮继续；默认每 60 秒一轮。
+
+一条 assistant `message` 行算一次调用。请求体是截至该行之前的全部消息，回复取该行 `content`。`started_ms` 取该行之前最近一条消息的时间，缺时间时退回该行自身时间；这是消息时间，只用于排序，不当作请求发出时刻。`agent='droid'`、`session=session_start.id`、`conv_source='droid-session'`、`via='session'`。`response_id_norm` 由 `openaiMessageId` 经同一套前缀规范化得到，`model_requested` 取 `message.modelId`；`model_served`、`provider`、`status`、`stop` 与逐笔读数列保持 NULL，不拿相邻字段顶替。
+
+fork 会话在 `forkedAtMessageId` 之前的行是源会话复制段：它们进消息窗口，不建请求行；越过锚点后才按 assistant 行建行。带 `callingSessionId` 的子代理会话照常建行，`actor` 与 `subagent` 取自身 session id，`parent_agent` 取调用者 id。
+
+正文走现有 `persistBodyTx`，`protocol='droid-session'`，请求侧是消息数组、回复侧是 assistant `content`。重建的正文不含 droid 发给模型的 system prompt 与工具定义，页面按 `via='session'` 标「droid 会话文件」，不能与 hook 正文同等对待。
+
+转录只给会话累计 `tokenUsage`，没有逐笔用量。`request` 行的四件读数列留 NULL；`session_usage` 按 `(agent, session)` 存累计值，只读主会话的 `.settings.json`，子代理 settings 不另计，避免双算。`inputTokens` 不含缓存读、`outputTokens` 含思考，累计值按最后一条消息的日期归属，不能摊到轮次或按天拆开。会话页把累计值单列「会话累计」，与逐笔合计分开。
+
+解析器状态从本代际的 `raw_droid_event` 按偏移重放，批次之间不靠内存。坏行记 issue、游标停在行起点；跳过一条消息会让后续每轮请求体缺一条。未知行类型与不认识的字段只落原始层，不判坏。
+
 ### 合并规则
 
-每个 `req_id` 维护一个来源位图 `have`：1 为 hook，2 为账本，4 为路由，8 为 OTLP span。
+每个 `req_id` 维护一个来源位图 `have`：1 为 hook，2 为账本，4 为路由，8 为 OTLP span，16 为 droid 会话文件。
 
 ```text
 through 请求：期望 1|2|4
 rejected：    期望 2（永远不会有 1 和 4）
 hook 独有：   只有 1，超时未对上账本则停在 1，标记为待关联
-otlp：        只有 8，独立建行，不参与上面三种的合并
+otlp：        只有 8，独立建行；缺正文判定只要求这一位
+session：     只有 16，独立建行；缺正文判定只要求这一位和正文可读
 ```
 
 OTLP 行不走加法合并：它没有 `response_id` / `route_id` 可挂，物理身份是 `(trace_id, span_id)`，落到 `request_evidence` 的 `source_kind='otlp_span'`。会话缺正文的判定按期望位图算——otlp 行只期望第 4 位，不因缺 magpie 三路证据被标采集失败。
@@ -422,6 +439,18 @@ hook 的 `model` 与 `success` 只作为独立报告保留在 `raw_hook`：前�
 | 未取得 | 没有 API 行 | 显示未取得，附原因 |
 
 每条费用记录取值时点与所用定价版本。不建议为此复制 magpie 的价格表；确实需要离线计价时再引入带版本的定价快照。
+
+### 跨来源认领
+
+droid 行与账本行写入前先找它认领的既有请求，共用 `src/owner.ts` 的同一处查找，按顺序试三条线索：
+
+1. `response_id_norm` 精确命中。
+2. `turn_ref` 命中；带 agent 时只认同 agent。
+3. 同 `conv_key`、同 agent，候选行的 `started_ms` 落在入站起点前后 60 秒内，模型在 `model_requested` 或 `model_served` 上相等。
+
+只有唯一命中才认领。零候选或两个以上候选都独立成行，证据行的 `match_rule` 记 `match_absent` 或 `match_ambiguous`，不按最近时间猜。第 3 条线索跳过已带同一来源证据的行：同一来源里相邻的两笔调用是两次真实调用，不是同一笔的重复记录。
+
+droid 在写请求行前调用它；账本在 `route_id` 未命中时调用它，所以账本迟到能认领 OTLP 或 droid 已建的行。hook 走自己的等待队列，OTLP 摄入不调用它，账本先到、OTLP 后到的调用仍保留两行。合并到既有行时 droid 只补空字段，不改变原有 `via`，正文只在对方没有可读骨架且未被回收时补，不覆盖已有值。投影仍只把账本、路由与 hook 当字段来源，OTLP 与 `session_call` 只贡献位图与缺失判定。
 
 ### 乱序到达与重算
 
@@ -453,11 +482,11 @@ SQLite，WAL，单文件，放仓库外。默认路径按平台惯例落在数�
 
 ### 版本与破坏式替换
 
-当前结构版本是 v8。空库在同一个事务里建到 v8。存量库的原地升级路径：v6 与 v7 打开时在单个事务里升到 v8（纯新增表与索引，不动旧行），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
+当前结构版本是 v11。空库在同一个事务里建到 v11。存量库的原地升级路径：v6 到 v10 打开时在单个事务里升到 v11（纯新增表、列与索引，不动旧行），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
 
-首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6 起不走这条路，原因是仓库已有本机真实数据且各步变更纯新增，原地升级可执行、可验证。备份白名单收 v6、v7 与 v8 三版，低版本包恢复后首次打开时同样原地升级。
+首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6 起不走这条路，原因是仓库已有本机真实数据且各步变更纯新增，原地升级可执行、可验证。备份白名单收 v6 到 v11，低版本包恢复后首次打开时同样原地升级。
 
-v8 在 v7 之上加的是两条部分反向索引：`i_req_prev`（`request(prev_req_id) WHERE prev_req_id IS NOT NULL`）与 `i_tool_result_req`（`tool_call(result_req) WHERE result_req IS NOT NULL`）。hook 合并按旧 id 反向改指前驱与工具结果位置，这两条 UPDATE 没有索引时是全表扫描（[采集期间交互延迟](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)）；部分形状匹配写路径，两个更新绑定的参数都非空。存量库建索引的启动停顿与失败恢复归[运维手册](operations.md#schema-版本)。
+v11 在 v10 之上加的是 droid 原始层 `raw_droid_event` 与会话累计 `session_usage` 两张表，建表与索引全是 `IF NOT EXISTS`，不扫描存量。v10 在 v9 之上给 `request` 加 `user_fingerprint` 与 `turn_ref` 两列和两条按非空值的部分索引。v9 在 v8 之上给 `derive_queue` 加 `claim_from_sort` 列，带常量默认值。v8 在 v7 之上加的是两条部分反向索引：`i_req_prev`（`request(prev_req_id) WHERE prev_req_id IS NOT NULL`）与 `i_tool_result_req`（`tool_call(result_req) WHERE result_req IS NOT NULL`）。hook 合并按旧 id 反向改指前驱与工具结果位置，这两条 UPDATE 没有索引时是全表扫描（[采集期间交互延迟](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)）；部分形状匹配写路径，两个更新绑定的参数都非空。存量库建索引的启动停顿与失败恢复归[运维手册](operations.md#schema-版本)。
 
 v7 在 v6 之上加的是 OTLP 三张表：`raw_otlp_span`（span 原始层，主键 `(trace_id, span_id)`）、`raw_otlp_log`（logs 原始层，按记录内容哈希判重）与 `otlp_body_ref`（Claude Code 正文指针状态机）。v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，切片模式不写它们，同步模式照旧写。
 
@@ -577,6 +606,40 @@ CREATE TABLE otlp_body_ref (              -- Claude Code 正文指针状态机
 
 白名单外的 span（agent 层、工具层）只落 `raw_otlp_span`，不建 `request` 行。`otlp_body_ref` 按 `request_body_id` 聚 Claude Code 的 `api_request_body` / `api_response_body` 事件，traces 先到或 logs 先到都能收敛：span 行落库时回接 pending 指针，双指针齐后读文件、脱敏、走既有 `persistBodyTx` 落正文，`body_state` 从 `summary` 转 `available`。同 trace 多 attempt 撞出多候选时记 `span_ambiguous`，不猜。指针读取只认事件指到的单个普通文件，非普通文件、符号链接、超 32 MiB 或读不到分别记因，读失败行保持 `summary` 并写 `miss_reason='body_ref_read_failed'`。
 
+droid 通道另有两张表。转录与 settings 都先脱敏再落原始层：
+
+```sql
+CREATE TABLE raw_droid_event (
+  file_generation TEXT NOT NULL,
+  byte_offset      INTEGER NOT NULL,
+  session_id       TEXT,
+  line_type        TEXT NOT NULL,
+  event_at_ms      INTEGER,
+  payload_json     TEXT NOT NULL,      -- 脱敏后的整行原文
+  privacy_version  INTEGER NOT NULL,
+  PRIMARY KEY (file_generation, byte_offset)
+) WITHOUT ROWID;
+CREATE INDEX i_raw_droid_event_session ON raw_droid_event(session_id);
+
+CREATE TABLE session_usage (
+  agent                 TEXT NOT NULL,
+  session               TEXT NOT NULL,
+  model                 TEXT,
+  input_tokens          INTEGER,
+  output_tokens         INTEGER,
+  cache_creation_tokens INTEGER,
+  cache_read_tokens     INTEGER,
+  thinking_tokens       INTEGER,
+  factory_credits       REAL,
+  source_path           TEXT NOT NULL,
+  source_hash           TEXT NOT NULL, -- settings 内容哈希，覆盖写时判变化
+  observed_at           INTEGER NOT NULL,
+  PRIMARY KEY (agent, session)
+) WITHOUT ROWID;
+```
+
+`raw_droid_event` 是批次之间重放解析状态的唯一来源，当前不参与 rawPrune；转录整份落原始层后，纳入回收前要先另存解析位点。`session_usage` 每个 `(agent, session)` 一行，覆盖写按 `source_hash` 判变化，`source_path` 与 `source_hash` 留作来源审计。
+
 ### 路由摘要长期层
 
 原始路由 7 天滚动，但 `/api/requests/:id/route` 需要长期可查，清理原始层后历史路由不能跟着消失。所以另存一张摘要表，只保留展示需要的字段，去掉 `prompt`、`for`、`nested` 与 `order` 的完整结构：
@@ -613,7 +676,7 @@ CREATE TABLE request (
   subagent TEXT, parent_agent TEXT,
   started_ms       INTEGER NOT NULL,
   day              TEXT NOT NULL,
-  via              TEXT NOT NULL,       -- through / hook / direct / rejected / otlp
+  via              TEXT NOT NULL,       -- through / hook / direct / rejected / otlp / session
   -- 身份与状态
   status INTEGER, stop TEXT,
   model_requested TEXT, model_served TEXT, provider TEXT,
@@ -651,7 +714,7 @@ CREATE TABLE request (
   title TEXT, title_source TEXT,
   derive_version   INTEGER NOT NULL,
   -- 完整性
-  have             INTEGER NOT NULL,    -- 位：1 hook 2 账本 4 路由 8 OTLP span
+  have             INTEGER NOT NULL,    -- 位：1 hook 2 账本 4 路由 8 OTLP span 16 droid 会话文件
   miss_reason      TEXT,
   magpie_version   TEXT,
   created_at INTEGER NOT NULL,
@@ -665,6 +728,8 @@ CREATE INDEX i_req_day  ON request(day);
 CREATE INDEX i_req_body ON request(body_state) WHERE body_state != 'available';
 CREATE INDEX i_req_fail ON request(started_ms DESC) WHERE status >= 400;
 ```
+
+会话文件行的逐笔读数列保持 NULL，`source_facts_json` 记 `usageScope='session'`。会话累计单独存在 `session_usage`，按 `(agent, session)` 一行，只读主会话 settings；它不能摊到轮次，也不按天拆分。会话汇总接口把它作为 `session_usage` 返回，与逐笔 `totals` 并列展示。
 
 `body_state` 与 `have` 分开：`have` 表示收到哪几路证据，回收不能把收到过改写成没收到；`body_state` 表示正文当前能否读取。两者混在一个位图里，回收后界面就会显示成回调未收到。
 
@@ -697,7 +762,7 @@ CREATE INDEX i_req_fail ON request(started_ms DESC) WHERE status >= 400;
 ```sql
 CREATE TABLE request_evidence (
   req_id      INTEGER NOT NULL,
-  source_kind TEXT NOT NULL,           -- hook / ledger / route / otlp_span
+  source_kind TEXT NOT NULL,           -- hook / ledger / route / otlp_span / session_call
   ref_key     TEXT NOT NULL,           -- hook_id / 物理记录三元组 / route_id / trace 与 span 的十六进制
   merge_state TEXT NOT NULL,           -- merged / pending；多候选歧义由 pending_hook.candidates 承载
   match_rule  TEXT,                    -- 命中的规范化规则与版本
@@ -1072,6 +1137,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | 有 hook、无账本 | `have & 2 == 0` 且超过阈值 | 标待关联，保留候选，不按时间强行匹配 |
 | 无路由 | `have & 4 == 0` | 路由段显示当前来源不提供 |
 | 收到 null 回复 | `raw_hook.success = 0` 且 `response_z IS NULL` | 显示上游未给出回复，与没收到 hook 分开 |
+| 会话文件行缺正文 | `via='session'` 且 `body_state != 'available'` | 只报会话文件正文不可读，不按缺回调或缺账本标采集失败 |
 
 原始证据过期或被回收时，保留旧的最终尝试、开始时间、排序键与尝试合计：证据不完整不等于旧事实已被推翻。只有证据完整而顺序不可证这一种情形会清空排序键与响应身份，因为留着它们等于声称知道顺序。重复尝试嫌疑同样保留旧值，不用 MAX 保住合计。
 
@@ -1087,6 +1153,8 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | `evicted` | 正文已按预算回收 |
 | `unsupported` | 已保存原对象，暂无适配器解析 |
 | `summary` | OTLP 行只有 span 摘要；body_ref 接线成功后转 `available` |
+
+droid 行在落库时由转录重建正文，正常为 `available`；行建好之后只有预算回收会把它变成 `evicted`。认领既有行时保留原有的 `via` 与可读正文，缺口状态由原来源决定。
 
 `miss_reason` 只记 collector 真能观测到的事实：
 
@@ -1141,7 +1209,7 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 | --- | --- | --- |
 | `GET /api/sessions?limit=50&cursor=` | 会话列表，含笔数、最后时间、异常标记 | keyset，(last_ms, conv_key) |
 | `GET /api/sessions/:key/requests?limit=100&cursor=&direction=older` | 会话内请求列表，只返回列字段；direction 省略为 forward | keyset，(started_ms, req_id)；older 游标绑定会话与方向 |
-| `GET /api/sessions/:key/summary` | 会话口径汇总：工具、路径、Skill、中断、资源合计、结构与覆盖度；查询时聚合 | 无 |
+| `GET /api/sessions/:key/summary` | 会话口径汇总：工具、路径、Skill、中断、资源合计、会话累计用量、结构与覆盖度；查询时聚合 | 无 |
 | `GET /api/sessions/:key/summary/entries?kind=&name=/path=` | 汇总条目点击后的按组支撑记录，带配对状态、执行段耗时与已有参数摘要；kind 取 tool/written/read/skill/interrupts | 上限 1000 |
 | `GET /api/requests/:id` | 单笔读数、费用状态、正文状态 | 无 |
 | `GET /api/requests/:id/body?from=0&to=40&if_reading=` | 分页取消息；`if_reading` 可选，携带时校验阅读版本 | 消息序号区间 |
@@ -1304,7 +1372,7 @@ OTLP 摄入走同一梯度：80% 档 span 与摘要照收，body_ref 停止读�
 | 渲染 | 正文与路由内容一律转义，不直接插 HTML |
 | 账号字段 | `providerAccount`、`providerKeyId`、`host` 只在本地库，接口默认不返回 |
 | 运行数据 | 库、日志都在用户目录，`.gitignore` 再加一层 |
-| 不扫描 Agent 会话文件 | 只读 magpie 自己写的来源；OTLP 的 body_ref 只读事件显式指到的单个文件 |
+| 会话文件读取范围 | droid 转录只读登记路径；OTLP 的 body_ref 只读事件显式指到的单个文件；其他 Agent 私有目录不读 |
 
 ### 脱敏
 
@@ -1389,6 +1457,10 @@ hook 拿到的是脱敏前的正文。collector 自己实现一层，规则分�
 8. direct 的稳定身份。第 4 阶段开工前要定，候选是时间加多个读数字段的组合，但同字段全同不证明是同一笔调用。在第 4 阶段之前，API 行只在单次回填批次内幂等。
 9. 要不要开请求归档。`RequestArchive` 能把 hook 丢失的正文补回来，代价是正文出本机、进 S3。设计上已经把 `archive` 抄进 `request`，开与不开都不影响主通路，但影响缺正文是不是终态。这需要先定隐私偏好。
 10. `handed_on` 行会不会真的出现。本机 20,470 行一次都没有，但类型定义在。如果它只在 Codex 单账号过载重试那条路径产生，就要在测试里构造该场景，否则 `attempt_*` 字段永远是最终回复的副本，无法验证。
+11. droid 的 `openaiMessageId` 与 magpie `response_id` 是否同值空间。本机 droid 不走 magpie，无法用真实流量核对；若不同值，droid 接入 magpie 后仍会双行，需要扩展规范化前缀表并升匹配规则版本。
+12. droid 子代理 settings 是否独立计数。本机样本的 `childInclusiveTokenUsageBySessionId` 为空，当前只记主会话累计；更多样本确认前不改口径。
+13. 一条 assistant 消息是否恒为一次模型调用。thinking-only 或空回复的边界未覆盖；`agent_turn_outcome` 的失败形状本机只有 completed 与 cancelled，原始层先保留。
+14. `raw_droid_event` 的回收点。它当前是批次间重放的唯一来源，不参与 rawPrune；要回收必须先另存解析位点，否则重放会缺消息窗口。
 
 ## 两轮修正的记录
 
