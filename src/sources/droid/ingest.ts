@@ -202,34 +202,31 @@ function ingestCallTx(
   return 'inserted';
 }
 
-/** 主会话的 settings：整份读、按内容哈希判变化，不占游标。 */
-function ingestSettingsTx(
+/** 主会话 settings 的刷新：整份读、按内容哈希判变化。文件不存在时保留旧行。 */
+function refreshSessionUsageTx(
   db: Database,
-  transcript: DroidTranscript,
-  state: DroidParserState,
+  sessionId: string,
+  path: string,
   now: number,
 ): number {
-  const session = state.session;
-  if (session === null || session.callingSessionId !== null) return 0;
-  const path = join(transcript.dir, `${session.id}.settings.json`);
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      recordIssue(db, ISSUE_KIND, `${session.id}/settings`, 'droid_settings_unreadable', now, null);
+      recordIssue(db, ISSUE_KIND, `${sessionId}/settings`, 'droid_settings_unreadable', now, null);
     }
     return 0;
   }
   const hash = createHash('sha256').update(text).digest('hex');
   const existing = db.query<{ source_hash: string }, [string, string]>(
     'SELECT source_hash FROM session_usage WHERE agent=? AND session=?',
-  ).get('droid', session.id);
+  ).get('droid', sessionId);
   if (existing !== null && existing !== undefined && existing.source_hash === hash) return 0;
 
   const parsed = parseDroidSettings(text);
   if (!parsed.ok) {
-    recordIssue(db, ISSUE_KIND, `${session.id}/settings`, parsed.reason, now, Buffer.byteLength(text));
+    recordIssue(db, ISSUE_KIND, `${sessionId}/settings`, parsed.reason, now, Buffer.byteLength(text));
     return 0;
   }
   const value = parsed.value;
@@ -248,11 +245,23 @@ function ingestSettingsTx(
        source_path=excluded.source_path,source_hash=excluded.source_hash,observed_at=excluded.observed_at
      WHERE session_usage.source_hash<>excluded.source_hash`,
     [
-      session.id, value.model, value.inputTokens, value.outputTokens, value.cacheCreationTokens,
+      sessionId, value.model, value.inputTokens, value.outputTokens, value.cacheCreationTokens,
       value.cacheReadTokens, value.thinkingTokens, value.factoryCredits, path, hash, now,
     ],
   );
   return 1;
+}
+
+/** 一个刚摄入的转录：主会话的 settings 随转录一起刷新。 */
+function ingestSettingsTx(
+  db: Database,
+  transcript: DroidTranscript,
+  state: DroidParserState,
+  now: number,
+): number {
+  const session = state.session;
+  if (session === null || session.callingSessionId !== null) return 0;
+  return refreshSessionUsageTx(db, session.id, join(transcript.dir, `${session.id}.settings.json`), now);
 }
 
 /**
@@ -383,5 +392,14 @@ export async function ingestDroidBatch(
     total.settingsChanged += result.settingsChanged;
     total.bytes += result.bytes;
   }
+  // 转录不再增长时文件不会被选中；settings 是覆盖写，按已记录的路径单独刷新。
+  total.settingsChanged += store.write(db => {
+    let changed = 0;
+    const rows = db.query<{ session: string; source_path: string }, []>(
+      "SELECT session,source_path FROM session_usage WHERE agent='droid'",
+    ).all();
+    for (const row of rows) changed += refreshSessionUsageTx(db, row.session, row.source_path, now);
+    return changed;
+  }, 'droid');
   return total;
 }

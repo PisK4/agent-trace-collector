@@ -267,6 +267,29 @@ test('settings 覆盖写按哈希判变化；追加消息后读到新累计', as
   }
 });
 
+test('转录不增长时只改 settings：会话累计仍刷新', async () => {
+  const root = makeRoot();
+  const f = fixture();
+  try {
+    writeSession(root, 's1.jsonl', [SESSION, USER_A, ASSISTANT_1]);
+    writeFileSync(join(root, 's1.settings.json'), SETTINGS);
+    expect((await ingestDroidBatch(f.store, root, SALT, Date.now())).settingsChanged).toBe(1);
+
+    // 转录停在原处，只覆盖 settings：文件不会被取件，刷新仍要走已记录的路径。
+    writeFileSync(join(root, 's1.settings.json'), JSON.stringify({
+      tokenUsage: { inputTokens: 3100, outputTokens: 800, cacheCreationTokens: 0, cacheReadTokens: 900, thinkingTokens: 0, factoryCredits: 0 },
+      model: 'synth-model',
+    }));
+    const result = await ingestDroidBatch(f.store, root, SALT, Date.now());
+    expect(result.settingsChanged).toBe(1);
+    expect(f.store.read.query('SELECT input_tokens, output_tokens FROM session_usage').get())
+      .toEqual({ input_tokens: 3100, output_tokens: 800 });
+  } finally {
+    f.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('原始层脱敏：敏感片段不进 raw_droid_event 与正文块', async () => {
   const root = makeRoot();
   const f = fixture();
