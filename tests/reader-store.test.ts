@@ -1451,3 +1451,27 @@ test('oversized 项回退单项路径读取并计数', async () => {
   expect(reads[0]?.status).toBe('fresh');
   expect(store.batchFallbackCount()).toBe(1);
 });
+
+test('待办读取：切轮次后旧轮响应不写回，新轮结果落地', async () => {
+  let release: (() => void) | null = null;
+  const gated = new Promise<void>(resolve => { release = resolve; });
+  const fx = createFixtureReadTransport();
+  const turn1 = { key: 'k', actor: 'a', turn: 1, state: 'ready',
+    snapshot: { seq: 0, items: [{ content: 'old', status: 'pending' }] } };
+  const turn2 = { key: 'k', actor: 'a', turn: 2, state: 'ready',
+    snapshot: { seq: 1, items: [{ content: 'new', status: 'completed' }] } };
+  let calls = 0;
+  fx.respond('todoByTurn', () => {
+    calls += 1;
+    return calls === 1 ? gated.then(() => turn1) : turn2;
+  });
+  const store = createReaderStore(fx.transport);
+  const first = store.loadTodoByTurn('k', 'a', 1);
+  await delay(5);
+  const second = store.loadTodoByTurn('k', 'a', 2);
+  release!();
+  await Promise.all([first, second]);
+  const reading = store.peekTodoByTurn();
+  expect(reading.status).toBe('ready');
+  expect(reading.data?.snapshot?.items[0]?.content).toBe('new');
+});

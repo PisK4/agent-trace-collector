@@ -14,6 +14,8 @@ import { listSessions } from './queries/sessions';
 import type { LiveActivity } from './activity';
 import { listTurns } from './queries/turns';
 import { listBgJobs } from './queries/bg-jobs';
+import { getTodoByTurn } from './queries/todo-by-turn';
+import type { CommunityTodoSource } from './plugins/types';
 import { PAGE_MAX, bodyRangeError, getBodyPage } from './protocols';
 import {
   getReadingBody, getReadingBatch, getReadingRangeBatch, getReadingDetail,
@@ -42,7 +44,7 @@ export function routeTemplate(pathname: string): string {
   if (pathname === '/api/ingest-metrics' || pathname === '/api/metrics'
     || pathname === '/api/stats' || pathname === '/api/sessions') return pathname;
   if (pathname.startsWith('/api/sessions/')) {
-    for (const suffix of ['requests', 'turns', 'bg-jobs', 'summary/entries', 'summary',
+    for (const suffix of ['requests', 'turns', 'bg-jobs', 'todo', 'summary/entries', 'summary',
       'readings', 'reading-ranges']) {
       if (pathname.endsWith(`/${suffix}`)) return `/api/sessions/:key/${suffix}`;
     }
@@ -87,6 +89,8 @@ export const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/motion.vendor.js': { file: 'motion.vendor.js', type: 'text/javascript; charset=utf-8' },
   '/parts.js': { file: 'parts.js', type: 'text/javascript; charset=utf-8' },
   '/rail-facts.js': { file: 'rail-facts.js', type: 'text/javascript; charset=utf-8' },
+  '/rail-tabs.js': { file: 'rail-tabs.js', type: 'text/javascript; charset=utf-8' },
+  '/todo-tab.js': { file: 'todo-tab.js', type: 'text/javascript; charset=utf-8' },
   '/reader-store.js': { file: 'reader-store.js', type: 'text/javascript; charset=utf-8' },
   '/read-http.js': { file: 'read-http.js', type: 'text/javascript; charset=utf-8' },
   '/read-scheduler.js': { file: 'read-scheduler.js', type: 'text/javascript; charset=utf-8' },
@@ -509,6 +513,8 @@ export function createHandler(
   otlp?: { token: string; salt: Uint8Array; admission?: () => HookAdmission },
   diagnostics?: DiagnosticLog,
   live?: LiveActivity,
+  /** 社区轨折叠入口；未注入时只有内置 Parser。 */
+  community?: readonly CommunityTodoSource[],
 ): (req: Request) => Promise<Response> {
   // hook 计数在未注入观测运行时也保留，只是没有对外入口。
   const ingestMetrics = metrics?.ingest ?? createIngestMetrics();
@@ -601,6 +607,18 @@ export function createHandler(
       const bgJobsMatch = /^\/api\/sessions\/([^/]+)\/bg-jobs$/.exec(path);
       if (bgJobsMatch !== null) {
         return json(listBgJobs(store, decodeParam(bgJobsMatch[1]!)));
+      }
+
+      const todoMatch = /^\/api\/sessions\/([^/]+)\/todo$/.exec(path);
+      if (todoMatch !== null) {
+        const key = decodeParam(todoMatch[1]!);
+        // actor 缺省或空串时由服务端按主链结算，轮次态前端不猜归属。
+        const actor = url.searchParams.get('actor') ?? '';
+        const rawTurn = url.searchParams.get('turn');
+        if (rawTurn === null || !/^\d+$/.test(rawTurn) || Number(rawTurn) <= 0) {
+          return json({ error: 'invalid_todo_query' }, 400);
+        }
+        return json(await getTodoByTurn(store, key, actor, Number(rawTurn), community));
       }
 
       const summaryMatch = /^\/api\/sessions\/([^/]+)\/summary$/.exec(path);

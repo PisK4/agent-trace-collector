@@ -228,6 +228,6 @@ GROUP BY conv_key
 
 2026-11-03 对本机 `/v1/magpie/trace` 做过一次有界只读字段核对：HTTP 200，60 条记录均包含 `session`、`done`、`id` 与 `seq`，且该次样本全部已结束。没有取得请求在途到完成的真实过程，不能把字段存在描述为实时功能已验收。没有保存正文、会话值、账号或凭证。
 
-外部 magpie 检出 `3173440ca3be3eb0a855870d92faeadea6785aaa` 的 [trace 实现](https://github.com/yetone/magpie/blob/3173440ca3be3eb0a855870d92faeadea6785aaa/internal/gateway/trace.go#L562-L903)显示，请求开始时进入实时记录，接口支持 `after` 和 `wait`，完成后写历史。该检出与本机运行二进制是否相同尚未确认；原有入口研究见[集成研究](../../../../docs/magpie-integration-research.md)与[机制研究](../../../../docs/magpie-mechanisms-research.md)。[collector hook](../../../../plugins/collector.hooks.ts)在开始时只记内存状态，到响应结束才投递，因此现有 hook 本身不提供实时开始事件。
+外部 magpie 检出 `3173440ca3be3eb0a855870d92faeadea6785aaa` 的 [trace 实现](https://github.com/yetone/magpie/blob/3173440ca3be3eb0a855870d92faeadea6785aaa/internal/gateway/trace.go#L562-L903)显示，请求开始时进入实时记录，接口支持 `after` 和 `wait`，完成后写历史。该检出与本机运行二进制是否相同尚未确认；原有入口研究见[集成研究](../../../../docs/magpie-integration-research.md)与[机制研究](../../../../docs/magpie-mechanisms-research.md)。[collector hook](../../../../integrations/magpie-hook/collector.hooks.ts)在开始时只记内存状态，到响应结束才投递，因此现有 hook 本身不提供实时开始事件。
 
 导航竞态的既有行为依据是上述 implemented 记录及当前源码。活动事实、独立活跃分区与 60 秒沉降窗口已实施并合入（`49ac7bf`、`4cd6179`、`33870c5`、`2178e79`、`a16ed4c`、`7291f66`，经 `57491a4`；沉降 `68312d8`，经 `868882f`）。长轮询、导航集中、桌面端与真实流量验收尚未交付，见 `## Deferred`；导航、恢复与桌面测试未执行。

@@ -33,7 +33,7 @@ Tracery 留下原始请求：把每笔调用记成一笔请求——组装后的
 
 [magpie](https://github.com/yetone/magpie) 在请求发送点记录三路证据：hook 拿到客户端协议请求体与合并后的回复，用量账本给出状态、用量、`route_id` 与 `response_id`，路由历史给出候选顺序、尝试与规则。三路按 `response_id` 与 `route_id` 对账成一笔请求。
 
-正文来自 hook。把 [`plugins/collector.hooks.ts`](plugins/collector.hooks.ts) 注册进 magpie 的插件配置，并把首次启动生成的 `hook.token` 交给它。插件只做三件事：请求期生成 `hook_id`、完成期上报完整对象、按固定码记录投递结果；不改正文、不做关联、不做脱敏。
+正文来自 hook。把 [`integrations/magpie-hook/collector.hooks.ts`](integrations/magpie-hook/collector.hooks.ts) 注册进 magpie 的插件配置，并把首次启动生成的 `hook.token` 交给它。插件只做三件事：请求期生成 `hook_id`、完成期上报完整对象、按固定码记录投递结果；不改正文、不做关联、不做脱敏。
 
 不装 hook 时，页面仍能读到账本与路由两路证据，但没有请求体与回复正文。
 
@@ -124,6 +124,8 @@ assistant 文本行尾是推理段耗时，工具调用与结果行尾是执行�
 ## 多 Agent，同一套视图
 
 左栏会话列表装不同 harness 的会话，用 Agent 标签区分与过滤；同一会话涉及多个 Agent 时，行上显示主 Agent 与 `+N`。已适配 Claude Code、OMP 与 Codex CLI。新增 harness 的成本是一个稳定的 `service.name` 加一行选取规则，规范见 [OTLP exporter 接入 profile](docs/otlp-exporter-profile.md)。
+
+页面阅读能力按 Plugin 注册：`src/plugins/registry.ts` 的一项给出页签槽位与各家 Agent 的形状适配 Parser。Todo 是第一个 Plugin，两类 PR 的写法见[参与](CONTRIBUTING.md#plugin-contributions)。
 
 ## 记录什么，存在哪
 

@@ -26,6 +26,9 @@ import { markHookAbsent, reconcilePending } from './hook';
 import { createDeriveUnit, type DeriveCompute } from './derive/unit';
 import { createDeriveWorker } from './derive/worker';
 import { deriveRetryBackoffMs } from './derive/state';
+import { PLUGIN_REGISTRY } from './plugins/registry';
+import { loadCommunityPlugins } from './plugins/runtime/manifest';
+import { communitySources, createCommunityWorker } from './plugins/runtime/worker';
 import {
   RAW_TTL_MS,
   createAdmissionGate,
@@ -71,6 +74,11 @@ export type CollectorOptions = {
    */
   sessionAdapters?: readonly SessionAdapter[];
   sessionRoots?: (adapter: SessionAdapter) => string[];
+  /**
+   * 社区插件根目录；`false` 整路关闭。缺省是数据目录下的 `plugins/`。
+   * 单测注入临时目录或关闭，不能读真实数据目录。
+   */
+  communityPlugins?: false | string;
 };
 
 /** 当前检出的代码版本；读不到 git 时退回环境变量，再退回 unknown（不编造版本）。 */
@@ -115,6 +123,22 @@ export async function startCollector(
     : createDeriveWorker(store.path, {
       onFailure: code => diagnostics.error('derive.worker', { code }),
     });
+  // 社区轨只读数据目录下的本地包清单：被拒的包记固定分类码，不挡启动，
+  // 内置轨照常工作。线程懒启动，没有社区包时不起。
+  const communityRoot = options?.communityPlugins === false ? null
+    : options?.communityPlugins ?? join(config.dataDir, 'plugins');
+  const communityWorker = communityRoot === null ? null : createCommunityWorker({
+    onFailure: code => diagnostics.error('plugins.runtime', { code }),
+  });
+  const communityLoad = communityRoot === null
+    ? { packages: [], rejected: [] }
+    : loadCommunityPlugins(communityRoot, PLUGIN_REGISTRY.map(entry => entry.id));
+  for (const failed of communityLoad.rejected) {
+    diagnostics.error('plugins.load', { code: failed.code });
+  }
+  const community = communityWorker === null
+    ? []
+    : communitySources(communityLoad.packages, communityWorker);
   // 派生路径按配置定下来，定时器之前就设好：一旦有派生任务进来，模式和预算都
   // 必须是已确定的，不能"先按同步跑一会儿再切"。
   if (config.deriveBudget !== undefined) {
@@ -345,7 +369,7 @@ export async function startCollector(
     token: otlpToken,
     salt,
     admission: () => gate.check(0),
-  }, diagnostics, live);
+  }, diagnostics, live, community);
 
   timers.push(setInterval(ledgerTick, intervalOf(config, 'ledger', LEDGER_INTERVAL_MS)));
   timers.push(setInterval(routeTick, intervalOf(config, 'route', ROUTE_INTERVAL_MS)));
@@ -390,6 +414,8 @@ export async function startCollector(
     // 计算线程随后终止，再关库：不留 Worker 在库关掉后继续读。
     deriveWorker?.close();
     await server.stop(true);
+    // 读路径已经停下，再终止社区插件线程：在飞的折叠不会写回页面。
+    communityWorker?.close();
     store.close();
     diagnostics.lifecycle('service.stop', {
       phase: 'shutdown', dur_ms: performance.now() - stopStarted,

@@ -1,8 +1,10 @@
 // @ts-check
 /**
  * URL 与路由目标的纯函数：trace 参数解析、右栏页签声明与路由读取目标。
- * URL 恢复与导航完成处共用，测试直接断言。
+ * URL 恢复与导航完成处共用，测试直接断言。页签合法值取自 RAIL_TABS 登记，
+ * 新增一栏不在这里另写白名单。
  */
+import { DEFAULT_TAB, RAIL_TABS } from './rail-tabs.js';
 
 /**
  * URL 的 trace 参数解析成请求号：只接受十进制正整数。非法值按未指定处理，
@@ -35,15 +37,15 @@ export function resolveTraceTarget(rows, requested, detail) {
  * URL 的 tab 参数解析成右栏页签：合法内容页签原样采用，无效或缺省回读数；
  * 无声明进入读数是现有默认，不属于被覆盖的缺陷。
  * @param {string | null} value
- * @returns {'facts' | 'body' | 'tools' | 'route'}
+ * @returns {string}
  */
 export function railTabFromParam(value) {
-  return value === 'body' || value === 'tools' || value === 'route' ? value : 'facts';
+  return value !== null && RAIL_TABS.some(tab => tab.id === value) ? value : DEFAULT_TAB;
 }
 
-/** 读数是缺省页签，不落 URL；显式内容页签原样写回。 @param {string} tab @returns {'body' | 'tools' | 'route' | null} */
+/** 读数是缺省页签，不落 URL；显式内容页签原样写回。 @param {string} tab @returns {string | null} */
 export function railTabParam(tab) {
-  return tab === 'body' || tab === 'tools' || tab === 'route' ? tab : null;
+  return tab !== DEFAULT_TAB && RAIL_TABS.some(entry => entry.id === tab) ? tab : null;
 }
 
 /**

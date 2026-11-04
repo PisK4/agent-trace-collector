@@ -56,6 +56,69 @@ The README has an English version, but `docs/` and the notes are Chinese, with E
 - **Harness-specific behaviour is registered, not branched.** A new harness contributes a predicate in `src/harness/<name>.ts` plus one line in the registry array; dispatch code never compares harness names.
 - **`main.ts` is wiring only.** Timer bodies, locks and configuration assembly live in the module that owns the concept.
 
+## Plugin contributions
+
+A Plugin is one registered reading capability (`src/plugins/registry.ts`). A Parser adapts one agent's tool shape to that capability's DTO. Both are contributions, but they land in different places.
+
+**Built-in Parser (in-repo PR).** Add a file under `src/plugins/<plugin>/parsers/`, one line in that plugin's `parsers` array, and a synthetic test that covers a hit, a lookalike miss, missing parameters and reclaimed bodies. Parsers import nothing outside `src/plugins/`, never fetch, never produce HTML; `tests/plugin-boundaries.test.ts` enforces it. Add the Chinese strings your tab renders to `web/i18n-en.js` (`tests/i18n-coverage.test.ts` checks this). PR template:
+
+```markdown
+## What this Parser reads
+<agent name, tool name, input shape>
+
+## DTO
+<the snapshot it returns; state words kept as-is>
+
+## Synthetic cases
+- [ ] hit / [ ] lookalike miss / [ ] missing params / [ ] reclaimed body
+- [ ] bun run typecheck / [ ] bun test tests/<plugin>.test.ts
+- [ ] bun run verify:notes:staged
+```
+
+**Community package (local install).** A package is one ESM file exporting `parsers`; each Parser names the agent it claims and folds calls into the plugin's DTO. The host loads it in a Bun Worker, and it is not imported at all until a read needs it. A package whose declared `api` does not match is rejected before import. A timeout or a thrown error hides that tab only — the four built-in tabs keep working.
+
+Declare the package in `<dataDir>/plugins/plugins.json` (on macOS the data directory is `~/Library/Application Support/tracery`):
+
+```json
+{
+  "plugins": [
+    { "id": "todo", "api": 1, "agent": "acme", "entry": "acme-todo/index.ts" }
+  ]
+}
+```
+
+`id` must be one the core registers (`src/plugins/registry.ts`); `agent` is the value the collector stores on that agent's requests; `entry` resolves inside the plugin root and may not leave it. A community Parser takes over its agent — the built-in Parser for that agent steps aside so two state machines never fold the same calls. `api` is `PLUGIN_API` in `src/plugins/types.ts`.
+
+```ts
+export const parsers = [{
+  agent: 'acme',
+  parse(call: { toolName: string; input: unknown },
+    previous: { seq: number; items: { content: string; status: string }[] } | null) {
+    if (call.toolName !== 'acme_todo') return null;   // abstain
+    return { seq: (previous?.seq ?? 0) + 1, items: [] };
+  },
+}];
+```
+
+Restart the collector after editing the manifest; there is no hot reload. A timeout, a thrown error or a malformed snapshot leaves that turn's tab showing "read failed" rather than an empty list. PR template (for the package's own repo, or an issue here documenting it):
+
+```markdown
+## Package
+<id, api version, agent, entry file>
+
+## Trust
+This code runs in a Worker in the collector process with host permissions.
+Only install code you trust. List every file the package reads or writes.
+
+## Verification
+- [ ] api mismatch is rejected, built-in track unaffected
+- [ ] timeout / throw hides only the community tab
+- [ ] malformed snapshot is rejected, not rendered
+- [ ] no third-party runtime dependencies
+```
+
+External code has host permissions: the Worker isolates crashes and timeouts, not privileges. Do not install packages that read credentials, tokens or real request bodies.
+
 ## Tests
 
 - **Synthetic data only.** Real request bodies, accounts, tokens and user configuration must never enter a fixture, a log or a commit.

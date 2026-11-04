@@ -25,7 +25,7 @@ Status: implemented
 | +4967 ms | req 43041 | hook | 请求体完整 | reply=absent |
 | +4973 ms | req 43045 | 账本 | 无正文 | status=400 |
 
-**每一对的时间差是 0–6 毫秒**。hook envelope 的 `observed_start_ms` 由插件在 `onRequest` 里取 `Date.now()`（[collector.hooks.ts](../../../../plugins/collector.hooks.ts)），账本的 `started_ms` 是 magpie 记录的请求开始时刻——同一台机器、同一个时钟、同一个瞬间。
+**每一对的时间差是 0–6 毫秒**。hook envelope 的 `observed_start_ms` 由插件在 `onRequest` 里取 `Date.now()`（[collector.hooks.ts](../../../../integrations/magpie-hook/collector.hooks.ts)），账本的 `started_ms` 是 magpie 记录的请求开始时刻——同一台机器、同一个时钟、同一个瞬间。
 
 也就是说：用户只发了一次输入，客户端因为连续收到 502/400 自动重试了五次，每次重试产生一行 hook 证据和一行账本证据。**5 次真实尝试被记成 10 行。**
 

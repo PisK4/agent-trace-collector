@@ -22,6 +22,7 @@ import { ReadingConflictError } from '../../src/reading';
 import { getRoute } from '../../src/queries/routes';
 import { listTurns } from '../../src/queries/turns';
 import { listBgJobs } from '../../src/queries/bg-jobs';
+import { getTodoByTurn } from '../../src/queries/todo-by-turn';
 import { getSessionSummary, getSummaryEntries } from '../../src/queries/session-summary';
 import { getStats } from '../../src/queries/stats';
 
@@ -172,7 +173,8 @@ const requireValue = <T>(value: T | null): T => {
 };
 
 /** 直调真实查询；返回 null 的 not_found 与 ReadingConflictError 在此映射为稳定错误。 */
-function dispatchQuery(store: Store, operation: keyof ReadOperations, rawInput: unknown): unknown {
+async function dispatchQuery(store: Store, operation: keyof ReadOperations,
+  rawInput: unknown): Promise<unknown> {
   switch (operation) {
     case 'sessions': {
       const input = rawInput as ReadInput<'sessions'>;
@@ -205,6 +207,10 @@ function dispatchQuery(store: Store, operation: keyof ReadOperations, rawInput: 
     case 'bgJobs': {
       const input = rawInput as ReadInput<'bgJobs'>;
       return listBgJobs(store, input.key);
+    }
+    case 'todoByTurn': {
+      const input = rawInput as ReadInput<'todoByTurn'>;
+      return getTodoByTurn(store, input.key, input.actor, input.turn);
     }
     case 'summary': {
       const input = rawInput as ReadInput<'summary'>;
@@ -240,7 +246,7 @@ export function createInProcessReadTransport(store: Store): ReadTransport {
     ): Promise<ReadOutput<K>> {
       if (signal.aborted) throw codeError('cancelled');
       try {
-        return dispatchQuery(store, operation, input) as ReadOutput<K>;
+        return await dispatchQuery(store, operation, input) as ReadOutput<K>;
       } catch (error) {
         // 阅读身份冲突在查询层是异常、在契约上是稳定错误码，与 HTTP 409 对齐。
         if (error instanceof ReadingConflictError) throw codeError('reading_changed');

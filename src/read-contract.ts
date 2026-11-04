@@ -15,6 +15,7 @@ import type {
 } from './reading';
 import type { TurnsPage } from './queries/turns';
 import type { BgJobRow } from './queries/bg-jobs';
+import type { TodoByTurn } from './queries/todo-by-turn';
 import type { SessionSummary, SummaryEntriesQuery, SummaryEntries } from './queries/session-summary';
 import type { Stats } from './queries/stats';
 import type { getRoute } from './queries/routes';
@@ -60,6 +61,7 @@ export type ReadOperations = {
   route: { input: { id: number }; output: ReturnType<typeof getRoute> };
   turns: { input: { key: string; from: number | null }; output: TurnsPage };
   bgJobs: { input: { key: string }; output: BgJobRow[] };
+  todoByTurn: { input: { key: string; actor: string; turn: number }; output: TodoByTurn };
   summary: { input: { key: string }; output: SessionSummary };
   summaryEntries: { input: { key: string; query: SummaryEntriesQuery }; output: SummaryEntries };
   contextItem: { input: { id: number; token: string; query: ContextItemQuery };

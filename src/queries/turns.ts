@@ -46,7 +46,7 @@ const TURN_COLUMNS = `r.req_id, r.started_ms, r.agent,
  * 主链 actor：参与请求最多的那个组。子代理与主会话共用 conv_key 但按 actor
  * 各自成组，主流程的参与请求数远多于任何子代理；同数时取最早开头的组。
  */
-function mainActorOf(read: Database, convKey: string): string | null {
+export function mainActorOf(read: Database, convKey: string): string | null {
   const row = read.query<{ actor: string }, [string]>(`
     SELECT actor FROM request
     WHERE conv_key=? AND actor IS NOT NULL AND actor_state='known'

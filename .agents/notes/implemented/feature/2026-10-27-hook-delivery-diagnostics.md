@@ -31,7 +31,7 @@ Hermes 流量的钩子缺口需要分层判断，不能直接归因成投递丢�
 
 ### 插件侧固定码
 
-[plugins/collector.hooks.ts](../../../../plugins/collector.hooks.ts) 把一次投递的结果分成六个码：
+[integrations/magpie-hook/collector.hooks.ts](../../../../integrations/magpie-hook/collector.hooks.ts) 把一次投递的结果分成六个码：
 
 | 码 | 条件 | 重试 |
 | --- | --- | --- |

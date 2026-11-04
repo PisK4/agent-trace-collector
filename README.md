@@ -33,7 +33,7 @@ Three independent ingestion paths write into one SQLite database. You can enable
 
 [magpie](https://github.com/yetone/magpie) is an LLM gateway that records evidence at the point of send: a hook captures the client protocol request body and the merged reply, a usage ledger carries status, usage, `route_id` and `response_id`, and routing history carries candidate order, attempts and rules. Tracery reconciles all three into a single request row keyed on `response_id` and `route_id`.
 
-Bodies come from the hook. Register [`plugins/collector.hooks.ts`](plugins/collector.hooks.ts) in magpie's plugin config and give it the `hook.token` that Tracery generates on first start. The plugin does three things: it tags the request with a `hook_id`, reports the complete object when the call finishes, and records delivery outcomes under fixed codes. It never rewrites bodies, never correlates, never redacts.
+Bodies come from the hook. Register [`integrations/magpie-hook/collector.hooks.ts`](integrations/magpie-hook/collector.hooks.ts) in magpie's plugin config and give it the `hook.token` that Tracery generates on first start. The plugin does three things: it tags the request with a `hook_id`, reports the complete object when the call finishes, and records delivery outcomes under fixed codes. It never rewrites bodies, never correlates, never redacts.
 
 Without the hook you still get the ledger and routing evidence — just no request or reply bodies.
 
@@ -136,6 +136,8 @@ This is where you check whether a request carried something it shouldn't have: h
 ## Multiple agents, one set of views
 
 The session list holds sessions from different harnesses, using an Agent tag for distinction and filtering. When a session involves several agents, the row shows the primary agent and `+N`. Claude Code, OMP and Codex CLI are supported today. Adding a harness costs one stable `service.name` plus one selection rule — the contract is in the [OTLP exporter profile](docs/otlp-exporter-profile.md).
+
+Reading capabilities are registered as Plugins: one entry in `src/plugins/registry.ts` gives a capability its rail tab and the Parsers that adapt each agent's tool shape. Todo is the first Plugin. See [Contributing](CONTRIBUTING.md#plugin-contributions) for the two PR shapes.
 
 ## What records, and where it lives
 

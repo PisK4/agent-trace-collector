@@ -103,6 +103,13 @@ _Avoid_: 把首 token 当思考时间；把首 token 到首个文本的差当成
 **执行段（execution window）**：结果请求的开始时刻减调用请求的结束时刻（开始加时长）。窗口含客户端处理、权限确认与会话中断，是上界，不是工具进程自己的耗时。
 _Avoid_: 与工具自身运行时间混用
 
+**Plugin**：一份可注册、可关闭的阅读能力包，装 id、页签槽位、Parser 数组与 DTO 校验入口；登记在 `src/plugins/registry.ts`。
+_Avoid_: 与 magpie 的请求薄插件混用（后者在 `integrations/magpie-hook/`）
+
+**Parser**：某家 Agent 对一种能力的工具形状适配，把 tool_use 参数还原成该能力的 DTO；只交 DTO，不取数、不转义、不拼页面。
+
+**Feature**：一类可解释的阅读能力（Todo、Plan、Subagent 等），一个 Feature 对应一个 Plugin 与多个 Parser。
+
 ## 上下文读数
 
 **已用上下文（used context）**：本笔请求的 `prompt_tokens`，与上下文矩阵面积同源；不是厂商计费输入（`in_tok + cache_read + cache_write`），两者多数相等但不是同一事实。
@@ -153,6 +160,7 @@ _Avoid_: 与推理段、执行段混用；把速度分母当成整笔时长
 | 压缩归档 / 归档消息 | compaction archive / archive message | 上游 Claude Code 术语 |
 | 标题生成 | title generation | 旁路请求的一种，生成会话标题 |
 | 服务模型 | served model | `model_served` 同名 |
+| 待办 | Todo | 第五页签；Plugin 与 Parser 的术语定义见判定与读出 |
 | 承载（请求） | carrier | 结果正文所在的那笔请求 |
 | 分片 | slice | `derive-slice` 同名；_Avoid_: chunk、shard |
 | 工具子事件 | tool subevent | 会话行里默认折叠的工具调用组 |

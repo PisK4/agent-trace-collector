@@ -58,6 +58,8 @@ import { createReadScheduler } from './read-scheduler.js';
  * @property {() => Promise<void>} loadTurns 按当前会话与窗口下界取轮次列表；换窗后的重取排在前一次之后。
  * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', items: import('../src/queries/bg-jobs').BgJobRow[]}} peekBgJobs 同步读取背景作业配对快照；absent 覆盖 404、读取失败与无会话。
  * @property {() => Promise<void>} loadBgJobs 按当前会话取 bg_job 结算行；选会话与刷新时重取。
+ * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/todo-by-turn').TodoByTurn | null}} peekTodoByTurn 同步读取轮次态待办快照；absent 覆盖 404、读取失败与无会话。
+ * @property {(key: string, actor: string, turn: number) => Promise<void>} loadTodoByTurn 按会话、actor 与轮号取待办；切会话或切轮次后的迟到响应不写回。
  * @property {() => {status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} peekSummary 同步读取会话汇总快照；absent 覆盖 404、读取失败与无会话三种不可呈现态。
  * @property {(key: string) => Promise<void>} loadSummary 打开会话即拉一次汇总，不懒加载；换会话代次变更后迟到响应不写入。
  * @property {(v: boolean) => void} setDemoSilent 拍摄静默开关：开着时作废不排自动重读。
@@ -70,9 +72,9 @@ import { createReadScheduler } from './read-scheduler.js';
  * @param {import('../src/read-contract').ReadTransport} transport 具名读取的唯一执行通道；store 不拼 URL、不 Fetch。
  * @param {(id: number) => void} [onReadChanged] 记录快照异步变化（作废、自动重读
  *   换新或失败）时通知页面重绘；迟到响应与会话切换后的旧任务不通知。
- * @param {{ autoRereadCooldownMs?: number, scheduler?: object, onTurnsChanged?: () => void, onSummaryChanged?: () => void }} [options]
- *   自动重读的冷却窗口，默认 10 秒；scheduler 透传给内部有界调度器；轮次快照与会话
- *   汇总落地（ready 或 absent）时通知，测试可注入短窗。
+ * @param {{ autoRereadCooldownMs?: number, scheduler?: object, onTurnsChanged?: () => void, onSummaryChanged?: () => void, onTodoChanged?: () => void }} [options]
+ *   自动重读的冷却窗口，默认 10 秒；scheduler 透传给内部有界调度器；轮次快照、会话
+ *   汇总与待办落地（ready 或 absent）时通知，测试可注入短窗。
  * @returns {ReaderStore}
  */
 export function createReaderStore(transport, onReadChanged, options) {
@@ -81,6 +83,7 @@ export function createReaderStore(transport, onReadChanged, options) {
   let demoSilent = false;
   const onTurnsChanged = options?.onTurnsChanged ?? null;
   const onSummaryChanged = options?.onSummaryChanged ?? null;
+  const onTodoChanged = options?.onTodoChanged ?? null;
   const scheduler = createReadScheduler(options?.scheduler);
   /** 页面级读取（会话列表、统计）的取消边界；dispose 时一并取消。 */
   let pageScope = {};
@@ -137,6 +140,11 @@ export function createReaderStore(transport, onReadChanged, options) {
   let bgJobs = { status: 'idle', items: [] };
   /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/session-summary').SessionSummary | null}} */
   let summary = { status: 'idle', data: null };
+  /** 轮次态 Todo 快照：复合身份拦住切会话或切轮次后的迟到响应。 */
+  /** @type {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/todo-by-turn').TodoByTurn | null}} */
+  let todo = { status: 'idle', data: null };
+  /** @type {string | null} */
+  let todoInflightKey = null;
 
   /**
    * 请求读取缓存，按 canonical id 归属。rec 的字段在运行期由各读取路径填充，
@@ -363,6 +371,36 @@ export function createReaderStore(transport, onReadChanged, options) {
       if (/** @type {Error & {code?: string}} */ (error).code === 'cancelled') return;
       bgJobs = { status: 'absent', items: [] };
     }
+  }
+
+  /**
+   * 按会话、actor 与轮号取 Todo。复合身份同时覆盖会话代次与轮号：切会话或
+   * 逐轮翻阅后，旧轮的在途响应不写回当前页签。读取失败与取消都落 absent，
+   * 页面只隐藏该页签内容，其余四栏不受影响。
+   * @param {string} key @param {string} actor @param {number} turn
+   */
+  async function loadTodoByTurn(key, actor, turn) {
+    const myEpoch = epoch;
+    const identity = `${myEpoch}:${key}:${actor}:${turn}`;
+    todoInflightKey = identity;
+    todo = { status: 'loading', data: null };
+    onTodoChanged?.();
+    try {
+      const data = await execute(sessionScope, 'todoByTurn', { key, actor, turn });
+      if (myEpoch !== epoch || todoInflightKey !== identity) return;
+      todo = { status: 'ready', data };
+    } catch (error) {
+      if (myEpoch !== epoch || todoInflightKey !== identity) return;
+      if (/** @type {Error & {code?: string}} */ (error).code === 'cancelled') return;
+      todo = { status: 'absent', data: null };
+    } finally {
+      if (myEpoch === epoch && todoInflightKey === identity) onTodoChanged?.();
+    }
+  }
+
+  /** @returns {{status: 'idle' | 'loading' | 'ready' | 'absent', data: import('../src/queries/todo-by-turn').TodoByTurn | null}} */
+  function peekTodoByTurn() {
+    return todo;
   }
 
   /**
@@ -1264,6 +1302,8 @@ export function createReaderStore(transport, onReadChanged, options) {
     loadTurns,
     peekBgJobs,
     loadBgJobs,
+    peekTodoByTurn,
+    loadTodoByTurn,
     peekSummary,
     loadSummary,
     setDemoSilent: (/** @type {boolean} */ v) => { demoSilent = v; },

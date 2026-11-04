@@ -82,7 +82,7 @@ adapter 不读数据库、文件或网络，不写派生列、不推进修订、
 
 **立即收紧所有共享包装为 agent 专属。** 会改变未知标签及共享格式的既有行为。先保持行为并明确归属，收紧另以反例和版本策略验证。
 
-**建设动态插件加载器或全能 Feature interface。** 当前需求是本仓库内持续添加适配，不需要第三方代码执行、热加载、插件市场或任意写库能力；扩大 interface 会降低 depth，同时增加部署与失败模式。
+**建设动态插件加载器或全能 Feature interface。** 当前需求是本仓库内持续添加适配，不需要第三方代码执行、热加载、插件市场或任意写库能力；扩大 interface 会降低 depth，同时增加部署与失败模式。这条否决理由的前提在[页面 Plugin 机制](../../proposed/architecture/2026-11-04-plugin-system-and-todo-feature.md)里失效：社区轨要执行第三方代码；静态登记的决策本身继续有效，[Plugin 登记层与 Todo 页签](2026-11-05-plugin-registry-and-todo-tab.md)照它的形状落地。
 
 ## Consequences
 

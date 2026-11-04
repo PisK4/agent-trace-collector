@@ -6,7 +6,7 @@
  *   node scripts/verify-change-notes.mjs --staged
  *   node scripts/verify-change-notes.mjs --range origin/master..HEAD
  *
- * 触发路径是保守近似，不是语义判断：src/、web/、plugins/、scripts/、tests/、
+ * 触发路径是保守近似，不是语义判断：src/、web/、integrations/、scripts/、tests/、
  * package.json、bun.lock、tsconfig.json、AGENTS.md。纯机械或局部改动在提交
  * 信息里写 `Agent-Note: none — <reason>` 豁免；--staged 还没有提交信息，用
  * ATC_NOTE_EXEMPT=<reason> 放行，并把同样的理由写进提交信息供 range 模式核对。
@@ -17,7 +17,7 @@
  */
 import { execFileSync } from 'node:child_process'
 
-const TRIGGER_PREFIXES = ['src/', 'web/', 'plugins/', 'scripts/', 'tests/']
+const TRIGGER_PREFIXES = ['src/', 'web/', 'integrations/', 'scripts/', 'tests/']
 const TRIGGER_FILES = new Set(['package.json', 'bun.lock', 'tsconfig.json', 'AGENTS.md'])
 const NOTE_FILE = /^\.agents\/notes\/(?:proposed|implemented|rejected|archived)\/[^/]+\/\d{4}-\d{2}-\d{2}-.+\.md$/
 const EXEMPT = /^Agent-Note:\s*none\s+[—–-]\s+\S+/m
