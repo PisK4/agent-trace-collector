@@ -1699,6 +1699,8 @@ if (typeof document !== 'undefined') {
     setAttr('rail-resize', 'aria-label', t('调整详情栏宽度'));
     setAttr('rail-resize', 'title', t('拖动调整宽度；双击恢复默认；方向键微调'));
     setAttr('rail-col', 'aria-label', t('请求读数与正文'));
+    setAttr('refresh-sessions', 'aria-label', t('刷新会话列表'));
+    setAttr('refresh-sessions', 'title', t('重新读取会话列表第一页'));
     const title = document.querySelector('.sessions-title h2');
     if (title) title.textContent = t('会话');
     const listPulse = document.querySelector('#sessions-list > p.sess-empty.pulse');
@@ -2421,7 +2423,6 @@ if (typeof document !== 'undefined') {
     const pop = document.createElement('div');
     pop.className = 'more-pop';
     pop.setAttribute('role', 'dialog');
-    pop.setAttribute('aria-label', '完整目标清单');
     pop.addEventListener('pointerover', () => { clearTimeout(moreHoverTimer); });
     pop.addEventListener('pointerout', scheduleHideMore);
     document.body.append(pop);
@@ -2446,7 +2447,8 @@ if (typeof document !== 'undefined') {
     if (list === undefined) return;
     clearTimeout(moreHoverTimer);
     const pop = morePopEl();
-    pop.innerHTML = `<div class="mp-head">完整目标 ${list.length}</div>`
+    pop.setAttribute('aria-label', t('完整目标清单'));
+    pop.innerHTML = `<div class="mp-head">${t('完整目标 {n}', { n: list.length })}</div>`
       + list.map(item => `<div class="mp-item" title="${esc(item)}">${esc(item)}</div>`).join('');
     pop.classList.add('show');
     const r = anchor.getBoundingClientRect();
@@ -2460,10 +2462,10 @@ if (typeof document !== 'undefined') {
   }
   document.addEventListener('pointerover', (e) => {
     if (!(e.target instanceof Element)) return;
-    const t = /** @type {HTMLElement | null} */ (e.target.closest('[data-more-key]'));
-    if (t === null || t === moreAnchor) return;
+    const chip = /** @type {HTMLElement | null} */ (e.target.closest('[data-more-key]'));
+    if (chip === null || chip === moreAnchor) return;
     clearTimeout(moreHoverTimer);
-    moreHoverTimer = setTimeout(() => showMore(t), 160);
+    moreHoverTimer = setTimeout(() => showMore(chip), 160);
   });
   document.addEventListener('pointerout', (e) => {
     if (moreAnchor === null) return;

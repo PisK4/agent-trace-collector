@@ -624,7 +624,7 @@ export function renderTraceRow(row, step, ordinal, callOf = null, selected = fal
   const isTool = step.kind === 'tool' || step.kind === 'tool_result';
   // 多目标只出计数：清单不落 DOM，悬浮或聚焦行时由 app 层按 key 现取现渲染。
   const moreHtml = more.length > 0
-    ? ` <span class="row-more" data-more-key="${esc(step.key)}" aria-label="另有 ${more.length} 个目标，悬停或聚焦这一行查看" title="另有 ${more.length} 个目标">+${more.length}</span>`
+    ? ` <span class="row-more" data-more-key="${esc(step.key)}" aria-label="${t('另有 {n} 个目标，悬停或聚焦这一行查看', { n: more.length })}" title="${t('另有 {n} 个目标', { n: more.length })}">+${more.length}</span>`
     : '';
   // 悬停给完整信息：调用行放完整参数 JSON，结果行放调用摘要与完整结果正文；属性按 TITLE_MAX 截断。
   let title = '';
