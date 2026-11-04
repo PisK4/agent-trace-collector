@@ -27,11 +27,17 @@ Status: implemented
 
 ### hook-delivery 的日期简写按本地日解析
 
-`momentFlag` 给 `YYYY-MM-DD` 简写加了一个分支：显式按本地时区构造零点（`new Date(y, m-1, d)`），不再走 `Date.parse` 对纯日期的 UTC 口径；复用 `isCalendarDay`，`2026-02-31` 这类会被 `Date` 静默滚月的简写按用法错误（退出 2）拒绝。epoch 毫秒与完整 ISO 的解析路径不动；带时区偏移的 ISO 在 Asia/Shanghai 下与简写现在给出同一条边界。解析结果本就经 `window.since_ms` / `until_ms` 回显，运维核对以这个字段为准。`delivery.ts`、`day` 列与 `localDay` 都没动。
+`momentFlag` 给 `YYYY-MM-DD` 简写加了一个分支：显式按本地时区构造零点（`new Date(y, m-1, d)`），不再走 `Date.parse` 对纯日期的 UTC 口径；复用 `isCalendarDay`，`2026-02-31` 这类会被 `Date` 静默滚月的简写按用法错误（退出 2）拒绝。epoch 毫秒与完整 ISO 的解析路径不动；带时区偏移的 ISO 在 Asia/Shanghai 下与简写现在给出同一条边界。窗口端点的既有校验（缺端点退出 2、倒置区间报 `invalid_window`）来自[hook 投递分层诊断](../feature/2026-10-27-hook-delivery-diagnostics.md)，本批只改简写的解析口径。解析结果本就经 `window.since_ms` / `until_ms` 回显，运维核对以这个字段为准。`delivery.ts`、`day` 列与 `localDay` 都没动。
+
+### precheck 作为独立只读子命令
+
+新增 `maintain precheck --db <path>`：只读打开目标库，读 `PRAGMA user_version` 与表数，与代码侧版本对比，输出 `in_place` / `rebuild_required` / `unsupported` 三态之一加 `db_version` / `code_version`，不可迁移的两态以退出 1 拒绝。判据与 [store.ts 的 migrate](../../../../src/store.ts) 对齐：当前版本、v6 起有原地升级路径的旧版本与待新建的空库都算 `in_place`；更早版本需重建；带表但版本为 0 与高于代码的版本不支持。「旧库没有升级路径」的语义来自[旧库删除重建](../architecture/2026-10-23-destructive-schema-replacement.md)，precheck 只是把同一套判据提前到只读场景。不取维护锁、不做任何迁移写入，用例断言 v11 库预检后 `user_version` 原样保留。
+
+代码侧版本是 verify.ts 里的 `CODE_SCHEMA_VERSION`，未从 store.ts 导出 `SCHEMA_VERSION`：那个常量目前没有第二个消费方，为一次预检扩大 store 的导出面不值得，出现第二个需要它的模块时再晋升导出。漂移由测试钉住——新装 fixture 断言 `db_version: 12 === code_version`，store 升版而这里没跟时该断言先报红。`bun run verify-cutover` 是 collector 与 AVA 前身库的正文覆盖对比工具，与预检无关，未动。
 
 ## Testing
 
-`tests/maintenance.test.ts` 新增 CLI 用例：非法日历（`2026-13-01`、`2026-02-31`、`2026-1-01`）与未来日退出 2，库未被改动；部分命中 `--apply` 不需要 `--allow-all`；全库命中拒绝、带 `--allow-all` 后删除数与预览一致。verify 的退出码用例：只有派生积压仍 `ok:true`、退出 0；悬空块 `ok:false`、退出 1；损坏的库经 CLI 退出 1。日期窗口用例：epoch 与带偏移的完整 ISO 原样直通；简写解析由子进程用 `TZ=Asia/Shanghai` 钉住，断言窗口端点等于本地零点（1_793_721_600_000 / 1_793_808_000_000，UTC 口径各多 8 小时）——Bun 不认运行时改 `process.env.TZ`，进程内断言只能证同构，钉时区必须独立进程；非法简写按用法拒绝。全部合成数据。
+`tests/maintenance.test.ts` 新增 CLI 用例：非法日历（`2026-13-01`、`2026-02-31`、`2026-1-01`）与未来日退出 2，库未被改动；部分命中 `--apply` 不需要 `--allow-all`；全库命中拒绝、带 `--allow-all` 后删除数与预览一致。verify 的退出码用例：只有派生积压仍 `ok:true`、退出 0；悬空块 `ok:false`、退出 1；损坏的库经 CLI 退出 1。日期窗口用例：epoch 与带偏移的完整 ISO 原样直通；简写解析由子进程用 `TZ=Asia/Shanghai` 钉住，断言窗口端点等于本地零点（1_793_721_600_000 / 1_793_808_000_000，UTC 口径各多 8 小时）——Bun 不认运行时改 `process.env.TZ`，进程内断言只能证同构，钉时区必须独立进程；非法简写按用法拒绝。precheck 用例覆盖 v12/v11 放行（含 user_version 不变的只读断言）、v5 重建、v13 与带表空版本拒绝、空文件放行、损坏文件报 `precheck_failed`。全部合成数据。
 
 ## Alternatives considered
 
@@ -41,6 +47,10 @@ Status: implemented
 
 **F32 把 `day` 列改成 UTC 日期。** 能统一 CLI 与列的口径，但要迁移全部历史 `day`、页面日期整体偏移，还牵动按 `day` 聚合的既有查询；`day` 的本地日语义是 [format.ts](../../../../src/format.ts) 的明确定位，客户端入参解析对齐它改动面最小。落选。
 
+**F08 并入 `maintain verify`。** verify 回答「这份库健康吗」，precheck 回答「这份库这份代码能不能直接启动」；后者在版本不支持时要把库判成拒绝服务，混进 verify 会让完整性体检在旧版本库上整个失效（integrity_check 本可以在旧结构上照跑）。两个问题的时间点也不同：precheck 在部署前、服务未启，verify 在停服窗口内。落选。
+
+**F08 另开 verify-restore 命令。** 把预检挂到恢复路径只覆盖「从 bundle 恢复」一个场景；换机器、回滚代码、数据目录指向旧库都不经过 restore，照样要等服务启动失败才发现不兼容。独立 precheck 对任何路径都可用，恢复场景对恢复产物跑同一条命令即可。落选。
+
 ## Consequences
 
 未来日期不能再用于预清理（例如提前导入的数据要按未来日截断）；真有这个需求时加显式旗标，而不是放开上界。`--before` 等于今天仍允许，「删今天之前」的语义不变，命中是否全库由计数门兜底。校验只长在 CLI 入口，直接调 `purgeMetadata` 的代码路径（目前只有 CLI 与测试）不受保护。
@@ -48,3 +58,5 @@ Status: implemented
 verify 的 `ok` 字段语义从「命令执行成功」变为「库健康」：只读 `ok` 的自动化从此拿到真实结论，此前把损坏当通过的行为是本批要消灭的假阳性。以退出码判定的既有脚本若在积压场景依赖恒 0，需要确认它们没有把「结构问题」当正常。
 
 简写改按本地日解析后，一直按 UTC 心算日期调用的外部脚本会看到窗口整体平移一个时区（Asia/Shanghai 下早 8 小时开始、早 8 小时结束）；核对入口是输出里的 `window.since_ms` / `until_ms`，混用简写与无偏移 ISO 的两套口径也随之收敛成一种。
+
+precheck 只对比版本号：`auto_vacuum` 不符、半迁移状态这类也会让启动失败的形态不在它的判据里，预检通过仍不等于迁移一定成功。`CODE_SCHEMA_VERSION` 与 store.ts 的 `SCHEMA_VERSION` 是两处数字，靠测试钉住；晋升为导出常量的时机是下一次需要跨模块读它的改动。precheck 的版本下界（v6 起可升级）也与 migrate 的分支硬编码并存，迁移路径变化时两处一起动。

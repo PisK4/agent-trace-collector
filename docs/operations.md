@@ -117,6 +117,9 @@ rm ~/Library/LaunchAgents/local.tracery-monitor.plist
 # 只读校验：完整性与三类容易悄悄积累的结构问题
 bun run maintain verify --db '<dataDir>/trace.db'
 
+# 只读预检：这份库能否被当前代码直接启动（schema 版本三态）
+bun run maintain precheck --db '<dataDir>/trace.db'
+
 # hook 投递的只读窗口诊断：缺口、等待队列与已到达回调
 bun run maintain hook-delivery --db '<dataDir>/trace.db' --since '2026-10-26T00:00:00Z' --until '2026-10-27T00:00:00Z'
 
@@ -169,6 +172,18 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 | `pending_derivations` | `derive_queue` 里的分组数 | 采集器启动后会自行清空；停服务时看到的数字只说明停机前有积压 |
 
 `integrity` 只有一项 `ok`、且 `dangling_blocks` 与 `duplicate_evidence` 都是 0 才算通过：任一不满足时输出 `ok:false` 并退出 1，损坏的库在报告阶段直接抛错，同样不会被当成合格备份。`pending_derivations` 是信息字段，不参与判定——停机前有积压是正常的。
+
+### precheck
+
+只读预检：只读打开目标库，对比 `PRAGMA user_version` 与代码侧 schema 版本，回答「这份库能不能被当前代码直接启动」。不取维护锁、不做任何迁移写入，判据与启动路径的迁移规则一致（见[schema 版本](#schema-版本)）。
+
+| `state` | 含义 | 退出码 |
+| --- | --- | --- |
+| `in_place` | 已是当前版本、v6 起有原地升级路径的旧版本，或待新建的空库 | 0 |
+| `rebuild_required` | 版本早于 v6，没有升级路径；按重建流程处理 | 1 |
+| `unsupported` | 库比代码新，或带表但版本为 0（`schema_unknown`） | 1 |
+
+打不开或不是 SQLite 文件报 `precheck_failed:<原因>`，同样退出 1。预检通过不替代备份，也不保证迁移一定成功；它只把「schema 不兼容」的发现时机从重启窗口提前到部署前。
 
 ### hook-delivery
 
@@ -558,7 +573,7 @@ sqlite3 "$HOME/Library/Application Support/tracery/trace.db" \
 
 ## schema 版本
 
-当前 `user_version=12`。空数据目录首次启动直接建到 v12；v6 到 v11 库打开时在单个事务里原地升到 v12，更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 到 v12，旧版本包恢复后首次打开同样原地升级。
+当前 `user_version=12`。空数据目录首次启动直接建到 v12；v6 到 v11 库打开时在单个事务里原地升到 v12，更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 到 v12，旧版本包恢复后首次打开同样原地升级。部署或恢复前可先跑 `maintain precheck` 只读预判同一套判据，不必等服务启动失败（见[维护命令](#维护命令)）。
 
 v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列，五个本地 Agent 适配器与 droid 共用一张原始层。旧行保留并补 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若因旧脚本同时存在两张表，旧表行先并入再删除。升级不扫描正文，停顿是毫秒级。升级后 `sessions` 定时器从偏移 0 开始按每家 64 个文件或 2 MiB 追历史；当前调度改为 live/backfill 两档，见[架构设计](architecture-design.md)。页面上 `via='session'` 的行按 `agent` 区分来源。
 
@@ -576,7 +591,7 @@ v8 在 v7 之上加的两条部分索引（`i_req_prev`、`i_tool_result_req`）
 
 带 schema 变更或判据变更的发布，顺序固定是**备份 → 重启 → 显式 rebuild → 验证**，不是"重启完就生效"：
 
-1. **备份**：`maintain bundle` 要求源库已停，所以先 `bun run service stop`，bundle 到数据目录之外，再启动新代码。失败时保留库与 WAL 文件，按错误码处理后在低峰重试。
+1. **备份**：`maintain bundle` 要求源库已停，所以先 `bun run service stop`，bundle 到数据目录之外。失败时保留库与 WAL 文件，按错误码处理后在低峰重试。启动新代码前对源库跑一次 `bun run maintain precheck --db '<dataDir>/trace.db'`：`rebuild_required` / `unsupported` 先按「schema 版本」节处理，别带病重启。
 2. **重启**：`openStore` 在启动路径里完成原地迁移（一次性索引扫描停顿，见上）。重启后先只读核对：`PRAGMA user_version` 到目标版本、`integrity_check` 为 ok。
 3. **显式 rebuild**：迁移只加表、列或索引，不回填存量；需要让存量会话按新判据收敛时，逐会话（或分批）跑 `bun run maintain rebuild --session '<conv_key>'`。不要在重启窗口顺手跑全量 rebuild——大会话的升级在秒级，会占主线程。
 4. **验证**：区分「迁移成功」与「回填完成」。迁移成功的只读自检是本批新增表或列随新流量开始出现行（例如 v12 的 `raw_session_event.source_kind` 与各 `*_session` 游标）；回填完成的验收是 `GET /api/sessions` 的标题、flags 与 request_count 符合新规则预期。重启后立刻看会话列表，看到旧行为是「还没 rebuild」，不是「功能没生效」。

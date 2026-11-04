@@ -14,7 +14,7 @@ import { dedupeSessionDuplicates, previewSessionDedupe } from './dedupe';
 import { rebuildSession } from './rebuild';
 import { reparseProtocol } from './reparse';
 import { normalizeStoredResponseIds, previewResponseIdNormalization } from './response-ids';
-import { verifyDatabase } from './verify';
+import { verifyDatabase, precheckDatabase } from './verify';
 
 function parseArgs(argv: string[]): Map<string, string | true> {
   const flags = new Map<string, string | true>();
@@ -65,6 +65,7 @@ function isCalendarDay(value: string): boolean {
 
 const USAGE = `usage:
   maintain verify --db <path>
+  maintain precheck --db <path>
   maintain hook-delivery --db <path> --since <ISO|ms> --until <ISO|ms>
   maintain backup --db <path> --out <new-path>
   maintain bundle --dir <dataDir> --out <new-dir>
@@ -163,6 +164,18 @@ export async function runMaintenance(argv: string[], io: {
       return 0;
     } catch (error) {
       err(`hook-delivery_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
+    }
+  }
+
+  if (command === 'precheck') {
+    // 只读预检：换机、回滚或指向旧数据目录时，把 schema 不兼容的发现时机提前到部署前。
+    try {
+      const report = precheckDatabase(dbPath);
+      out(JSON.stringify(report));
+      return report.ok ? 0 : 1;
+    } catch (error) {
+      err(`precheck_failed:${error instanceof Error ? error.message : 'unknown'}`);
       return 1;
     }
   }

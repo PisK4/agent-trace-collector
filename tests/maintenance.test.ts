@@ -576,6 +576,54 @@ test('日期简写按本地日零点解析（TZ=Asia/Shanghai 钉住）', () => 
   }
 });
 
+test('precheck按schema版本三态放行或拒绝，且不做迁移写入', async () => {
+  const f = fixture();
+  const path = join(f.dir, 'trace.db');
+  const setVersion = (version: number) => {
+    const db = new Database(path);
+    db.run(`PRAGMA user_version=${version}`);
+    db.close();
+  };
+  try {
+    f.store.close();
+    const lines: string[] = [];
+    const errs: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: (line: string) => errs.push(line) };
+    // 新装库是当前版本：直接可启动。store.ts 升版而 CODE_SCHEMA_VERSION 没跟时，这条先报红。
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toEqual({ ok: true, state: 'in_place', db_version: 12, code_version: 12 });
+    // 有原地升级路径的旧版本放行，且预检不写库：user_version 原样保留。
+    setVersion(11);
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, state: 'in_place', db_version: 11 });
+    const reopened = new Database(path, { readonly: true });
+    expect(reopened.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
+    reopened.close();
+    // 没有升级路径的更早版本：需重建。
+    setVersion(5);
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'rebuild_required', db_version: 5 });
+    // 比代码新与带表的空版本：不支持。
+    setVersion(13);
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'unsupported', db_version: 13 });
+    setVersion(0);
+    expect(await runMaintenance(['precheck', '--db', path], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'unsupported', db_version: 0 });
+    // 空文件按新建放行；损坏的文件报 precheck_failed。
+    const empty = join(f.dir, 'empty.db');
+    writeFileSync(empty, '');
+    expect(await runMaintenance(['precheck', '--db', empty], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, state: 'in_place', db_version: 0 });
+    const garbage = join(f.dir, 'garbage.db');
+    writeFileSync(garbage, 'this is not a database');
+    expect(await runMaintenance(['precheck', '--db', garbage], io)).toBe(1);
+    expect(errs.some(line => line.startsWith('precheck_failed:'))).toBe(true);
+  } finally {
+    f.close();
+  }
+});
+
 test('purge-metadata拒绝非法与未来日期，全库命中要求allow-all', async () => {
   const f = fixture();
   try {
