@@ -45,7 +45,7 @@ droid 完全未接入，不会与现有 magpie 行产生重叠，去重压力最
 
 扫描根目录取 `$FACTORY_HOME_OVERRIDE/.factory/sessions`，否则 `~/.factory/sessions`，与 magpie 的 `FactoryDir` 一致（[droid.go:35](https://github.com/yetone/magpie/blob/3173440ca3be3eb0a855870d92faeadea6785aaa/internal/sessions/droid.go#L35-L43)）。匹配 `*.jsonl` 与 `*/*.jsonl`，忽略 `.settings.json`。
 
-转录是 append-only，复用 `source_cursor`，`source_kind='droid_transcript'`，按文件身份、`committed_off` 与冻结头部基线增量读；规则与账本、路由相同。`.settings.json` 是覆盖写，整份读、按内容哈希判变化，不占游标。文件消失时保留已摄入行，不删除。
+转录是 append-only，复用 `source_cursor`，`source_kind='droid_transcript'`，按文件身份、`committed_off` 与冻结头部基线增量读；规则与账本、路由相同。`.settings.json` 是覆盖写，整份读、按内容哈希判变化，不占游标。取件只选还有剩余字节的转录，所以转录停止增长时文件不会进批次；每批结束再按 `session_usage.source_path` 刷新一次已记录的 settings，覆盖写不会漏。文件消失时保留已摄入行，不删除。
 
 每轮按剩余字节从大到小取文件，单轮上限 64 个文件或 8 MiB，未读完的下一轮继续。新增 `intervalOf(config, 'droid', …)`，默认 60 秒。
 
@@ -87,7 +87,7 @@ schema v11 增加两张表。`raw_droid_event` 存脱敏后的整行原文与物
 2. `turn_ref` 命中（Codex 已有）；
 3. 同 `conv_key`、同 agent、起止时间在 ±60 秒窗口内、模型相等，且只命中一行。
 
-多候选或零候选都不合并，独立成行，记 `match_ambiguous` 或 `match_absent`。这沿用仓库「不按相邻时间猜」的规则。droid 写入前调用这个查找；`mergeLedgerRow` 在 `route_id` 未命中时也调用，账本迟到就能认领 OTLP 或 droid 已建的行，双份消失。
+多候选或零候选都不合并，独立成行，记 `match_ambiguous` 或 `match_absent`。这沿用仓库「不按相邻时间猜」的规则。`via='rejected'` 的行不参与任何一条线索：被上游拒绝的调用没有走到模型，不是同一笔调用的另一份证据。droid 写入前调用这个查找；`mergeLedgerRow` 在 `route_id` 未命中时也调用，账本迟到就能认领 OTLP 或 droid 已建的行，双份消失。
 
 `normalizeResponseId` 的前缀表目前是 `chatcmpl-`、`msg_resp_`、`msg_`、`resp_`（[mapping.ts:217](../../../../src/sources/magpie/mapping.ts)）。droid 的 `gen-` 是否应加入，取决于它是否与 magpie 账本的 `response_id` 同值；本机 droid 不走 magpie，无法验证。第一版按原样比较，验证后再决定是否升匹配规则版本。
 
