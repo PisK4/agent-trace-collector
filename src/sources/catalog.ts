@@ -24,7 +24,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { agent: 'pi', sourceKind: 'pi_session', format: 'jsonl', status: 'implemented' },
   { agent: 'omp', sourceKind: 'omp_session', format: 'jsonl', status: 'implemented' },
   { agent: 'zcode', sourceKind: 'zcode_session', format: 'sqlite', status: 'implemented' },
-  { agent: 'dsh', sourceKind: null, format: 'jsonl+zstd', status: 'local_data' },
+  { agent: 'dsh', sourceKind: 'dsh_session', format: 'jsonl+zstd', status: 'implemented' },
   { agent: 'cline', sourceKind: null, format: 'json', status: 'unimplemented' },
   { agent: 'qoder', sourceKind: null, format: 'jsonl', status: 'local_data' },
   { agent: 'qoder-cn', sourceKind: null, format: 'jsonl', status: 'unimplemented' },

@@ -3,10 +3,10 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { basename, join } from 'node:path';
 
-/** 来源在库里的标识：账本、路由文件、droid 转录与五个本地 Agent 会话。 */
+/** 来源在库里的标识：账本、路由文件、droid 转录与六个本地 Agent 会话。 */
 export type SourceKind =
   | 'ledger' | 'route_file' | 'route_gz' | 'droid_transcript'
-  | 'claude_session' | 'codex_session' | 'omp_session' | 'pi_session' | 'zcode_session';
+  | 'claude_session' | 'codex_session' | 'dsh_session' | 'omp_session' | 'pi_session' | 'zcode_session';
 
 /** 文件形态：可以按偏移续读的追加流，或整份替换、只能按指纹识别的封口文件。 */
 export type SourceMode = 'appendable' | 'sealed';
@@ -39,9 +39,11 @@ export type SourceIssue = { offset: number; end: number; reason: 'line_too_large
  * 一行完整内容。
  *
  * 可追加文件的 offset 是文件字节位置，也是物理记录身份的一部分；封口 gz 的
- * offset 是解压后文本里的位置，只用于批次内定位，不写进物理身份。
+ * offset 是解压后文本里的位置，只用于批次内定位，不写进物理身份。容器内行
+ * （如 DSH 的 zstd frame）的偏移只是身份，处理失败时用 `restartOff` 回到容器
+ * 起点重读。
  */
-export type SourceLine = { offset: number; end: number; text: string };
+export type SourceLine = { offset: number; end: number; text: string; restartOff?: number };
 
 /**
  * 一次读取的结果。游标字段与行、坏行平铺在一起，读取结果本身就是下一轮的游标。

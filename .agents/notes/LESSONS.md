@@ -90,6 +90,11 @@
 
 ## 摄入与预算
 
+**读取层返回的行偏移不是游标时，必须同时声明游标来源与坏行重读点。**
+- 证据：2026-11-04 DSH 多 frame 读取给每行合成偏移（frame 起点乘 stride 加行号），共用摄入仍按 `line.end` 写 `committed_off`：369 字节的子会话文件首轮只提交到 281，第二次从 281 开始正好落在 frame 边界之前，追加的 frame 整段读不出来，表现为第二轮 `calls=0`。
+- 防护：容器读取用 `SessionAdapter.lineCommit=false` 让游标只认读取层的 `committedOff`，用 `SourceLine.restartOff` 给坏行一个 frame 起点；集成测试同时断言 `committed_off===observed_off` 与追加后还能再读出一笔。新适配器若偏移只是原始层身份，先写这两条声明再跑追加测试。
+- Seen 1× (2026-11-04).
+
 **给逐项循环加分块内层循环时，预算计数与结果累计分开，物理条目只在首块计一次。**
 - 证据：2026-11-04 封口分块把 `ingestSessionFiles` 改成每文件多事务，直接把累计 `total.files` 当预算计数器会让分块放大文件数；局部计数器又与参数 `files` 同名，typecheck 报 TS2300 才发现。
 - 防护：预算用 `fileCount`/`bytes` 独立变量，`total.*` 只做输出；内层循环用 `counted` 标记首块；新增循环后先跑 `bun run typecheck` 与多块集成测试。

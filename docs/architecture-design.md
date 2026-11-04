@@ -405,12 +405,13 @@ fork 会话在 `forkedAtMessageId` 之前的行是源会话复制段：它们进
 
 ### 本地 Agent 会话适配器（第一版）
 
-Claude Code、Codex、Zcode、OMP、Pi 与 droid 的本地会话走同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。
+Claude Code、Codex、DSH、Zcode、OMP、Pi 与 droid 的本地会话走同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。
 
 | Agent | 根 | 形态 | 调用单位 | 正文协议 |
 | --- | --- | --- | --- | --- |
 | Claude Code | `$CLAUDE_CONFIG_DIR` 或 `~/.claude` 下的 `projects` | JSONL | assistant 行的 `message.id`；同一响应的多行按 id 合并 | `anthropic` |
 | Codex | `$CODEX_HOME` 或 `~/.codex` 下的 `sessions` 与 `archived_sessions` | JSONL 与 `.jsonl.zst` | `token_usage_record` 或 `event_msg/token_count` | `responses` |
+| DSH | `$DSH_HOME` 或 `~/.dsh` 下的 `sessions/<project>/<session>` | JSONL 与追加式多 frame `.zstd` | `assistant/message`；事件 `seq` 或行偏移 | `chat` |
 | Zcode | `$ZCODE_HOME` 或 `~/.zcode` 下的 `cli/db/db.sqlite` | SQLite | assistant 消息，`model_usage` 的 rowid 作游标 | `anthropic` |
 | OMP | `$PI_CONFIG_DIR` 或 `~/.omp` 下的 `agent/sessions` 与 `profiles/*/agent/sessions`；XDG 数据根下的 `sessions` 与 `profiles/*/sessions` | JSONL | assistant 消息；消息 id 或行偏移 | `anthropic` |
 | Pi | `$PI_CODING_AGENT_DIR` 或 `~/.pi/agent` 下的 `sessions`；全局 `settings.json` 的 `sessionDir` | JSONL | 同 OMP，共用解析器 | `anthropic` |
@@ -420,7 +421,9 @@ OMP/Pi 的多根在适配器里展开：OMP 还读 `PI_CODING_AGENT_DIR`、`PI_C
 
 Codex 归档的 `.jsonl.zst` 先整份解压，再按解压后的字节省份提交：压缩字节的 SHA-256 作为代际与指纹，同指纹不再解压；每次写事务最多提交 256 KiB 或 64 行，`committed_off` 是本块末尾，`observed_off` 是整份长度，发现阶段用两者之差判断还有没有剩余。解压失败记 `codex_zstd_invalid`，超过 256 MiB 记 `codex_zstd_limit`，游标不前进。压缩文件按单个 zstd frame 处理。同名 plain 与 zst 先比较解压内容；相等或互为前缀时只留覆盖更全的一份，分叉时都保留。
 
-五个非 droid 适配器共用一个 `sessions` 定时器，每 60 秒跑一轮。每轮先对全部适配器做一次只读发现，只 stat；发现后 Codex 对同名 plain/zst twin 读两份比较内容，结果按大小与 mtime 缓存。
+DSH 的 `.zstd` 是追加式多 frame 流，不能整份当归档。读取器逐个 frame 校验长度后再解压，只有累计文本以换行结尾的 frame 才提交；`committed_off` 是压缩偏移，`observed_off` 是压缩文件长度，写了一半的尾帧留到下一轮。行的 offset 是合成身份（frame 起点乘 stride 加行号），只用于原始层主键与排序；适配器以 `lineCommit:false` 让共用摄入把读取层的批末位置写进游标，坏行则退回所在 frame 的起点。同一会话目录只取版本最高、同版本最后写入的一份。分叉会话在 `session/end-seed` 之前只把父会话事件放进消息窗口，不重复建调用；格式 1 用 `seedLength` 判断边界。子代理折叠到直接父会话。
+
+六个非 droid 适配器共用一个 `sessions` 定时器，每 60 秒跑一轮。每轮先对全部适配器做一次只读发现，只 stat；发现后 Codex 对同名 plain/zst twin 读两份比较内容，结果按大小与 mtime 缓存。
 
 - live：mtime 在 10 分钟内的文件，按 mtime 从新到旧，最多 4 家，每家 2 个文件或 256 KiB；
 - backfill：从轮转游标选一家仍有剩余的来源，重新发现后按该适配器自己的预算摄入，每家每轮最多 64 个文件或 2 MiB；封口文件在本轮预算内连续提交多个分块，没有剩余的来源跳过。

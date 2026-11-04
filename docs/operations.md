@@ -1,6 +1,6 @@
 # 运维手册
 
-采集器把账本、路由、hook、OTLP 与本地 Agent 会话文件（droid、Claude Code、Codex、Zcode、OMP、Pi）五路证据写进同一个 SQLite 库。在线读取走独立只读连接，写入全部走单写者事务。下面这些操作都在**采集器已停止**的前提下进行，停服务用 `bun run service stop`，见[起停与状态](#起停与状态)。
+采集器把账本、路由、hook、OTLP 与本地 Agent 会话文件（droid、Claude Code、Codex、DSH、Zcode、OMP、Pi）五路证据写进同一个 SQLite 库。在线读取走独立只读连接，写入全部走单写者事务。下面这些操作都在**采集器已停止**的前提下进行，停服务用 `bun run service stop`，见[起停与状态](#起停与状态)。
 
 ## 数据目录
 
