@@ -7,3 +7,11 @@ node_modules/
 .env*
 coverage/
 .intent
+# 本机工具与运行时产物：不进仓库（数据目录默认在仓库外）
+.zcode/
+.claude/
+.archify/
+.codex-worktrees/
+data/
+*.token
+redaction.salt

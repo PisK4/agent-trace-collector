@@ -88,7 +88,7 @@ master 基线：`.compact-row` 已是 36px（`web/app.css:302`），因此 ⑦ �
 
 ### 演示稿位置
 
-`<home>/Documents/Trae-CN/temp_20261103_07/tracery-style-demo/index.html`（单文件自包含，含修改前/后切换、①–⑩ 标注、`+N` 与折叠按需渲染）。**本机临时目录，不入库，不作为实现依据**；实现以本笔记的落点行号为准。
+`<tmp>/tracery-style-demo/index.html`（单文件自包含，含修改前/后切换、①–⑩ 标注、`+N` 与折叠按需渲染）。**本机临时目录，不入库，不作为实现依据**；实现以本笔记的落点行号为准。
 
 ## Alternatives considered
 

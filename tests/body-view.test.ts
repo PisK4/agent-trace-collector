@@ -394,7 +394,7 @@ test('工具往返与中栏共用摘要：工具名加参数段，完整参数�
     state: 'resolved', owner: 7, result_req: null, result_ord: null, result_path: null,
     ...over,
   });
-  const read = JSON.stringify({ file_path: '$HOME/src/queries.ts', limit: 130 });
+  const read = JSON.stringify({ file_path: '/Users/example/src/queries.ts', limit: 130 });
   const edit = JSON.stringify({ file_path: 'src/derive.ts', old_string: 'a\nb', new_string: 'x' });
   const bash = JSON.stringify({ command: 'bun test tests/body-view.test.ts', description: '跑窄测' });
   const skill = JSON.stringify({ skill: 'de-AI-writing', args: '审阅' });

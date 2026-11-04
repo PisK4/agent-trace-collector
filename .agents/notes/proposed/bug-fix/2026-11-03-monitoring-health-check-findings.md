@@ -359,7 +359,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 - **影响**：运维或使用者会误判「功能没生效」或「改动没合进去」，进而重复重启、重复部署，甚至怀疑迁移把数据弄坏；实际只差一次显式 rebuild。
 - **复现**：拿一个已有大量存量请求的库，合并带 schema 变更与新派生规则的改动，只重启、不跑 `maintain rebuild`；然后 `GET /api/sessions` 看 `title` / `flags` / `request_count`，四条 Codex 线程不会收敛，标题不变。
 - **严重度**：P1（运维语义与验收口径；不改变服务可用性，但会稳定地制造误判和重复操作）。
-- **建议**：在 [operations.md](file:///path/to/agent-trace-collector/docs/operations.md) 的发布/升级章节写清部署顺序：**重启（完成 v9→v10 迁移）→ `maintain rebuild`（回填/重判存量）→ 验证**，并明确「仅重启只完成迁移，不回填存量」。验收命令固化为：
+- **建议**：在 [operations.md](../../../../docs/operations.md) 的发布/升级章节写清部署顺序：**重启（完成 v9→v10 迁移）→ `maintain rebuild`（回填/重判存量）→ 验证**，并明确「仅重启只完成迁移，不回填存量」。验收命令固化为：
   ```
   bun run maintain rebuild --db "$DB" --session '<conv_key>'
   GET /api/sessions?limit=100          # 过滤 agents=codex，看 title/flags/request_count
@@ -463,10 +463,10 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 
 - **现象**：`/api/sessions` 单发慢会同时拖垮 metrics/stats；多标签页/刷新会线性叠加，且这段时间内**任何**请求都得不到执行。用户判断「反复刷新就能把主线程阻塞」本身是 bug，速度只是表象。
 - **证据**（代码，行号）：
-  - [http.ts](file:///path/to/agent-trace-collector/src/http.ts#L519-L525) L519-525：`/api/sessions` 分支 `parseLimit(...)` → `listSessions(...)` → `json(...)`，**三者之间没有任何 `await`**；`async` 只是签名。
-  - [sessions.ts](file:///path/to/agent-trace-collector/src/queries/sessions.ts#L196-L225) L196-225：`store.read.transaction(...).deferred()` 是 bun:sqlite **同步**事务，两条 SQL 全同步；`.deferred()` 只是 `BEGIN DEFERRED`，不排队、不让出。
-  - [http.ts](file:///path/to/agent-trace-collector/src/http.ts#L105-L115) L105-115：`json()` 内 `JSON.stringify` 同步（对 20–50 行是小项，非主因）。
-  - [main.ts](file:///path/to/agent-trace-collector/src/main.ts#L279-L283) L279-283：`Bun.serve({ fetch: (req) => handler(req) })`，单进程单事件循环。
+  - [http.ts](../../../../src/http.ts#L519-L525) L519-525：`/api/sessions` 分支 `parseLimit(...)` → `listSessions(...)` → `json(...)`，**三者之间没有任何 `await`**；`async` 只是签名。
+  - [sessions.ts](../../../../src/queries/sessions.ts#L196-L225) L196-225：`store.read.transaction(...).deferred()` 是 bun:sqlite **同步**事务，两条 SQL 全同步；`.deferred()` 只是 `BEGIN DEFERRED`，不排队、不让出。
+  - [http.ts](../../../../src/http.ts#L105-L115) L105-115：`json()` 内 `JSON.stringify` 同步（对 20–50 行是小项，非主因）。
+  - [main.ts](../../../../src/main.ts#L279-L283) L279-283：`Bun.serve({ fetch: (req) => handler(req) })`，单进程单事件循环。
 - **并发实测**（副本，limit=20，预热；「推迟」= 与任务同时 `setTimeout(0)` 的纯内存 metrics 探针实际触发时间）：
   | 并发 | 墙钟 | 各请求完成偏移 | 纯内存 metrics 被推迟 |
   | ---: | ---: | --- | ---: |
@@ -476,7 +476,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
   | 5 | 1,603.7 ms | 315.3 / 313.4 / 317.7 / 338.7 / 317.2 | 1,602.2 ms |
   - 基线：metrics 纯内存路径自身 **0.01 ms**；`getStats` 自身 **59.7 ms**；紧随一次 sessions 之后，stats 要等 **+315.8 ms** 才能开始。
   - 换算：**3 个标签页同时刷新 = 最后一张卡 ~1.0 s；5 个 ≈ 1.6 s**；此窗口内 metrics 的内存路径（0.01 ms 的活）同样等整段墙钟。
-- **现有防护：服务端一条都没有**：无 single-flight、无结果缓存、无 TTL、无并发上限、无超时/取消（`AbortSignal` 只出现在 ingest 路径，[http.ts](file:///path/to/agent-trace-collector/src/http.ts) 内无 `Map`/cache）。前端只有一道同 tab 去重：[reader-store.js](file:///path/to/agent-trace-collector/web/reader-store.js#L279-L299) L279-299 的 `sessionsLoading` 布尔闸门（不共享 Promise）；[read-scheduler.js](file:///path/to/agent-trace-collector/web/read-scheduler.js#L22-L26) L22-26 的 `activeLimit=4`/`pendingLimit=64` 只约束单页；`web/` 全量搜索确认**无轮询、无自动重试、无 `setInterval`**，只有首屏一次 `limit=20` 与「加载更多」（[app.js](file:///path/to/agent-trace-collector/web/app.js#L2226-L2249) L2226-2249，且主动把 stats 排在列表之后）。
+- **现有防护：服务端一条都没有**：无 single-flight、无结果缓存、无 TTL、无并发上限、无超时/取消（`AbortSignal` 只出现在 ingest 路径，[http.ts](../../../../src/http.ts) 内无 `Map`/cache）。前端只有一道同 tab 去重：[reader-store.js](../../../../web/reader-store.js#L279-L299) L279-299 的 `sessionsLoading` 布尔闸门（不共享 Promise）；[read-scheduler.js](../../../../web/read-scheduler.js#L22-L26) L22-26 的 `activeLimit=4`/`pendingLimit=64` 只约束单页；`web/` 全量搜索确认**无轮询、无自动重试、无 `setInterval`**，只有首屏一次 `limit=20` 与「加载更多」（[app.js](../../../../web/app.js#L2226-L2249) L2226-2249，且主动把 stats 排在列表之后）。
 - **影响**：任意一个慢会话列表都会冻结整个进程的读写接口；并发客户端数直接乘到延迟上；metrics/stats 的「变慢」是排队，不是它们自身退化（stats 自身 59.7 ms）。
 - **根因（已证实）**：同步 SQL 在 HTTP 回调里执行，中间无让出点；服务端没有任何并发合并或缺省策略，进程只有一条事件循环 + 一条同步连接。
 - **候选修法（全部未采纳，待用户拍板）**：
@@ -514,7 +514,7 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 ### F29 前端 `sessionsLoading` 是布尔闸门，不共享 Promise
 
 - **现象**：同一标签页同一 tick 的第二次 `loadSessions` 被直接丢弃（返回 `undefined`），没有共享在途结果；跨标签页没有任何约束。
-- **证据**：[reader-store.js](file:///path/to/agent-trace-collector/web/reader-store.js#L279-L299) L279-299：`if (state.sessionsLoading) return; state.sessionsLoading = true; … finally { state.sessionsLoading = false; }`；`web/` 全量搜索无 `setInterval`/轮询/自动重试；首屏一次 `limit=20`，另有「加载更多」。
+- **证据**：[reader-store.js](../../../../web/reader-store.js#L279-L299) L279-299：`if (state.sessionsLoading) return; state.sessionsLoading = true; … finally { state.sessionsLoading = false; }`；`web/` 全量搜索无 `setInterval`/轮询/自动重试；首屏一次 `limit=20`，另有「加载更多」。
 - **影响**：多标签页是天然放大器，配合 F27 把排队叠起来；同 tab 的并发调用被静默丢弃，调用方拿不到结果也无从重试。
 - **建议修法**：把 `sessionsLoading` 改成 `sessionsInFlight: Promise|null`，并发调用返回同一个 Promise；跨 tab 只能靠服务端（F27-A）。改动面 `web/reader-store.js` 约 **10 行**。
 - **严重度**：P1（功能/体验缺陷，非数据风险）。
@@ -538,11 +538,11 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 
 ### F31 `source:web_search` 被判成主链参与，实为辅助（Claude 侧）
 
-- **现象**：主页左栏有 6 条「只有一笔、空无正文」的卡（截图里第 13–18 行）。核查结论：它们不是真会话，是 Claude Code 侧 **WebSearch 工具执行产生的 `source=search` 账本子事件**。当时首屏（limit=20）可见同族 **18 张卡**：14 条 `["request",…]` 请求级卡 + 4 张 `["conv","magpie-…"]` 卡（标题 `<model> · <time>`）。**全库口径更正（11-03 22:57 读数）：同族共 136 张，67 个 `["request",…]` + 69 个 `["conv","magpie-…"]`，今天新增 88 条（16 点集中）；top50 覆盖 37 张、top100 覆盖 86 张。**
+- **现象**：主页左栏有 6 条「只有一笔、空无正文」的卡（截图里第 13–18 行）。核查结论：它们不是真会话，是 Claude Code 侧 **WebSearch 工具执行产生的 `source=search` 账本子事件**。当时首屏（limit=20）可见同族 **18 张卡**：14 条 `["request",…]` 请求级卡 + 4 张 `["conv","magpie-…"]` 卡（标题 `<model> · 16:25`）。**全库口径更正（11-03 22:57 读数）：同族共 136 张，67 个 `["request",…]` + 69 个 `["conv","magpie-…"]`，今天新增 88 条（16 点集中）；top50 覆盖 37 张、top100 覆盖 86 张。**
 - **证据**：
   - 共同特征（逐行列值一致）：`conv_source=request`、`sort_source=ledger`、`req_kind=source:web_search`、`purpose_chain=participate`、`purpose_rule=source.kind.v1`、`chain_role=main`、`via=through`、`body_state=pending`、`have=2`（只有 ledger 位）、`miss_reason=hook_absent`、`actor=NULL`、`session=NULL`、token/cost 全 0、`raw_ledger` payload 为 `{"kind":"web_search","source":"search","status":200,"in":0,"out":0,…}`。
-  - Claude 侧真正的 web_search 辅助识别**依赖正文尾巴模板**：[claude.ts L113-119](file:///path/to/agent-trace-collector/src/harness/claude.ts#L113-L119)，L117 `'Perform a web search for the query: '` → `rule='claude.web-search.v1'`、`kind='web_search'`、`chain='exclude'`。
-  - 这批行 `body_state=pending` / `miss_reason=hook_absent`，正文不存在 → 模板判据无法执行 → 掉到 [semantics.ts L186-206](file:///path/to/agent-trace-collector/src/semantics.ts#L186-L206) 的 `source.kind.v1` 兜底：非 `title` 一律 `chain='participate'`、`kind='source:${kindValue}'`（L198-206）。
+  - Claude 侧真正的 web_search 辅助识别**依赖正文尾巴模板**：[claude.ts L113-119](../../../../src/harness/claude.ts#L113-L119)，L117 `'Perform a web search for the query: '` → `rule='claude.web-search.v1'`、`kind='web_search'`、`chain='exclude'`。
+  - 这批行 `body_state=pending` / `miss_reason=hook_absent`，正文不存在 → 模板判据无法执行 → 掉到 [semantics.ts L186-206](../../../../src/semantics.ts#L186-L206) 的 `source.kind.v1` 兜底：非 `title` 一律 `chain='participate'`、`kind='source:${kindValue}'`（L198-206）。
   - 对照：库里 Claude 辅助线程的真实形态（`title`、`auto-mode-classifier`、`action_description`、`suggestion_mode`、`recap`、`context_compaction`、`web_search`）全部是 `exclude/aux`；只有这批 `source:web_search` 卡（当时首屏 18 张，全库 136 张）是 `participate/main`。
   - 与 Codex 的区别：Codex 是「有元数据（`thread_source`/`turn_trigger`）但没接线」；Claude 是「只有正文模板、正文丢了」。**成因不同，不要混成一条**。
 - **影响**：这批辅助事件（当时首屏 18 张，全库 136 张）被当成主卡参与列表，token/cost 全 0、无正文，用户看到空卡；同时污染按 participate 链的标题候选。
@@ -558,9 +558,9 @@ F26–F30 记录于 2026-11-03 晚，来源是重启后新实例 `27838-mw0ra0dm
 
 - **现象**：`conv_key` 以 `["request"` 开头的组没有任何派生队列行，读侧四个标题候选全部落空，最终空标题。
 - **证据**：
-  - [state.ts L191-196](file:///path/to/agent-trace-collector/src/derive/state.ts#L191-L196)：`requestGroupTx` 在 `actor_state !== 'known'` 时直接 `return null`，不进派生队列；[markRequestGroupsTx L199-204](file:///path/to/agent-trace-collector/src/derive/state.ts#L199-L204) 因此也不会把这类组标脏。
+  - [state.ts L191-196](../../../../src/derive/state.ts#L191-L196)：`requestGroupTx` 在 `actor_state !== 'known'` 时直接 `return null`，不进派生队列；[markRequestGroupsTx L199-204](../../../../src/derive/state.ts#L199-L204) 因此也不会把这类组标脏。
   - 库里实测：`conv_key` 以 `["request"` 开头的 key **414 个**，其中 `derive_queue` 有组的 **0 条**。
-  - 读侧：[sessions.ts L128-159](file:///path/to/agent-trace-collector/src/queries/sessions.ts#L128-L159) 的 r1–r4 四个标题候选全部 `JOIN derive_queue` 落空；[L172-173](file:///path/to/agent-trace-collector/src/queries/sessions.ts#L172-L173) 的 `SESSION_TITLE_GUARD_SQL` 的 `EXISTS` 为假 → [L217](file:///path/to/agent-trace-collector/src/queries/sessions.ts#L217) `CASE WHEN guard THEN ${SESSION_TITLE_SQL} END` → 空标题。请求行上虽然存了 `title='<model> · <time>'`、`title_source='model_time'`，但组不存在，连 r4 的 `derivedColSql` 回退都轮不到。
+  - 读侧：[sessions.ts L128-159](../../../../src/queries/sessions.ts#L128-L159) 的 r1–r4 四个标题候选全部 `JOIN derive_queue` 落空；[L172-173](../../../../src/queries/sessions.ts#L172-L173) 的 `SESSION_TITLE_GUARD_SQL` 的 `EXISTS` 为假 → [L217](../../../../src/queries/sessions.ts#L217) `CASE WHEN guard THEN ${SESSION_TITLE_SQL} END` → 空标题。请求行上虽然存了 `title='<model> · 16:25'`、`title_source='model_time'`，但组不存在，连 r4 的 `derivedColSql` 回退都轮不到。
   - **最关键的一条**：即使把 F31 的规则改成 `source:web_search → exclude`，当时首屏这 18 张卡（全库同族 136 张）**也不会自动收走**——它们根本没有派生组，列表读的是原始列回退。要收走，必须先让 unknown-actor 的请求组进派生，或单独做一次归并/回填。这条是 F32 的核心结论。
 - **影响**：所有 unknown-actor 会话标题为空、flags 缺失（组闸门为假），也无法通过重派生收敛；F31 的修复被这层卡死。
 - **根因（已证实）**：派生队列只接收 `actor_state='known'` 的组；unknown-actor 组没有任何派生或回填路径，读侧却仍把它们当会话展示。
@@ -711,7 +711,7 @@ sqlite3 -readonly "$SNAP" "PRAGMA user_version; PRAGMA integrity_check; \
 
 ### A.2 F26：两段 SQL 与计时
 
-阶段一（候选会话；完整版 [sessions.ts L196-213](file:///path/to/agent-trace-collector/src/queries/sessions.ts#L196-L213)）：
+阶段一（候选会话；完整版 [sessions.ts L196-213](../../../../src/queries/sessions.ts#L196-L213)）：
 
 ```sql
 SELECT conv_key, MAX(started_ms) AS last_ms FROM request
@@ -719,7 +719,7 @@ WHERE conv_key IS NOT NULL GROUP BY conv_key
 ORDER BY last_ms DESC, conv_key DESC LIMIT ?;
 ```
 
-阶段二（页内聚合，节选；完整版 [sessions.ts L215-223](file:///path/to/agent-trace-collector/src/queries/sessions.ts#L215-L223)）：
+阶段二（页内聚合，节选；完整版 [sessions.ts L215-223](../../../../src/queries/sessions.ts#L215-L223)）：
 
 ```sql
 SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
@@ -730,7 +730,7 @@ SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
 FROM request WHERE conv_key IN (?,?,…) GROUP BY conv_key;
 ```
 
-- `<SESSION_TITLE_SQL>` 见 [sessions.ts L128-159](file:///path/to/agent-trace-collector/src/queries/sessions.ts#L128-L159)，跨组分支 `CROSS_GROUP_TITLE_SQL` 见 [L101-116](file:///path/to/agent-trace-collector/src/queries/sessions.ts#L101-L116)。
+- `<SESSION_TITLE_SQL>` 见 [sessions.ts L128-159](../../../../src/queries/sessions.ts#L128-L159)，跨组分支 `CROSS_GROUP_TITLE_SQL` 见 [L101-116](../../../../src/queries/sessions.ts#L101-L116)。
 - **归因方法（差值计时）**：同一份阶段二 SQL，只把 `${CROSS_GROUP_TITLE_SQL}` 换成 `NULL`，其余不变；两次结果差即跨组绑定成本（F26 表里 `no-cross` = 2.5–2.9 ms）。
 - **候选 ① 的验证形态**：把 `${CROSS_GROUP_TITLE_SQL}` 包成 `CASE WHEN EXISTS (SELECT 1 FROM request x WHERE x.conv_key = request.conv_key AND x.user_fingerprint IS NOT NULL) THEN <原表达式> END`，同法计时。
 
@@ -753,7 +753,7 @@ const t1 = performance.now();  // 每档至少 3 次取中位；首跑与预热�
 
 ### A.3 F27：并发与「主线程推迟」探针
 
-- 形态：`Bun.serve` 的 `fetch` 回调内**不 await** 地调用 `listSessions`（与 [http.ts L519-525](file:///path/to/agent-trace-collector/src/http.ts#L519-L525) 同形），并发 N 个 HTTP 请求。
+- 形态：`Bun.serve` 的 `fetch` 回调内**不 await** 地调用 `listSessions`（与 [http.ts L519-525](../../../../src/http.ts#L519-L525) 同形），并发 N 个 HTTP 请求。
 - 「推迟」测法：与任务同一 tick 注册 `setTimeout(0)` 的纯内存探针（读常量或 `/api/metrics` 的内存字段），记录实际触发时间与发起时间差。
 - **必须先 `await setTimeout(0)` 再读探针时间**，否则会得到「never」伪结果（本次踩过）。
 - 基线：`/api/metrics` 纯内存路径自身 **0.01 ms**；`getStats` 自身 **59.7 ms**；紧随一次 sessions 之后，stats 要等 **+315.8 ms** 才开始。

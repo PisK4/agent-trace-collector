@@ -607,7 +607,7 @@ test('HTTP 失败、缺正文与已有步骤并存', () => {
 });
 
 test('工具摘要按工具分派：Read 行区间四种组合', () => {
-  expect(toolSummary('Read', JSON.stringify({ file_path: '$HOME/src/queries.ts', offset: 1400, limit: 130 })))
+  expect(toolSummary('Read', JSON.stringify({ file_path: '/Users/example/src/queries.ts', offset: 1400, limit: 130 })))
     .toBe('Read · src/queries.ts · 1400–1530 行');
   expect(toolSummary('Read', JSON.stringify({ file_path: '/a/b.ts', limit: 130 })))
     .toBe('Read · a/b.ts · 前 130 行');
@@ -616,7 +616,7 @@ test('工具摘要按工具分派：Read 行区间四种组合', () => {
   expect(toolSummary('Read', JSON.stringify({ file_path: '/a/b.ts' })))
     .toBe('Read · a/b.ts');
   // 仓库根文件：倒数第二段是仓库名，不是文件名。
-  expect(toolSummary('Read', JSON.stringify({ file_path: '$HOME/repos/agent-trace-collector/AGENTS.md' })))
+  expect(toolSummary('Read', JSON.stringify({ file_path: '/Users/example/repos/agent-trace-collector/AGENTS.md' })))
     .toBe('Read · agent-trace-collector/AGENTS.md');
   // 只有一段的相对路径原样显示，不补斜杠。
   expect(toolSummary('Read', JSON.stringify({ file_path: 'AGENTS.md' }))).toBe('Read · AGENTS.md');

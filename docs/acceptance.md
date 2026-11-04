@@ -6,7 +6,7 @@
 
 ## 后台监控落地（合成，2026-11-03）
 
-前提：隔离 worktree `/path/to/worktrees/atc-background-monitoring`，分支 `feat/background-monitoring`，基于 master `4a4108f`。只改代码、测试与文档；没有提交、合并、push，没有重启生产采集器，没有安装或触发新的 launchd 作业。主工作区与其他 worktree 未触碰。
+前提：隔离 worktree `<worktrees>/atc-background-monitoring`，分支 `feat/background-monitoring`，基于 master `4a4108f`。只改代码、测试与文档；没有提交、合并、push，没有重启生产采集器，没有安装或触发新的 launchd 作业。主工作区与其他 worktree 未触碰。
 
 | 检查 | 结果 |
 | --- | --- |

@@ -48,7 +48,7 @@ test('会话外壳、技能注入与 harness 提示都不当标题', () => {
   const fallback = 'model · 10:00';
   const cases = [
     ['<session>\n评估压缩机制文档\n/de-AI-writing\n</session>', '评估压缩机制文档'],
-    ['Base directory for this skill: $HOME/.claude/skills/x\n\n# 技能正文', fallback],
+    ['Base directory for this skill: /Users/example/.claude/skills/x\n\n# 技能正文', fallback],
     ['The user stepped away and is coming back. Recap in under 40 words.', fallback],
     ['<command-name>/auto-mode-setup</command-name>\n<command-args></command-args>\n\n改', '改'],
     ['<transcript>\n{"user":"历史"}\n</transcript>', fallback],

@@ -54,7 +54,7 @@ hook 的 `session`、magpie 的 `session` 和 `conv_key` 三者都等于同一�
 四条会话在只读 `/api/sessions` 里显示同一个标题：
 
 ```
-# AGENTS.md instructions for /Users/example/workspace_intelligen…
+# AGENTS.md instructions for /path/to/agent-trace-collector…
 ```
 
 这不是「无标题」，而是「标题退化成注入头且四条同质」。主会话首条 `role=user` 块（请求 92858 的 `ord=3`）就是 Codex 注入的 `# AGENTS.md instructions for …`；该行 `title_source='user_delta'`。62 条 Codex 请求里 `model_title` 全部为空。

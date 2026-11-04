@@ -8,7 +8,7 @@ Tracery 收集 Agent 发出的请求，把散落的调用织成一条可以逐�
 
 ![Tracery 三栏界面：左栏会话列表，中栏轨迹，右栏读数](docs/images/session-list.png)
 
-*图 1｜本地真实数据。会话 `3d1f0a7c-5b2e-4c93-8f61-7a2e4d9c0b58`，英文 csvutil 任务，26 笔请求（主链 20 / 旁路 6 / 子代理 1），标题由标题生成请求给出。*
+*图 1｜会话列表。英文 csvutil 任务，26 笔请求（主链 20 / 旁路 6 / 子代理 1），标题由标题生成请求给出。*
 
 ## 为什么需要它
 
@@ -54,13 +54,13 @@ export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $ATC_TOKEN"
 
 点任意一行，右栏定位到该步骤对应的协议来源。右栏四个页签：读数（本次回复、请求结构、能力清单、用量与上下文、身份完整性）、正文（原始消息，按 40 条一片翻页）、工具（选中一次调用后有概览、参数、配对、Schema 四页）、路由（候选顺序与尝试链）。
 
-<img src="docs/images/session-trace.png" alt="真实会话的轨迹列：assistant 行与工具调用、结果行交替出现" width="620">
+<img src="docs/images/session-trace.png" alt="会话的轨迹列：assistant 行与工具调用、结果行交替出现" width="620">
 
-*图 2｜同一真实会话 `3d1f0a7c…` 的轨迹列。assistant 文本行尾是推理段耗时，工具调用与结果行尾是执行段耗时；序号 6 的 Bash 调用报 exit code 1，随后的 assistant 行给出修正方案。*
+*图 2｜同一会话的轨迹列。assistant 文本行尾是推理段耗时，工具调用与结果行尾是执行段耗时；序号 6 的 Bash 调用报 exit code 1，随后的 assistant 行给出修正方案。*
 
 <img src="docs/images/tool-pair.png" alt="工具调用与结果的配对页：调用 JSON 与结果正文并排" width="520">
 
-*图 3｜另一条真实会话 `b5e2c174…` 的工具「配对」页。同一个 `call_id` 的调用 JSON 与结果正文同屏并置；结果一栏注明它由「下一条请求」带回，以及具体的消息位置。*
+*图 3｜另一条会话的工具「配对」页。同一个 `call_id` 的调用 JSON 与结果正文同屏并置；结果一栏注明它由「下一条请求」带回，以及具体的消息位置。*
 
 ## 推理段与执行段
 
