@@ -109,6 +109,30 @@ test('账本先到、droid 晚到：按 response id 认领同一行，只补空�
   }
 });
 
+test('rejected 账本行不是认领对象：droid 另建一行', async () => {
+  const f = fixture();
+  const root = writeTranscript([
+    SESSION, USER, droidAssistant('m-a1', 'gen-1779000000000-abc', 'synth-model', T0 + 2_000),
+  ]);
+  try {
+    ingestSource(f.store, ledgerBatch([
+      ledgerRow({ response_id: 'gen-1779000000000-abc', status: 400, provider: '' }),
+    ], 'ledger-g1'), SALT, 1);
+    expect(f.store.read.query("SELECT COUNT(*) AS n FROM request WHERE via='rejected'").get())
+      .toEqual({ n: 1 });
+
+    const result = await ingestDroidBatch(f.store, root, SALT, 2);
+    expect(result).toMatchObject({ calls: 1, merged: 0 });
+    expect(f.store.read.query('SELECT via, agent FROM request ORDER BY req_id').all()).toEqual([
+      { via: 'rejected', agent: 'droid' },
+      { via: 'session', agent: 'droid' },
+    ]);
+  } finally {
+    f.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('droid 先到、账本晚到：账本认领 droid 行，证据位齐全且不覆盖已有正文', async () => {
   const f = fixture();
   const root = writeTranscript([

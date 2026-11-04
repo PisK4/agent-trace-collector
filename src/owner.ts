@@ -44,7 +44,9 @@ const ABSENT: RequestOwner = { reqId: null, outcome: 'absent', rule: null };
 
 function byResponseId(db: Database, responseIdNorm: string): RequestOwner {
   const rows = db.query<{ req_id: number }, [string]>(`
-    SELECT req_id FROM request WHERE response_id_norm=? ORDER BY req_id LIMIT 2`,
+    SELECT req_id FROM request
+    WHERE response_id_norm=? AND via<>'rejected'
+    ORDER BY req_id LIMIT 2`,
   ).all(responseIdNorm);
   if (rows.length === 1) return { reqId: rows[0]!.req_id, outcome: 'matched', rule: MATCH_BY_RESPONSE_ID };
   if (rows.length > 1) return { reqId: null, outcome: 'ambiguous', rule: MATCH_BY_RESPONSE_ID };
@@ -54,9 +56,13 @@ function byResponseId(db: Database, responseIdNorm: string): RequestOwner {
 function byTurnRef(db: Database, turnRef: string, agent: string | null): RequestOwner {
   const rows = agent === null
     ? db.query<{ req_id: number }, [string]>(`
-        SELECT req_id FROM request WHERE turn_ref=? ORDER BY req_id LIMIT 2`).all(turnRef)
+        SELECT req_id FROM request
+        WHERE turn_ref=? AND via<>'rejected'
+        ORDER BY req_id LIMIT 2`).all(turnRef)
     : db.query<{ req_id: number }, [string, string]>(`
-        SELECT req_id FROM request WHERE turn_ref=? AND agent=? ORDER BY req_id LIMIT 2`)
+        SELECT req_id FROM request
+        WHERE turn_ref=? AND agent=? AND via<>'rejected'
+        ORDER BY req_id LIMIT 2`)
       .all(turnRef, agent);
   if (rows.length === 1) return { reqId: rows[0]!.req_id, outcome: 'matched', rule: MATCH_BY_TURN };
   if (rows.length > 1) return { reqId: null, outcome: 'ambiguous', rule: MATCH_BY_TURN };
@@ -76,6 +82,7 @@ function byConvTimeModel(
     SELECT r.req_id FROM request r
     WHERE r.conv_key=? AND r.agent=? AND r.started_ms BETWEEN ? AND ?
       AND (r.model_requested=? OR r.model_served=?)
+      AND r.via<>'rejected'
       AND NOT EXISTS (
         SELECT 1 FROM request_evidence e WHERE e.req_id=r.req_id AND e.source_kind=?
       )
