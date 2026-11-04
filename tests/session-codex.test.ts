@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
 import { fixture } from './fixtures';
 import { readBodyWithMessagesTx } from '../src/body';
 import { codexAdapter } from '../src/sources/session/adapters/codex';
@@ -58,6 +59,12 @@ function tokenCount(timestamp: number, lastUsage: Record<string, unknown>): stri
 function writeSession(root: string, name: string, lines: string[]): string {
   const path = join(root, name);
   writeFileSync(path, `${lines.join('\n')}\n`);
+  return path;
+}
+
+function writeSessionZst(root: string, name: string, lines: string[]): string {
+  const path = join(root, name);
+  writeFileSync(path, zstdCompressSync(Buffer.from(`${lines.join('\n')}\n`)));
   return path;
 }
 
@@ -236,6 +243,65 @@ test('Codex 坏行停游标：坏行前的调用已落库，坏行记 codex_ iss
     const again = await ingestSessionFile(f.store, codexAdapter, file, SALT, Date.now());
     expect(again.calls).toBe(0);
     expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 1 });
+  } finally {
+    f.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Codex 压缩转录：.jsonl.zst 按整份指纹摄入，未变不再解压', async () => {
+  const root = makeRoot();
+  const f = fixture();
+  try {
+    writeSessionZst(root, 'rollout-archive.jsonl.zst', [
+      meta(SESSION_ID),
+      turn('turn-1'),
+      item(T0 + 100, developerItem),
+      item(T0 + 200, userItem),
+      item(T0 + 1_000, assistantItem),
+      usage(T0 + 2_000, 'resp_archive-1', 'turn-1'),
+    ]);
+
+    const first = await ingestSessionBatch(f.store, codexAdapter, [root], SALT, Date.now());
+    expect(first).toMatchObject({ files: 1, calls: 1, invalid: 0, blocked: 0 });
+    expect(f.store.read.query(
+      'SELECT session, response_id_norm, started_ms FROM request').get())
+      .toEqual({ session: SESSION_ID, response_id_norm: 'archive-1', started_ms: T0 + 200 });
+
+    const cursor = f.store.read.query(`
+      SELECT file_generation, fingerprint, committed_off, seen_size
+      FROM source_cursor WHERE source_kind='codex_session'`).get() as {
+      file_generation: string; fingerprint: string; committed_off: number; seen_size: number;
+    };
+    expect(cursor.file_generation).toMatch(/^[0-9a-f]{64}$/);
+    expect(cursor.fingerprint).toBe(cursor.file_generation);
+    expect(cursor.committed_off).toBeGreaterThan(0);
+
+    // 同一份压缩字节：发现阶段 remaining=0，不再进读取器。
+    const second = await ingestSessionBatch(f.store, codexAdapter, [root], SALT, Date.now());
+    expect(second.files).toBe(0);
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 1 });
+  } finally {
+    f.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Codex 压缩转录损坏：记固定 issue，不建调用也不推进游标', async () => {
+  const root = makeRoot();
+  const f = fixture();
+  try {
+    const path = join(root, 'rollout-broken.jsonl.zst');
+    writeFileSync(path, Buffer.from('not a zstd frame'));
+    const result = await ingestSessionBatch(f.store, codexAdapter, [root], SALT, Date.now());
+    expect(result).toMatchObject({ files: 1, calls: 0, invalid: 0, blocked: 0 });
+    expect(f.store.read.query(
+      "SELECT reason FROM ingest_issue WHERE source_kind='codex_session'").get())
+      .toEqual({ reason: 'codex_zstd_invalid' });
+    expect(f.store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 0 });
+    expect(f.store.read.query(
+      "SELECT COUNT(*) AS n FROM source_cursor WHERE source_kind='codex_session'").get())
+      .toEqual({ n: 0 });
   } finally {
     f.close();
     rmSync(root, { recursive: true, force: true });

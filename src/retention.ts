@@ -105,7 +105,9 @@ export type Admission = { mode: AdmissionMode; reason: string | null };
 export type AdmissionLimits = { bodyBudget: number; diskLimit: number };
 
 export type EvictResult = { requests: number; blocks: number; releasedLogicalBytes: number; day: string | null };
-export type PruneResult = { ledger: number; route: number; hook: number; otlpSpan: number; otlpLog: number };
+export type PruneResult = {
+  ledger: number; route: number; hook: number; otlpSpan: number; otlpLog: number; session: number;
+};
 export type ResumeResult = { recoverable: number; unrecoverable: number };
 
 const MiB = 1024 * 1024;
@@ -480,8 +482,18 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
             AND i.ref_key=h.hook_id AND i.reason='raw_hook_body_unlinked')))
       OR EXISTS (SELECT 1 FROM raw_otlp_span WHERE received_at<?)
       OR EXISTS (SELECT 1 FROM raw_otlp_log WHERE received_at<?)
-  `).get(beforeMs, beforeMs, beforeMs, beforeMs, beforeMs);
-  if (candidate === null) return { ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0 };
+      OR EXISTS (
+        SELECT 1 FROM raw_session_event r
+        WHERE NOT EXISTS (SELECT 1 FROM source_cursor c
+          WHERE c.source_kind=r.source_kind AND c.file_generation=r.file_generation)
+          OR EXISTS (SELECT 1 FROM source_cursor c
+            WHERE c.source_kind=r.source_kind AND c.file_generation=r.file_generation
+              AND c.fingerprint IS NOT NULL AND c.last_ok_ms<?)
+      )
+  `).get(beforeMs, beforeMs, beforeMs, beforeMs, beforeMs, beforeMs);
+  if (candidate === null) return {
+    ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0, session: 0,
+  };
   return store.write(db => {
     const ledgerRows = db.query<{ source_kind: string; file_generation: string; byte_offset: number }, [number, number]>(`
       SELECT source_kind, file_generation, byte_offset FROM raw_ledger
@@ -566,12 +578,32 @@ export function pruneRaw(store: Store, beforeMs: number, limit = PRUNE_BATCH): P
     const deleteOtlpLog = db.prepare('DELETE FROM raw_otlp_log WHERE record_hash=?');
     for (const row of otlpLogRows) deleteOtlpLog.run(row.record_hash);
 
+    // 追加文件的重放需要当前代际的完整原始行，不能按年龄删；这里只清两类
+    // 已不可达的代际：游标已换代留下的孤儿，以及内容不会变的封口文件。
+    const sessionRows = db.query<{ source_kind: string; file_generation: string }, [number, number]>(`
+      SELECT r.source_kind, r.file_generation
+      FROM raw_session_event r
+      WHERE NOT EXISTS (SELECT 1 FROM source_cursor c
+        WHERE c.source_kind=r.source_kind AND c.file_generation=r.file_generation)
+        OR EXISTS (SELECT 1 FROM source_cursor c
+          WHERE c.source_kind=r.source_kind AND c.file_generation=r.file_generation
+            AND c.fingerprint IS NOT NULL AND c.last_ok_ms<?)
+      GROUP BY r.source_kind, r.file_generation
+      LIMIT ?`).all(beforeMs, limit);
+    const deleteSession = db.prepare(
+      'DELETE FROM raw_session_event WHERE source_kind=? AND file_generation=?',
+    );
+    for (const row of sessionRows) deleteSession.run(row.source_kind, row.file_generation);
+
     // 过期证据的归属请求要重算：投影与派生输入都变了。
     for (const reqId of expiredOwners) {
       projectRequestTx(db, reqId, { now: beforeMs, mappingVersion: SOURCE_PROJECTION_VERSION });
       markRequestInputTx(db, reqId);
     }
-    return { ledger, route, hook, otlpSpan: otlpSpanRows.length, otlpLog: otlpLogRows.length };
+    return {
+      ledger, route, hook, otlpSpan: otlpSpanRows.length, otlpLog: otlpLogRows.length,
+      session: sessionRows.length,
+    };
   }, 'raw_prune');
 }
 

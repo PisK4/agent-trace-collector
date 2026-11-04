@@ -373,7 +373,9 @@ test('原始层过期先标证据再删原文，长期读数不动', () => {
       db.run(`INSERT INTO raw_hook(hook_id,received_at,parse_state) VALUES ('hook-old',10,'ok'),('hook-new',1000,'ok')`);
     });
     const pruned = pruneRaw(f.store, 100, 100);
-    expect(pruned).toEqual({ ledger: 1, route: 1, hook: 1, otlpSpan: 0, otlpLog: 0 });
+    expect(pruned).toEqual({
+      ledger: 1, route: 1, hook: 1, otlpSpan: 0, otlpLog: 0, session: 0,
+    });
     expect(f.store.read.query('SELECT route_id FROM raw_ledger ORDER BY route_id').all()).toEqual([{ route_id: 7 }]);
     expect(f.store.read.query('SELECT route_id FROM raw_route ORDER BY route_id').all()).toEqual([{ route_id: 8 }]);
     expect(f.store.read.query('SELECT hook_id FROM raw_hook ORDER BY hook_id').all()).toEqual([{ hook_id: 'hook-new' }]);
@@ -418,7 +420,9 @@ test('原始层过期在同一事务推进修订，证据族转expired', () => {
     // 先把请求的待处理标记清掉：过期本身必须重新把它置位。
     f.store.write(db => db.run('UPDATE request SET purpose_pending=0'));
 
-    expect(pruneRaw(f.store, 100, 100)).toEqual({ ledger: 1, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0 });
+    expect(pruneRaw(f.store, 100, 100)).toEqual({
+      ledger: 1, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0, session: 0,
+    });
     const after = f.store.write(db => projectRequestTx(db, 1, {
       now: 3, mappingVersion: SOURCE_PROJECTION_VERSION,
     }));
@@ -457,7 +461,9 @@ test('OTLP 原始层同受 TTL：span 证据转 expired，log 直接删，请求
       );
     });
     const pruned = pruneRaw(f.store, 100, 100);
-    expect(pruned).toEqual({ ledger: 0, route: 0, hook: 0, otlpSpan: 1, otlpLog: 1 });
+    expect(pruned).toEqual({
+      ledger: 0, route: 0, hook: 0, otlpSpan: 1, otlpLog: 1, session: 0,
+    });
     expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get()).toEqual({ n: 0 });
     expect(f.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_log').get()).toEqual({ n: 0 });
     // 证据行保留但转 expired；请求行身份（sort_key）与 have 不因原文删除改写。
@@ -465,6 +471,43 @@ test('OTLP 原始层同受 TTL：span 证据转 expired，log 直接删，请求
       .toEqual([{ ref_key: refKey, payload_state: 'expired' }]);
     expect(f.store.read.query('SELECT via,have,body_state,sort_key FROM request').get())
       .toEqual({ via: 'otlp', have: 8, body_state: 'summary', sort_key: refKey });
+  } finally {
+    f.close();
+  }
+});
+
+test('原始层 TTL：孤儿代际与封口代际可清，追加代际保留重放', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => {
+      db.run(`INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
+        line_type,event_at_ms,payload_json,privacy_version)
+        VALUES ('claude_session','gen-orphan',0,'s','user',10,'{"a":1}',1),
+               ('claude_session','gen-sealed',0,'s','user',10,'{"b":2}',1),
+               ('claude_session','gen-live',0,'s','user',10,'{"c":3}',1)`);
+      db.run(`INSERT INTO source_cursor(source_kind,source_name,file_generation,committed_off,
+        seen_size,head_len,head_hash,fingerprint,last_ok_ms,rewrite_epoch,observed_off)
+        VALUES ('claude_session','/sealed.jsonl.zst','gen-sealed',1,1,0,NULL,'fp-sealed',10,0,1),
+               ('claude_session','/live.jsonl','gen-live',1,1,0,NULL,NULL,10,0,1)`);
+    });
+    expect(pruneRaw(f.store, 100, 100)).toEqual({
+      ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0, session: 2,
+    });
+    expect(f.store.read.query(
+      'SELECT file_generation FROM raw_session_event ORDER BY file_generation').all())
+      .toEqual([{ file_generation: 'gen-live' }]);
+    // 追加代际的游标保留，下一批仍能从头重放；封口代际的游标保留，避免重复解压。
+    expect(f.store.read.query(
+      'SELECT source_kind,source_name,file_generation FROM source_cursor ORDER BY source_name').all())
+      .toEqual([
+        { source_kind: 'claude_session', source_name: '/live.jsonl', file_generation: 'gen-live' },
+        { source_kind: 'claude_session', source_name: '/sealed.jsonl.zst', file_generation: 'gen-sealed' },
+      ]);
+    const before = f.store.writeStats.count;
+    expect(pruneRaw(f.store, 100, 100)).toEqual({
+      ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0, session: 0,
+    });
+    expect(f.store.writeStats.count).toBe(before);
   } finally {
     f.close();
   }
@@ -478,7 +521,9 @@ test('带正文且无法迁移的hook原文不被过期规则删掉', () => {
         new Uint8Array([1, 2, 3]),
       ]);
     });
-    expect(pruneRaw(f.store, 100, 100)).toEqual({ ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0 });
+    expect(pruneRaw(f.store, 100, 100)).toEqual({
+      ledger: 0, route: 0, hook: 0, otlpSpan: 0, otlpLog: 0, session: 0,
+    });
     expect(f.store.read.query("SELECT hook_id FROM raw_hook WHERE hook_id='hook-body'").get()).toEqual({ hook_id: 'hook-body' });
     expect(f.store.read.query('SELECT reason FROM ingest_issue').all()).toEqual([{ reason: 'raw_hook_body_unlinked' }]);
     // 再跑一次不重复记录。

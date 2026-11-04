@@ -13,7 +13,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeResponseId } from '../../magpie/mapping';
-import { discoverJsonl, jsonlBatch, jsonlRead } from '../read';
+import { discoverJsonl, jsonlBatch, jsonlRead, sealedJsonlRead } from '../read';
 import type { SourceCursor, SourceRead } from '../../files';
 import type {
   SessionAdapter, SessionApplyResult, SessionCall, SessionFile, SessionParseResult, SessionUsage,
@@ -230,11 +230,13 @@ export const codexAdapter: SessionAdapter = {
   },
 
   discover(root, cursorFor) {
-    return discoverJsonl(root, cursorFor);
+    return discoverJsonl(root, cursorFor, { extensions: ['.jsonl', '.jsonl.zst'] });
   },
 
   read(file: SessionFile, cursor: SourceCursor | null): Promise<SourceRead> {
-    return jsonlRead(file, cursor, 'codex_session');
+    return file.path.endsWith('.jsonl.zst')
+      ? Promise.resolve(sealedJsonlRead(file, cursor, 'codex_session'))
+      : jsonlRead(file, cursor, 'codex_session');
   },
 
   parse(text: string): SessionParseResult {
