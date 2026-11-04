@@ -233,13 +233,17 @@ export async function probeStats(port: number, token: string,
     : result;
 }
 
-/** 取日志尾部若干非空行；文件不存在时返回空数组。 */
-export function tailLines(path: string, count: number): string[] {
+/**
+ * 取日志尾部若干非空行。读失败与「日志为空」必须可区分：文件不存在、无权限
+ * 或路径写错时 `lines` 为空数组、`error` 带失败原因，调用方显式标注，
+ * 不把读失败伪装成没有日志。
+ */
+export function tailLines(path: string, count: number): { lines: string[]; error: string | null } {
   try {
     const lines = readFileSync(path, 'utf8').split('\n').filter(line => line.trim().length > 0);
-    return lines.slice(-count);
-  } catch {
-    return [];
+    return { lines: lines.slice(-count), error: null };
+  } catch (error) {
+    return { lines: [], error: error instanceof Error ? error.message : String(error) };
   }
 }
 
