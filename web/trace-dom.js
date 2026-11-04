@@ -348,9 +348,17 @@ export function createMainView(main, options = {}) {
     }
     // 准备行只是占位：组内交互（锚点、文本选择）按「还没有真实步骤」处理。
     if (state.placeholder !== model.placeholder) {
+      const filled = state.placeholder && !model.placeholder;
       state.placeholder = model.placeholder;
       if (model.placeholder) state.node.setAttribute('data-placeholder', '');
       else state.node.removeAttribute('data-placeholder');
+      // 占位换成真实内容时轻淡入一次；后续增量到达不重播。
+      if (filled) {
+        state.node.dataset.enter = 'fill';
+        setTimeout(() => {
+          if (state.node.dataset.enter === 'fill') delete state.node.dataset.enter;
+        }, 200);
+      }
     }
     const plan = planCommit(shownHtml(state.rows), model.rows);
     /** @type {Map<string, string>} */
