@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadReadToken } from '../src/http';
 import { DEFAULT_DERIVE_BUDGET, loadBoundSaltTx, loadConfig } from '../src/config';
@@ -154,6 +155,36 @@ test('SIGTERM停止后不再响应请求', async () => {
     })).rejects.toThrow();
   } finally {
     f.close();
+  }
+});
+
+test('派生永不落盘时 SIGTERM 在等待上限内退出', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'atc-stop-hang-'));
+  const proc = Bun.spawn([process.execPath, join(import.meta.dir, 'stop-hang-child.ts')], {
+    stdout: 'pipe',
+    env: { ...process.env, ATC_STOP_HANG_DIR: dir },
+  });
+  try {
+    // ready 由注入的派生计算发出：看到它才说明卡住的正是派生等待。
+    const reader = proc.stdout.getReader();
+    const decoder = new TextDecoder();
+    let output = '';
+    const startedAt = Date.now();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      output += decoder.decode(value, { stream: true });
+      if (output.includes('ready')) break;
+      if (Date.now() - startedAt > 10_000) throw new Error(`stop_hang_child_not_ready:${output}`);
+    }
+    proc.kill('SIGTERM');
+    const code = await proc.exited;
+    // 子进程注入的上限是 1 s；没有上限的旧实现永远不会走到断言。
+    expect(Date.now() - startedAt).toBeLessThan(15_000);
+    expect(code).toBe(0);
+  } finally {
+    proc.kill(9);
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
