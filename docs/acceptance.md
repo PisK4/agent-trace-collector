@@ -32,9 +32,12 @@
 | 错误 | `ingest_issue` 0 条；重复 0、坏行阻塞 0；49 批后全部游标 `committed_off == seen_size` |
 | 会话 | 174 个会话有请求行（109 个主会话、65 个子代理）；140 个主会话写入 `session_usage`（含 31 个没有请求行的会话），76 个子代理转录不另计 |
 | 用量 | 会话累计 input 55,204,994、output 2,983,021 tokens；`factoryCredits` 等字段按 settings 原值写入 |
+| 体积 | 临时库 336 MB、WAL 3 MB；其中 `raw_droid_event` 的脱敏原文合计 103.1 MiB，接近源文件总量 |
 | 资源 | 进程峰值 RSS 78 MB；读取总量 253.6 MiB，高于源文件 111.7 MiB，差额来自读取器 1 MiB 分块预读与下一批从 `committed_off` 重读，不是 droid 新增的行为 |
 
-未覆盖：生产库写入与页面呈现、重启后首轮耗时与长期 RSS、`raw_droid_event` 的增长与回收、真实流量下的跨来源重复率。本机 droid 不走 magpie，没有可对账的账本行；`openaiMessageId` 与 magpie `response_id` 的对应关系仍无真实样本。
+未覆盖：生产库写入与页面呈现、重启后首轮耗时与长期 RSS、真实流量下的跨来源重复率。本机 droid 不走 magpie，没有可对账的账本行；`openaiMessageId` 与 magpie `response_id` 的对应关系仍无真实样本。
+
+已知缺口：`raw_droid_event` 没有回收路径，而每批解析要从它重放会话与消息窗口，体积随转录和文件改写代际线性增长；回收前必须先有解析状态检查点。坏行会让该文件后续调用全部停住，直到原文修复，这是为正文完整性做的取舍。
 
 ## 后台监控落地（合成，2026-11-03）
 
