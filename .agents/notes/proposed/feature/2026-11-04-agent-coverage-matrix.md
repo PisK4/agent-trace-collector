@@ -23,11 +23,11 @@ Status: proposed
 | 批次 | Agent | 前置条件 |
 | --- | --- | --- |
 | A | WorkBuddy、Grok | 无；两家有真实会话文件且格式可还原调用 |
-| B | Qoder、CodeBuddy | 先侦查 Qoder 调用数据的真实根目录；CodeBuddy 复用批次 A 的 buddy 解析 |
+| B | Qoder、CodeBuddy | 侦查后降为不排期，见[批次 B 侦查记录](../../implemented/process/2026-11-04-batch-b-source-recon.md)；恢复条件是出现同时含 assistant 回复与逐笔用量的文件 |
 | C | Hermes、OpenCode | 先落地多来源同一调用的身份归一；OpenCode 等本机有会话库 |
 | 不排期 | qoder-cn、cline、cursor、alma、kimi、agy | 等本机出现真实数据 |
 
-一次一家、一次一个 worktree 分支，不把三家合并成一个分支。理由是格式差异大：WorkBuddy 是 message 行加 subagents 子目录，Grok 是一个会话多个文件且用量只在会话级累计，Qoder 的 segment 日志里几乎没有模型调用。合并成一个分支会让三种失败模式互相遮挡。
+一次一家、一次一个 worktree 分支，不把多家合并成一个分支。理由是格式差异大：WorkBuddy 是 message 行加 subagents 子目录，Grok 是一个会话多个文件且用量只在会话级累计；批次 A 最终用共享登记面基线加两个隔离分支落地，见[批次 A 共享登记面](../../implemented/process/2026-11-04-batch-a-shared-registry.md)。Qoder 的 segment 日志里几乎没有模型调用，全量侦查后确认没有可读调用数据，见[批次 B 侦查记录](../../implemented/process/2026-11-04-batch-b-source-recon.md)。合并成一个分支会让不同失败模式互相遮挡。
 
 Qoder 被排到批次 B 而不与 A 同批，来自只读扫描：`~/.qoder/logs/sessions` 的 118 个 segment 共 1,154 条事件，只有 1 个文件含 `model.request.started`，没有 assistant 回复与逐笔用量；`~/.qoder/projects` 的 8 个会话目录里只有 1 个 22 KB jsonl，10 行是会话骨架与一条 `hi` 用户消息，同样没有 assistant 回复。Magpie 的 `qoder.go` 只做目录定位，调用解析走 `ccFiles("qoder", QoderDir("qoder"))` 复用 Claude Code 的 `projects` 形状。两处根都只有骨架，先写解析器只能读出空窗口，得先确认调用记录落在哪个文件。
 
@@ -60,7 +60,7 @@ Wake 的 Agent 清单与扫描分层用作路线参照，不照搬它的覆盖�
 ## Risks
 
 - 读数是一次快照，文件数、字节数与 request 数会随使用增长。矩阵写明采集日期与「重新测量」，但读者仍可能直接引用过期数字；`source-health` 落地前靠人工更新。
-- Qoder 的两处根（`~/.qoder/logs/sessions` 与 `~/.qoder/projects`）都只有会话骨架，调用记录的真实落点尚未确认。批次 B 的侦查可能得出「本机没有可读的调用数据」，那时 Qoder 要降为不排期。
+- Qoder 的两处根（`~/.qoder/logs/sessions` 与 `~/.qoder/projects`）都只有会话骨架，调用记录的真实落点尚未确认。批次 B 的侦查可能得出「本机没有可读的调用数据」，那时 Qoder 要降为不排期。这条预判已由[批次 B 侦查记录](../../implemented/process/2026-11-04-batch-b-source-recon.md)收口：两家本机都没有可读的调用数据，批次 B 不落地代码。
 - Grok 的逐笔用量不可得，只能按会话累计摊或留 null。若按累计摊，会与 droid 的 `session_usage` 口径一致，但单笔 request 的用量列为 NULL，页面读数与其它来源不同。
 - Wake 对标依赖外部检出的当前版本；`repos-external/` 不动内容，版本变化时对标节的源码位置要重新核对。
 - 本轮没有新适配器落地，覆盖广度没有增加；交付的是路线与现状，不是可用的解析器。

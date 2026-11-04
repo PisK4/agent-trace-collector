@@ -52,9 +52,9 @@ Hermes 的位置值得单独说明：它的 4,778 行全部由 hook、账本、�
 | droid | `implemented` | `~/.factory/sessions` 648 文件 | 9,582 / 216 游标 | `droid.go` | 已接（独立定时器） |
 | workbuddy | `implemented` | `~/.workbuddy/projects` 6 个 jsonl / 3.65 MB，含 4 个 subagents 文件 | 已接，见[验收记录](acceptance.md) | `workbuddy.go`、`calls_workbuddy.go` | 批次 A（已交付） |
 | grok | `implemented` | `~/.grok/sessions` 6 会话 / 23 个 jsonl（`chat_history`、`events`、`updates`、`rewind_points` 各 6 份，另有 1 份 `prompt_history`），含 `summary.json`、`usage.json` | 已接，见[验收记录](acceptance.md) | `grok.go`（`readGrokSummary`、`parseGrok`、`grokUsage.tokens`） | 批次 A（已交付） |
-| qoder | `local_data` | `~/.qoder/logs/sessions` 118 个 segment / 365 KB；`~/.qoder/projects` 8 目录仅 1 个 22 KB jsonl | 无 | `qoder.go`（仅 `QoderDir`，调用解析复用 `ccFiles`） | 批次 B |
+| qoder | `local_data` | `~/.qoder` 566 文件 / 78 MB；119 个 jsonl 共 1,164 行事件，零 assistant 回复与零 usage 字段 | 无 | `qoder.go`（仅 `QoderDir`，调用解析复用 `ccFiles`） | 不排期（等可读会话样本） |
 | hermes | `local_data` | `~/.hermes` 205,607 文件 / 5.2 GB，含 `state.db`、`projects.db`、`kanban.db` | 4,778（网关侧） | `hermes.go`、`hermes_display.go` | 批次 C（先解决去重） |
-| codebuddy | `unimplemented` | `~/.codebuddy` 仅 3 个日志文件；`~/Library/Application Support/CodeBuddyExtension` 存在 | 无 | `workbuddy.go` 的 `codebuddyFiles()`、`buddyFiles()`（与 WorkBuddy 共用） | 批次 B（与 WorkBuddy 同构） |
+| codebuddy | `unimplemented` | `~/.codebuddy` 仅 3 个 memwatch 日志，无 `projects/` 目录 | 无 | `workbuddy.go` 的 `codebuddyFiles()`、`buddyFiles()`（与 WorkBuddy 共用） | 不排期（等项目会话目录） |
 | opencode | `unimplemented` | `~/.config/opencode` 仅 3 个配置文件，无会话库 | 无 | `opencode.go`、`calls_opencode.go`、`traces_opencode_db.go` | 批次 C |
 | qoder-cn | `unimplemented` | 无根目录 | 无 | `qoder.go`（`QoderDir("qoder-cn")`） | 不排期 |
 | cline | `unimplemented` | 无根目录 | 无 | `cline.go` | 不排期 |
@@ -73,7 +73,11 @@ Hermes 的位置值得单独说明：它的 4,778 行全部由 hook、账本、�
 
 **Grok 是「一个会话多个文件」。** 每个会话目录有 `chat_history.jsonl`（system / user / assistant / reasoning / tool_result 等行型）、`summary.json`（会话 id、cwd、模型、消息数）、`usage.json`（四段 token、`modelCalls`、`turnCount`、`modelUsage` 累计）、`events.jsonl`、`rewind_points.jsonl`、`tool_definitions.json` 等。抽样一个会话的 `chat_history.jsonl` 有 107 条 assistant 与 107 条 reasoning，`usage.json` 记 `modelCalls: 107`，两者能对上。逐笔用量在会话级累计里，没有逐调用的 token 行；要建 request 得从 chat_history 的消息边界切调用，用量只能按会话累计摊或留空。共用摄入的 `SessionCall` 要求 `usage` 四段齐全或为 null，这里倾向留 null 并把累计值放进 `session_usage`，与 droid 的处理一致。
 
-**Qoder 是日志事件流，本机可读文件里几乎没有模型调用。** 118 个 `segments/*.jsonl` 共 1,154 条事件，绝大部分是 `session.phase.started/finished`、`hook.started/finished`、`session.config.loaded`、`cli.route.entered`；全量扫描只有 1 个文件含 `model.request.started`，另有 1 条 `model.request.attempt_failed`，没有 assistant 回复或逐笔用量。Magpie 的 `qoder.go` 只做目录定位（`QoderDir`），调用解析走 `ccFiles("qoder", QoderDir("qoder"))` 复用 Claude Code 的 `projects` 形状。本机 `~/.qoder/projects` 确实存在，8 个会话目录里只有 1 个 22 KB 的 jsonl，10 行内容是 workspace-directories、runtime-config、一条 `hi` 的 user 消息、4 条 attachment 与 active-leaf，同样没有 assistant 回复与用量。两处根都只有会话骨架，写出来的适配器会读出空窗口。接 Qoder 之前要先确认这个 Agent 的调用记录究竟落在哪个文件，或是否只经网关侧可见。
+**Qoder 是日志事件流，本机可读文件里没有模型调用。** 2026-11-04 对 `~/.qoder` 的全量结构扫描（只看字段名与值类型，不读正文）：566 文件 / 78 MB，119 个 jsonl 共 1,164 行 JSON 全部合法，零坏行；出现的字段是 `type`、`ts`、`seq`、`level`、`data`、`turn_id`，`type` 值集中在 `session.phase.started/finished`（526 条）、`hook.started/finished`（456 条）、`session.config.loaded`（80 条）、`cli.route.entered`（80 条）。带 assistant 角色的文件 0 个，带 `usage` 字段的文件 0 个，`role` 值一次都没出现；调用相关只有 1 条 `model.request.started` 与 1 条 `model.request.attempt_failed`，没有成对回复或完成事件。`~/.qoder/projects` 只有 1 个 10 行 jsonl，内容是 workspace-directories、runtime-config、一条用户消息、4 条 attachment 与 active-leaf。`~/.qoder/logs/runs/*/qodercli.log` 158 个 CLI 日志共 139,041 行、22 MB，只有 18 行沾到 `assistant`、`completion`、`model.request`、`input_tokens` 等关键词，形态是日志语句，不是可还原的调用记录。
+
+Magpie 的 `qoder.go` 注释说 `projects/<项目>/<id>.jsonl` 与 Claude Code 同形（`user`/`assistant` 加 Anthropic usage），调用解析走 `ccFiles("qoder", QoderDir("qoder"))` 复用 Claude Code 的 `projects` 形状；本机这份数据没有体现这个形状，注释只做目录定位，不是可核对的调用样本。生产库 `request` 里也没有 qoder 任何一行，连网关侧证据都没有。侦查结论与判据见[批次 B 侦查记录](../.agents/notes/implemented/process/2026-11-04-batch-b-source-recon.md)。
+
+**CodeBuddy 连会话目录都不存在。** `~/.codebuddy` 只有 3 个 `cli-memwatch-*.log`（内存与 CPU 采样），`~/Library/Application Support/CodeBuddyExtension` 下只有 1 个 4 KB 的 auth 文件；没有 `projects/`。Magpie 的 `codebuddyFiles()` 与 WorkBuddy 共用 `buddyFiles()` 读 `projects/`，复用批次 A 的解析器本身成本低，但本机没有可读样本，合成 fixture 之外的验收为零。
 
 Hermes 是另一类：`~/.hermes` 下有多个 SQLite 库与 20 万个文件，Magpie 的 `hermes.go`、`hermes_display.go` 处理的是它自己的 state.db 形状。本机已有 4,778 笔网关侧请求，接本地来源前必须先定认领规则，否则同一调用会按本地证据和网关证据各建一行。
 
@@ -85,9 +89,11 @@ Hermes 是另一类：`~/.hermes` 下有多个 SQLite 库与 20 万个文件，M
 
 两家都有真实会话文件，格式可还原调用，Magpie 有现成解析器。两家各走一个 `worktree` 分支、合成 fixture、生产部署与逐项对账，共享登记面先由准备分支一次铺好，避免两处实现同时改同一批文件。WorkBuddy 按 `providerData.messageId` 把同组行归成一笔调用，子代理折叠到父会话；Grok 一个会话目录一条流，单笔用量留 null、累计值写 `session_usage`。两家的首轮生产读数与已知边界见[验收记录](acceptance.md)。
 
-### 批次 B：Qoder 与 CodeBuddy
+### 批次 B：Qoder 与 CodeBuddy（侦查后不排期）
 
-Qoder 先做调用数据根目录的侦查：`~/.qoder/logs/sessions` 与 `~/.qoder/projects` 两处都只有会话骨架，没有 assistant 回复与用量，要确认这个 Agent 的调用记录落在哪个文件，或是否只经网关侧可见；侦查没有结论就不写解析器。CodeBuddy 与 WorkBuddy 同构（Magpie 的 `buddyFiles` 共用），可复用批次 A 的解析器，本机只有 3 个日志文件，做完后按合成数据验收，真实流量读数标为未覆盖。
+按[批次 B 侦查记录](../.agents/notes/implemented/process/2026-11-04-batch-b-source-recon.md)，两家的本机数据都不足以还原一笔调用：Qoder 的 119 个 jsonl 零 assistant、零 usage，`projects` 只有 10 行骨架，158 个 CLI 日志里只有 18 行沾到调用关键词；CodeBuddy 连 `projects/` 目录都没有。生产库也没有这两家的网关侧行。按「每批完成条件」第 3 条，写出来的解析器无法做生产对账，只能靠合成 fixture 自证，与「没有真实样本的不排期」判据冲突，因此本批不落地代码。
+
+恢复排期的判据是「至少有一个文件同时含 assistant 回复与逐笔用量」，不是「目录里有 jsonl」。Qoder 若换版本把调用正文写进 `projects/`，或 CodeBuddy 建出项目会话目录，重新做一次结构侦查再排；CodeBuddy 届时可复用 WorkBuddy 的 `buddyFiles()` 同构解析。
 
 ### 批次 C：Hermes 与 OpenCode
 
@@ -95,7 +101,7 @@ Hermes 等[多来源同一调用的身份归一](../.agents/notes/proposed/featu
 
 ### 不排期
 
-qoder-cn、cline、cursor、alma、kimi、agy 六家在本机没有根目录，也没有真实样本。`catalog.ts` 保留它们是为了目录与 Magpie 对齐，不写解析器。Wake 的 24 项清单里另有 Grok Bot、Kiro、Gemini、Copilot、Antigravity、Openclaw、CraftAgents、Devin、Kilo、MimoCode 等候选，比 Magpie 的 19 家多出一批桌面与新客户端；根路径不可靠就不凭猜测加扫描路径。
+qoder、codebuddy 两家有根但没有可读的调用数据（见批次 B），qoder-cn、cline、cursor、alma、kimi、agy 六家在本机没有根目录，也没有真实样本；八家都不写解析器。`catalog.ts` 保留它们是为了目录与 Magpie 对齐。Wake 的 24 项清单里另有 Grok Bot、Kiro、Gemini、Copilot、Antigravity、Openclaw、CraftAgents、Devin、Kilo、MimoCode 等候选，比 Magpie 的 19 家多出一批桌面与新客户端；根路径不可靠就不凭猜测加扫描路径。
 
 ### 每批的完成条件
 
