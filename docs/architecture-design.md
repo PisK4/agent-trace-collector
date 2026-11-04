@@ -405,7 +405,7 @@ fork 会话在 `forkedAtMessageId` 之前的行是源会话复制段：它们进
 
 ### 本地 Agent 会话适配器（第一版）
 
-Claude Code、Codex、DSH、Zcode、OMP、Pi 与 droid 的本地会话走同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。
+Claude Code、Codex、DSH、Zcode、OMP、Pi 与 droid 的本地会话走同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。19 家本地 Agent 的覆盖状态、本机数据与下一批接入顺序见[覆盖矩阵](agent-coverage.md)。
 
 | Agent | 根 | 形态 | 调用单位 | 正文协议 |
 | --- | --- | --- | --- | --- |

@@ -1923,3 +1923,22 @@ Zcode 的原始行是重建的完整调用，携带整段请求窗口。首轮�
 修复后 249 秒窗口的事件循环 p50 1.94 ms / p95 26.19 ms / p99 391.17 ms / 最大 1,531 ms；`sessions` 任务 5 轮、最长 7,411 ms，仍无法把单轮停顿单独归给 DSH。
 
 本机 77 个会话头里没有 `isSeeded: true`（70 个 version 0 没有该字段，7 个 version 4 为 false），所以 seeded 分叉的真实路径本轮没有走到；剩余 3 个曾读文件与 61 个未读目录继续由 backfill 推进。
+
+## DSH 全量回填收敛对账（2026-11-04）
+
+范围：身份修复后的 backfill 由轮转推进到收敛，复核交接时点留下的对账项。本节只记生产库重新测量的读数，不改写上一节的修复结论。
+
+| 项 | 交接时点 | 收敛后 |
+| --- | --- | --- |
+| `dsh_session` 游标 | 13 | 77 |
+| 游标到文件末尾 | 重读批次 13 个 | 77 / 77，剩余字节 0 |
+| `agent='dsh'` request | 999 | 2,542 |
+| `dsh_session_call` 证据 | 999 | 2,542，2,542 个不同 `ref_key` |
+| 悬空证据 | 0 | 0 |
+| 重复证据 owner | 0 | 0 |
+| `dsh_session` issue | 0 | 0 |
+| 子代理调用 | 105 | 1,009，`subagent` 非空 |
+
+原始层按行型分开数：`assistant` 2,542、`user` 610、`session` 77、`end-seed` 70。2,542 条 assistant 与 2,542 笔 request 一一对上，说明 `<父会话>/<子代理>/seq:N` 的证据键在本机 77 个目录上不再相撞，也无需再按 `(session, seq)` 查丢行。证据总数与不同 `ref_key` 数相等，重复 owner 为 0。
+
+本轮只读 `source_cursor`、`request`、`request_evidence`、`raw_session_event` 与 `ingest_issue` 的聚合，没有重放正文，也没有重启服务；采集进程仍是上一节修复后的同一实例（pid 93709）。seeded 分叉的真实路径仍只有合成测试覆盖：本机 77 个会话头没有 `isSeeded: true`，这一条边界不随回填收敛改变。

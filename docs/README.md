@@ -15,6 +15,7 @@
 | [agent-request-kind-review.md](agent-request-kind-review.md) | Agent 语义与字段保真联合评审；附请求触发、派生排序与摘要依赖、版本消费者、来源完整性及合成反例 |
 | [session-trace-summary-review.md](session-trace-summary-review.md) | 会话汇总提案评审：社区需求证据、同类工具与复用取舍、评估语义、派生与回收约束及首批范围建议 |
 | [architecture-evolution-v2.md](architecture-evolution-v2.md) | 本轮架构演进的目标约束与阶段划分：来源完整性、请求级触发、统一派生依赖、破坏式结构替换、阶段依赖与容量验收；具体证据见联合评审 |
+| [agent-coverage.md](agent-coverage.md) | 本地 Agent 覆盖矩阵：19 家的目录状态、本机数据规模、生产库覆盖与分批适配器路线 |
 | [architecture-design.md](architecture-design.md) | 收敛型架构设计：账本物理记录身份与增量读取协议、三路证据收敛、SQLite 表结构与正文状态、内容去重与语义指纹、乱序重算、查询接口、正文预算与总磁盘硬上限、版本与形状探针、访问控制、AVA 下线顺序与分步落地判据；文末附两轮评审的逐条对照 |
 | [architecture-review.md](architecture-review.md) | 基于设计提交的落地前评审：账本身份、持久化与恢复、正文预算和回收、乱序派生、协议与费用来源、安全边界及合成验收条件；文末两轮结论已逐条落进设计文档 |
 | [operations.md](operations.md) | 运维手册：维护命令与错误码、备份与恢复流程、维护锁、掉电边界、费用时钟冲突诊断、容量门槛、切换核对与 AVA 下线/回滚步骤 |
