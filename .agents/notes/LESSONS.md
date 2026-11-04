@@ -37,6 +37,11 @@
 - 防护：交接前跑 `git status --short .agents/notes`；有 `??` 的提案先 add 并提交，再让对方基于该检出工作。
 - Seen 1× (2026-11-04).
 
+**用生产库副本起本地预览时，先 rebase 到 master、用 `sqlite3 .backup` 拷贝，并带上 `redaction.salt`。**
+- 证据：2026-11-04 会话切换预览，分支基点 schema v10、生产库 v11，启动报 `schema_version_unsupported`；`bun run maintain backup` 报 `backup_failed:source_must_be_stopped`（备份要求源采集器停止）；数据目录缺 `redaction.salt` 时启动报 `redaction_salt_missing`。3.9GB 库用 `sqlite3 .backup` 约 3 分钟。
+- 防护：预览前 `git rebase master`；`sqlite3 <prod>/trace.db ".backup '<tmp>/trace.db'"`；复制生产目录的 `redaction.salt`（0600）到 `ATC_DATA_DIR`；用独立 `ATC_PORT` 起，不碰生产 8320。验收完成后删掉整个临时目录（含库与 salt），保留生产原件。
+- Seen 1× (2026-11-04).
+
 ## 验证
 
 **改过 JS/TS 后，提交前跑 `bun run typecheck`；`bun test` 不检查 JSDoc 类型。**

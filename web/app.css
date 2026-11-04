@@ -920,13 +920,25 @@ button.ctx-row{width:100%;font:inherit;border:0;background:none;text-align:left;
 /* 读取中的占位步骤行：步骤键固定以 :preparing 结尾，文本槽整行呼吸。 */
 .compact-select[data-step-key$=":preparing"] .compact-preview{animation:pulse-load 1.4s ease-in-out infinite}
 /* 尾部追加的组一次性渐显：键控提交创建节点时由 shouldEnter 标记；
-   窗口重建与首屏填充不算追加。 */
-.trace-group[data-enter]{animation:group-in 180ms var(--ease-out)}
+   窗口重建与首屏填充不算追加。准备行换成真实内容时只从压暗值淡回，不整组消失。 */
+.trace-group[data-enter="append"]{animation:group-in 180ms var(--ease-out)}
+.trace-group[data-enter="fill"]{animation:group-fill 160ms var(--ease-out)}
 @keyframes group-in{from{opacity:0}}
+@keyframes group-fill{from{opacity:.55}}
 /* 定位滚动的落点确认：目标组呼吸一次淡出（locate 意图触发）。 */
 .trace-group.landed{animation:land-flash 700ms var(--ease-out)}
 @keyframes land-flash{from{background-color:var(--accent-soft)}}
-/* 换会话中栏整体渐显：app.js 在会话变化后的首次提交时以 motion() 播放。 */
+/* 换会话的保留态与一次换场：保留期间中栏压暗、栏顶走一条细线，换场时新列表
+   从压暗值淡回。状态只由 app.js 的 selectSession 写入 data-switch-state。 */
+.col-main[data-switch-state="switching"]{
+  background-image:linear-gradient(90deg,transparent,var(--accent),transparent);
+  background-size:38% 2px;background-repeat:no-repeat;background-position:-40% 0;
+  animation:switch-sweep 1s linear infinite;
+}
+.col-main[data-switch-state="switching"] .step-list{opacity:.55;pointer-events:none;transition:opacity 120ms linear}
+.col-main[data-switch-state="entering"] .step-list{animation:session-swap-in 180ms var(--ease-out)}
+@keyframes switch-sweep{from{background-position:-40% 0}to{background-position:140% 0}}
+@keyframes session-swap-in{from{opacity:.55}}
 /* toast：入场走 CSS（插入即播），离场由 motion() 驱动后移除。 */
 .toast{animation:toast-in 180ms var(--ease-out)}
 @keyframes toast-in{from{opacity:0;transform:translate(-50%,8px)}}
@@ -958,6 +970,8 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
     animation-duration:.01ms!important;animation-iteration-count:1!important;
     transition-duration:0s!important;transition-delay:0s!important;
   }
+  /* 扫描线是无限动画：关停后停成一个静态的左起短线，而不是停在画面外。 */
+  .col-main[data-switch-state="switching"]{background-position:0 0;animation:none}
 }
 /* 切主题两帧抑制：主题当帧完成（既有决策），交互过渡在其余时刻照常。 */
 body.theme-switching *,body.theme-switching *::before,body.theme-switching *::after{

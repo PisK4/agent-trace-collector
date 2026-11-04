@@ -1069,14 +1069,65 @@ if (typeof document !== 'undefined') {
     }
   }
 
-  /** 换会话的一次性渐显以会话键为闸：同会话内的重绘与流式到位不重播。 */
+  /** 中栏实际画着的会话键：保留旧画面与一次换场的判定用它，不用语义上的 state.session。 */
   let lastRenderedSession = /** @type {string | null} */ (null);
+  /** 切换会话时最多保留旧画面的时长；窗口页先到就提前换场。 */
+  const SWITCH_HOLD_MS = 300;
+  /** 换场后的连点窗口：这段时间内的下一次切换先等点击停稳，避免中间目标各换一次。 */
+  const SWITCH_BURST_MS = 400;
+  /** 连点时的点击稳定窗口；被下一次点击取代就整次放弃换场。 */
+  const SWITCH_SETTLE_MS = 140;
+  /** @type {number} 最近一次换场的时刻。 */
+  let lastSwapAt = 0;
+  /** @type {ReturnType<typeof setTimeout> | null} 换场淡回的清理定时器。 */
+  let switchEnterTimer = null;
+
+  /** 保留旧画面：中栏压暗、置忙并禁止交互，内容等窗口页或保留上限到点再换。 */
+  function beginSwitchHold() {
+    const main = el('main');
+    if (switchEnterTimer !== null) { clearTimeout(switchEnterTimer); switchEnterTimer = null; }
+    main.dataset.switchState = 'switching';
+    main.setAttribute('aria-busy', 'true');
+    main.setAttribute('inert', '');
+  }
+
+  /** @param {boolean} entering 为真时让新列表从压暗值淡回，不重播整栏淡入。 */
+  function endSwitchHold(entering) {
+    const main = el('main');
+    main.removeAttribute('inert');
+    main.removeAttribute('aria-busy');
+    if (!entering) {
+      delete main.dataset.switchState;
+      return;
+    }
+    main.dataset.switchState = 'entering';
+    switchEnterTimer = setTimeout(() => {
+      switchEnterTimer = null;
+      if (main.dataset.switchState === 'entering') delete main.dataset.switchState;
+    }, 220);
+  }
+
+  /** @param {Promise<void>} loading @param {number} deadline @returns {Promise<boolean>} 窗口页先到返回 true；到保留上限返回 false。 */
+  function switchReady(loading, deadline) {
+    return new Promise(resolve => {
+      const timer = setTimeout(() => resolve(false), Math.max(0, deadline - performance.now()));
+      void loading.then(() => { clearTimeout(timer); resolve(true); });
+    });
+  }
+
+  /** @param {number} ms */
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   function renderMain() {
     const main = el('main');
-    if (state.session !== lastRenderedSession) {
-      lastRenderedSession = state.session;
-      motion(main, { opacity: [0, 1] }, 0.15);
+    if (main.dataset.switchState === 'switching') {
+      // 没有在途切换却还压着：导航被别的入口收走，清掉保留态再照常画。
+      if (state.pendingSession !== null) return;
+      endSwitchHold(false);
     }
+    lastRenderedSession = state.session;
     if (state.pendingSession !== null) {
       mainView.reset();
       main.innerHTML = `<p class="sess-empty pulse" style="padding:24px">${t('正在读取{session}的请求…', { session: esc(shortSession(state.pendingSession)) })}</p>`;
@@ -2082,6 +2133,8 @@ if (typeof document !== 'undefined') {
    */
   async function selectSession(key, wantedTrace = null) {
     const myNav = ++navEpoch;
+    // 中栏已经画着真实会话时先保留旧画面：窗口页或 300ms 保留上限一到，再一次换场。
+    const hold = lastRenderedSession !== null && el('main').querySelector('.session-head') !== null;
     // 页签是显式声明或用户偏好：URL 直达、popstate 与手动切会话都保留当前
     // 顶层页签；请求内的步骤与工具选择仍清除。
     dispatch({ kind: 'open-session', sessionKey: key, wantedTrace });
@@ -2091,10 +2144,45 @@ if (typeof document !== 'undefined') {
     state.windowAnchor = 'start';
     // 换会话不复用上一场的准备结论与保留投影：它们只服务当场阅读。
     resetReading();
-    renderMain();
-    await store.selectSession(key, windowLimit());
+    if (hold) beginSwitchHold();
+    else renderMain();
+    const loading = store.selectSession(key, windowLimit());
+    let timedOut = false;
+    if (hold) {
+      const now = performance.now();
+      const deadline = now + SWITCH_HOLD_MS;
+      // 刚换过场又点下一个：先等点击停稳，被下一次点击取代就整次放弃。
+      if (now - lastSwapAt < SWITCH_BURST_MS) {
+        await sleep(Math.min(SWITCH_SETTLE_MS, SWITCH_HOLD_MS));
+        if (myNav !== navEpoch) return;
+      }
+      const ready = await switchReady(loading, deadline);
+      if (myNav !== navEpoch) return;
+      if (ready) {
+        // 窗口页已到：新会话的头部与读取中的组一次提交，旧画面不再参与后续重绘。
+        state.pendingSession = null;
+        lastSwapAt = performance.now();
+        endSwitchHold(true);
+        renderAll();
+      } else {
+        // 超过保留上限：不再压着旧画面，如实显示加载占位。
+        timedOut = true;
+        endSwitchHold(false);
+        renderMain();
+      }
+    }
+    await loading;
     if (myNav !== navEpoch) return;
-    state.pendingSession = null;
+    // 保留上限内已换过场的路径不再重复提交；首载与超时路径在这里落定。
+    if (state.pendingSession !== null) {
+      state.pendingSession = null;
+      if (timedOut) {
+        // 慢网络下占位已经出现过：窗口页最终到达时仍给一次淡回，不再硬切。
+        lastSwapAt = performance.now();
+        endSwitchHold(true);
+      }
+      renderAll();
+    }
     await resolveInitialTrace();
     if (myNav !== navEpoch) return;
     // 默认选第一笔有内容的请求；窗口外 trace 保留其语义，不用第一笔顶替。
@@ -2333,7 +2421,12 @@ if (typeof document !== 'undefined') {
       return;
     }
     const sess = /** @type {HTMLElement | null} */ (target.closest('[data-session]'));
-    if (sess) { void selectSession(sess.dataset.session ?? ''); return; }
+    if (sess) {
+      const key = sess.dataset.session ?? '';
+      // 点当前会话不再整窗重读；读取失败时仍允许点它重试。
+      if (key !== state.session || store.getWindow().error !== null) void selectSession(key);
+      return;
+    }
     if (target.closest('[data-fold-toggle]')) {
       state.showFolded = !state.showFolded;
       renderSessions();
@@ -2608,6 +2701,9 @@ if (typeof document !== 'undefined') {
     });
     if (state.session !== null) { void selectSession(state.session, state.reqId); return; }
     // URL 无会话：离开当前会话——窗口与请求级读取全部取消并清空，页面回到无会话落点。
+    navEpoch += 1;
+    state.pendingSession = null;
+    endSwitchHold(false);
     resetReading();
     store.leaveSession();
     folds.clear();
