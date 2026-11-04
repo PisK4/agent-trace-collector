@@ -15,6 +15,9 @@ export function todoTabHtml(reading) {
     return `<div class="rail-empty">${t('读取失败')}</div>`;
   }
   const { state, snapshot } = reading.data;
+  if (state === 'failed') {
+    return `<div class="rail-empty">${t('读取失败')}</div>`;
+  }
   if (state === 'unavailable') {
     return `<div class="rail-empty">${t('正文已回收，待办不可读')}</div>`;
   }

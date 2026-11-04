@@ -11,16 +11,18 @@ import type { Store } from '../store';
 import { readBodyWithMessagesTx } from '../body';
 import { wireCallsOf } from '../protocol-shape';
 import { listTurns, mainActorOf } from './turns';
-import type { TodoParser } from '../plugins/types';
+import type { CommunityTodoSource, TodoCall, TodoParser } from '../plugins/types';
 import type { TodoSnapshot } from '../plugins/todo/dto';
+import { validateTodoSnapshot } from '../plugins/todo/dto';
 import { PLUGIN_REGISTRY, parsersOf } from '../plugins/registry';
 
-/** 一轮跑完的 Todo 事实。state 区分没有更新、读得到与正文已回收三种结果。 */
+/** 一轮跑完的 Todo 事实。state 区分没有更新、读得到、正文已回收与读失败。 */
 export type TodoByTurn = {
   key: string;
   actor: string;
   turn: number;
-  state: 'ready' | 'absent' | 'unavailable';
+  /** failed 是社区包超时、抛错或交回畸形 DTO：隐藏列表但不冒充「没有待办」。 */
+  state: 'ready' | 'absent' | 'unavailable' | 'failed';
   /** state='ready' 时是该轮末次更新后的列表，其余为 null。 */
   snapshot: TodoSnapshot | null;
 };
@@ -46,17 +48,40 @@ function turnRequestIds(store: Store, key: string, actor: string,
 /**
  * 一笔请求只解压一次正文，把 tool_call 的 tool_name 与 tool_use.input 按 ord 对齐
  * 后交给 Parser 按序 apply。正文不可读返回 found=false，调用方据此标 unavailable。
+ *
+ * 社区包按 agent 认领：命中时该 Agent 交给 Worker 折叠，内置 Parser 让位，避免
+ * 两套状态机各自折叠。外部包的交回值在这里校验，畸形快照按 failed 处理。
  */
-function foldRequest(store: Store, reqId: number, rows: readonly ToolRow[],
-  parsers: readonly TodoParser[], previous: TodoSnapshot | null):
-  { found: boolean; latest: TodoSnapshot | null } {
+async function foldRequest(store: Store, reqId: number, rows: readonly ToolRow[],
+  parsers: readonly TodoParser[], community: readonly CommunityTodoSource[],
+  previous: TodoSnapshot | null):
+  Promise<{ found: boolean; latest: TodoSnapshot | null; failed: boolean }> {
   const body = readBodyWithMessagesTx(store.read, reqId);
-  if (body === null) return { found: false, latest: previous };
+  if (body === null) return { found: false, latest: previous, failed: false };
   const calls = wireCallsOf(body.body.protocol, body.body.reply);
   const byOrd = new Map(calls.map(call => [call.ord, call]));
   const agentRow = store.read.query<{ agent: string | null }, [number]>(
     'SELECT agent FROM request WHERE req_id=?').get(reqId);
   const agent = agentRow?.agent ?? '';
+
+  const external = community.find(item => item.agent === agent);
+  if (external !== undefined) {
+    const batch: TodoCall[] = [];
+    for (const row of rows) {
+      const call = byOrd.get(row.ord);
+      if (call !== undefined) batch.push({ toolName: row.tool_name, input: call.input });
+    }
+    if (batch.length === 0) return { found: true, latest: previous, failed: false };
+    try {
+      const next = await external.fold(previous, batch);
+      if (next === null) return { found: true, latest: previous, failed: false };
+      const checked = validateTodoSnapshot(next);
+      return { found: true, latest: checked ?? previous, failed: checked === null };
+    } catch {
+      return { found: true, latest: previous, failed: true };
+    }
+  }
+
   let latest = previous;
   for (const row of rows) {
     const call = byOrd.get(row.ord);
@@ -67,7 +92,7 @@ function foldRequest(store: Store, reqId: number, rows: readonly ToolRow[],
       if (next !== null) { latest = next; break; }
     }
   }
-  return { found: true, latest };
+  return { found: true, latest, failed: false };
 }
 
 /**
@@ -75,9 +100,10 @@ function foldRequest(store: Store, reqId: number, rows: readonly ToolRow[],
  * 归属；登记关闭时返回空列表而不是报错。
  */
 export function getTodoByTurn(store: Store, key: string, actor: string,
-  turn: number): TodoByTurn {
+  turn: number, community: readonly CommunityTodoSource[] = []): Promise<TodoByTurn> {
   const resolved = actor === '' ? mainActorOf(store.read, key) ?? '' : actor;
-  return todoByTurnWithParsers(store, key, resolved, turn, parsersOf(PLUGIN_REGISTRY, 'todo'));
+  return todoByTurnWithParsers(store, key, resolved, turn,
+    parsersOf(PLUGIN_REGISTRY, 'todo'), community);
 }
 
 /**
@@ -86,8 +112,9 @@ export function getTodoByTurn(store: Store, key: string, actor: string,
  * Parser 直接覆盖，增量命令型在上一时点上累积。按 actor 独立折叠，子代理的
  * 命令不会插进主流程时间线。
  */
-export function todoByTurnWithParsers(store: Store, key: string, actor: string,
-  turn: number, parsers: readonly TodoParser[]): TodoByTurn {
+export async function todoByTurnWithParsers(store: Store, key: string, actor: string,
+  turn: number, parsers: readonly TodoParser[],
+  community: readonly CommunityTodoSource[] = []): Promise<TodoByTurn> {
   const base = { key, actor, turn };
   const pair = listTurns(store, key).items.find(item => item.turn === turn);
   if (pair === undefined) return { ...base, state: 'absent', snapshot: null };
@@ -99,6 +126,7 @@ export function todoByTurnWithParsers(store: Store, key: string, actor: string,
     ORDER BY tc.req_id ASC, tc.ord ASC`).all(...ids);
   let latest: TodoSnapshot | null = null;
   let unavailable = false;
+  let failed = false;
   // 按请求分组：每笔只解压一次正文，避免一轮多次 Todo 更新重复解压。
   const byRequest = new Map<number, ToolRow[]>();
   for (const row of rows) {
@@ -109,10 +137,12 @@ export function todoByTurnWithParsers(store: Store, key: string, actor: string,
   for (const id of ids) {
     const group = byRequest.get(id);
     if (group === undefined) continue;
-    const result = foldRequest(store, id, group, parsers, latest);
+    const result = await foldRequest(store, id, group, parsers, community, latest);
     if (!result.found) { unavailable = true; continue; }
+    if (result.failed) failed = true;
     latest = result.latest;
   }
   if (latest !== null) return { ...base, state: 'ready', snapshot: latest };
+  if (failed) return { ...base, state: 'failed', snapshot: null };
   return { ...base, state: unavailable ? 'unavailable' : 'absent', snapshot: null };
 }

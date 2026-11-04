@@ -2033,6 +2033,13 @@ Grok 的 `session_usage` 有 4 行而游标有 6 个，不是漏刷：本机 6 �
 - `bun run typecheck` 通过；11 个最窄测试文件 219 例通过。测试全部使用合成数据，未写生产库。
 - 真实库只读聚合用于校准 Parser 形状，不进 fixture、日志或提交。校准结果：zcode 的 `todos` 是数组，droid 是带编号的纯文本行，pi 是 `create`/`update` 增量命令，omp 是 chat `arguments` 字符串里的 `init`/`start`/`done`/`drop`。droid 形状与 11-04 交接文档记的「JSON 字符串」不符，Parser 按真实形状落地。
 
+### 社区轨合成验收（2026-11-05）
+
+- 清单：缺失目录按没有社区包处理；坏 JSON、api 不符、id 未登记、entry 越出根目录、文件缺失分别给 `plugin_manifest_invalid`、`plugin_api_mismatch`、`plugin_unknown_id`、`plugin_entry_outside_root`、`plugin_entry_missing`，合法项解析成绝对入口。`tests/plugin-community.test.ts` 覆盖。
+- 执行：合成社区包写成临时目录里的 `.ts` 文件，由真实 Bun Worker 动态 import 并折叠，`getTodoByTurn` 命中 `ready`；同一 Worker 下 zcode 轮次仍由内置 Parser 结算，社区包不抢别家 Agent。
+- 失败隔离：包内抛错、`while(true)` 超时（timeoutMs=100）、交回畸形 DTO 三种情况都返回 `failed` 且 `snapshot=null`，不冒充「本轮没有待办」；超时路径由 terminate 终止线程。
+- `bun run typecheck` 通过；`tests/todo-by-turn.test.ts`、`tests/plugin-community.test.ts`、`tests/plugin-boundaries.test.ts` 共 14 例通过。测试全部使用合成数据与临时目录，未读真实数据目录。
+
 ### 真实流量验收
 
 待合并到 master 并部署后单独记录：目录改名后 hook 不丢请求、生产 `plugins.json` 生效、第五页签能读到真实 Todo、社区包 Worker 加载的失败隔离。本轮未执行，不写成通过。

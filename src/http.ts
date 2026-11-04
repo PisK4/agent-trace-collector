@@ -15,6 +15,7 @@ import type { LiveActivity } from './activity';
 import { listTurns } from './queries/turns';
 import { listBgJobs } from './queries/bg-jobs';
 import { getTodoByTurn } from './queries/todo-by-turn';
+import type { CommunityTodoSource } from './plugins/types';
 import { PAGE_MAX, bodyRangeError, getBodyPage } from './protocols';
 import {
   getReadingBody, getReadingBatch, getReadingRangeBatch, getReadingDetail,
@@ -512,6 +513,8 @@ export function createHandler(
   otlp?: { token: string; salt: Uint8Array; admission?: () => HookAdmission },
   diagnostics?: DiagnosticLog,
   live?: LiveActivity,
+  /** 社区轨折叠入口；未注入时只有内置 Parser。 */
+  community?: readonly CommunityTodoSource[],
 ): (req: Request) => Promise<Response> {
   // hook 计数在未注入观测运行时也保留，只是没有对外入口。
   const ingestMetrics = metrics?.ingest ?? createIngestMetrics();
@@ -615,7 +618,7 @@ export function createHandler(
         if (rawTurn === null || !/^\d+$/.test(rawTurn) || Number(rawTurn) <= 0) {
           return json({ error: 'invalid_todo_query' }, 400);
         }
-        return json(getTodoByTurn(store, key, actor, Number(rawTurn)));
+        return json(await getTodoByTurn(store, key, actor, Number(rawTurn), community));
       }
 
       const summaryMatch = /^\/api\/sessions\/([^/]+)\/summary$/.exec(path);

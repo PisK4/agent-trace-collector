@@ -17,6 +17,18 @@
 
 `redaction.salt` 与库必须配对。库里的 `collector_state['privacy:salt']` 记这份盐的标识（加域前缀的 SHA-256，不含盐明文）；有数据却没有绑定、盘上没有盐文件、或盐与标识不符时，采集器拒绝启动，分别报 `redaction_salt_unbound`、`redaction_salt_missing`、`redaction_salt_mismatch`。启动路径不会顺手生成新盐：换盐会让库里已有的占位符再也解释不了。有盐文件却没有绑定同样拒绝启动（`redaction_salt_unbound`）：无法证明历史占位符是这份盐算的，也没有确认绕过的入口，旧库删除后重建。
 
+## 本地插件包
+
+社区轨只装本地包，不联网、不签名、不自动更新。目录是数据目录下的 `plugins/`，清单是 `plugins.json`：
+
+```json
+{ "plugins": [{ "id": "todo", "api": 1, "agent": "acme", "entry": "acme-todo/index.ts" }] }
+```
+
+安装：把包目录放进 `plugins/`，在清单里加一项，重启采集器（`bun run service restart`）。卸载：删掉清单项与包目录，同样重启。没有热重载。
+
+`api` 与代码里的 `PLUGIN_API` 不符、`id` 未登记、`entry` 越出插件根目录或文件缺失时，该包被拒收，启动日志记 `plugins.load` 与固定分类码，采集器与内置轨照常工作。包在独立 Worker 里执行：超时（1.5 s）、崩溃或抛错只让该页签显示「读取失败」，本进程内不再重试该包，重启后恢复。外部代码拥有宿主权限，只装可信代码。
+
 ## 起停与状态
 
 生产采集器由 launchd 托管（label `local.tracery`，`KeepAlive=true`、`ThrottleInterval=10`）。这套配置下 `kill` 不安全：进程退出后 10 秒内会被重新拉起，维护命令正好可能落进那个窗口，再手动起一个还会撞端口。起停统一走 `bun run service`：

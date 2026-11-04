@@ -7,6 +7,9 @@
  */
 import type { TodoSnapshot } from './todo/dto';
 
+/** 社区包声明并比对的 API 版本；不匹配的包整包拒收，内置轨照常工作。 */
+export const PLUGIN_API = 1;
+
 /** 一条 Plugin 登记项：给出算 DTO 的 Parser 与它填的页签槽位。 */
 export type PluginRegistration = {
   /** 稳定 id；同时是 HTTP 操作名后缀与前端页签 key 的对齐依据。 */
@@ -32,4 +35,15 @@ export type TodoCall = { toolName: string; input: unknown };
 export type TodoParser = {
   agent: string;
   parse(call: TodoCall, previous: TodoSnapshot | null): TodoSnapshot | null;
+};
+
+/**
+ * 社区轨的折叠入口：同一批调用交给 Worker 里的外部包，核心只拿回未校验的快照。
+ * 它按 agent 认领：清单里登记了某家 Agent 的社区包后，该 Agent 的内置 Parser
+ * 让位，避免两套状态机各自折叠出互相覆盖的结果。
+ */
+export type CommunityTodoSource = {
+  agent: string;
+  fold(previous: TodoSnapshot | null, calls: readonly TodoCall[]):
+    Promise<TodoSnapshot | null>;
 };

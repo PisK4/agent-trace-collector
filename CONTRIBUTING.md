@@ -75,11 +75,36 @@ A Plugin is one registered reading capability (`src/plugins/registry.ts`). A Par
 - [ ] bun run verify:notes:staged
 ```
 
-**Community package (local install).** A package export declares `api`, `id`, `tab` and parsers. Put it in the local plugin directory listed in the manifest; the host loads it in a Bun Worker and rejects it when `api` does not match. A timeout or a thrown error hides that tab only — the four built-in tabs keep working. PR template (for the package's own repo, or an issue here documenting it):
+**Community package (local install).** A package is one ESM file exporting `parsers`; each Parser names the agent it claims and folds calls into the plugin's DTO. The host loads it in a Bun Worker, and it is not imported at all until a read needs it. A package whose declared `api` does not match is rejected before import. A timeout or a thrown error hides that tab only — the four built-in tabs keep working.
+
+Declare the package in `<dataDir>/plugins/plugins.json` (on macOS the data directory is `~/Library/Application Support/tracery`):
+
+```json
+{
+  "plugins": [
+    { "id": "todo", "api": 1, "agent": "acme", "entry": "acme-todo/index.ts" }
+  ]
+}
+```
+
+`id` must be one the core registers (`src/plugins/registry.ts`); `agent` is the value the collector stores on that agent's requests; `entry` resolves inside the plugin root and may not leave it. A community Parser takes over its agent — the built-in Parser for that agent steps aside so two state machines never fold the same calls. `api` is `PLUGIN_API` in `src/plugins/types.ts`.
+
+```ts
+export const parsers = [{
+  agent: 'acme',
+  parse(call: { toolName: string; input: unknown },
+    previous: { seq: number; items: { content: string; status: string }[] } | null) {
+    if (call.toolName !== 'acme_todo') return null;   // abstain
+    return { seq: (previous?.seq ?? 0) + 1, items: [] };
+  },
+}];
+```
+
+Restart the collector after editing the manifest; there is no hot reload. A timeout, a thrown error or a malformed snapshot leaves that turn's tab showing "read failed" rather than an empty list. PR template (for the package's own repo, or an issue here documenting it):
 
 ```markdown
 ## Package
-<id, api version, tab key, entry file>
+<id, api version, agent, entry file>
 
 ## Trust
 This code runs in a Worker in the collector process with host permissions.
@@ -88,6 +113,7 @@ Only install code you trust. List every file the package reads or writes.
 ## Verification
 - [ ] api mismatch is rejected, built-in track unaffected
 - [ ] timeout / throw hides only the community tab
+- [ ] malformed snapshot is rejected, not rendered
 - [ ] no third-party runtime dependencies
 ```
 

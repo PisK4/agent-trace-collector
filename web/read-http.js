@@ -146,7 +146,7 @@ export function createHttpReadTransport({ fetcher, baseUrl = '', headers }) {
         // 新具名操作：身份、时点与列表形状都要完整，畸形 DTO 不进缓存。
         if (!isObj(parsed) || typeof parsed.key !== 'string' || typeof parsed.actor !== 'string'
           || !Number.isSafeInteger(parsed.turn) || parsed.turn < 1
-          || !['ready', 'absent', 'unavailable'].includes(parsed.state)) reject();
+          || !['ready', 'absent', 'unavailable', 'failed'].includes(parsed.state)) reject();
         const snapshot = parsed.snapshot;
         if (parsed.state !== 'ready') { if (snapshot !== null) reject(); return; }
         if (!isObj(snapshot) || !Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0
