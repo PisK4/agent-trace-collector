@@ -14,6 +14,7 @@ import { claudeAdapter } from './adapters/claude';
 import { codexAdapter } from './adapters/codex';
 import { dshAdapter } from './adapters/dsh';
 import { grokAdapter } from './adapters/grok';
+import { hermesAdapter } from './adapters/hermes';
 import { ompAdapter } from './adapters/omp';
 import { piAdapter } from './adapters/pi';
 import { workbuddyAdapter } from './adapters/workbuddy';
@@ -24,6 +25,7 @@ export const SESSION_ADAPTERS: readonly SessionAdapter[] = [
   codexAdapter,
   dshAdapter,
   grokAdapter,
+  hermesAdapter,
   zcodeAdapter,
   ompAdapter,
   piAdapter,

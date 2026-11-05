@@ -18,7 +18,7 @@ import { canonicalSessionId } from '../../evidence';
 
 export type SessionKind = Extract<SourceKind,
   'claude_session' | 'codex_session' | 'dsh_session' | 'grok_session'
-  | 'omp_session' | 'pi_session' | 'workbuddy_session' | 'zcode_session'
+  | 'hermes_session' | 'omp_session' | 'pi_session' | 'workbuddy_session' | 'zcode_session'
   | 'droid_transcript'>;
 
 /** magpie 口径的四段用量；缺任一段的调用记 null，不用 0 冒充。 */
