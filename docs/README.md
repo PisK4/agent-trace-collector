@@ -21,6 +21,7 @@
 | [operations.md](operations.md) | 运维手册：维护命令与错误码、备份与恢复流程、维护锁、掉电边界、费用时钟冲突诊断、容量门槛、切换核对与 AVA 下线/回滚步骤 |
 | [patrol.md](patrol.md) | 巡查程序：容量、证据链与摄入产出比三条核心，每次迭代/每周/触发式/一次性的节奏，判定口径与误报边界；可计算部分与阈值归 `scripts/patrol.ts` |
 | [otlp-exporter-profile.md](otlp-exporter-profile.md) | 对外接入规范：harness 侧 OTLP exporter 的传输认证、属性 profile、登记要求与版本承诺 |
+| [plugin-guide.md](plugin-guide.md) | Plugin 开发者指引：准入判据与现有能力评估、内置 Parser 与本地 Parser 包、本地 Feature 包的完整形态（规划中）、提案模板与失败排查 |
 | [acceptance.md](acceptance.md) | 各轮验收记录：单一轨迹界面的合成验收、历史双视图验收、真实流量暴露的问题、标题与主链、保留与容量、维护与恢复、切换核对 |
 | [AGENTS.md](AGENTS.md) | 文档分层、写作规则与文风禁区；note 与架构文档的接缝 |
 | [架构演进实施入口](superpowers/plans/2026-10-22-atc-evolution-implementation.md) | A—F 批次依赖、跨计划验收、执行导航与交付记录 |

@@ -22,7 +22,7 @@ Plugin 只交 DTO。核心管取数、转义、缓存、失败与页签槽位，
 
 ### 首批 Plugin 与 Parser
 
-Feature 指一类可解释的阅读能力，Parser 指某家 Agent 对该能力的形状适配，Plugin 指可注册、可关闭的一份能力包。首版只做 Todo 一个 Plugin，内含四个 Parser。第一批做全量快照型的 zcode 与 droid，验证第五页签、读取契约与静态登记；第二批做增量命令型的 pi 与 omp，验证同一 Plugin 能容纳重放状态机。Todo 跑通之前不立第二个 Plugin；Plan、Subagent、Skill 调用留作后续候选，本轮只排序。
+Feature 指一类可解释的阅读能力，Parser 指某家 Agent 对该能力的形状适配，Plugin 指可注册、可关闭的一份能力包。首版只做 Todo 一个 Plugin，内含四个 Parser。第一批做全量快照型的 zcode 与 droid，验证第五页签、读取契约与静态登记；第二批做增量命令型的 pi 与 omp，验证同一 Plugin 能容纳重放状态机。Todo 跑通之前不立第二个 Plugin；Plan、Subagent、Skill 调用留作后续候选，本轮只排序。后续候选的逐项结论与本地 Feature 包的完整形态见[Plugin 准入边界与本地 Feature 包契约](2026-11-05-plugin-admission-and-feature-package-api.md)。
 
 旧功能不做搬迁。右栏四页签内部的 skill chip、WebSearch 子事件卡、工具往返配对页只是在既有页签里多渲染一种行或卡片，搬走只能证明能搬，证明不了可注册、可关闭。会话汇总组清单看起来像独立页签，实际由 `web/app.js:1409` 的 `summaryList` 把右栏整块替换，优先于轮次态与请求态；它没有独立页签槽位，按同一判据留到 Todo 闭环之后再评估。摄入、derive、schema、三路证据收敛、HTTP 身份认证、读取架构的调度与缓存留在核心；它们是账本与信任边界，关掉任何一项都会让数据不完整或不可信。`src/harness/purpose.ts` 的 `PURPOSE_RULES` 与 `src/sources/session/registry.ts` 的 `SESSION_ADAPTERS` 已经给出登记加注入关闭的现成形状，前者有 `tests/harness-purpose.test.ts` 的注入式测试 seam；两者分别属于 derive 期与摄入期，原地保留，Plugin 的登记数组照它们的形状写。
 

@@ -137,7 +137,7 @@ This is where you check whether a request carried something it shouldn't have: h
 
 The session list holds sessions from different harnesses, using an Agent tag for distinction and filtering. When a session involves several agents, the row shows the primary agent and `+N`. Claude Code, OMP and Codex CLI are supported today. Adding a harness costs one stable `service.name` plus one selection rule — the contract is in the [OTLP exporter profile](docs/otlp-exporter-profile.md).
 
-Reading capabilities are registered as Plugins: one entry in `src/plugins/registry.ts` gives a capability its rail tab and the Parsers that adapt each agent's tool shape. Todo is the first Plugin. See [Contributing](CONTRIBUTING.md#plugin-contributions) for the two PR shapes.
+Reading capabilities are registered as Plugins: one entry in `src/plugins/registry.ts` gives a capability its rail tab and the Parsers that adapt each agent's tool shape. Todo is the first Plugin. The [Plugin developer guide](docs/plugin-guide.md) covers the author contract, the two contribution paths available today, and the planned form for community-defined features.
 
 ## What records, and where it lives
 
@@ -204,6 +204,7 @@ All design documents are written in Chinese. The [glossary](GLOSSARY.md) pairs e
 - [Architecture](docs/architecture-design.md) — evidence identity, storage model, derivation, capacity, security boundary
 - [Operations](docs/operations.md) — maintenance commands, backup and restore, capacity thresholds
 - [OTLP exporter profile](docs/otlp-exporter-profile.md) — the contract for harness authors
+- [Plugin developer guide](docs/plugin-guide.md) — the plugin contract, admission criteria, the two contribution paths available today, and the planned feature-package form
 - [Acceptance record](docs/acceptance.md) — per-round validation against synthetic and real traffic
 - [Project positioning](docs/project-overview.md) — why the unit is a request and the reading unit is a session
 - [Glossary](GLOSSARY.md)

@@ -58,7 +58,7 @@ The README has an English version, but `docs/` and the notes are Chinese, with E
 
 ## Plugin contributions
 
-A Plugin is one registered reading capability (`src/plugins/registry.ts`). A Parser adapts one agent's tool shape to that capability's DTO. Both are contributions, but they land in different places.
+The author contract lives in the [Plugin developer guide](docs/plugin-guide.md): what a Plugin is, which capabilities qualify, the exact Parser and package shapes, failure isolation, and the planned feature-package API. Read it before opening a PR.
 
 **Built-in Parser (in-repo PR).** Add a file under `src/plugins/<plugin>/parsers/`, one line in that plugin's `parsers` array, and a synthetic test that covers a hit, a lookalike miss, missing parameters and reclaimed bodies. Parsers import nothing outside `src/plugins/`, never fetch, never produce HTML; `tests/plugin-boundaries.test.ts` enforces it. Add the Chinese strings your tab renders to `web/i18n-en.js` (`tests/i18n-coverage.test.ts` checks this). PR template:
 
@@ -75,32 +75,9 @@ A Plugin is one registered reading capability (`src/plugins/registry.ts`). A Par
 - [ ] bun run verify:notes:staged
 ```
 
-**Community package (local install).** A package is one ESM file exporting `parsers`; each Parser names the agent it claims and folds calls into the plugin's DTO. The host loads it in a Bun Worker, and it is not imported at all until a read needs it. A package whose declared `api` does not match is rejected before import. A timeout or a thrown error hides that tab only — the four built-in tabs keep working.
+**Community package (local install).** A package is one ESM file exporting `parsers`, declared in `<dataDir>/plugins/plugins.json`. The host loads it in a Bun Worker, rejects an `api` mismatch before import, and a timeout or thrown error hides only that tab. The guide covers the manifest fields, agent takeover and failure behavior.
 
-Declare the package in `<dataDir>/plugins/plugins.json` (on macOS the data directory is `~/Library/Application Support/tracery`):
-
-```json
-{
-  "plugins": [
-    { "id": "todo", "api": 1, "agent": "acme", "entry": "acme-todo/index.ts" }
-  ]
-}
-```
-
-`id` must be one the core registers (`src/plugins/registry.ts`); `agent` is the value the collector stores on that agent's requests; `entry` resolves inside the plugin root and may not leave it. A community Parser takes over its agent — the built-in Parser for that agent steps aside so two state machines never fold the same calls. `api` is `PLUGIN_API` in `src/plugins/types.ts`.
-
-```ts
-export const parsers = [{
-  agent: 'acme',
-  parse(call: { toolName: string; input: unknown },
-    previous: { seq: number; items: { content: string; status: string }[] } | null) {
-    if (call.toolName !== 'acme_todo') return null;   // abstain
-    return { seq: (previous?.seq ?? 0) + 1, items: [] };
-  },
-}];
-```
-
-Restart the collector after editing the manifest; there is no hot reload. A timeout, a thrown error or a malformed snapshot leaves that turn's tab showing "read failed" rather than an empty list. PR template (for the package's own repo, or an issue here documenting it):
+Restart the collector after editing the manifest; there is no hot reload. A malformed snapshot leaves that turn's tab showing "read failed" rather than an empty list. PR template (for the package's own repo, or an issue here documenting it):
 
 ```markdown
 ## Package
@@ -116,6 +93,8 @@ Only install code you trust. List every file the package reads or writes.
 - [ ] malformed snapshot is rejected, not rendered
 - [ ] no third-party runtime dependencies
 ```
+
+New Features are not drop-in packages yet. Propose them first; the guide's feature proposal template and admission criteria are the starting point. The planned feature-package API is specified there but not implemented.
 
 External code has host permissions: the Worker isolates crashes and timeouts, not privileges. Do not install packages that read credentials, tokens or real request bodies.
 

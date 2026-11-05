@@ -125,7 +125,7 @@ assistant 文本行尾是推理段耗时，工具调用与结果行尾是执行�
 
 左栏会话列表装不同 harness 的会话，用 Agent 标签区分与过滤；同一会话涉及多个 Agent 时，行上显示主 Agent 与 `+N`。已适配 Claude Code、OMP 与 Codex CLI。新增 harness 的成本是一个稳定的 `service.name` 加一行选取规则，规范见 [OTLP exporter 接入 profile](docs/otlp-exporter-profile.md)。
 
-页面阅读能力按 Plugin 注册：`src/plugins/registry.ts` 的一项给出页签槽位与各家 Agent 的形状适配 Parser。Todo 是第一个 Plugin，两类 PR 的写法见[参与](CONTRIBUTING.md#plugin-contributions)。
+页面阅读能力按 Plugin 注册：`src/plugins/registry.ts` 的一项给出页签槽位与各家 Agent 的形状适配 Parser。Todo 是第一个 Plugin，作者契约、今天可用的两条贡献路径与新 Feature 的完整形态见 [Plugin 开发者指引](docs/plugin-guide.md)。
 
 ## 记录什么，存在哪
 
@@ -190,6 +190,7 @@ bun run verify:notes      # 变更 note 闸门，维护者用
 - [架构设计](docs/architecture-design.md)：证据身份、存储模型、派生、容量与安全边界
 - [运维手册](docs/operations.md)：维护命令、备份恢复、容量门槛、派生切片
 - [OTLP exporter 接入 profile](docs/otlp-exporter-profile.md)：harness 作者的对接规范与登记方式
+- [Plugin 开发者指引](docs/plugin-guide.md)：准入判据、今天可用的两条贡献路径、本地 Feature 包的完整形态
 - [验收记录](docs/acceptance.md)：各轮合成与真实流量的验收结果
 - [项目定位](docs/project-overview.md)：记录单位与阅读入口的取舍
 - [领域术语表](GLOSSARY.md)：术语定义与边界
