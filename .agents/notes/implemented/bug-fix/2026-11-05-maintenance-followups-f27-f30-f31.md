@@ -62,7 +62,7 @@ Status: implemented
 - 冲突时整批不写。运维需要先处理冲突键再重跑；预览 JSON 的 `conflicts` 会给出表、目标键与旧值。预览命令本身仍以 `ok:true`、退出 0 输出，自动化要读 `conflicts` 字段，或在应用阶段接收 `response_id_conflict`。
 - 合法现场（唯一路由行 + 有等待项的 hook 行）不受影响，原 `response-ids.test.ts` 的合并用例仍通过。
 - 恢复旧包会实际执行一次迁移，耗时与首次启动相同；恢复成功后发布的是当前版本的库，清单同步更新。恢复目录可能带空的 `trace.db-wal`/`trace.db-shm`，权限同为 0600。
-- 新增失败码 `restore_migration_failed`。它表示包结构与当前迁移不兼容，不是包损坏；运维文档尚未收录，需要与 `restore_bundle_invalid` 分节说明。
+- `restore_migration_failed` 表示 staging 内迁移或可服务性检查失败；包校验失败另用 `restore_bundle_invalid`。恢复步骤与错误处理见[运维手册](../../../../docs/operations.md)。
 - 旧结构夹具只覆盖 v6（白名单下界）。v7–v13 走同一条加列链，但没有各版本的独立样本；以后改动迁移分支时应补对应夹具。
 - `migrateStagedDatabase` 用 `verify.ts` 的 `CODE_SCHEMA_VERSION` 断言迁移结果，未从 `store.ts` 扩大导出面；两处数字由既有 precheck 测试钉住。
 
@@ -71,4 +71,4 @@ Status: implemented
 - `bun test tests/response-ids.test.ts tests/restore-migration.test.ts tests/maintenance.test.ts`：44 pass、0 fail。
 - `bun run typecheck`：通过。
 - 旧实现回放：把 `src/maintenance/response-ids.ts` 与 `src/maintenance/backup.ts` 暂存回退后重跑同一批新用例，冲突用例、v6 恢复升级用例与迁移失败原子性用例均失败：旧代码不报冲突、恢复后清单仍是 `schema:6`、缺 `tool_call` 的包被直接发布。
-- 合成数据范围：真实 v6 建表链、合成盐与合成请求；没有复制生产库、个人盐或真实正文，也没有跑全量套件、生产巡查或真实旧包恢复。
+- 合成数据范围：真实 v6 建表链、合成盐与合成请求；没有复制生产库、个人盐或真实正文。组内验证未跑全量套件或真实旧包恢复；整合后的部署与只读巡查见[生产验收](../../../../docs/acceptance.md#开放缺陷生产部署真实流量2026-11-06)。

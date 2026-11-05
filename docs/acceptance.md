@@ -6,6 +6,30 @@
 
 记录里的数字、端口、pid 与耗时都来自作者机器，用于说明当时怎么判断，不是可复现的基准。
 
+## 开放缺陷生产部署（真实流量，2026-11-06）
+
+前提：实现 `5f95f1a` 以 `--no-ff` 合并为 master `1adef83`，schema 仍为 v14。用 `bun run service stop` 停止旧进程后，在私有目录制作包含数据库、脱敏盐与 manifest 的一致恢复 bundle，耗时 54,237 ms；目录 0700、文件 0600。恢复包保留在本机 `~/Library/Application Support/tracery-findings-20261105-8yZAus/bundle`，不随仓库提交。预检返回 `ok:true`、`state:in_place`、db/code 均为 14；`bun run service start` 后 pid 68920，约 12 秒进入服务。没有使用真实数据构造测试夹具。
+
+| 检查 | 实测 |
+| --- | --- |
+| HTTP 冒烟 | `bun run patrol smoke` 的 6 项全部 ok：limit 0、201、1.5，畸形百分号编码，非法方向及正文 from=1e20 均按契约返回 400 |
+| 容量精确对账 | `capacity-check` 四项字节与行数 delta 全为 0；block 1,078,269,266 B / 274,883 行，request 1,602,692,464 B / 124,337 行，raw_hook 0 B / 49,042 行，raw_session_event 1,563,582,883 B / 270,600 行 |
+| 持续读接口 | 12 轮、轮间 5 秒，每轮依次读取 metrics、10 条 sessions 与 stats，共 36 次全部成功；实际历时还包含各请求耗时，不是严格等间隔基准 |
+| `/api/metrics` | min / median / max 为 3 / 4 / 2,542 ms；部署后首次另测为 4 / 1 / 1 ms，不能用首次快响应代替持续窗口 |
+| `/api/sessions?limit=10` | min / median / max 为 107 / 1,039 / 3,488 ms |
+| `/api/stats` | min / median / max 为 328 / 858 / 2,508 ms |
+| 事件循环与任务 | 最后样本 p50 1.0 ms、p95 12.5 ms、p99 862.5 ms、max 10,601.4 ms；`derive` 累计任务 max 10,534 ms、`sessions` max 40,018 ms、`retention` max 126.8 ms。任务时长可能包含调度等待，不能逐项当作对应 SQL 阻塞量 |
+| 派生与准入 | 最后样本 pending_groups=0、准入 normal；这不证明所有历史证据均完整 |
+| 周巡查 | 只读采集耗时 20,952 ms，退出 1；越界为 body_ratio 31.6% 与 otlp_yield 15 条 LLM span / 0 条匹配证据。四源逻辑载荷 4,048.3 MiB；capacity_meter、freelist 0 页、WAL 2.2 MiB、可用磁盘 31.9% 及其余判定项正常 |
+
+OTLP 周窗共有 216,076 条 span，其中非 LLM 215,997、未知形状 64、LLM 15。生命周期与分母修复后仍能看见真实证据缺口，本轮没有重放 raw 或放宽阈值。周任务会读取 raw 属性和 dbstat，存在只读 I/O 开销；它不是新加的在线扫描。持续窗口没有消除所有长尾，整体卡顿仍需沿既有摄入与派生路径定位，不能仅凭重启后的计数归零判定修复。
+
+存量订正仅完成预览：F09 为 671 条（claude 610、hermes 61，均为 2026-10-31 的 disk_body_paused、HAVE_BODY、无骨架 pending），目标是 pending→partial 并推进派生修订，不会恢复正文。F24 可重算 29,042 条、逻辑字节合计 8,074,543,091 B，另有 344 条引用不完整而不纳入；历史 redact_version 不猜测。逻辑字节合计含共享块，不能解释为物理释放量，实际应用前还需重新预览计数。
+
+自动审批拒绝了 `body-consistency --apply --approval-id confirmed-findings-20261105 --expected-candidates 671`：通用的修复与生产测试授权未具体覆盖这批既有生产记录的永久订正。命令未执行，F24 回填与真实 raw 清理也未执行，没有通过其他入口改写。备份、代码部署和只读验收完成，不等于这两批存量订正完成。
+
+部署前浏览器基线完成，页面导航 961 ms、会话首请求 1,407 ms，相关 API 均 200；部署后原浏览器 task space 消失，页面交互复验未完成，持续 HTTP 检查不能替代页面验收。新进程采样时 `raw_prune` 尚未自然触发，F11 的真实定时清理结果未覆盖；当前磁盘未触顶，F39 的真实水位触发未覆盖。上述两项已有合成回归和大载荷验证，不能写成真实流量触发通过。没有跑全量测试或真实旧包恢复。
+
 ## 开放缺陷确认与修复（合成，2026-11-05）
 
 基于 master `a586d4f`，四组隔离实施后由主 Agent 整合。修复前分别复现 F09 合并 partial 状态丢失、F24 搬正文漏元数据、F25 模型不同仍被弱窗认领、F27 规范化同键冲突、F30 旧包未迁移即发布、F23 失败组阻塞健康组，以及 F37 巡查误报与生命周期错位。F31 保持 DB-only 备份 `ok:true` 与 `ingestion_restorable:false` 分别表达的语义。

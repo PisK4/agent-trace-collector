@@ -33,7 +33,7 @@ OTLP traces（[ingest.ts](../../../../src/sources/otlp/ingest.ts)）的 `AcceptO
 
 ## Consequences
 
-- 生产上 `otlp_yield` 会按新的 LLM 分母继续报越界：窗口内 16 条 LLM span、1 条证据，覆盖率 6.25%，属于 F37 的原有缺口，不是本次引入。
+- 按 LLM 分母核对后，实际缺失证据仍会越界；补 skipped 和统一窗口不等于补齐采集。部署读数与残余问题见[生产验收](../../../../docs/acceptance.md#开放缺陷生产部署真实流量2026-11-06)。
 - 巡查每周会解析保留窗内的 raw span 属性 JSON（本机约 80 MB），仍是一次只读周任务，没有新增在线扫描。
 - 分类使用当前 mapping 版本；跨 mapping 升级的窗口内旧 raw 可能被重新分类，读数要结合 `OTLP_MAPPING_VERSION` 看。
 - 切片派生路径（`store.deriveRuntime`）的调度没有改动，本次只修同步候选查询。

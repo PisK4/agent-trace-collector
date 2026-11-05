@@ -52,7 +52,7 @@ export function capacityMeterEvictableBytes(db): number
 
 - 单次最多准备 2,000 个候选键/表；批间墙钟与载荷上限还会进一步限制实际处理数。超期存量大的首轮需要多个 tick 收敛，验收看连续多轮计数下降，不能看单次调用是否归零。
 - 单条超大行、单条 SQL 的同步执行、繁忙时的 checkpoint 仍是不可抢占的残余；准备扫描仍可能一次读完某张无索引表。这些边界写在代码注释与 `## Testing` 的断言里，不用「严格墙钟有界」描述。
-- 磁盘目标不可达时返回 0 是有意行为：告警与报告应显示「可回收上界不足」，而不是让回收循环继续删正文假装在收敛。
+- 磁盘目标不可达时停止磁盘驱动的正文删除；正文逻辑预算仍独立执行，调用结果不保证为 0。单独给磁盘回收增加批次也无法解决长期元数据占用。
 - 会话代际游标是进程内状态，重启后从最小代际重新开始；幂等删除保证重复扫描不会多删。
 
 ## Testing
@@ -67,7 +67,7 @@ export function capacityMeterEvictableBytes(db): number
 - 「磁盘触顶先回收空闲页，回到阈值下就不淘汰正文」：旧实现 `evicted=1`，现为 0。
 - 「磁盘压力用独立目标，按可回收上界继续淘汰而不是每轮只删一批」：旧实现只删 100，现按缺口继续淘汰。
 
-`bun run typecheck` 通过；`bun test tests/retention.test.ts` 32 通过；与本改动相关的 6 个测试文件（retention、capacity-meter、capacity、metrics-light、commit-unit、store）合计 53 通过。
+`bun run typecheck` 通过；`bun test tests/retention.test.ts` 32 通过；与本改动相关的 6 个测试文件（retention、capacity-meter、capacity、metrics-light、commit-unit、store）合计 53 通过。主整合另补磁盘目标不可达时正文预算仍执行的回归；大载荷与部署边界见[验收记录](../../../../docs/acceptance.md#开放缺陷生产部署真实流量2026-11-06)。
 
 ## Related
 
