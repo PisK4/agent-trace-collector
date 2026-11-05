@@ -157,6 +157,8 @@ export const dict = {
     'No callback evidence in this store. That does not mean the upstream never called back: delivery timeouts and host aborts give up silently.',
   '本库没有这笔的账本证据：回调没有携带可核验的 response ID，两边各自成行，不按时间近邻合并。':
     'No ledger evidence for this request in this store: the callback carried no verifiable response ID, so both sides form separate rows, not merged by time proximity.',
+  '本库没有这笔的账本证据：本地会话行没有与网关行唯一对齐，两边各自成行。':
+    'No ledger evidence for this request in this store: the local session call did not align uniquely with a gateway row, so both sides form separate rows.',
   '证据': 'Evidence',
 
   /* rail-facts:计时与用量读数 */
@@ -246,8 +248,10 @@ export const dict = {
   '状态待确认': 'Status unconfirmed',
   '上游没有报告状态码': 'Upstream reported no status code',
   'OTLP 通道': 'OTLP channel',
-  'droid 会话文件': 'droid session file',
-  '请求体由 droid 会话文件重建，不含 system prompt 与工具定义': 'Request body reconstructed from the droid session file; system prompt and tool definitions are not included',
+  '会话文件': 'session file',
+  '{agent} 会话文件': '{agent} session file',
+  '请求体由会话文件重建，不含 system prompt 与工具定义': 'Request body reconstructed from the session file; system prompt and tool definitions are not included',
+  '请求体由 {agent} 会话文件重建，不含 system prompt 与工具定义': 'Request body reconstructed from the {agent} session file; system prompt and tool definitions are not included',
   '会话文件正文': 'Session-file body',
   '不可读': 'Unreadable',
   '仅回调，未关联账本': 'Callback only, no ledger row linked',
