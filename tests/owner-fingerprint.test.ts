@@ -216,11 +216,22 @@ test('没有结束时间就不走完成时间对齐', () => {
   }
 });
 
-test('网关缺时长时完成时间对齐跳过，仍由开始窗兜底', () => {
+test('网关缺时长时完成时间对齐跳过，来源有完成时间也不再退回弱开始窗', () => {
+  const f = fixture();
+  try {
+    seedCall(f.store, { startedMs: 10_000, usage: { ...USAGE, input: 101 } });
+    expect(find(f.store, { startedMs: 10_500, endMs: 11_000, model: null, usage: null }))
+      .toEqual({ reqId: null, outcome: 'absent', rule: null });
+  } finally {
+    f.close();
+  }
+});
+
+test('来源没有完成时间时仍由弱开始窗兜底', () => {
   const f = fixture();
   try {
     const reqId = seedCall(f.store, { startedMs: 10_000, usage: { ...USAGE, input: 101 } });
-    expect(find(f.store, { startedMs: 10_500, endMs: 11_000, model: null, usage: null }))
+    expect(find(f.store, { startedMs: 10_500, endMs: null, model: null, usage: null }))
       .toEqual({ reqId, outcome: 'matched', rule: 'conv_time_model.v1' });
   } finally {
     f.close();
