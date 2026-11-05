@@ -12,30 +12,30 @@
 | 本机有数据 | 根目录存在且有会话文件，或有网关侧请求行 | 根目录扫描、`request.agent` 聚合 |
 | 已入库 | 这家的数据已经落成 `request` 行 | `request` 按 agent 分组、`request_evidence` 按 `source_kind` 分组 |
 
-三者可以两两不同。Hermes 有 4,778 笔网关侧请求，却没有本地会话游标；Qoder 在本机有数据，却没有适配器；目录里标 `unimplemented` 的几家大多连根目录都没有。把其中任何一个口径当成「已支持」，报告就会失真。
+三者可以两两不同。Qoder 在本机有数据，却没有适配器；目录里标 `unimplemented` 的几家大多连根目录都没有；同一家也可能只有网关侧行而没有本地游标，或反过来。把其中任何一个口径当成「已支持」，报告就会失真。
 
 ## 生产库现状
 
-`request` 按 agent 分组（2026-11-04 读数，随使用增长）：
+`request` 按 agent 分组（2026-11-05 读数，随使用增长）：
 
 | agent | request | 首日 | 末日 | 证据来源 |
 | --- | --- | --- | --- | --- |
-| claude | 52,838 | 2026-10-24 | 2026-11-04 | hook / ledger / route / `claude_session_call` |
+| claude | 58,282 | 2026-10-24 | 2026-11-05 | hook / ledger / route / `claude_session_call` |
+| codex | 17,715 | 2026-08-30 | 2026-11-03 | `codex_session_call` / 账本 |
+| omp | 13,644 | 2026-09-28 | 2026-11-05 | `omp_session_call` / 账本 |
 | droid | 9,582 | 2026-08-21 | 2026-08-30 | `session_call` |
 | zcode | 6,630 | 2026-10-05 | 2026-11-04 | `zcode_session_call` / 账本 |
-| codex | 6,198 | 2026-09-04 | 2026-11-03 | `codex_session_call` / 账本 |
-| omp | 6,070 | 2026-10-14 | 2026-11-04 | `omp_session_call` / 账本 |
-| hermes | 4,778 | 2026-10-27 | 2026-11-04 | hook / ledger / route，无本地游标 |
+| hermes | 6,134 | 2026-10-26 | 2026-11-05 | hook / ledger / route / `hermes_session_call` |
 | pi | 3,142 | 2026-08-21 | 2026-09-02 | `pi_session_call` |
 | dsh | 2,542 | 2026-08-22 | 2026-09-04 | `dsh_session_call` |
-| workbuddy | 131（回填中） | 2026-09-03 | 2026-09-03 | `workbuddy_session_call` |
+| magpie | 435 | 2026-10-26 | 2026-11-05 | 账本 / 路由 |
+| workbuddy | 141（已到 EOF） | 2026-09-03 | 2026-09-03 | `workbuddy_session_call` |
 | grok | 139（已到 EOF） | 2026-09-23 | 2026-09-23 | `grok_session_call` |
-| magpie | 413 | 2026-10-26 | 2026-11-04 | 账本 / 路由 |
 | 其它直连客户端 | 59 | 2026-10-25 | 2026-11-04 | 账本 |
 
-九家本地会话来源有游标：claude 48、codex 98、omp 90、zcode 83、dsh 77、pi 46、droid 216、workbuddy 6、grok 6（droid 走独立定时器，不在 `registry.ts` 轮转里）。`ingest_issue` 当前只落在 `omp_session`（28 条，消息内容与角色格式）与 `otlp_span`（8 条），其余来源为 0。DSH 回填收敛与批次 A 首轮的对账见[验收记录](acceptance.md)。
+十家本地会话来源有游标：claude 174、codex 383、omp 273、zcode 83、dsh 77、pi 46、droid 216、workbuddy 6、grok 6、hermes 159（droid 走独立定时器，不在 `registry.ts` 轮转里）。`ingest_issue` 当前落在 `omp_session`（64 条，消息内容与角色格式）、`otlp_span`（8 条）与 `zcode_session`（1 条，会话根不可读），其余来源为 0。DSH 回填收敛与批次 A 首轮的对账见[验收记录](acceptance.md)。
 
-Hermes 的位置值得单独说明：它的 4,778 行全部由 hook、账本、路由三种网关侧证据构成，本机 `.hermes` 有 205,607 个文件、约 5.2 GB，但采集器没有读这些文件。接本地 Hermes 适配器会把同一批调用第二次送进库，先要按[多来源同一调用的身份归一](../.agents/notes/proposed/feature/2026-11-04-multi-source-call-identity.md)处理认领，不能只补一个解析器。
+Hermes 有网关侧与本地两条路径。网关侧的行由 hook、账本、路由三种证据构成；本地 `~/.hermes/state.db` 由 `hermes_session` 适配器读取。本地行用首条 user 消息的 magpie 摘要挂到网关会话，摘要在本库不唯一（同 prompt 的 oneshot 会话）或算不出时退回本地会话键，不按时间近邻猜会话坐标。是否与网关行是同一笔由通用 owner 匹配决定：`messages.timestamp` 是落库时刻，按完成时间 ±2 秒唯一命中才合并；只有消息没有落库时刻时才退回弱开始窗。逐笔用量本地不可得，只有 `session_model_usage` 的会话级聚合。设计与真实读数见 [Hermes 会话适配器 note](../.agents/notes/implemented/feature/2026-11-05-hermes-session-adapter.md) 与[验收记录](acceptance.md)。
 
 ## 19 家矩阵
 
@@ -43,17 +43,17 @@ Hermes 的位置值得单独说明：它的 4,778 行全部由 hook、账本、�
 
 | Agent | 目录 status | 本机数据 | 生产库 | Magpie 参照 | 接入批次 |
 | --- | --- | --- | --- | --- | --- |
-| claude | `implemented` | `~/.claude/projects` 有 348 个 jsonl | 52,838 / 48 游标 | `claude.go`、`claude_usage.go` | 已接（第一版） |
-| codex | `implemented` | `~/.codex/sessions` 含 zst 归档 | 6,198 / 98 游标 | `codex.go`、`codex_discovery.go`、`codex_usage.go` | 已接（第一版） |
+| claude | `implemented` | `~/.claude/projects` 有 348 个 jsonl | 58,282 / 174 游标 | `claude.go`、`claude_usage.go` | 已接（第一版） |
+| codex | `implemented` | `~/.codex/sessions` 含 zst 归档 | 17,715 / 383 游标 | `codex.go`、`codex_discovery.go`、`codex_usage.go` | 已接（第一版） |
 | zcode | `implemented` | `~/.zcode/cli/db` SQLite | 6,630 / 83 游标 | `zcode.go`、`calls_zcode.go` | 已接（第一版） |
-| omp | `implemented` | `~/.omp/agent/sessions` 多根 | 6,070 / 90 游标 | `omp.go` | 已接（第一版） |
+| omp | `implemented` | `~/.omp/agent/sessions` 多根 | 13,644 / 273 游标 | `omp.go` | 已接（第一版） |
 | pi | `implemented` | `~/.pi/agent/sessions` | 3,142 / 46 游标 | `pi.go`、`calls_pi.go` | 已接（第一版，共用 OMP 解析） |
 | dsh | `implemented` | `~/.dsh/sessions` 77 目录 / 32.9 MB | 2,542 / 77 游标 | `dsh.go`、`calls_dsh.go`、`frames.go` | 已接（第二版） |
 | droid | `implemented` | `~/.factory/sessions` 648 文件 | 9,582 / 216 游标 | `droid.go` | 已接（独立定时器） |
-| workbuddy | `implemented` | `~/.workbuddy/projects` 6 个 jsonl / 3.65 MB，含 4 个 subagents 文件 | 已接，见[验收记录](acceptance.md) | `workbuddy.go`、`calls_workbuddy.go` | 批次 A（已交付） |
-| grok | `implemented` | `~/.grok/sessions` 6 会话 / 23 个 jsonl（`chat_history`、`events`、`updates`、`rewind_points` 各 6 份，另有 1 份 `prompt_history`），含 `summary.json`、`usage.json` | 已接，见[验收记录](acceptance.md) | `grok.go`（`readGrokSummary`、`parseGrok`、`grokUsage.tokens`） | 批次 A（已交付） |
+| workbuddy | `implemented` | `~/.workbuddy/projects` 6 个 jsonl / 3.65 MB，含 4 个 subagents 文件 | 141 / 6 游标 | `workbuddy.go`、`calls_workbuddy.go` | 批次 A（已交付） |
+| grok | `implemented` | `~/.grok/sessions` 6 会话 / 23 个 jsonl（`chat_history`、`events`、`updates`、`rewind_points` 各 6 份，另有 1 份 `prompt_history`），含 `summary.json`、`usage.json` | 139 / 6 游标 | `grok.go`（`readGrokSummary`、`parseGrok`、`grokUsage.tokens`） | 批次 A（已交付） |
 | qoder | `local_data` | `~/.qoder` 566 文件 / 78 MB；119 个 jsonl 共 1,164 行事件，零 assistant 回复与零 usage 字段 | 无 | `qoder.go`（仅 `QoderDir`，调用解析复用 `ccFiles`） | 不排期（等可读会话样本） |
-| hermes | `local_data` | `~/.hermes` 205,607 文件 / 5.2 GB，含 `state.db`、`projects.db`、`kanban.db` | 4,778（网关侧） | `hermes.go`、`hermes_display.go` | 批次 C（先解决去重） |
+| hermes | `implemented` | `~/.hermes/state.db` 168 会话 / 11,762 行消息，含压缩归档与 rewind 三态 | 6,134 / 159 游标 | `hermes.go`、`hermes_display.go` | 已接（批次 C） |
 | codebuddy | `unimplemented` | `~/.codebuddy` 仅 3 个 memwatch 日志，无 `projects/` 目录 | 无 | `workbuddy.go` 的 `codebuddyFiles()`、`buddyFiles()`（与 WorkBuddy 共用） | 不排期（等项目会话目录） |
 | opencode | `unimplemented` | `~/.config/opencode` 仅 3 个配置文件，无会话库 | 无 | `opencode.go`、`calls_opencode.go`、`traces_opencode_db.go` | 批次 C |
 | qoder-cn | `unimplemented` | 无根目录 | 无 | `qoder.go`（`QoderDir("qoder-cn")`） | 不排期 |
@@ -63,11 +63,11 @@ Hermes 的位置值得单独说明：它的 4,778 行全部由 hook、账本、�
 | kimi | `unimplemented` | 无根目录 | 无 | `kimi.go`、`calls_kimi.go`、`transcript_kimi.go` | 不排期 |
 | agy | `unimplemented` | 无根目录 | 无 | `agy.go`、`calls_agy.go` | 不排期 |
 
-目录 status 与本机实测有出入的地方，以矩阵为准：`~/.codebuddy` 与 `~/.config/opencode` 有根目录，但里面没有会话文件，标 `unimplemented` 描述的是「格式已知、本机没有数据」，不是「没装」。`~/.hermes` 有大量数据，标 `local_data` 描述的是「有根、未接入」，不是「数据少」。目录骨架不存这些细节，所以本文补上。
+目录 status 与本机实测有出入的地方，以矩阵为准：`~/.codebuddy` 与 `~/.config/opencode` 有根目录，但里面没有会话文件，标 `unimplemented` 描述的是「格式已知、本机没有数据」，不是「没装」。目录骨架不存这些细节，所以本文补上。
 
 ## 格式差异决定工作量
 
-未接入的几家解析难度差别很大，按「一份文件能不能独立还原一笔调用」排。批次 A 两家的实现已交到[验收记录](acceptance.md)，下面保留格式差异作为后续批次的判据，Hermes 另说：
+未接入的几家解析难度差别很大，按「一份文件能不能独立还原一笔调用」排。批次 A 两家的实现已交到[验收记录](acceptance.md)，下面保留格式差异作为后续批次的判据：
 
 **WorkBuddy 最接近现有适配器。** `~/.workbuddy/projects/<project>/<uuid>.jsonl` 每行是带 `id`、`timestamp`、`type`、`role`、`content` 的消息；抽样一个主会话有 45 条 `role=assistant`、15 条 `role=user`，另有 `function_call`、`function_call_result`、`reasoning`、`output_text` 等行型。`subagents/agent-*.jsonl` 与主会话同形。这与 Claude Code 适配器的消息窗口模型一致，正文协议可复用 `anthropic` 或 `chat` 的判断路径。Magpie 的 `calls_workbuddy.go` 有逐行建调用的实现可核对。
 
@@ -79,7 +79,7 @@ Magpie 的 `qoder.go` 注释说 `projects/<项目>/<id>.jsonl` 与 Claude Code �
 
 **CodeBuddy 连会话目录都不存在。** `~/.codebuddy` 只有 3 个 `cli-memwatch-*.log`（内存与 CPU 采样），`~/Library/Application Support/CodeBuddyExtension` 下只有 1 个 4 KB 的 auth 文件；没有 `projects/`。Magpie 的 `codebuddyFiles()` 与 WorkBuddy 共用 `buddyFiles()` 读 `projects/`，复用批次 A 的解析器本身成本低，但本机没有可读样本，合成 fixture 之外的验收为零。
 
-Hermes 是另一类：`~/.hermes` 下有多个 SQLite 库与 20 万个文件，Magpie 的 `hermes.go`、`hermes_display.go` 处理的是它自己的 state.db 形状。本机已有 4,778 笔网关侧请求，接本地来源前必须先定认领规则，否则同一调用会按本地证据和网关证据各建一行。
+Hermes 是另一类：`~/.hermes` 下有多个 SQLite 库与 20 万个文件，Magpie 的 `hermes.go`、`hermes_display.go` 处理的是它自己的 `state.db` 形状。它的展示顺序由 `display_order` 决定，不是插入 id：压缩与 rewind 会插入新副本，本机有 1,748 行的 id 序与展示序不一致。适配器照抄 Hermes 自己的展示投影，退化成「按 id 排」会直接打乱请求窗口；逐笔用量在本地库里不存在，只有会话级聚合。
 
 ## 分批路线
 
@@ -95,9 +95,9 @@ Hermes 是另一类：`~/.hermes` 下有多个 SQLite 库与 20 万个文件，M
 
 恢复排期的判据是「至少有一个文件同时含 assistant 回复与逐笔用量」，不是「目录里有 jsonl」。Qoder 若换版本把调用正文写进 `projects/`，或 CodeBuddy 建出项目会话目录，重新做一次结构侦查再排；CodeBuddy 届时可复用 WorkBuddy 的 `buddyFiles()` 同构解析。
 
-### 批次 C：Hermes 与 OpenCode
+### 批次 C：OpenCode（Hermes 已交付）
 
-Hermes 等[多来源同一调用的身份归一](../.agents/notes/proposed/feature/2026-11-04-multi-source-call-identity.md)落地后再接，先按网关侧 4,778 行与本地 state.db 对账，确认唯一命中率。OpenCode 本机只有配置文件、没有会话库，等有真实数据再排。
+Hermes 的本地适配器已交付：顺序照抄 `display_order` 展示投影，会话坐标用唯一时才采信的 magpie 摘要，逐笔用量留 null、累计值写 `session_usage`。实现在 `src/sources/session/adapters/hermes.ts`，设计与实测见 [Hermes 会话适配器 note](../.agents/notes/implemented/feature/2026-11-05-hermes-session-adapter.md)，生产读数见[验收记录](acceptance.md)。OpenCode 本机只有配置文件、没有会话库，等有真实数据再排。
 
 ### 不排期
 

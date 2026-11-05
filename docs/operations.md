@@ -169,6 +169,10 @@ bun run maintain normalize-response-ids --db '<dataDir>/trace.db' --apply --appr
 bun run maintain dedupe-sessions --db '<dataDir>/trace.db'
 bun run maintain dedupe-sessions --db '<dataDir>/trace.db' --apply --approval-id '<你的审批标识>'
 
+# 重置一个本地会话来源并从头重摄入：删独占行、摘混合行证据、清游标与原始行，默认只预览
+bun run maintain reset-source --db '<dataDir>/trace.db' --source hermes_session
+bun run maintain reset-source --db '<dataDir>/trace.db' --source hermes_session --apply --approval-id '<你的审批标识>'
+
 # 长期元数据淘汰，默认只预览；--before 必须是合法日历日且不得晚于今天，命中全库的删除要再带 --allow-all
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01
 bun run maintain purge-metadata --db '<dataDir>/trace.db' --before 2026-09-01 --apply --approval-id '<你的审批标识>'

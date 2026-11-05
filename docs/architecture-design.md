@@ -405,7 +405,7 @@ fork 会话在 `forkedAtMessageId` 之前的行是源会话复制段：它们进
 
 ### 本地 Agent 会话适配器
 
-Claude Code、Codex、DSH、Zcode、OMP、Pi、WorkBuddy、Grok 与 droid 的本地会话走同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。19 家本地 Agent 的覆盖状态、本机数据与下一批接入顺序见[覆盖矩阵](agent-coverage.md)。
+Claude Code、Codex、DSH、Zcode、OMP、Pi、WorkBuddy、Grok、Hermes 与 droid 的本地会话走同一条采集缝：`src/sources/session/` 定义契约与共用摄入，`adapters/` 每家一个实现，`registry.ts` 的数组是调度次序。适配器只做发现、解析与归约；原始层、证据、正文、游标与去重归 `ingest.ts`，不各写一份。19 家本地 Agent 的覆盖状态、本机数据与下一批接入顺序见[覆盖矩阵](agent-coverage.md)。
 
 | Agent | 根 | 形态 | 调用单位 | 正文协议 |
 | --- | --- | --- | --- | --- |
@@ -417,9 +417,12 @@ Claude Code、Codex、DSH、Zcode、OMP、Pi、WorkBuddy、Grok 与 droid 的本
 | Pi | `$PI_CODING_AGENT_DIR` 或 `~/.pi/agent` 下的 `sessions`；全局 `settings.json` 的 `sessionDir` | JSONL | 同 OMP，共用解析器 | `anthropic` |
 | WorkBuddy | `$WORKBUDDY_CONFIG_DIR` 或 `~/.workbuddy` 下的 `projects`，含 `subagents/` | JSONL | `providerData.messageId`；同组行按 id 合并，组内任一行带 usage 即结算 | `chat` |
 | Grok | `$GROK_HOME` 或 `~/.grok` 下的 `sessions/<cwd>/<uuid>` | 每会话 `chat_history.jsonl` 加 `summary.json`、`usage.json` 等旁路快照 | assistant 行，行偏移作 `callId`；会话 id 从目录名取 | `chat` |
+| Hermes | `$HERMES_HOME` 或 `~/.hermes` 下的 `state.db` | SQLite | 展示投影里 assistant 行，槽位代表行的 `messages.id` 作游标；`display_order` 定序 | `chat` |
 | droid | `$FACTORY_HOME_OVERRIDE/.factory/sessions` 或 `~/.factory/sessions` | JSONL | assistant 消息；`openaiMessageId` 作响应 id | `droid-session` |
 
 WorkBuddy 的 `subagents/` 文件折叠到父会话，调用身份带子代理 id；同 `messageId` 的行跨批次到达时用 `mutable` 与 `refreshOnDuplicate` 刷新正文，内容块的顺序按重放先后，不按文件里的 `parentId` 链。Grok 的会话 id 只存在于目录名，`chat_history` 行里没有时间戳、消息 id 与逐笔用量，因此单笔 `usage` 记 null，会话累计值由 `afterFile` 写 `session_usage`；`started_ms` 用 `summary.created_at` 加调用序号合成，只用于排序。`usage.json` 在 `chat_history` 静止期被单独改写时，共用摄入的 `unchanged` 分支在 `afterFile` 之前返回，累计值要等主流下一次推进才刷新。
+
+Hermes 的展示顺序由 `messages.display_order` 决定，插入 id 不作数：压缩会写新副本并保留旧行，rewind 只把旧行 `active` 置 0，同一槽位可能有多行。适配器照抄 Hermes 自己的展示投影，只留 `(active = 1 OR compacted = 1)`，同槽取 `active DESC, id DESC` 的代表行，排除 `display_metadata.model_only` 与后到的工具副本；`display_order` 全局唯一但按会话分段，适配器按会话取槽位，调用身份仍用 `messages.id`。会话坐标用首条 user 消息的 magpie 摘要，摘要在本机不唯一（同 prompt 的 oneshot 会话）或算不出时退回 `["session", <根会话 id>]`，不按时间近邻猜。子代理按 `parent_session_id` 折到根会话，`subagent` 留自己的 id，会话累计用量只汇总主会话。本地库没有逐笔用量，单笔 `usage` 记 null；`afterFile` 把 `session_model_usage` 写 `session_usage`。`messages.timestamp` 是消息落库时刻（完成时间）：适配器把它填进 `endedMs`，开始时间取同一会话上一条展示行的时间戳，摄入层落成 `started_ms` 与 `ms`。与网关行的对齐在通用 owner 匹配里按完成时间窗口进行。行可重读且每条调用自带整段窗口，`storesRaw: false`；展示投影由 Hermes 维护，`mutable: false`。
 
 OMP/Pi 的多根在适配器里展开：OMP 还读 `PI_CODING_AGENT_DIR`、`PI_CODING_AGENT_SESSION_DIR` 与 `OMP_HOME`；Pi 还读 `PI_CODING_AGENT_SESSION_DIR` 与 `PI_HOME`。共享发现按 `source_name` 去重，重叠根只进一次。Pi 的项目级 `.pi/settings.json` 没有可枚举的 cwd，不扫。
 
@@ -427,7 +430,7 @@ Codex 归档的 `.jsonl.zst` 先整份解压，再按解压后的字节省份提
 
 DSH 的 `.zstd` 是追加式多 frame 流，不能整份当归档。读取器逐个 frame 校验长度后再解压，只有累计文本以换行结尾的 frame 才提交；`committed_off` 是压缩偏移，`observed_off` 是压缩文件长度，写了一半的尾帧留到下一轮。行的 offset 是合成身份（frame 起点乘 stride 加行号），只用于原始层主键与排序；适配器以 `lineCommit:false` 让共用摄入把读取层的批末位置写进游标，坏行则退回所在 frame 的起点。同一会话目录只取版本最高、同版本最后写入的一份。分叉会话在 `session/end-seed` 之前只把父会话事件放进消息窗口，不重复建调用；格式 1 用 `seedLength` 判断边界。子代理折叠到直接父会话，调用证据键再带上 subagent id，避免同父多个子代理的文件内 seq 相撞。
 
-六个非 droid 适配器共用一个 `sessions` 定时器，每 60 秒跑一轮。每轮先对全部适配器做一次只读发现，只 stat；发现后 Codex 对同名 plain/zst twin 读两份比较内容，结果按大小与 mtime 缓存。
+九个非 droid 适配器共用一个 `sessions` 定时器，每 60 秒跑一轮。每轮先对全部适配器做一次只读发现，只 stat；发现后 Codex 对同名 plain/zst twin 读两份比较内容，结果按大小与 mtime 缓存。
 
 - live：mtime 在 10 分钟内的文件，按 mtime 从新到旧，最多 4 家，每家 2 个文件或 256 KiB；
 - backfill：从轮转游标选一家仍有剩余的来源，重新发现后按该适配器自己的预算摄入，每家每轮最多 64 个文件或 2 MiB；封口文件在本轮预算内连续提交多个分块，没有剩余的来源跳过。
