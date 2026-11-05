@@ -64,6 +64,12 @@
 
 部署后仍保留的长尾与容量路径无关：`pruneRaw` 单事务、`enforceBodyBudget` 多批循环与 `shrinkStorage` 仍是不可抢占单元；`event_loop_p99` 仍高于 330 ms 告警线，本轮没有把它归因到单个任务。13:04:40 的并发重启同时执行了 Hermes 来源重置，13:10:05 在 pid 69138 上再次 `capacity-check` 仍为 `ok:true`、四项 delta 0；行数与 13:03 的序列不可直接比较。回滚必须先恢复 v13 bundle，v14 库不能被 v13 代码打开。
 
+13:36 的收尾复核发生在 pid 16374（代码 `241070f`，13:28:52 由另一会话重启）。`capacity-check` 仍为 `ok:true`，block 973,997,597 B / 245,092 行、request 1,523,356,053 B / 117,298 行、raw_hook 0 B / 47,582 行、raw_session_event 1,209,694,681 B / 218,887 行，四项 `byte_delta` 与 `row_delta` 均为 0；13:34:37 的 `maintain verify` 返回 `{"ok":true,"integrity":["ok"],"dangling_blocks":0,"duplicate_evidence":0,"pending_derivations":0}`，耗时 9.4 s；`/api/stats` 0.32–0.94 s、`/api/metrics` 0.003–0.045 s，`capacity_meter` 的 `body_bytes` 为 3.707 GB、来源数为 4。
+
+同一时段的 `monitor inspect` 报告 1 个活动告警（`event_loop_p99`），24 小时 errors 与 gaps 均为 0。`patrol weekly` 的 `capacity_meter` 为 ok、`body_budget` 3,535.2 MiB；越界项是 `body_ratio` 32.6%、`freelist` 2,268 页与 `otlp_yield` 0.0%，前两项属于既有比例分界和来源重置后的空闲页，`otlp_yield` 属于既有采集覆盖问题，均不归因到 v14 计数或迁移。
+
+验收后删除部署前备份 `~/tracery-backups/bundle-2026-11-05-before-v14`（schema 13、7.0 GB，manifest 的 `database_sha256` 为 `3363a6f17a097d4d90cc5ae92d90cc5cba6dc8ae55d71c4ff81185ccf70bef22`）。更早的 `bundle-2026-11-04-before-v12` 与 `trace-2026-11-04-before-dedupe.db` 保留。v13 回滚点随本次删除消失，此后的回退只能依赖更早备份或在 v14 上修复。
+
 ## 覆盖护栏（合成 + 生产真实流量，2026-11-04）
 
 前提：隔离 worktree `.codex-worktrees/atc-coverage-foundation` 的 `feat/coverage-foundation` 分支，基于 master `0f81367`。代码、测试与文档提交为 `c9485ed` 与 `d091502`，以 `--no-ff` 合并为 `073c329`；2026-11-04 18:22:09 用 `bun run service restart` 重启采集器，pid 13304，`service status` 显示 src 未落后。合成验收只进临时库；真实流量读数来自生产库只读查询与全量 `/api/ingest-metrics`，没有把正文、账号或令牌写入本记录。
