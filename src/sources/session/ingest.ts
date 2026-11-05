@@ -93,21 +93,25 @@ function insertSessionRequestTx(
 ): number {
   const title = modelTimeTitle(call.model, call.startedMs);
   const convSource = `${adapter.agent}-session`;
+  // 可读完成时间的来源把时长一并落库：本地行重放与事后复核都靠它还原结束时刻。
+  const duration = call.endedMs === undefined || call.endedMs === null
+    ? null
+    : Math.max(0, Math.round(call.endedMs - call.startedMs));
   const inserted = db.run(
     `INSERT INTO request(
        response_id_norm,agent,session,conv_key,conv_source,actor,actor_state,subagent,parent_agent,
        turn_ref,started_ms,day,via,status,stop,model_requested,model_served,provider,
-       in_tok,out_tok,cache_read,cache_write,reasoning,
+       in_tok,out_tok,cache_read,cache_write,reasoning,ms,
        body_state,derive_version,have,created_at,updated_at,title,title_source,cost_state,
        attempt_state,sort_source,sort_key,source_facts_json
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       call.responseIdNorm, adapter.agent, call.sessionId, call.convKey, convSource,
       call.subagentId ?? call.sessionId, 'known', call.subagentId, call.parentSessionId,
       call.turnRef, call.startedMs, localDay(call.startedMs), 'session', null, null,
       call.model, null, null,
       call.usage?.input ?? null, call.usage?.output ?? null,
-      call.usage?.cacheRead ?? null, call.usage?.cacheWrite ?? null, call.reasoning,
+      call.usage?.cacheRead ?? null, call.usage?.cacheWrite ?? null, call.reasoning, duration,
       'pending', 0, HAVE_SESSION, now, now, title, 'model_time', 'absent',
       adapter.attemptState ?? 'known', adapter.sortSource,
       `${generation}|${String(offset).padStart(20, '0')}`,
@@ -235,6 +239,7 @@ function ingestCallTx(
     convKey: call.convKey,
     agent: adapter.agent,
     startedMs: call.startedMs,
+    endMs: call.endedMs ?? null,
     model: call.model,
     usage: call.usage,
     excludeSourceKind: adapter.evidenceKind,

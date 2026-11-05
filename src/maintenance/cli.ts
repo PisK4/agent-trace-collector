@@ -10,7 +10,7 @@ import { assertWindow, hookDeliveryReport } from './delivery';
 import { previewCapacityMeter, recountCapacityMeter } from './capacity';
 import { acquireMaintenanceLock, type LockHandle } from './lock';
 import { previewHookIdentityMigration, migrateHookIdentity } from './identity';
-import { previewAgentPurge, previewMetadataPurge, purgeAgent, purgeMetadata } from './purge';
+import { previewAgentPurge, previewMetadataPurge, previewSourceReset, purgeAgent, purgeMetadata, resetSource } from './purge';
 import { dedupeSessionDuplicates, previewSessionDedupe } from './dedupe';
 import { rebuildSession } from './rebuild';
 import { reparseProtocol } from './reparse';
@@ -78,6 +78,7 @@ const USAGE = `usage:
   maintain migrate-hook-identity --db <path> [--apply --approval-id <id>]
   maintain normalize-response-ids --db <path> [--apply --approval-id <id>]
   maintain dedupe-sessions --db <path> [--apply --approval-id <id>]
+  maintain reset-source --db <path> --source <source_kind> [--apply --approval-id <id>]
   maintain purge-metadata --db <path> --before <YYYY-MM-DD> [--apply --allow-all --approval-id <id>]
   maintain purge-agent --db <path> --agent <name> [--apply --approval-id <id>]
 `;
@@ -226,7 +227,8 @@ export async function runMaintenance(argv: string[], io: {
 
   if (command === 'verify' || command === 'purge-metadata' || command === 'purge-agent'
     || command === 'rebuild' || command === 'reparse' || command === 'migrate-hook-identity'
-    || command === 'normalize-response-ids' || command === 'dedupe-sessions') {
+    || command === 'normalize-response-ids' || command === 'dedupe-sessions'
+    || command === 'reset-source') {
     // verify 只读，不需要锁；其余命令写库，必须有。
     let store: Store | null = null;
     let lock: LockHandle | null = null;
@@ -322,6 +324,32 @@ export async function runMaintenance(argv: string[], io: {
         }
         const report = dedupeSessionDuplicates(store, Date.now());
         out(JSON.stringify({ ok: true, applied: true, approval_id: approvalId, ...report }));
+        return 0;
+      }
+      if (command === 'reset-source') {
+        const sourceKind = stringFlag(flags, 'source');
+        if (sourceKind === null) {
+          err(USAGE.trimEnd());
+          return 2;
+        }
+        lock = acquireMaintenanceLock(dirname(dbPath), `reset-source:${process.pid}`);
+        if (lock === null) {
+          err('maintenance_lock_held');
+          return 1;
+        }
+        store = openStore(dbPath);
+        const preview = previewSourceReset(store, sourceKind);
+        if (flags.get('apply') !== true) {
+          out(JSON.stringify({ ok: true, applied: false, ...preview }));
+          return 0;
+        }
+        const approvalId = stringFlag(flags, 'approval-id');
+        if (approvalId === null) {
+          out(JSON.stringify({ ok: false, error: 'approval_id_required', ...preview }));
+          return 1;
+        }
+        const result = resetSource(store, sourceKind, approvalId);
+        out(JSON.stringify({ ok: true, applied: true, approval_id: approvalId, ...result }));
         return 0;
       }
       if (command === 'purge-agent') {

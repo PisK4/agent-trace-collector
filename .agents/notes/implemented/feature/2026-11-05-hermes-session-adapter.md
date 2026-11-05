@@ -20,7 +20,7 @@ Hermes 自己的读取路径是 `hermes_state_messages.py` 的 `_display_rows_fr
 
 `messages` 里 role 是 user/assistant/tool 三种；assistant 行是模型输出，4,966 行带 `tool_calls`，307 行是纯文本，tool 行 5,882 行全部有 `tool_call_id`，配对完整。适配器只对展示集里的 assistant 行发调用，`callId` 用 `String(messages.id)`（AUTOINCREMENT、全局唯一、永不变），`sortOffset` 用 `display_order`，请求窗口是展示集里槽位更小的所有行，按 chat 形状重建。
 
-`messages.timestamp` 的语义用只读对账定了：与网关 `started_ms` 的中位差 353 毫秒（4,603 笔可比样本），所以 `startedMs = timestamp * 1000`；缺值时退回会话 `started_at`。Hermes 源码自己注明这个字段不可用于排序（时钟回退），适配器只把它当时间戳，不当顺序。
+`messages.timestamp` 是消息落库时刻，也就是调用完成时间，不是开始时间：本机对账里它与网关 `started_ms + ms` 的差值中位数在 5 到 80 毫秒之间，而与会话内前一条展示行的时间差才是调用开始到结束的间隔。适配器把 `timestamp` 作为 `endedMs`，开始时间取同一会话上一条展示行的时间戳（工具结果或 user 消息写完，下一笔调用随即发出），缺值时退回会话 `started_at`；两者同时落成 `started_ms` 与 `ms`。Hermes 源码自己注明这个字段不可用于排序（时钟回退），适配器只把它当时间戳，不当顺序。修正过程与真实数据见[完成时间基准](../bug-fix/2026-11-05-hermes-call-time-basis.md)。
 
 ### 3. 会话坐标：摘要唯一才用，否则退回本地 id
 
@@ -40,7 +40,7 @@ Hermes 自己的读取路径是 `hermes_state_messages.py` 的 `_display_rows_fr
 
 ### 验收
 
-合成数据 7 个用例：顺序（id 序与槽位序相反）、三态过滤与同槽裁决、model_only 与工具副本过滤、摘要碰撞回退、子代理折叠、增量游标、会话累计用量。`bun test tests/session-hermes.test.ts` 全过，`bun run typecheck` 通过，受影响的既有测试 30 个全过。
+合成数据 9 个用例：顺序（id 序与槽位序相反）、三态过滤与同槽裁决、model_only 与工具副本过滤、摘要碰撞回退、子代理折叠、增量游标、会话累计用量、开始/结束时间基准、按完成时间与网关行对齐。`bun test tests/session-hermes.test.ts` 全过，`bun run typecheck` 通过，受影响的既有测试 30 个全过。
 
 真实库只读验收：168 个会话被发现，159 个有调用；模拟多轮摄入全量收敛到 5,273 笔，与 Hermes 展示集 assistant 行数精确相等；顺序违规 0、坏行 0、卡住的会话 0；单会话最多 15 轮。这项验证只读、不写生产库，与合成数据验收分开记。
 
@@ -54,7 +54,7 @@ Hermes 自己的读取路径是 `hermes_state_messages.py` 的 `_display_rows_fr
 
 **只做会话与消息补充，不进 `request` 行。** 与用户「忠于 trace」的要求冲突：这种做法只能得到消息浏览，拿不到逐笔请求行，也没法用现有 owner 匹配去重。用户已明确接入后要能被当作数据源使用。
 
-**新建 crosswalk 表存本地会话与网关 conv 的映射。** `ingest.ts` 已有 `findRequestOwnerTx`：`convKey` 相同、agent 相同、±60 秒、模型归一后相等才合并，多候选标 ambiguous。适配器只要给出正确的 `convKey` 与 `startedMs`，不需要第二套身份表。
+**新建 crosswalk 表存本地会话与网关 conv 的映射。** `ingest.ts` 已有 `findRequestOwnerTx`：`convKey` 相同、agent 相同，按响应 id、turn、用量指纹、完成时间或 ±60 秒弱窗口中的一条认领，多候选标 ambiguous。适配器只要给出正确的 `convKey`、`startedMs` 与 `endedMs`，不需要第二套身份表。
 
 **把 rewind 掉的行（`0/0`）也摄入，或反过来重写它们的状态。** 前者违背 Hermes 自己的展示集（用户已放弃的分支会出现在 trace 里）；后者没有删除语义可用：`ingest.ts` 只插入、合并、刷新，不删行。适配器选择只发展示集，已经摄入的 rewind 行保留，代价见下文。
 

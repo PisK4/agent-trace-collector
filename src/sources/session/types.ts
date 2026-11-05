@@ -45,6 +45,11 @@ export type SessionCall = {
   parentSessionId: string | null;
   /** 调用开始时间（不是完成时间）；网关与本地对齐用这个基准。 */
   startedMs: number;
+  /**
+   * 调用完成时间；来源只读得到消息落库时刻时填它，owner 用它跟网关
+   * `started_ms + ms` 做 ±2 秒的完成时间对齐。缺省为 null。
+   */
+  endedMs?: number | null;
   model: string | null;
   responseIdNorm: string | null;
   /** Codex thread turn 身份；没有就 null。 */

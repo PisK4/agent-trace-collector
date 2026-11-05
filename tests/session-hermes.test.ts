@@ -89,6 +89,19 @@ function expectedConvKey(content: string): string {
   return convDigestOf({ messages: [{ role: 'user', content }] })!.key;
 }
 
+/** 预置一笔网关行：完成为 started_ms + ms，本地只有消息落库时刻。 */
+function seedGateway(
+  store: ReturnType<typeof fixture>['store'],
+  input: { convKey: string; startedMs: number; ms: number },
+): number {
+  return store.write(db => Number(db.run(`
+    INSERT INTO request(agent,conv_key,conv_source,session,actor,actor_state,started_ms,ms,day,via,
+      body_state,derive_version,have,created_at,updated_at,model_requested)
+    VALUES ('hermes',?,'gateway','gw-session','gw-session','known',?,?,'2026-09-01','through',
+      'available',0,0,1,1,'hermes-synthetic')`,
+  [input.convKey, input.startedMs, input.ms]).lastInsertRowid));
+}
+
 test('Hermes 会话：按 display_order 还原顺序，插入序与展示序不同也成立', async () => {
   const home = makeHome();
   const f = fixture();
@@ -307,6 +320,64 @@ test('Hermes 增量：追加的 assistant 行单独成行，游标越过非调�
         },
       ],
     } }] });
+  } finally {
+    f.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('Hermes 时间基准：开始取前一条展示行，结束取消息落库时刻，时长一并落库', async () => {
+  const home = makeHome();
+  const f = fixture();
+  try {
+    const { db } = openHermes(home);
+    addSession(db);
+    addRow(db, { role: 'user', content: 'prompt', displayOrder: 10, timestamp: T0 + 1_000 });
+    addRow(db, { role: 'assistant', content: 'reply', displayOrder: 20, timestamp: T0 + 6_000 });
+    db.close();
+
+    await ingestSessionBatch(f.store, hermesAdapter, [home], SALT, Date.now());
+
+    // 本地只读得到落库时刻：开始用上一条展示行，结束与时长按完成时刻还原。
+    expect(f.store.read.query(
+      'SELECT started_ms, ms FROM request').get(),
+    ).toEqual({ started_ms: T0 + 1_000, ms: 5_000 });
+  } finally {
+    f.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('Hermes 完成时间对齐：开始时间超出弱窗口仍能认领同一笔网关行', async () => {
+  const home = makeHome();
+  const f = fixture();
+  try {
+    const { db } = openHermes(home);
+    addSession(db);
+    addRow(db, { role: 'user', content: 'prompt', displayOrder: 10, timestamp: T0 + 1_000 });
+    const assistantId = addRow(db, {
+      role: 'assistant', content: 'reply', displayOrder: 20, timestamp: T0 + 6_000,
+    });
+    db.close();
+
+    const gatewayId = seedGateway(f.store, {
+      convKey: expectedConvKey('prompt'), startedMs: T0 - 100_000, ms: 106_000,
+    });
+    const result = await ingestSessionBatch(f.store, hermesAdapter, [home], SALT, Date.now());
+    expect(result).toMatchObject({ files: 1, calls: 0, merged: 1, invalid: 0 });
+
+    expect(requestRows(f.store)).toHaveLength(1);
+    expect(requestRows(f.store)[0]).toMatchObject({
+      req_id: gatewayId, started_ms: T0 - 100_000, body_state: 'available',
+    });
+    expect(f.store.read.query('SELECT ms, have FROM request WHERE req_id=?').get(gatewayId))
+      .toEqual({ ms: 106_000, have: 16 });
+    expect(f.store.read.query(
+      'SELECT req_id, source_kind, ref_key, match_rule FROM request_evidence').all(),
+    ).toEqual([{
+      req_id: gatewayId, source_kind: 'hermes_session_call',
+      ref_key: `${ROOT}/${assistantId}`, match_rule: 'conv_end.v1',
+    }]);
   } finally {
     f.close();
     rmSync(home, { recursive: true, force: true });
