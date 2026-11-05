@@ -37,6 +37,7 @@ bun run verify:notes   # 合并到 master 前
 
 - TypeScript + Bun 单进程；不引第三方依赖，SQLite 用 `bun:sqlite`，压缩用 `node:zlib`。
 - 依赖方向单向：`config`（叶子，不 import 仓库内其他模块）← `store` ← 引擎与读模型，见[五个放错层的符号归位](.agents/notes/implemented/architecture/2026-10-23-symbol-relocations.md)。
+- **数据源彼此独立**：任何一家只要有数据，就要能单独发现、解析并展示 trace；适配器解析时不打开另一家的库，也不因另一家缺失而停摆。跨来源的认领与合并只在摄入层按 `request_evidence` 与 owner 匹配完成，不写进适配器的解析路径。见[本地 Agent 会话适配器第一版](.agents/notes/proposed/feature/2026-11-04-agent-session-adapters.md)与[多来源同一调用的身份归一与去重](.agents/notes/proposed/feature/2026-11-04-multi-source-call-identity.md)。
 - **Harness 专属用途判定走静态登记**：新 Harness 的强指纹写成 `src/harness/<name>.ts` 的判定函数，在 `harness/purpose.ts` 的登记数组加一行，数组次序即优先级；分派与结算不另写品牌分支，`semantics.ts`、`request-purpose.ts` 及消费端不出现 Harness 名称比较，也不建只转发通用行为的空壳 adapter。见[harness 语义 adapter](.agents/notes/implemented/architecture/2026-10-26-harness-semantics-adapters.md)。
 - **共享解释规则不悄悄加 agent 门控**：输入包装、OMP 归档锚点与 Claude 技能标题格式的定义留在 `input-interpretation.ts` 与 `capabilities.ts`，对未知与空标签同样生效；收紧门控是行为变化，先列反例、升 `PURPOSE_VERSION` 并按显式重建交付，不混进重构提交，纯移动不升版、不开重建。
 - `main.ts` 只做 wiring（timer、防重入锁、配置装配、进程日志），任务体归持有对应概念的 module，见[定时任务体归位](.agents/notes/implemented/architecture/2026-10-23-main-orchestration-delegation.md)。

@@ -70,7 +70,7 @@ zcode 的语义信号全部走 header，而 header 不在任何证据通道里�
 
 **把 zcode 的子代理当独立 actor 拆出来。** 否决，暂无依据。zcode 自己在会话库里有子会话谱系（`session.parent_id`、`task_type='subagent_child'`、`session_task_link`），但它在模型请求里没有可供 ATC 读取的关联字段——实测 56 笔 `subagent` 全空、`raw_route.subagent_id` 全空，本文样本里也没有子代理请求可对照。留到有真实样本时再提案。
 
-**直接摄入 zcode 自己的会话库（`~/.zcode/cli/db/db.sqlite`）。** 否决。它与 direct 行属于同一类身份问题（同一调用会被账本与本地库各记一次），且本地库是另一个存储格式的兼容面。对标提案已把 direct 行走在前面，本文不另开一条。
+**直接摄入 zcode 自己的会话库（`~/.zcode/cli/db/db.sqlite`）。** 否决。它与 direct 行属于同一类身份问题（同一调用会被账本与本地库各记一次），且本地库是另一个存储格式的兼容面。对标提案已把 direct 行走在前面，本文不另开一条。2026-11-04 的[多来源调用身份提案](2026-11-04-multi-source-call-identity.md)重新评估了这一条：本地库改为主来源，direct 只作兜底；本文其余规则不变。
 
 ## Acceptance criteria
 
