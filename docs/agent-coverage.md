@@ -25,7 +25,7 @@
 | omp | 13,644 | 2026-09-28 | 2026-11-05 | `omp_session_call` / 账本 |
 | droid | 9,582 | 2026-08-21 | 2026-08-30 | `session_call` |
 | zcode | 6,630 | 2026-10-05 | 2026-11-04 | `zcode_session_call` / 账本 |
-| hermes | 6,134 | 2026-10-26 | 2026-11-05 | hook / ledger / route / `hermes_session_call` |
+| hermes | 6,393 | 2026-10-26 | 2026-11-05 | hook / ledger / route / `hermes_session_call` |
 | pi | 3,142 | 2026-08-21 | 2026-09-02 | `pi_session_call` |
 | dsh | 2,542 | 2026-08-22 | 2026-09-04 | `dsh_session_call` |
 | magpie | 435 | 2026-10-26 | 2026-11-05 | 账本 / 路由 |
@@ -53,7 +53,7 @@ Hermes 有网关侧与本地两条路径。网关侧的行由 hook、账本、�
 | workbuddy | `implemented` | `~/.workbuddy/projects` 6 个 jsonl / 3.65 MB，含 4 个 subagents 文件 | 141 / 6 游标 | `workbuddy.go`、`calls_workbuddy.go` | 批次 A（已交付） |
 | grok | `implemented` | `~/.grok/sessions` 6 会话 / 23 个 jsonl（`chat_history`、`events`、`updates`、`rewind_points` 各 6 份，另有 1 份 `prompt_history`），含 `summary.json`、`usage.json` | 139 / 6 游标 | `grok.go`（`readGrokSummary`、`parseGrok`、`grokUsage.tokens`） | 批次 A（已交付） |
 | qoder | `local_data` | `~/.qoder` 566 文件 / 78 MB；119 个 jsonl 共 1,164 行事件，零 assistant 回复与零 usage 字段 | 无 | `qoder.go`（仅 `QoderDir`，调用解析复用 `ccFiles`） | 不排期（等可读会话样本） |
-| hermes | `implemented` | `~/.hermes/state.db` 168 会话 / 11,762 行消息，含压缩归档与 rewind 三态 | 6,134 / 159 游标 | `hermes.go`、`hermes_display.go` | 已接（批次 C） |
+| hermes | `implemented` | `~/.hermes/state.db` 168 会话 / 11,762 行消息，含压缩归档与 rewind 三态 | 6,393 / 159 游标 | `hermes.go`、`hermes_display.go` | 已接（批次 C） |
 | codebuddy | `unimplemented` | `~/.codebuddy` 仅 3 个 memwatch 日志，无 `projects/` 目录 | 无 | `workbuddy.go` 的 `codebuddyFiles()`、`buddyFiles()`（与 WorkBuddy 共用） | 不排期（等项目会话目录） |
 | opencode | `unimplemented` | `~/.config/opencode` 仅 3 个配置文件，无会话库 | 无 | `opencode.go`、`calls_opencode.go`、`traces_opencode_db.go` | 批次 C |
 | qoder-cn | `unimplemented` | 无根目录 | 无 | `qoder.go`（`QoderDir("qoder-cn")`） | 不排期 |
