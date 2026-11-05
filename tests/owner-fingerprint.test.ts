@@ -96,12 +96,27 @@ test('时间窗按归一后的模型名认领', () => {
   }
 });
 
-test('时间窗模型名不同但候选唯一时仍然认领', () => {
+test('时间窗模型名不同时唯一候选也不合并', () => {
+  const f = fixture();
+  try {
+    seedCall(f.store, {
+      startedMs: 10_000, usage: { ...USAGE, input: 101 }, model: 'sn-deepseek-v4-1-flash-1017',
+    });
+    // 双方都有模型且归一后不相等：唯一候选也不是同一笔，宁可新建一行。
+    expect(find(f.store, { model: 'auto/deepseek-v4.1-flash' }))
+      .toEqual({ reqId: null, outcome: 'absent', rule: null });
+  } finally {
+    f.close();
+  }
+});
+
+test('时间窗候选缺模型时唯一候选仍可兜底', () => {
   const f = fixture();
   try {
     const reqId = seedCall(f.store, {
-      startedMs: 10_000, usage: { ...USAGE, input: 101 }, model: 'sn-deepseek-v4-1-flash-1017',
+      startedMs: 10_000, usage: { ...USAGE, input: 101 }, model: null,
     });
+    // 候选没有模型，无法证明不同；唯一候选仍按弱窗认领。
     expect(find(f.store, { model: 'auto/deepseek-v4.1-flash' }))
       .toEqual({ reqId, outcome: 'matched', rule: 'conv_time_model.v1' });
   } finally {

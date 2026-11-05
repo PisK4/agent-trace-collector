@@ -160,18 +160,30 @@ test('droid 先到、账本晚到：账本认领 droid 行，证据位齐全且�
   }
 });
 
-test('无 response id 时按同会话 ±60 秒认领；模型名不同不是拒绝理由', async () => {
-  for (const model of ['synth-model', 'other-model']) {
+test('无 response id 时按同会话 ±60 秒认领；模型不同则另建一行', async () => {
+  for (const [model, merges] of [
+    ['synth-model', true],
+    ['group/auto-synth-model', true],
+    ['other-model', false],
+  ] as const) {
     const f = fixture();
     const root = writeTranscript([SESSION, USER, droidAssistant('m-a1', null, 'synth-model', T0 + 2_000)]);
     try {
       expect((await ingestDroidBatch(f.store, root, SALT, 1)).calls).toBe(1);
       ingestSource(f.store, ledgerBatch([ledgerRow({ req: model, model })], 'ledger-g1'), SALT, 2);
       const rows = f.store.read.query('SELECT via FROM request ORDER BY req_id').all();
-      expect(rows).toEqual([{ via: 'session' }]);
-      expect(f.store.read.query(
-        "SELECT match_rule FROM request_evidence WHERE source_kind='ledger'").get())
-        .toEqual({ match_rule: 'conv_time_model.v1' });
+      if (merges) {
+        expect(rows).toEqual([{ via: 'session' }]);
+        expect(f.store.read.query(
+          "SELECT match_rule FROM request_evidence WHERE source_kind='ledger'").get())
+          .toEqual({ match_rule: 'conv_time_model.v1' });
+      } else {
+        // 双方都有模型且归一后不相等：唯一候选也不合并，账本独立成行。
+        expect(rows).toEqual([{ via: 'session' }, { via: 'through' }]);
+        expect(f.store.read.query(
+          "SELECT match_rule FROM request_evidence WHERE source_kind='ledger'").get())
+          .toEqual({ match_rule: 'match_absent' });
+      }
     } finally {
       f.close();
       rmSync(root, { recursive: true, force: true });

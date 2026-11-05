@@ -38,7 +38,11 @@ function reading(overrides: Partial<WeeklyReading> = {}): WeeklyReading {
     hookAbsentPriorMean: 300,
     hookAbsentTopAgent: { agent: 'claude', n: 300 },
     spans: 180_000,
-    spanEvidence: 200,
+    spanEvidence: 149_200,
+    llmSpans: 150_000,
+    llmMatched: 149_000,
+    nonLlmSpans: 30_000,
+    unknownShapeSpans: 0,
     bodyRefs: 5,
     issueReasons: [],
     convs: 1_600,
@@ -85,11 +89,35 @@ test('证据缺口、pending_hook 突增、hook_absent 突增各自报出', () =
 
 test('OTLP 只收不产出与单条 issue 超量报出', () => {
   const checks = evaluateWeekly(reading({
-    spans: 188_000, spanEvidence: 1, bodyRefs: 0,
+    spans: 188_000, spanEvidence: 1, llmSpans: 16, llmMatched: 1,
+    nonLlmSpans: 187_984, bodyRefs: 0,
     issueReasons: [{ reason: 'span_shape_unknown', n: 150 }],
   }));
   expect(checks.find(check => check.id === 'otlp_yield')?.state).toBe('over');
   expect(checks.find(check => check.id === 'otlp_issues')?.state).toBe('over');
+});
+
+test('纯内部 span 与没有正文来源的合法来源不报 OTLP 产出', () => {
+  const checks = evaluateWeekly(reading({
+    spans: 188_000, spanEvidence: 0, llmSpans: 0, llmMatched: 0,
+    nonLlmSpans: 188_000, unknownShapeSpans: 0, bodyRefs: 0,
+  }));
+  expect(checks.find(check => check.id === 'otlp_yield')?.state).not.toBe('over');
+  // 有 LLM span 且全部匹配、但该来源不写 body 时也不报。
+  const noBody = evaluateWeekly(reading({
+    spans: 20, spanEvidence: 10, llmSpans: 10, llmMatched: 10,
+    nonLlmSpans: 10, bodyRefs: 0,
+  }));
+  expect(noBody.find(check => check.id === 'otlp_yield')?.state).toBe('ok');
+});
+
+test('真正遗漏的 LLM span 仍然越界', () => {
+  const missed = evaluateWeekly(reading({
+    spans: 20, spanEvidence: 10, llmSpans: 10, llmMatched: 0,
+    nonLlmSpans: 10, bodyRefs: 0,
+  }));
+  expect(missed.find(check => check.id === 'otlp_yield')?.state).toBe('over');
+  expect(missed.find(check => check.id === 'otlp_yield')?.detail).toContain('LLM span 10');
 });
 
 test('会话过大只算越界，>200 的个数留给周环比', () => {
@@ -99,7 +127,7 @@ test('会话过大只算越界，>200 的个数留给周环比', () => {
   expect(normal.find(check => check.id === 'conversation_size')?.state).toBe('info');
 });
 
-test('契约冒烟：400 通过，5xx 越界，F20/F41 的已知基线记 info', () => {
+test('契约冒烟：400 通过，已修 F20/F41 的旧返回码按回归越界', () => {
   const checks = judgeSmoke([
     { name: 'limit=0', status: 400 },
     { name: 'limit=1.5', status: 400 },
@@ -109,8 +137,10 @@ test('契约冒烟：400 通过，5xx 越界，F20/F41 的已知基线记 info',
   ]);
   expect(checks.find(check => check.id === 'limit=0')?.state).toBe('ok');
   expect(checks.find(check => check.id === 'direction=sideways')?.state).toBe('ok');
-  expect(checks.find(check => check.id === 'bad_pct')?.state).toBe('info');
-  expect(checks.find(check => check.id === 'body_from_1e20')?.state).toBe('info');
+  expect(checks.find(check => check.id === 'bad_pct')?.state).toBe('over');
+  expect(checks.find(check => check.id === 'body_from_1e20')?.state).toBe('over');
+  expect(judgeSmoke([{ name: 'bad_pct', status: 400 }, { name: 'body_from_1e20', status: 400 }])
+    .every(check => check.state === 'ok')).toBe(true);
   const broken = judgeSmoke([{ name: 'direction=sideways', status: 200 }, { name: 'bad_pct', status: 503 }]);
   expect(broken[0]?.state).toBe('over');
   expect(broken[1]?.state).toBe('over');
@@ -129,6 +159,105 @@ test('空库能收集读数且不误报 OTLP 产出', () => {
     expect(checks.find(check => check.id === 'body_ratio')?.state).toBe('info');
   } finally {
     rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+function rawIdentity(traceHex: string, spanHex: string): string {
+  return `${traceHex}/${spanHex}`;
+}
+
+/** 合成原始 span：只写巡查需要的列，值全部自造。 */
+function seedRawSpan(
+  f: ReturnType<typeof fixture>,
+  input: { traceHex: string; spanHex: string; service: string; name: string; receivedAt: number },
+): string {
+  f.store.write(db => db.run(
+    `INSERT INTO raw_otlp_span(trace_id,span_id,received_at,service,scope_name,name,kind,start_ms,
+       end_ms,status_code,attributes_json,mapping_version,privacy_version)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [Buffer.from(input.traceHex, 'hex'), Buffer.from(input.spanHex, 'hex'), input.receivedAt,
+      input.service, null, input.name, 0, input.receivedAt, null, null, '{}', 4, 1],
+  ));
+  return rawIdentity(input.traceHex, input.spanHex);
+}
+
+function seedEvidence(f: ReturnType<typeof fixture>, refKey: string, reqId = 1): void {
+  f.store.write(db => db.run(
+    `INSERT INTO request_evidence(req_id,source_kind,ref_key,merge_state,match_rule,added_at)
+     VALUES (?,'otlp_span',?,'merged','trace_span.v1',?)`,
+    [reqId, refKey, Date.now()],
+  ));
+}
+
+test('只有窗口内物理 span 计入产出，TTL 后的长期证据不进分子', () => {
+  const f = fixture();
+  const NOW = 1_760_000_000_000;
+  try {
+    // 窗口内只有一条内部 span；它本来就不该产出 LLM 证据。
+    seedRawSpan(f, {
+      traceHex: 'aa'.repeat(16), spanHex: 'bb'.repeat(8),
+      service: 'claude-code', name: 'fs.read_file', receivedAt: NOW - 1000,
+    });
+    // 窗口外的旧 LLM span 与其长期证据：raw 已过 TTL，证据仍在库里。
+    const oldTrace = 'cc'.repeat(16);
+    const oldSpan = 'dd'.repeat(8);
+    seedRawSpan(f, {
+      traceHex: oldTrace, spanHex: oldSpan,
+      service: 'claude-code', name: 'claude_code.llm_request', receivedAt: NOW - 8 * DAY_MS,
+    });
+    seedEvidence(f, rawIdentity(oldTrace, oldSpan));
+    // 没有对应 raw 的长期证据同样不进分子。
+    seedEvidence(f, rawIdentity('ee'.repeat(16), 'ff'.repeat(8)));
+    f.store.close();
+
+    const collected = collectWeekly(join(f.dir, 'trace.db'), f.dir, NOW);
+    expect(collected.spans).toBe(1);
+    expect(collected.spanEvidence).toBe(0);
+    expect(collected.llmSpans).toBe(0);
+    expect(collected.nonLlmSpans).toBe(1);
+    expect(evaluateWeekly(collected).find(check => check.id === 'otlp_yield')?.state).not.toBe('over');
+  } finally {
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('窗口内遗漏的 LLM span 仍然越界，身份匹配后放行', () => {
+  const NOW = 1_760_000_000_000;
+  const missed = fixture();
+  try {
+    for (let index = 0; index < 10; index++) {
+      seedRawSpan(missed, {
+        traceHex: index.toString(16).padStart(2, '0').repeat(16),
+        spanHex: (index + 16).toString(16).padStart(2, '0').repeat(8),
+        service: 'claude-code', name: 'claude_code.llm_request', receivedAt: NOW - 1000,
+      });
+    }
+    missed.store.close();
+    const readingMissed = collectWeekly(join(missed.dir, 'trace.db'), missed.dir, NOW);
+    expect({ spans: readingMissed.spans, llm: readingMissed.llmSpans, matched: readingMissed.llmMatched })
+      .toEqual({ spans: 10, llm: 10, matched: 0 });
+    expect(evaluateWeekly(readingMissed).find(check => check.id === 'otlp_yield')?.state).toBe('over');
+  } finally {
+    rmSync(missed.dir, { recursive: true, force: true });
+  }
+
+  const matched = fixture();
+  try {
+    for (let index = 0; index < 10; index++) {
+      const refKey = seedRawSpan(matched, {
+        traceHex: (index + 32).toString(16).padStart(2, '0').repeat(16),
+        spanHex: (index + 48).toString(16).padStart(2, '0').repeat(8),
+        service: 'claude-code', name: 'claude_code.llm_request', receivedAt: NOW - 1000,
+      });
+      seedEvidence(matched, refKey);
+    }
+    matched.store.close();
+    const readingMatched = collectWeekly(join(matched.dir, 'trace.db'), matched.dir, NOW);
+    expect({ llm: readingMatched.llmSpans, matched: readingMatched.llmMatched, bodyRefs: readingMatched.bodyRefs })
+      .toEqual({ llm: 10, matched: 10, bodyRefs: 0 });
+    expect(evaluateWeekly(readingMatched).find(check => check.id === 'otlp_yield')?.state).toBe('ok');
+  } finally {
+    rmSync(matched.dir, { recursive: true, force: true });
   }
 });
 

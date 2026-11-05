@@ -14,6 +14,8 @@ Status: implemented
 
 **弱时间窗按归一后的模型名比较。** 新增 `normalizedModel`：转小写，去掉开头连续的 `group/`、`auto/` 前缀，再删掉所有非字母数字字符。只用于比较，不改写入库的原值。时间窗候选先按归一后模型相等过滤：恰好一个就认领；没有相等的候选时，唯一候选仍然认领（模型名不同不是拒绝理由）；多候选且无法区分时保持 ambiguous。查询侧模型为 null 时同样走这条兜底，一方缺失不再直接放弃。
 
+**2026-11-05 部分修订：** “模型名不同不是拒绝理由”只在无法比较时成立。双方都给出模型、归一后仍不相等时，唯一候选也不认领，独立成行；别名前缀与标点差异仍视为同一模型，缺模型仍走唯一候选兜底。来由见[正文与弱合并的数据一致性修复](./2026-11-05-confirmed-body-identity-consistency.md)。
+
 **已落库的重复行由显式命令修复。** 新增 `bun run maintain dedupe-sessions --db <path>`：默认只预览，`--apply --approval-id <id>` 才写库。它只处理“只有一条会话证据”的行，按同一套 `findRequestOwnerTx` 再找一次 owner；只认精确身份（response id、turn ref、四段用量指纹），弱时间窗能配上的行只计数（`weak_only`），不在事后改行。命中后走新的共享 `mergeRequestTx`：迁移证据、正文引用、工具链接、别名与整组身份字段，删除源行，重算目标与两边的派生组。
 
 **行合并逻辑从 hook 挪到共享层。** `src/merge.ts` 承接原 `mergeHookInto` 的行级迁移；hook 只剩 pending 队列与 hook 证据状态。`mergeRequestTx` 的 `fillIdentity` 选项区分两种合并：hook 只补账本缺失的 response/conv 身份，会话修复补全会话、actor、模型、用量、标题与来源事实。合并本身仍按“目标已有的事实不覆盖、空字段才补”的规则。
@@ -37,8 +39,8 @@ Status: implemented
 
 ## Testing
 
-- `tests/owner-fingerprint.test.ts`：模型写法不同仍按四段用量认领；时间窗按归一后模型认领；模型名不同但候选唯一仍认领；多候选中只认归一后相等的；多候选无模型线索不合并。
+- `tests/owner-fingerprint.test.ts`：模型写法不同仍按四段用量认领；时间窗按归一后模型认领；双方模型归一后不同且候选唯一时不认领（2026-11-05 修订）；候选缺模型时唯一候选仍认领；多候选中只认归一后相等的；多候选无模型线索不合并。
 - `tests/session-dedupe.test.ts`：历史重复行并回网关行并迁移证据与别名；同 ord 的 `tool_call` 保留目标行、源行独有链接搬过来；只有弱时间窗能配上的行不修；已并入其它来源证据的会话行不参与修复。
-- `tests/droid-dedupe.test.ts`：时间窗的模型名不同但候选唯一时合并；同窗多候选仍不合并。
+- `tests/droid-dedupe.test.ts`：时间窗模型别名归一后合并；模型明确不同则独立成行（2026-11-05 修订）；同窗多候选仍不合并。
 - `bun test` 全量 1232 通过；`bun run typecheck` 通过。
 - 生产验收待补：修复命令的预览与执行计数、合并后页面单行展示、后续轮转不再新增重复。

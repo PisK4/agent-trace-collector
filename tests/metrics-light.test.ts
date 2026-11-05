@@ -8,7 +8,7 @@ import type { StorageUsage } from '../src/retention';
 
 const usage: StorageUsage = {
   body_bytes: 10, db_bytes: 20, wal_bytes: 0, temp_bytes: 0, other_bytes: 3,
-  total_bytes: 33, free_bytes: 1_000, page_count: 10, freelist_count: 0,
+  total_bytes: 33, free_bytes: 1_000, page_size: 4096, page_count: 10, freelist_count: 0,
 };
 
 test('轻量快照不量存储、不求和元数据，存储值取闸门最近量测', () => {

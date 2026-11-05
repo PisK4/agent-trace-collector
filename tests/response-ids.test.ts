@@ -58,7 +58,7 @@ test('规范化存量剥净旧前缀并让等待队列合并', async () => {
     expect(JSON.parse(previewLines[0]!)).toEqual({
       ok: true, applied: false,
       requests: 1, pending_hooks: 1, raw_ledger: 1,
-      merges: 1, ambiguous: 0, without_id: 0,
+      merges: 1, ambiguous: 0, without_id: 0, conflicts: [],
     });
 
     const applyLines: string[] = [];
@@ -88,6 +88,53 @@ test('规范化存量剥净旧前缀并让等待队列合并', async () => {
     expect(JSON.parse(secondLines[0]!)).toMatchObject({
       requests: 0, pending_hooks: 0, raw_ledger: 0, merges: 0, ambiguous: 0, without_id: 0,
     });
+  } finally {
+    f.close();
+  }
+});
+
+test('规范化目标冲突时预览列出，应用整批拒绝且不写库', async () => {
+  const f = fixture();
+  try {
+    const now = 1_700_000_000_000;
+    f.store.write(db => {
+      for (const [reqId, routeId, norm] of [
+        [1, 101, 'synthetic_route'], [2, 102, 'msg_synthetic_route'],
+      ] as const) {
+        db.run(
+          `INSERT INTO request(req_id,route_id,response_id_norm,agent,actor,actor_state,
+             started_ms,day,via,body_state,derive_version,have,created_at,updated_at)
+           VALUES (?,?,?,'alpha',?,'known',?,'2026-10-31','through','pending',0,1,?,?)`,
+          [reqId, routeId, norm, `actor-${reqId}`, now + reqId, now, now]);
+      }
+    });
+
+    const previewLines: string[] = [];
+    expect(await runMaintenance(['normalize-response-ids', '--db', join(f.dir, 'trace.db')], {
+      out: line => previewLines.push(line), err: () => {},
+    })).toBe(0);
+    expect(JSON.parse(previewLines[0]!)).toMatchObject({
+      ok: true, applied: false, requests: 1,
+      conflicts: [{
+        table: 'request', key: 'synthetic_route',
+        values: ['msg_synthetic_route', 'synthetic_route'],
+      }],
+    });
+
+    // 旧实现会直接 UPDATE 成同一个键；这里要求在任何写入前整批拒绝。
+    const applyLines: string[] = [];
+    const applyErrs: string[] = [];
+    expect(await runMaintenance([
+      'normalize-response-ids', '--db', join(f.dir, 'trace.db'),
+      '--apply', '--approval-id', 'synthetic-approval',
+    ], { out: line => applyLines.push(line), err: line => applyErrs.push(line) })).toBe(1);
+    expect(applyLines).toEqual([]);
+    expect(applyErrs).toEqual(['normalize-response-ids_failed:response_id_conflict']);
+    expect(f.store.read.query(
+      'SELECT req_id,response_id_norm AS norm FROM request ORDER BY req_id').all()).toEqual([
+      { req_id: 1, norm: 'synthetic_route' },
+      { req_id: 2, norm: 'msg_synthetic_route' },
+    ]);
   } finally {
     f.close();
   }

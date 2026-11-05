@@ -13,15 +13,21 @@ import {
   requestPositionTx,
   resetRequestInputEpochTx,
 } from './derive/state';
+import { HAVE_BODY } from './evidence';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from './sources/projection';
 
 type SourceRow = {
   skeleton_z: Uint8Array | null;
   body_state: string;
+  body_prev_state: string | null;
+  body_evicted_at: number | null;
+  body_evict_reason: string | null;
   parse_state: string | null;
   reply_state: string | null;
   adapter_version: number | null;
   msg_count: number | null;
+  body_bytes: number | null;
+  redact_version: number | null;
   miss_reason: string | null;
   source_facts_json: string | null;
   have: number;
@@ -87,27 +93,35 @@ export function mergeRequestTx(
   db.run('UPDATE request SET prev_req_id=? WHERE prev_req_id=?', [targetId, sourceId]);
 
   const source = db.query<SourceRow, [number]>(`
-    SELECT skeleton_z,body_state,parse_state,reply_state,adapter_version,msg_count,miss_reason,
+    SELECT skeleton_z,body_state,body_prev_state,body_evicted_at,body_evict_reason,
+      parse_state,reply_state,adapter_version,msg_count,body_bytes,redact_version,miss_reason,
       source_facts_json,have,response_id_norm,session,conv_key,conv_source,actor,subagent,
       parent_agent,turn_ref,model_requested,in_tok,out_tok,cache_read,cache_write,reasoning,
       title,sort_source,sort_key
     FROM request WHERE req_id=?`).get(sourceId);
   if (source === null) return;
 
-  // 3) 目标缺正文而源有正文时搬过去；adapter_version 一并搬，漏掉它会让按版本
-  //    筛选的回填跳过有正文的行。
+  // 3) 目标缺正文而源有正文时搬过去。正文从哪来就以哪来的元数据为准：
+  //    body_bytes 是这笔请求的逻辑正文字节，不是删行时物理释放的字节。
   const targetBody = db.query<{ body_state: string }, [number]>(
     'SELECT body_state FROM request WHERE req_id=?').get(targetId);
   let bodyState = targetBody?.body_state ?? null;
   if (targetBody?.body_state !== 'available' && source.skeleton_z !== null) {
     db.run(
-      `UPDATE request SET skeleton_z=?, body_state=?, parse_state=COALESCE(parse_state,?),
-         reply_state=COALESCE(reply_state,?), adapter_version=COALESCE(adapter_version,?),
-         msg_count=COALESCE(msg_count,?) WHERE req_id=?`,
-      [source.skeleton_z, source.body_state, source.parse_state, source.reply_state,
-        source.adapter_version, source.msg_count, targetId],
+      `UPDATE request SET skeleton_z=?, body_state=?, body_prev_state=?, body_evicted_at=?,
+         body_evict_reason=?, parse_state=?, reply_state=?, adapter_version=?, msg_count=?,
+         body_bytes=?, redact_version=? WHERE req_id=?`,
+      [source.skeleton_z, source.body_state, source.body_prev_state, source.body_evicted_at,
+        source.body_evict_reason, source.parse_state, source.reply_state, source.adapter_version,
+        source.msg_count, source.body_bytes, source.redact_version, targetId],
     );
     bodyState = source.body_state;
+  } else if (targetBody?.body_state === 'pending' && source.skeleton_z === null
+    && source.body_state === 'partial' && (source.have & HAVE_BODY) !== 0) {
+    // hook 回调已登记正文证据但正文没落盘：目标不能继续假装还在等。
+    // 只纠正状态，正文仍不可读；之后若有别的来源补上正文，persistBodyTx 会改回 available。
+    db.run("UPDATE request SET body_state='partial' WHERE req_id=?", [targetId]);
+    bodyState = 'partial';
   }
   db.run('UPDATE request SET miss_reason=? WHERE req_id=?',
     [bodyState === 'available' ? null : source.miss_reason, targetId]);

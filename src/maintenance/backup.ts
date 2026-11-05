@@ -10,8 +10,9 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { readLocalSecret, saltId } from '../config';
+import { openStore } from '../store';
 import { acquireMaintenanceLock } from './lock';
-import { verifyDatabase } from './verify';
+import { CODE_SCHEMA_VERSION, verifyDatabase } from './verify';
 
 function isBusy(error: unknown): boolean {
   const code = (error as { code?: unknown }).code;
@@ -145,10 +146,10 @@ export function backupDatabase(
 /**
  * 可恢复 bundle 接受的库结构版本。
  *
- * 备份与恢复都只查这一处：加一个版本就是在这里加一个数字，不另写第二份版本规则。
+ * v6–v14 的恢复包由当前代码在 staging 里原地迁移到最新版本；更早版本没有升级
+ * 路径，更高版本当前代码打不开。备份与恢复都只查这一处，加一个版本就是在这里
+ * 加一个数字，不另写第二份版本规则。
  */
-/** 可搬运的 schema 版本。只有当前版本：低版本没有升级路径，搬回来也打不开。 */
-/** 可恢复的 schema 版本：v6～v13 包恢复后首次打开会原地升到当前版本（纯新增）。 */
 export const RESTORABLE_SCHEMA_VERSIONS: readonly number[] = [6, 7, 8, 9, 10, 11, 12, 13, 14];
 
 const BUNDLE_FILES = ['trace.db', 'redaction.salt', 'manifest.json'] as const;
@@ -309,11 +310,59 @@ export function backupBundle(sourceDir: string, destinationDir: string): void {
   }
 }
 
+type BundleManifest = {
+  format: number;
+  schema: number;
+  salt_id: string;
+  database_sha256: string;
+};
+
+/** 恢复后必须能读的关键表；迁移没覆盖到的旧结构在这里现形。 */
+const RESTORE_PROBE_TABLES = [
+  'request', 'request_evidence', 'pending_hook', 'derive_queue', 'collector_state',
+] as const;
+
+/**
+ * 在 staging 副本上验证当前代码能迁移并打开这份库，再返回迁移后的清单。
+ *
+ * `openStore` 是写操作：它执行迁移、切到 WAL 并校验容量计数，所以只能对
+ * staging 里的副本做。任何一步失败都映射成 `restore_migration_failed`，
+ * 由调用方清掉 staging，目标不会发布。
+ */
+function migrateStagedDatabase(
+  path: string,
+  manifest: BundleManifest,
+  salt: Uint8Array,
+): BundleManifest {
+  let store: ReturnType<typeof openStore> | null = null;
+  try {
+    store = openStore(path);
+    const version = store.read.query<{ user_version: number }, []>('PRAGMA user_version').get();
+    if (version?.user_version !== CODE_SCHEMA_VERSION) throw new Error('version');
+    for (const table of RESTORE_PROBE_TABLES) {
+      store.read.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
+    }
+    const row = store.read.query<{ value_json: string }, []>(
+      "SELECT value_json FROM collector_state WHERE key='privacy:salt'").get();
+    if (row === null || bindingIdOf(row.value_json) !== saltId(salt)) throw new Error('salt');
+  } catch {
+    throw new Error('restore_migration_failed');
+  } finally {
+    store?.close();
+  }
+  // close 会做 TRUNCATE checkpoint；staging 里没有别的连接，正常应留下 0 字节 WAL。
+  // 还有未回放内容时清单的 SHA-256 就代表不了整份库，不能发布。
+  const wal = `${path}-wal`;
+  if (existsSync(wal) && statSync(wal).size > 0) throw new Error('restore_migration_failed');
+  return { ...manifest, schema: CODE_SCHEMA_VERSION, database_sha256: hashDatabase(path) };
+}
+
 /**
  * 从 bundle 恢复到新目录。目标已存在就拒绝，任何一步校验不过都不留下半套目录。
  *
  * 校验顺序：目录内容与权限 → 清单格式与版本 → 盐标识 → 数据库哈希 → 复制到 staging
- * → 再校验哈希与完整性 → 包内库自身的版本与盐绑定 → 发布。
+ * → 再校验哈希与完整性 → 包内库自身的版本与盐绑定 → 在 staging 上用 `openStore`
+ * 迁移并探活关键表 → 按迁移后的库重写清单 → 发布。
  * 清单是自述，包内数据库是事实；两者对不上就不发布。
  *
  * 认证令牌不随包走：恢复后的库要在新目录里按显式重配流程生成 `read.token` 与 `hook.token`。
@@ -337,13 +386,13 @@ export function restoreBundle(bundleDir: string, destinationDir: string): void {
       throw new Error('restore_bundle_permissions');
     }
   }
-  let manifest: { format: number; schema: number; salt_id: string; database_sha256: string };
+  let manifest: BundleManifest;
   try {
     const parsed: unknown = JSON.parse(readFileSync(join(bundleDir, 'manifest.json'), 'utf8'));
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('restore_bundle_invalid');
     }
-    manifest = parsed as typeof manifest;
+    manifest = parsed as BundleManifest;
   } catch {
     throw new Error('restore_bundle_invalid');
   }
@@ -386,6 +435,10 @@ export function restoreBundle(bundleDir: string, destinationDir: string): void {
     } finally {
       snapshot.close();
     }
+    // 迁移会改写 staging 里的库，清单必须跟着迁移后的库一起发布。
+    const upgraded = migrateStagedDatabase(join(staging, 'trace.db'), manifest, salt);
+    writeFileSync(join(staging, 'manifest.json'), JSON.stringify(upgraded));
+    chmodSync(join(staging, 'manifest.json'), 0o600);
     publishPrivateDirectory(staging, destinationDir);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });

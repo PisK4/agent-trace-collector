@@ -482,15 +482,19 @@ hook 的 `model` 与 `success` 只作为独立报告保留在 `raw_hook`：前�
 
 ### 跨来源认领
 
-droid 行与账本行写入前先找它认领的既有请求，共用 `src/owner.ts` 的同一处查找，按顺序试三条线索：
+本地会话行与账本行写入前共用 `src/owner.ts` 查找既有请求，按顺序尝试：
 
 1. `response_id_norm` 精确命中。
 2. `turn_ref` 命中；带 agent 时只认同 agent。
-3. 同 `conv_key`、同 agent，候选行的 `started_ms` 落在入站起点前后 60 秒内，模型在 `model_requested` 或 `model_served` 上相等。
+3. 同会话、同 agent、起点 ±2 秒且四段用量逐项相等。
+4. 提供完成时间时，按同会话、同 agent 的 ±2 秒完成窗匹配；未命中不回退到弱开始窗。
+5. 未提供完成时间时，按同会话、同 agent 的 ±60 秒开始窗兜底。模型先归一 `group/`、`auto/` 与标点；双方都有模型且不相等时，即使候选唯一也不合并。一方缺模型允许唯一候选兜底。
 
-只有唯一命中才认领。零候选或两个以上候选都独立成行，证据行的 `match_rule` 记 `match_absent` 或 `match_ambiguous`，不按最近时间猜。第 3 条线索跳过已带同一来源证据的行：同一来源里相邻的两笔调用是两次真实调用，不是同一笔的重复记录。
+只有唯一命中才认领。零候选或两个以上候选都独立成行，证据行的 `match_rule` 记 `match_absent` 或 `match_ambiguous`，不按最近时间猜。时间与用量线索跳过已带同一来源证据的行：同一来源里相邻的两笔调用是两次真实调用，不是同一笔的重复记录。
 
 droid 在写请求行前调用它；账本在 `route_id` 未命中时调用它，所以账本迟到能认领 OTLP 或 droid 已建的行。hook 走自己的等待队列，OTLP 摄入不调用它，账本先到、OTLP 后到的调用仍保留两行。合并到既有行时 droid 只补空字段，不改变原有 `via`，正文只在对方没有可读骨架且未被回收时补，不覆盖已有值。投影仍只把账本、路由与 hook 当字段来源，OTLP 与 `session_call` 只贡献位图与缺失判定。
+
+请求合并搬运骨架时，正文状态、解析状态、消息数、适配器版本、`body_bytes` 与 `redact_version` 同时取自实际正文供体。源 hook 已登记正文证据、仅保留 partial 且无骨架时，pending 目标随之成为 partial；这只纠正等待状态，不恢复正文。历史修正命令见[正文一致性维护](operations.md#body-consistency-与-body-bytes-backfill)。
 
 ### 乱序到达与重算
 
@@ -1104,6 +1108,8 @@ Responses 的前序响应引用（`previous_response_id`）不能解释为本笔
 
 完成用比较交换而不是无条件写：同步路径先只读算完本组（`computeDeriveGroup`，产出落库计划），再由落库段（`applyDeriveGroup`）在一个事务里写回并做交换：计划带着认领时读到的 `{group_epoch, input_revision, target_algorithm}`，交换成功才把状态改成 clean 并记下消费的修订与算法。交换不命中时按 `claim_from_sort` 只写本轮认领以来边界之前的行（一致前缀发布）：链关系与展示列落库，`chain_role`、工具行与后台作业留到整组完成，组保持 dirty，`from_sort` 推进到该边界。认领发生在计算快照之前，边界因此比真实快照更保守，只会少写。边界未知或为 `~`（认领后没有变化，与修订已变自相矛盾）则整轮丢弃。可写集合按库里此刻的 `started_ms` 取，不按计划里的位置，因为迟到账本会改写开始时刻。台账见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)、[一致前缀发布](../.agents/notes/implemented/architecture/2026-11-02-derive-prefix-publish.md)与[认领边界](../.agents/notes/implemented/architecture/2026-11-03-derive-claim-boundary.md)。在线路径把计算段交给 Worker、落库段留在主线程（见[派生计算线程](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-worker.md)），维护与回填仍在主线程算。在线已提交组独立保留，重启只需继续未完成组；未发布的切片代由启动恢复丢弃，上一代发布指针保持不动。离线调用 `drainDeriveTx` 时，由调用方外层事务决定整批回滚范围。
 
+同步候选先选没有失败记录的组；失败组按认领次数和最后完成时间轮转，避免一个组反复抛错阻塞后续健康组。错误仍回写队列并向上抛，组保持待办，在线调度保留既有退避。切片路径沿用其独立调度。
+
 #### 两个粒度：请求用途先于组结果
 
 派生编排归 `src/derive/unit.ts`。在线用 `createDeriveUnit(store).run({budgetMs})` 返回 `{didWork,nextDueMs}`：每轮预算 400 ms、最多十个组或切片步骤，用途按十笔一批独立提交，组间检查剩余预算；空闲先只读判定，不开写事务。有积压时 `nextDueMs=0`，调度用定时器让出事件循环后续跑，空闲等待两秒。同步单组拆成只读计算与短事务落库两段：计算走只读连接、不持写锁，在线路径把这一段交给 Worker（`src/derive/worker.ts` 与 `worker-entry.ts`），维护与回填留在主线程用 `store.read`，落库段一个事务执行计划并做队列交换；单个大组仍可能超过预算，但写锁只覆盖落库段，见[派生算/写接缝](../.agents/notes/implemented/architecture/2026-11-02-derive-compute-apply-seam.md)。生产切片启用限制见[派生代际与发布指针](#派生代际与发布指针)。维护与容量实验用同模块的 `drainDeriveEntry(store, limit, scope?)`，保留完整统计；需要把多个组放进外层事务的离线调用使用 `drainDeriveTx(db, {limit, scope?, purposeLimit?})`。
@@ -1388,7 +1394,11 @@ v14 的 `capacity_meter` 给四个来源各存一行 `bytes` 与 `row_count`。�
 
 `auto_vacuum = INCREMENTAL` 必须在建表前设置并验证；已有库需要单独迁移（`VACUUM` 一次）。设置之后，删除数据、`incremental_vacuum`、`wal_checkpoint(TRUNCATE)` 三步缺一不可：只做前两步文件仍是 6.7 MB，三步都做才归到 0.0 MB。
 
-回收不在凌晨等。磁盘接近上限时就触发，按批次限量执行，单批事务不阻塞写入。写入低峰（实测 16:00 前后是高峰，凌晨是低谷）只是调度上的偏好。
+回收不在凌晨等。磁盘接近上限时先收空闲页并重测，再以总盘 75% 为独立回收目标。缺口超过空闲页与 block/request 可淘汰逻辑字节之和时，停止为磁盘压力删正文，正文预算仍独立执行。已释放字节只统计骨架和失去最后引用的块，不能用逐请求 `body_bytes` 累加代替物理释放量。
+
+raw 清理候选每次只准备一次、每表最多 2,000 个键；会话代际按复合主键 seek 并跨调用轮转，活跃追加代际保留。每个写事务每来源最多处理 100 行、4 MiB 载荷，首行超大时仍作为不可拆分的单位处理；批间让出并检查墙钟，准备已超时也至少提交首批。单次 SQL 与事务仍同步执行，不能墙钟抢占。
+
+增量收缩每次最多 32 轮、每轮 256 页，轮间检查 500 ms 预算；未收完的空闲页留到后续调用。checkpoint 受连接忙等待约束，繁忙时如实返回 busy。写入低峰只是调度偏好，不能代替每次同步操作的限量。
 
 ## 后台监控
 

@@ -6,11 +6,12 @@
  * 2. `turn_ref` 命中（Codex 的 thread turn 身份）；
  * 3. 同 conv_key、同 agent、±2 秒、四段用量逐段相等（本地会话与网关指纹）；
  * 4. 同 conv_key、同 agent、±2 秒的完成时间对齐（本地只读得到消息落库时刻）；
- * 5. 同 conv_key、同 agent、±60 秒、模型名归一后相等或缺失（弱线索，只给
- *    没提供完成时间的来源兜底；提供了完成时间的来源不再走这一条）。
+ * 5. 同 conv_key、同 agent、±60 秒、模型名归一后相等或至少一方缺失（弱线索，
+ *    只给没提供完成时间的来源兜底；提供了完成时间的来源不再走这一条）。
+ *    双方都给出模型且归一后不相等时，即使只有一个候选也不合并。
  *
- * 模型名跨来源不等价（网关 `group/auto-…`、本地 `auto/…`），因此第 3、4 条不比较
- * 模型，第 5 条也不把模型名不同当作拒绝理由。
+ * 模型名跨来源写法不同（网关 `group/auto-…`、本地 `auto/…`），因此第 3、4 条不比较
+ * 模型；第 5 条先按归一后的模型消歧，无法证明相等时不拿唯一候选去猜。
  *
  * 多候选与零候选都不合并：同一会话里相邻的两笔调用不该被时间窗并成一笔，
  * 所以第 5 条只作为跨来源线索，不认领已有同来源证据的行。查找本身不写库，
@@ -187,7 +188,7 @@ function normalizedModel(model: string): string {
 
 /**
  * 同会话、同 agent、±60 秒的时间窗。模型名归一后相等或一方缺失才可用于
- * 消歧；模型名不同不是拒绝理由，只在多候选时作为排序依据。
+ * 消歧；双方都给出模型且归一后不相等时不合并。
  */
 function byConvTimeModel(
   db: Database,
@@ -218,9 +219,17 @@ function byConvTimeModel(
   if (sameModel.length > 1) {
     return { reqId: null, outcome: 'ambiguous', rule: MATCH_BY_CONV_TIME_MODEL };
   }
-  // 模型名不同不是拒绝理由：没有归一后相等的候选时，唯一候选仍然合并。
+  // 唯一候选也要过模型闸：双方都有模型而归一后不相等，说明不是同一笔。
+  // 模型缺失只说明无法比较，不构成拒绝理由，仍由唯一候选兜底。
   if (rows.length === 1) {
-    return { reqId: rows[0]!.req_id, outcome: 'matched', rule: MATCH_BY_CONV_TIME_MODEL };
+    const row = rows[0]!;
+    const candidateModels = [row.model_requested, row.model_served]
+      .filter((value): value is string => value !== null);
+    if (key === null || candidateModels.length === 0
+      || candidateModels.some(model => normalizedModel(model) === key)) {
+      return { reqId: row.req_id, outcome: 'matched', rule: MATCH_BY_CONV_TIME_MODEL };
+    }
+    return ABSENT;
   }
   if (rows.length > 1) {
     return { reqId: null, outcome: 'ambiguous', rule: MATCH_BY_CONV_TIME_MODEL };

@@ -65,7 +65,7 @@ const CODEX_TURN = {
 test('OMP chat span 落库：via=otlp、have=8、白名单列映射、conv 与 magpie 同组键', () => {
   const { store, result } = ingestOmp([{ resource: { service: 'oh-my-pi' }, spans: [OMP_CHAT] }]);
   try {
-    expect(result).toEqual({ spans: 1, spanDuplicates: 0, requestsCreated: 1, unknownShape: 0, unknownServices: 0, bodiesWired: 0 });
+    expect(result).toEqual({ spans: 1, spanDuplicates: 0, requestsCreated: 1, unknownShape: 0, unknownServices: 0, skipped: 0, bodiesWired: 0 });
     const row = store.store.read.query(`
       SELECT via, have, body_state, agent, session, conv_key, conv_source, actor, actor_state,
         started_ms, stop, model_requested, model_served, in_tok, out_tok, cache_read, cache_write,
@@ -121,7 +121,7 @@ test('同一批次重发两次：第二次全为重复，不产生新行', () =>
     const first = acceptOtlpTraces(store.store, payload(), NOW, salt);
     const second = acceptOtlpTraces(store.store, payload(), NOW + 1000, salt);
     expect(first.requestsCreated).toBe(1);
-    expect(second).toEqual({ spans: 1, spanDuplicates: 1, requestsCreated: 0, unknownShape: 0, unknownServices: 0, bodiesWired: 0 });
+    expect(second).toEqual({ spans: 1, spanDuplicates: 1, requestsCreated: 0, unknownShape: 0, unknownServices: 0, skipped: 0, bodiesWired: 0 });
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(1);
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(1);
   } finally {
@@ -285,6 +285,30 @@ test('span 不带会话 id：行可查但没有 conv_key，也不进派生队列
   }
 });
 
+test('登记服务的非 LLM 内部 span 计数为 skipped：落原始层、不建行、不记 issue', () => {
+  const store = fixture();
+  try {
+    const decoded = decodeTracesBody(tracesProtobuf([{ resource: { service: 'claude-code' }, spans: [{
+      traceId: SYNTH.traceA,
+      spanId: SYNTH.spanTool,
+      name: 'fs.read_file',
+      startNano: SYNTH.msToNano(1),
+      attrs: { 'fs.path': 'synthetic/path' },
+    }] }]), 'protobuf');
+    const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
+    expect(result).toEqual({
+      spans: 1, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0,
+      unknownServices: 0, skipped: 1, bodiesWired: 0,
+    });
+    // 原始层照旧保留，事后仍能判断是规则漏识别还是上游没发。
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(1);
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(0);
+    expect((store.store.read.query('SELECT COUNT(*) AS n FROM ingest_issue').get() as { n: number }).n).toBe(0);
+  } finally {
+    store.close();
+  }
+});
+
 test('LLM 形状但选取规则没认的 span 进未知桶，不按形状兜底建行', () => {
   const store = fixture();
   try {
@@ -297,7 +321,7 @@ test('LLM 形状但选取规则没认的 span 进未知桶，不按形状兜底�
       },
     }] }]), 'protobuf');
     const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
-    expect(result).toEqual({ spans: 1, spanDuplicates: 0, requestsCreated: 0, unknownShape: 1, unknownServices: 0, bodiesWired: 0 });
+    expect(result).toEqual({ spans: 1, spanDuplicates: 0, requestsCreated: 0, unknownShape: 1, unknownServices: 0, skipped: 0, bodiesWired: 0 });
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(0);
     const issues = store.store.read.query<{ reason: string }, [string]>(
       'SELECT reason FROM ingest_issue WHERE source_kind=?').all('otlp_span');
@@ -315,7 +339,7 @@ test('白名单外的服务不建行：span 落原始层，按服务与日聚合
       { ...OMP_CHAT, spanId: SYNTH.spanTool, name: 'chat another' },
     ] }]), 'protobuf');
     const result = acceptOtlpTraces(store.store, decoded, NOW, new Uint8Array(32));
-    expect(result).toEqual({ spans: 2, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0, unknownServices: 2, bodiesWired: 0 });
+    expect(result).toEqual({ spans: 2, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0, unknownServices: 2, skipped: 0, bodiesWired: 0 });
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(0);
     expect((store.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(2);
     // 同服务同日只记一行门铃 issue，ref_key 聚合到服务与日，不逐 span 刷表。

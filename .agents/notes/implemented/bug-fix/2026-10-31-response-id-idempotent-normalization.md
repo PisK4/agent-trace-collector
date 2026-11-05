@@ -34,6 +34,8 @@ hook 回执 id 是 `chatcmpl-msg_<hash>`，账本侧是 `msg_<hash>`。`normaliz
 
 命令幂等：第二次运行时三个存量计数都是 0，已合并的等待项不再出现。
 
+2026-11-05 增补：应用前先预演整批操作后的 `request` 同键形态；现有唯一候选合并路径覆盖不到的冲突整批拒绝，不自动合并。见[维护命令的三处收尾](./2026-11-05-maintenance-followups-f27-f30-f31.md)。
+
 ## Alternatives considered
 
 **只在 hook 入口多剥一层。** 只能修 OMP 这一种层数，账本侧已有的 `chatcmpl-msg_…` 与其它组合仍在；匹配规则会从一处变成两处。落选。

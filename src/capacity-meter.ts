@@ -122,6 +122,18 @@ export function capacityMeterBodyBytes(db: Database): number {
   ).get()?.n ?? 0;
 }
 
+/**
+ * 正文淘汰实际能回收的逻辑载荷：共享块与请求骨架。
+ *
+ * `raw_hook` 与 `raw_session_event` 由各自的保留路径清理，淘汰正文不会释放它们；
+ * 磁盘压力判断必须用这个上界，不能拿四源总量当成可回收量。
+ */
+export function capacityMeterEvictableBytes(db: Database): number {
+  return db.query<{ n: number }, []>(
+    "SELECT IFNULL(SUM(bytes),0) AS n FROM capacity_meter WHERE source IN ('block','request')",
+  ).get()?.n ?? 0;
+}
+
 /** 报告用状态：缺表、缺来源、坏值与版本不符都按固定错误码返回，不抛错。 */
 export function capacityMeterStatus(db: Database): CapacityMeterStatus {
   try {
