@@ -8,6 +8,7 @@ const USAGE = { input: 100, output: 20, cacheRead: 50, cacheWrite: 10 };
 
 function seedCall(store: Store, input: {
   startedMs: number;
+  ms?: number;
   usage?: typeof USAGE;
   evidence?: string;
   model?: string | null;
@@ -15,13 +16,14 @@ function seedCall(store: Store, input: {
 }): number {
   return store.write(db => {
     const reqId = Number(db.run(`
-      INSERT INTO request(agent,conv_key,conv_source,session,actor,actor_state,started_ms,day,via,
+      INSERT INTO request(agent,conv_key,conv_source,session,actor,actor_state,started_ms,ms,day,via,
         body_state,derive_version,have,created_at,updated_at,model_requested,
         in_tok,out_tok,cache_read,cache_write)
-      VALUES (?,?,'claude-session','synthetic-session','synthetic-session','known',?,'2026-11-04',
+      VALUES (?,?,'claude-session','synthetic-session','synthetic-session','known',?,?,'2026-11-04',
         'through','pending',0,16,1,1,?,?,?,?,?)`,
     [
-      input.agent ?? 'claude', CONV, input.startedMs, input.model === undefined ? 'claude-synthetic' : input.model,
+      input.agent ?? 'claude', CONV, input.startedMs, input.ms ?? null,
+      input.model === undefined ? 'claude-synthetic' : input.model,
       input.usage?.input ?? null, input.usage?.output ?? null,
       input.usage?.cacheRead ?? null, input.usage?.cacheWrite ?? null,
     ]).lastInsertRowid);
@@ -174,6 +176,67 @@ test('指纹缺任一段用量时跳过，不按 0 猜', () => {
   try {
     seedCall(f.store, { startedMs: 10_000, usage: USAGE });
     expect(find(f.store, { usage: null })).toMatchObject({ outcome: 'matched', rule: 'conv_time_model.v1' });
+  } finally {
+    f.close();
+  }
+});
+
+test('完成时间 ±2 秒唯一命中：长调用开始时间超出弱窗口仍能认领', () => {
+  const f = fixture();
+  try {
+    // 网关笔：开始 5 秒、耗时 107 秒，结束 112 秒；本地只有结束 112.1 秒和开始 110 秒。
+    const reqId = seedCall(f.store, { startedMs: 5_000, ms: 107_000, usage: { ...USAGE, input: 101 } });
+    expect(find(f.store, { startedMs: 110_000, endMs: 112_100, model: null, usage: null }))
+      .toEqual({ reqId, outcome: 'matched', rule: 'conv_end.v1' });
+  } finally {
+    f.close();
+  }
+});
+
+test('完成时间多候选不合并', () => {
+  const f = fixture();
+  try {
+    seedCall(f.store, { startedMs: 5_000, ms: 107_000, usage: { ...USAGE, input: 101 } });
+    seedCall(f.store, { startedMs: 5_600, ms: 106_900, usage: { ...USAGE, input: 102 } });
+    expect(find(f.store, { startedMs: 110_000, endMs: 112_100, model: null, usage: null }))
+      .toEqual({ reqId: null, outcome: 'ambiguous', rule: 'conv_end.v1' });
+  } finally {
+    f.close();
+  }
+});
+
+test('没有结束时间就不走完成时间对齐', () => {
+  const f = fixture();
+  try {
+    seedCall(f.store, { startedMs: 5_000, ms: 107_000, usage: { ...USAGE, input: 101 } });
+    expect(find(f.store, { startedMs: 110_000, endMs: null, model: null, usage: null }))
+      .toEqual({ reqId: null, outcome: 'absent', rule: null });
+  } finally {
+    f.close();
+  }
+});
+
+test('网关缺时长时完成时间对齐跳过，仍由开始窗兜底', () => {
+  const f = fixture();
+  try {
+    const reqId = seedCall(f.store, { startedMs: 10_000, usage: { ...USAGE, input: 101 } });
+    expect(find(f.store, { startedMs: 10_500, endMs: 11_000, model: null, usage: null }))
+      .toEqual({ reqId, outcome: 'matched', rule: 'conv_time_model.v1' });
+  } finally {
+    f.close();
+  }
+});
+
+test('同来源已有证据的行不被完成时间认领', () => {
+  const f = fixture();
+  try {
+    seedCall(f.store, {
+      startedMs: 5_000, ms: 107_000, evidence: 'hermes_session_call', usage: { ...USAGE, input: 101 },
+    });
+    expect(find(f.store, {
+      startedMs: 110_000, endMs: 112_100, model: null, usage: null,
+      excludeSourceKind: 'hermes_session_call',
+    })).toEqual({ reqId: null, outcome: 'absent', rule: null });
   } finally {
     f.close();
   }

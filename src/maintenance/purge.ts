@@ -3,6 +3,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
 import { markGroupDirtyTx, positionKey } from '../derive/state';
+import { HAVE_SESSION } from '../evidence';
+import { SESSION_ADAPTERS } from '../sources/session/registry';
 import type { Store } from '../store';
 
 export type PurgePreview = {
@@ -215,6 +217,101 @@ export function purgeAgent(store: Store, agent: string, approvalId: string): Pub
   );
 }
 
+/** 来源重置的范围预览：整行删除、只摘证据与来源层各自的可删行数。 */
+export type ResetSourcePreview = {
+  source_kind: string;
+  evidence_kind: string;
+  evidence: number;
+  local_only_requests: number;
+  mixed_requests: number;
+  cursors: number;
+  raw_rows: number;
+  first_day: string | null;
+  last_day: string | null;
+};
+
+function resetAdapter(sourceKind: string) {
+  const adapter = SESSION_ADAPTERS.find(entry => entry.sourceKind === sourceKind);
+  if (adapter === undefined) throw new Error('source_kind_unknown');
+  return adapter;
+}
+
+/** 重置范围预览；默认只读，不删任何东西。 */
+export function previewSourceReset(store: Store, sourceKind: string): ResetSourcePreview {
+  const adapter = resetAdapter(sourceKind);
+  const kind = adapter.evidenceKind;
+  const row = store.read.query<{
+    evidence: number; local_only_requests: number; mixed_requests: number;
+    cursors: number; raw_rows: number; first_day: string | null; last_day: string | null;
+  }, [string, string, string, string, string, string, string]>(`
+    SELECT
+      (SELECT COUNT(*) FROM request_evidence WHERE source_kind=?) AS evidence,
+      (SELECT COUNT(*) FROM request r
+        WHERE EXISTS (SELECT 1 FROM request_evidence e WHERE e.req_id=r.req_id AND e.source_kind=?)
+          AND (SELECT COUNT(*) FROM request_evidence x WHERE x.req_id=r.req_id)=1) AS local_only_requests,
+      (SELECT COUNT(*) FROM request r
+        WHERE EXISTS (SELECT 1 FROM request_evidence e WHERE e.req_id=r.req_id AND e.source_kind=?)
+          AND (SELECT COUNT(*) FROM request_evidence x WHERE x.req_id=r.req_id) > 1) AS mixed_requests,
+      (SELECT COUNT(*) FROM source_cursor WHERE source_kind=?) AS cursors,
+      (SELECT COUNT(*) FROM raw_session_event WHERE source_kind=?) AS raw_rows,
+      (SELECT MIN(r.day) FROM request r
+        WHERE EXISTS (SELECT 1 FROM request_evidence e WHERE e.req_id=r.req_id AND e.source_kind=?)) AS first_day,
+      (SELECT MAX(r.day) FROM request r
+        WHERE EXISTS (SELECT 1 FROM request_evidence e WHERE e.req_id=r.req_id AND e.source_kind=?)) AS last_day`,
+  ).get(kind, kind, kind, adapter.sourceKind, adapter.sourceKind, kind, kind)!;
+  return {
+    source_kind: sourceKind, evidence_kind: kind,
+    evidence: row.evidence, local_only_requests: row.local_only_requests,
+    mixed_requests: row.mixed_requests, cursors: row.cursors, raw_rows: row.raw_rows,
+    first_day: row.first_day, last_day: row.last_day,
+  };
+}
+
+/**
+ * 重置一个本地会话来源，让它从游标零重新摄入。
+ *
+ * 只带这一来源证据的请求整行删除（沿用淘汰级联）；与网关证据混在一起的行
+ * 只摘这一来源的证据并清会话位，请求本身与其它证据保留。游标与原始行一并
+ * 删除，下一轮发现从头读。与淘汰不同，这里不写 `purged_evidence` 墓碑：
+ * 重置的目的就是让同一批调用重新落库。
+ */
+export function resetSource(store: Store, sourceKind: string, approvalId: string): PublishResult {
+  requireApproval(approvalId);
+  const adapter = resetAdapter(sourceKind);
+  const kind = adapter.evidenceKind;
+  return purgeTargetsTx(
+    store,
+    { action: 'reset_source', reason: `source_reset:${sourceKind}`, approvalId },
+    db => {
+      db.run(`INSERT INTO purge_requests(req_id)
+              SELECT r.req_id FROM request r
+              WHERE EXISTS (SELECT 1 FROM request_evidence e WHERE e.req_id=r.req_id AND e.source_kind=?)
+                AND (SELECT COUNT(*) FROM request_evidence x WHERE x.req_id=r.req_id)=1`, [kind]);
+      // 混合行：只摘这一来源的证据，请求行保留。先把组标脏，证据删掉后
+      // 会话位与会话正文的缺失判定要重算。
+      const mixed = db.query<{ conv_key: string; actor: string; earliest: number }, [string]>(`
+        SELECT conv_key, actor, MIN(started_ms) AS earliest FROM request
+        WHERE req_id IN (SELECT req_id FROM request_evidence WHERE source_kind=?
+          AND req_id NOT IN (SELECT req_id FROM purge_requests))
+          AND conv_key IS NOT NULL AND actor IS NOT NULL AND actor_state='known'
+        GROUP BY conv_key, actor`).all(kind);
+      db.run(`UPDATE request SET have = have & ~${HAVE_SESSION}
+              WHERE req_id IN (SELECT req_id FROM request_evidence WHERE source_kind=?
+                AND req_id NOT IN (SELECT req_id FROM purge_requests))`, [kind]);
+      db.run(`DELETE FROM cost_observation WHERE ref_key IN (
+                SELECT ref_key FROM request_evidence WHERE source_kind=?)`, [kind]);
+      db.run('DELETE FROM request_evidence WHERE source_kind=?', [kind]);
+      db.run('DELETE FROM source_cursor WHERE source_kind=?', [adapter.sourceKind]);
+      db.run('DELETE FROM raw_session_event WHERE source_kind=?', [adapter.sourceKind]);
+      for (const group of mixed) {
+        markGroupDirtyTx(db, group.conv_key, group.actor, positionKey(group.earliest));
+      }
+    },
+    undefined,
+    { tombstones: false },
+  );
+}
+
 /** 来源层清理：只删归属于目标、且没有被存活请求共享的原始行。 */
 function purgeAgentRawLayer(db: Database, agent: string): void {
   db.run(`DELETE FROM pending_hook WHERE hook_id IN (
@@ -258,6 +355,7 @@ function purgeTargetsTx(
   event: PurgeEvent,
   fill: (db: Database) => void,
   beforeDelete?: (db: Database) => void,
+  options: { tombstones?: boolean } = {},
 ): PublishResult {
   return store.write(db => {
     db.exec('CREATE TEMP TABLE IF NOT EXISTS purge_requests(req_id INTEGER PRIMARY KEY)');
@@ -280,10 +378,12 @@ function purgeTargetsTx(
     // 1) 费用观测按目标证据的 ref_key 精确删除。
     db.run(`DELETE FROM cost_observation WHERE ref_key IN (
               SELECT ref_key FROM request_evidence WHERE req_id IN (SELECT req_id FROM purge_requests))`);
-    // 2) 墓碑：重放时按证据键跳过。
-    db.run(`INSERT OR IGNORE INTO purged_evidence(source_kind,ref_key,purged_at)
-            SELECT source_kind, ref_key, ? FROM request_evidence
-            WHERE req_id IN (SELECT req_id FROM purge_requests)`, [now]);
+    // 2) 墓碑：重放时按证据键跳过。来源重置要重新摄入，不能留墓碑。
+    if (options.tombstones !== false) {
+      db.run(`INSERT OR IGNORE INTO purged_evidence(source_kind,ref_key,purged_at)
+              SELECT source_kind, ref_key, ? FROM request_evidence
+              WHERE req_id IN (SELECT req_id FROM purge_requests)`, [now]);
+    }
     const event_id = db.run(
       `INSERT INTO retention_event(at_ms,action,first_day,last_day,request_count,reason,approval_id)
        VALUES (?,?,?,?,?,?,?)`,

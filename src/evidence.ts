@@ -100,6 +100,12 @@ export const MATCH_BY_SPAN_IDENTITY = 'trace_span.v1';
 /** 同会话 ±60 秒窗口 + 同模型认领：只在唯一命中时使用。 */
 export const MATCH_BY_CONV_TIME_MODEL = 'conv_time_model.v1';
 
+/**
+ * 同会话 ±2 秒的完成时间对齐：本地只能读到消息落库时刻时，与网关
+ * `started_ms + ms` 比较，唯一命中才认领。
+ */
+export const MATCH_BY_CONV_END = 'conv_end.v1';
+
 /** 同会话 ±2 秒、四段用量逐段相等：本地会话与网关/direct 的去重指纹。 */
 export const MATCH_BY_USAGE_FINGERPRINT = 'usage_fingerprint.v1';
 

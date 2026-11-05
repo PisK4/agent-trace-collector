@@ -476,6 +476,14 @@ export const hermesAdapter: SessionAdapter = {
         window.set(row.display_order, message);
         order.push(row.display_order);
       }
+      // 消息行的时间戳是落库时刻（完成时间）；调用开始时间用前一条展示行
+      // 的时间戳近似——工具结果或 user 消息写完，下一笔调用随即发出。
+      const previousTimestamp = new Map<number, number | null>();
+      let prior: number | null = null;
+      for (const row of display) {
+        previousTimestamp.set(row.display_order, prior);
+        prior = numberOrNull(row.timestamp);
+      }
 
       const lines: SourceRead['lines'] = [];
       for (const row of batch) {
@@ -486,6 +494,11 @@ export const hermesAdapter: SessionAdapter = {
           if (message !== undefined) requestMessages.push(message);
         }
         const reply = blocksOf(row);
+        const endedMs = numberOrNull(row.timestamp) === null
+          ? null
+          : numberOrNull(row.timestamp)! * 1000;
+        const previousMs = previousTimestamp.get(row.display_order) ?? null;
+        const startMs = previousMs !== null ? previousMs * 1000 : (startedAtMs || endedMs || 0);
         const call: SessionCall = {
           sessionId: root.id,
           subagentId,
@@ -493,9 +506,9 @@ export const hermesAdapter: SessionAdapter = {
           callId: String(row.id),
           sortOffset: row.display_order,
           parentSessionId: ownParent,
-          startedMs: numberOrNull(row.timestamp) === null
-            ? startedAtMs
-            : numberOrNull(row.timestamp)! * 1000,
+          // 时钟回退时不让开始时间晚于完成时间；两者都只用于对齐与排序。
+          startedMs: endedMs === null ? startMs : Math.min(startMs, endedMs),
+          endedMs,
           model,
           responseIdNorm: null,
           turnRef: null,
