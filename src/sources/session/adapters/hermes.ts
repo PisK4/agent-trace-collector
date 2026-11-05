@@ -386,8 +386,13 @@ export const hermesAdapter: SessionAdapter = {
     if (!stat.isFile()) return [];
     const db = new Database(dbPath, { readonly: true });
     try {
-      const sessions = db.query<{ id: string; max_id: number }, []>(`
-        SELECT s.id, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id=s.id), 0) max_id
+      // mtimeMs 用会话自己的最后一条消息，不是库文件时间：整个 state.db 共用
+      // 一个 mtime，库一被写全部会话都会进 live 档。
+      const sessions = db.query<{ id: string; max_id: number; last_ts: number | null }, []>(`
+        SELECT s.id,
+          COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id=s.id), 0) max_id,
+          COALESCE((SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id=s.id),
+                   s.started_at, 0) last_ts
         FROM sessions s`).all();
       return sessions.map((session): SessionFile => {
         const name = `${dbPath}#${session.id}`;
@@ -395,7 +400,10 @@ export const hermesAdapter: SessionAdapter = {
         const remaining = cursor === null
           ? (session.max_id > 0 ? 1 : 0)
           : Math.max(0, session.max_id - cursor.committedOff);
-        return { name, path: dbPath, size: session.max_id, mtimeMs: stat.mtimeMs, remaining };
+        return {
+          name, path: dbPath, size: session.max_id,
+          mtimeMs: (session.last_ts ?? 0) * 1000, remaining,
+        };
       });
     } finally {
       db.close();

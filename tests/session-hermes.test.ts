@@ -100,6 +100,10 @@ test('Hermes 会话：按 display_order 还原顺序，插入序与展示序不�
     addRow(db, { role: 'user', content: 'first prompt', displayOrder: 10 });
     db.close();
 
+    // 活跃时间取会话最后一条消息，不是整个 state.db 的文件 mtime。
+    const discovered = await hermesAdapter.discover(home, () => null);
+    expect(discovered[0]!.mtimeMs).toBe(T0 + 1_000);
+
     const result = await ingestSessionBatch(f.store, hermesAdapter, [home], SALT, Date.now());
     expect(result).toMatchObject({ files: 1, calls: 1, merged: 0, invalid: 0, blocked: 0 });
 
