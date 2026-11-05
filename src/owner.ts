@@ -6,7 +6,8 @@
  * 2. `turn_ref` 命中（Codex 的 thread turn 身份）；
  * 3. 同 conv_key、同 agent、±2 秒、四段用量逐段相等（本地会话与网关指纹）；
  * 4. 同 conv_key、同 agent、±2 秒的完成时间对齐（本地只读得到消息落库时刻）；
- * 5. 同 conv_key、同 agent、±60 秒、模型名归一后相等或缺失（弱线索，只作兜底）。
+ * 5. 同 conv_key、同 agent、±60 秒、模型名归一后相等或缺失（弱线索，只给
+ *    没提供完成时间的来源兜底；提供了完成时间的来源不再走这一条）。
  *
  * 模型名跨来源不等价（网关 `group/auto-…`、本地 `auto/…`），因此第 3、4 条不比较
  * 模型，第 5 条也不把模型名不同当作拒绝理由。
@@ -143,7 +144,8 @@ function byUsageFingerprint(
  *
  * 密集工具循环里同一个 ±60 秒开始窗会同时罩住十几笔调用；完成时间彼此拉开
  * 的距离通常大于 2 秒，这一条能把同一笔调用从窗口里挑出来。候选没有时长
- * （`ms` 为空）时无法还原结束时间，不参与这一条，留给后面的开始窗兜底。
+ * （`ms` 为空）时无法还原结束时间，不参与这一条；来源既已给出完成时间，
+ * 完成窗不命中就独立成行，不再退回弱开始窗猜。
  */
 function byConvEnd(
   db: Database,
@@ -246,6 +248,9 @@ export function findRequestOwnerTx(db: Database, query: OwnerQuery): RequestOwne
   // 完成时间对齐只在来源给出结束时间时启用，窗口比开始窗窄一个数量级。
   const ended = byConvEnd(db, query, query.convKey, query.agent);
   if (ended.outcome !== 'absent') return ended;
+  // 来源已经给出完成时间时，弱开始窗不再兜底：完成时刻对不上就是另一笔，
+  // 60 秒窗只会把相邻调用并错。缺结束时间的来源才继续用弱窗。
+  if (query.endMs !== undefined && query.endMs !== null) return ABSENT;
   // 时间窗只作为弱线索：模型名归一后比较，缺失或不相等都不直接拒绝，
   // 由候选唯一性与模型相等做最后裁决。
   return byConvTimeModel(db, query, query.convKey, query.agent);
