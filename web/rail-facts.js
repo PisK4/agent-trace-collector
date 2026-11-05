@@ -328,7 +328,9 @@ export function evidenceFoldHtml(row, detail, meta) {
     : callback.includes('class="ev miss"') && ledger.includes('class="ev ok"')
       ? `<p class="note">${t('本库没有这笔的回调证据。这不等于上游没有回调过：投递超时或宿主中止都会静默放弃。')}</p>`
       : ledger.includes('class="ev miss"')
-        ? `<p class="note">${t('本库没有这笔的账本证据：回调没有携带可核验的 response ID，两边各自成行，不按时间近邻合并。')}</p>`
+        ? `<p class="note">${row.via === 'session'
+          ? t('本库没有这笔的账本证据：本地会话行没有与网关行唯一对齐，两边各自成行。')
+          : t('本库没有这笔的账本证据：回调没有携带可核验的 response ID，两边各自成行，不按时间近邻合并。')}</p>`
         : '';
   return `<details class="rail-fold" data-fold="evidence:${row.req_id}" open>
     <summary>${t('证据')}</summary>

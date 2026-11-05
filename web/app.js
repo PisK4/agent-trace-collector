@@ -728,10 +728,20 @@ if (typeof document !== 'undefined') {
       ? ''
       : `<span class="state-chip ${status.cls}"><span class="d"></span>${status.label}</span>`;
   }
+  /** 会话文件来源按 agent 取名，不把一家的文件名按到所有会话来源上。 @param {RequestRow} r */
+  function sessionFileText(r) {
+    return r.agent === null ? t('会话文件') : t('{agent} 会话文件', { agent: agentLabel(r.agent) });
+  }
+  /** @param {RequestRow} r */
+  function sessionFileTitle(r) {
+    return r.agent === null
+      ? t('请求体由会话文件重建，不含 system prompt 与工具定义')
+      : t('请求体由 {agent} 会话文件重建，不含 system prompt 与工具定义', { agent: agentLabel(r.agent) });
+  }
   /** @param {RequestRow} r */
   function viaText(r) {
     if (r.via === 'otlp') return t('OTLP 通道');
-    if (r.via === 'session') return t('droid 会话文件');
+    if (r.via === 'session') return sessionFileText(r);
     if (!(r.have & HAVE_LEDGER)) return t('仅回调，未关联账本');
     if (!(r.have & HAVE_BODY)) return t('仅账本，没有回调');
     return t('账本 + 回调');
@@ -1218,7 +1228,7 @@ if (typeof document !== 'undefined') {
     // 模型在「用量与上下文」；标题成为第一行，状态点并入标题右端。
     // 无标题请求（model_time 自动标）不撑空行：状态点留在原身份行高度的单行里。
     const sourceTag = r.via === 'session'
-      ? `<span class="muted" title="${esc(t('请求体由 droid 会话文件重建，不含 system prompt 与工具定义'))}">${t('droid 会话文件')}</span>`
+      ? `<span class="muted" title="${esc(sessionFileTitle(r))}">${sessionFileText(r)}</span>`
       : '';
     const title = contentTitle(r);
     const firstLine = title === ''
