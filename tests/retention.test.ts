@@ -13,9 +13,7 @@ import {
   enforceBodyBudget,
   evictOldestBodyBatch,
   measureBodyBytes,
-  measureBodyBytesChunked,
   measureStorage,
-  measureStorageCheap,
   pruneRaw,
   pruneRawBounded,
   recordPausedBatch,
@@ -23,6 +21,7 @@ import {
   shrinkStorage,
 } from '../src/retention';
 import type { StorageUsage } from '../src/retention';
+import { exactCapacitySums } from '../src/capacity-meter';
 import { SOURCE_PROJECTION_VERSION, projectRequestTx } from '../src/sources/projection';
 
 const MiB = 1024 * 1024;
@@ -239,7 +238,7 @@ test('shrinkStorage在无可回收页时也不报错', () => {
   }
 });
 
-test('分块正文求和与同步版一致，块时长与事件循环滞后都在预算内', async () => {
+test('在线正文量测只读计数行，与全表求和一致且不随规模变慢', () => {
   const f = fixture();
   const blockRows = 88_000;
   const requestRows = 52_000;
@@ -266,37 +265,20 @@ test('分块正文求和与同步版一致，块时长与事件循环滞后都�
       for (let i = 0; i < hookRows; i++) insertHook.run(`h-${i}`, i, 'ok', blockBlob, blockBlob);
     });
 
-    // 刷新期间用 10 ms 采样事件循环滞后：分块让出后不应出现 50 ms 以上的停顿。
-    const intervalMs = 10;
-    const lags: number[] = [];
-    let expected = performance.now() + intervalMs;
-    const sampler = setInterval(() => {
-      const now = performance.now();
-      lags.push(Math.max(0, now - expected));
-      expected = now + intervalMs;
-    }, intervalMs);
-    let measured;
-    try {
-      measured = await measureBodyBytesChunked(f.store);
-    } finally {
-      clearInterval(sampler);
-    }
-    const exact = measureBodyBytes(f.store);
-    expect(measured.bytes).toBe(exact);
-    expect(measured.chunks).toBeGreaterThan(3);
-    expect(measured.max_chunk_ms).toBeLessThanOrEqual(20);
-    expect(Math.max(0, ...lags)).toBeLessThanOrEqual(50);
-
-    // 闸门每次同步取的是廉价路径：磁盘部分现取，正文读缓存。
-    const cheapStarted = performance.now();
-    expect(measureStorageCheap(f.store, f.dir, exact).body_bytes).toBe(exact);
-    expect(performance.now() - cheapStarted).toBeLessThanOrEqual(5);
+    const exact = exactCapacitySums(f.store.read);
+    const exactTotal = exact.block.bytes + exact.request.bytes
+      + exact.raw_hook.bytes + exact.raw_session_event.bytes;
+    const started = performance.now();
+    expect(measureBodyBytes(f.store)).toBe(exactTotal);
+    // 目标上限；四行读取不随上面的 14 万行增长。
+    expect(performance.now() - started).toBeLessThanOrEqual(5);
+    expect(measureStorage(f.store, f.dir).body_bytes).toBe(exactTotal);
   } finally {
     f.close();
   }
 });
 
-test('刷新窗口内摄入的字节量就是分块求和的误差上界', async () => {
+test('计数在同一写事务提交，读连接立刻看到增量', () => {
   const f = fixture();
   const blob = new Uint8Array(64).fill(1);
   try {
@@ -307,24 +289,19 @@ test('刷新窗口内摄入的字节量就是分块求和的误差上界', async
       }
     });
     const before = measureBodyBytes(f.store);
-    const pending = measureBodyBytesChunked(f.store, { chunkRows: 200 });
-    // 第一块已经跑完并让出；此后新增的正文落在后续块之外，总和不会读到它。
     const extraBytes = 4096;
     f.store.write(db => db.run(
       'INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?)',
       [new Uint8Array([9, 9, 9]), 'fp-late', new Uint8Array(extraBytes).fill(7), extraBytes],
     ));
-    const measured = await pending;
-    const after = measureBodyBytes(f.store);
-    expect(after).toBe(before + extraBytes);
-    expect(measured.bytes).toBeGreaterThanOrEqual(before);
-    expect(after - measured.bytes).toBeLessThanOrEqual(extraBytes);
+    expect(measureBodyBytes(f.store)).toBe(before + extraBytes);
+    expect(exactCapacitySums(f.store.read).block.bytes).toBe(before + extraBytes);
   } finally {
     f.close();
   }
 });
 
-test('回收后准入正文值在后台刷新收敛，invalidate不阻塞调用方', async () => {
+test('回收后准入读数直接收敛，invalidate只丢缓存', () => {
   const f = fixture();
   const blob = new Uint8Array(4096).fill(3);
   try {
@@ -334,20 +311,14 @@ test('回收后准入正文值在后台刷新收敛，invalidate不阻塞调用�
       insert.run(new Uint8Array([2]), 'fp-b', blob, blob.length);
     });
     expect(measureBodyBytes(f.store)).toBe(8192);
-    const seen: number[] = [];
     const gate = createAdmissionGate(f.store, f.dir, { bodyBudget: 10 * MiB, diskLimit: 100 * MiB }, {
-      ttlMs: 0, clock: () => 1000, onBodyMeasured: bytes => seen.push(bytes),
+      ttlMs: 0, clock: () => 1000,
     });
-    f.store.write(db => db.run('DELETE FROM block WHERE hash=?', [new Uint8Array([1])]));
-    const after = measureBodyBytes(f.store);
-    gate.invalidate();
-    const deadline = Date.now() + 1000;
-    while (seen.length === 0 && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 1));
-    }
-    expect(seen[0]).toBe(after);
     gate.check(0);
-    expect(gate.last().usage?.body_bytes).toBe(after);
+    f.store.write(db => db.run('DELETE FROM block WHERE hash=?', [new Uint8Array([1])]));
+    gate.invalidate();
+    expect(gate.check(0).mode).toBe('normal');
+    expect(gate.last().usage?.body_bytes).toBe(4096);
   } finally {
     f.close();
   }
@@ -569,24 +540,22 @@ test('有界清理分批独立提交、批间让出，连续调用收敛到零',
   }
 });
 
-test('body 计量纳入会话原始层 payload，分块求和与同步版一致', async () => {
+test('body 计量纳入会话原始层 payload，按 UTF-8 字节计', () => {
   const f = fixture();
   try {
     const before = measureBodyBytes(f.store);
-    const payloadSize = 2048;
+    const payload = '中'.repeat(1024);
     f.store.write(db => {
       db.run(
         `INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
           line_type,event_at_ms,payload_json,privacy_version)
          VALUES ('claude_session','g-f12',0,'s','user',10,?,1)`,
-        ['x'.repeat(payloadSize)],
+        [payload],
       );
     });
-    const exact = measureBodyBytes(f.store);
-    expect(exact - before).toBe(payloadSize);
-    // WITHOUT ROWID 表没有 rowid 可分块：整表一次求和的结果必须与同步版一致。
-    const measured = await measureBodyBytesChunked(f.store);
-    expect(measured.bytes).toBe(exact);
+    // TEXT 按字节而不是字符数：1024 个汉字是 3072 字节。
+    expect(measureBodyBytes(f.store) - before).toBe(payload.length * 3);
+    expect(exactCapacitySums(f.store.read).raw_session_event.bytes).toBe(measureBodyBytes(f.store));
   } finally {
     f.close();
   }

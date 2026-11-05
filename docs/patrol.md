@@ -36,7 +36,7 @@ bun run patrol smoke --port 8396     # 临时实例
 
 判定：`limit` 与 `direction` 应为 400（`direction` 只在会话请求路由上校验）；畸形百分号编码当前返回 500，是 F20 未修前的已知基线，修好后应转 400；`body?from=1e20` 同理，F41 未修时返回 200。`limit=201` 若产品改成截断会合法返回 200，以响应体的 `error` 字段为准。脚本把 F20、F41 这两条已知基线记作 info，其余非 400 记作 over。证据：第 5 轮 F41、第 2 轮 F20。成本 10 秒。
 
-**A3 健康抽检**（手工，非权威）。进程内指标与阈值告警归 `scripts/monitor.ts`：`bun scripts/monitor.ts inspect` 这套监控巡检的规则与落盘的 `checks/<day>.jsonl` 才是权威口径，`/api/stats` 的手工读取只用于当次确认，不构成第二套阈值。要看的是 `admission` 是否长时间非 `normal`、`probe` 是否非 `ok`、`open_gaps` 是否持续增长；批量导入、重启与维护窗口会让 `admission` 短暂变化，单次探针尖峰不算异常（F02）。`/api/stats` 的缓存陈旧（F33）靠这条命令发现不了，属于代码核查项。
+**A3 健康抽检**（手工，非权威）。进程内指标与阈值告警归 `scripts/monitor.ts`：`bun scripts/monitor.ts inspect` 这套监控巡检的规则与落盘的 `checks/<day>.jsonl` 才是权威口径，`/api/stats` 的手工读取只用于当次确认，不构成第二套阈值。要看的是 `admission` 是否长时间非 `normal`、`probe` 是否非 `ok`、`open_gaps` 是否持续增长；批量导入、重启与维护窗口会让 `admission` 短暂变化，单次 HTTP 探针尖峰需结合任务与事件循环归因（F02）。`event_loop_max` 和 `service_unreadable` 按监控规则判定，不能作为单次尖峰忽略。`/api/stats` 的缓存陈旧（F33）靠这条命令发现不了，属于代码核查项。
 
 ## B. 每周（十几分钟，只读，不起临时实例）
 
@@ -49,7 +49,7 @@ bun run patrol weekly --if-due                          # 本期已有快照时�
 
 输出逐行给出读数、当前阈值与 `ok / over / info`；有越界项时退出码 1。`weekly` 会把本期快照写进状态目录，并自动与上一期比较，周环比不再需要人算，见下面的「历史与周环比」。整段输出仍然建议贴进周报，方便人看趋势。
 
-**B1 容量与增长**（核心 1）。`body_ratio` 低于下限、`freelist` 与 `wal` 超上限、可用空间低于下限即越界；日增与周增由 `growth_delta` 与上一期快照比较，越过阈值才算越界。证据：第 5 轮 F38、F39；第 1 轮 F11（raw 层 7 天 TTL 未生效）、F12（`raw_droid_event` 不在预算内）。
+**B1 容量与增长**（核心 1）。`body_ratio` 只表示 block、骨架与 raw_hook 三源正文占文件的比例，低于下限即越界；四源逻辑载荷总量由 `body_budget` 单列，不并入这个比例。`capacity_meter` 检查计数结构：可用为 `ok`，v13 旧库回退全表求和记 `info`，缺表、坏值或触发器缺失记 `over`。`freelist` 与 `wal` 超上限、可用空间低于下限即越界；日增与周增由 `growth_delta` 与上一期快照比较，越过阈值才算越界。证据：第 5 轮 F38、F39；第 1 轮 F11（raw 层 7 天 TTL 未生效）、F12（`raw_droid_event` 不在预算内）。
 
 **B2 证据链**（核心 2）。`evidence_gap` 超比例、`pending_hook` 今日新增超过前 7 日均值的倍数、`hook_absent` 最近完整一天超过阈值且超过均值的倍数即越界。`hook_absent` 还要再看 agent 分布：claude 未装 hook 时持续增长是 F01 的已知行为，先排除它再定性；重启或升级窗口会临时抬高 gap；批量回填会让 `pairs` 一次跳增，不能直接做周环比。证据：第 1 轮 F09、F13、F16。
 
@@ -92,7 +92,11 @@ kill -TERM $PID; wait $PID 2>/dev/null; rm -rf "$TMP"
 
 **C2 动保留层、容量策略、准入闸门**
 
-先跑一次 `weekly` 记录改动前基线；改动后在临时镜像里做小规模写失败验证。
+先跑一次 `weekly` 记录改动前基线。修改量测、刷新、批次调度或新增计量来源时，同时验证实际准入与 timer 装配：未触顶、触顶回收、清理命中三种状态都要覆盖。记录最慢同步操作、事件循环最大滞后、写入吞吐与 WAL；外层 async、批间让出或墙钟预算不能证明单条 SQL、单个事务有界。数据规模同时按行数、总载荷与最大单行确定，日常测试守住调用路径，GiB 级载荷实验作为显式验收，不加入每周例行扫描。相关回归、显式脚本（`bun scripts/perf-capacity-meter.ts`）与拟议门槛见[容量计数与主线程阻塞回归](../.agents/notes/implemented/bug-fix/2026-11-05-capacity-meter-main-thread-regression.md#verification)。
+
+新增容量来源或改变字节公式时，检查 `collectWeekly`、`evaluateWeekly`、`toSnapshot` 与历史比较是否仍代表同一事实。正文比例、容量预算和物理文件占用分别命名；公式改变不能沿用旧历史得出增长结论。计量对账采用明确的只读全量核对，修复计数另走停服务维护命令，不让巡查顺手改库。
+
+改动后在临时镜像里做小规模写失败验证；下面的镜像只验写失败，不承担真实载荷下的性能验收。
 
 ```bash
 IMG=/tmp/atc-cap.sparseimage; MNT=/tmp/atc-cap
@@ -107,7 +111,7 @@ mount | grep atc-cap || echo 'no temp mount'
 
 **C3 动摄入：hook、OTLP、各 agent 源适配器**
 
-改动前后各跑 `weekly`；再跑相关测试。判定：`pairs` 不下降、`evidence_gap` 不上升、OTLP 产出比不下降、`ingest_issue` 不新增 reason。新适配器上线初期 `hook_absent` 会升高；重投会改变 `raw_*` 计数但不改变去重后的证据数。证据：第 5 轮 F37；第 1 轮 F09、F13、F16。
+改动前后各跑 `weekly`；再跑相关测试。来源写入涉及计量表时，同时验证重复摄入、upsert、删除和事务回滚后的计数一致，按 C2 复测实际载荷的最慢同步操作；新来源不能只验证正文或证据产出。判定：`pairs` 不下降、`evidence_gap` 不上升、OTLP 产出比不下降、`ingest_issue` 不新增 reason。新适配器上线初期 `hook_absent` 会升高；重投会改变 `raw_*` 计数但不改变去重后的证据数。证据：第 5 轮 F37；第 1 轮 F09、F13、F16。
 
 **C4 动查询、分页、时间窗口**
 
@@ -150,7 +154,7 @@ rm -rf "$TMP"
 - **前端极端数据**（F29）：一次性浏览器复现，成本高于收益。
 - **时间语义**（F32 CLI 日期按 UTC）：一次性确认，之后由测试守住。
 - **CLI 失败路径**（F34–F36）：一次性审计，在 `maintain verify` 与 backfill 循环的修复验收里覆盖。
-- **性能深挖**（F02、F07、F10、F23）：症状驱动，需要插桩与真实流量，不适合固定巡检。
+- **性能深挖**（F02、F07、F10、F23）：症状驱动，需要插桩与真实流量，不适合固定巡检。修改保留、准入和来源计量时的性能回归属于 C2、C3 必要验收，不因本条跳过。
 - **崩溃与 ENOSPC 基线**（F42–F44）：第 6 轮已做完，只在 C2、C5 对应的代码变更时重跑。
 - **真实旧 schema 迁移**：v6–v11 的实际路径随 F30 的备份验收做，不是周期性任务。
 - **依赖与供应链审计**：由依赖更新流程负责，不是采集器运行时巡检。

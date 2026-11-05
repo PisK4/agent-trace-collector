@@ -58,6 +58,7 @@ test('容量快照包含写统计、事件循环、队列年龄与存储', () =>
       count: 1, total_ms: expect.any(Number), max_ms: expect.any(Number),
     });
     expect(snapshot.ingest.rejected_total).toBe(0);
+    expect(snapshot.capacity_meter).toMatchObject({ ok: true, version: 1, source_count: 4 });
     expect(snapshot.metadata).toMatchObject({ clean_groups: 0 });
   } finally { f.close(); }
 });

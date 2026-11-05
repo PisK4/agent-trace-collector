@@ -18,6 +18,9 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { defaultDataDir } from '../src/config';
+import {
+  CAPACITY_METER_VERSION, capacityMeterStatus, exactCapacitySums,
+} from '../src/capacity-meter';
 import { readToken } from './service-support';
 
 const MB = 1024 * 1024;
@@ -61,6 +64,12 @@ export type WeeklyReading = {
   blockBytes: number;
   skeletonBytes: number;
   rawHookBytes: number;
+  /** 四源预算总量里的会话原始层部分；不并入三源正文比例。 */
+  rawSessionBytes: number;
+  /** 正文读数来自 v14 计数还是回退到全表求和。 */
+  meterUsed: boolean;
+  meterVersion: number | null;
+  meterError: string | null;
   walBytes: number;
   freeBytes: number;
   diskBytes: number;
@@ -102,7 +111,21 @@ export function evaluateWeekly(reading: WeeklyReading): Check[] {
     state: fileBytes < PATROL_THRESHOLDS.bodyRatioMinBytes
       ? 'info'
       : bodyRatio < PATROL_THRESHOLDS.bodyRatioMin ? 'over' : 'ok',
-    detail: `正文 ${mb(bodyBytes)} MiB / 文件 ${mb(fileBytes)} MiB = ${pct(bodyRatio)}，下限 ${pct(PATROL_THRESHOLDS.bodyRatioMin)}`,
+    detail: `三源正文 ${mb(bodyBytes)} MiB / 文件 ${mb(fileBytes)} MiB = ${pct(bodyRatio)}，下限 ${pct(PATROL_THRESHOLDS.bodyRatioMin)}`,
+  });
+  checks.push({
+    id: 'body_budget',
+    state: 'info',
+    // 四源预算总量与三源正文比例含义不同，单独表达，不混进 body_ratio。
+    detail: `四源逻辑载荷 ${mb(bodyBytes + reading.rawSessionBytes)} MiB（block ${mb(reading.blockBytes)} + 骨架 ${mb(reading.skeletonBytes)} + raw_hook ${mb(reading.rawHookBytes)} + raw_session ${mb(reading.rawSessionBytes)}）`,
+  });
+  checks.push({
+    id: 'capacity_meter',
+    state: reading.meterUsed
+      ? 'ok' : (reading.meterError === 'capacity_meter_missing' ? 'info' : 'over'),
+    detail: reading.meterUsed
+      ? `计数 v${reading.meterVersion ?? CAPACITY_METER_VERSION}`
+      : `计数不可用（${reading.meterError ?? 'unknown'}），正文按全表求和；增量计数未生效`,
   });
   checks.push({
     id: 'growth',
@@ -178,11 +201,14 @@ export function collectWeekly(dbPath: string, dataDir: string, nowMs = Date.now(
     const pageSize = db.query<{ page_size: number }, []>('PRAGMA page_size').get()?.page_size ?? 0;
     const pageCount = db.query<{ page_count: number }, []>('PRAGMA page_count').get()?.page_count ?? 0;
     const freelist = db.query<{ freelist_count: number }, []>('PRAGMA freelist_count').get()?.freelist_count ?? 0;
-    const blockBytes = db.query<{ n: number }, []>('SELECT IFNULL(SUM(length(z)),0) AS n FROM block').get()?.n ?? 0;
-    const skeletonBytes = db.query<{ n: number }, []>(
-      'SELECT IFNULL(SUM(length(skeleton_z)),0) AS n FROM request').get()?.n ?? 0;
-    const rawHookBytes = db.query<{ n: number }, []>(
-      'SELECT IFNULL(SUM(length(request_z)+length(response_z)),0) AS n FROM raw_hook').get()?.n ?? 0;
+    // 计数可用时只读四行；v13 旧库回退到全表求和，并明确标记不是计数读数。
+    const meter = capacityMeterStatus(db);
+    const exact = meter.ok ? null : exactCapacitySums(db);
+    const blockBytes = meter.ok ? meter.sources.block.bytes : exact!.block.bytes;
+    const skeletonBytes = meter.ok ? meter.sources.request.bytes : exact!.request.bytes;
+    const rawHookBytes = meter.ok ? meter.sources.raw_hook.bytes : exact!.raw_hook.bytes;
+    const rawSessionBytes = meter.ok
+      ? meter.sources.raw_session_event.bytes : exact!.raw_session_event.bytes;
     const walPath = `${dbPath}-wal`;
     const walBytes = existsSync(walPath) ? statSync(walPath).size : 0;
     const space = diskSpace(dataDir);
@@ -238,6 +264,10 @@ export function collectWeekly(dbPath: string, dataDir: string, nowMs = Date.now(
       blockBytes,
       skeletonBytes,
       rawHookBytes,
+      rawSessionBytes,
+      meterUsed: meter.ok,
+      meterVersion: meter.ok ? meter.version : null,
+      meterError: meter.ok ? null : meter.error,
       walBytes,
       freeBytes: space.freeBytes,
       diskBytes: space.totalBytes,
@@ -372,7 +402,11 @@ export type Snapshot = {
   period: string;
   takenAt: number;
   fileBytes: number;
+  /** 三源正文；历史快照没有 meterVersion，与 v14 口径分开比较。 */
   bodyBytes: number;
+  /** 四源预算总量，v14 起才有。 */
+  bodyBudgetBytes?: number;
+  meterVersion?: number;
   pairs: number;
   over5m: number;
   spans: number;
@@ -470,6 +504,8 @@ export function toSnapshot(reading: WeeklyReading, checks: Check[], nowMs = Date
     takenAt: nowMs,
     fileBytes: reading.pageSize * reading.pageCount,
     bodyBytes: reading.blockBytes + reading.skeletonBytes + reading.rawHookBytes,
+    bodyBudgetBytes: reading.blockBytes + reading.skeletonBytes + reading.rawHookBytes + reading.rawSessionBytes,
+    meterVersion: reading.meterVersion ?? undefined,
     pairs: reading.pairs,
     over5m: reading.over5m,
     spans: reading.spans,
@@ -500,6 +536,14 @@ export function compareSnapshots(current: Snapshot, previous: Snapshot): Check[]
       id: 'conversation_delta',
       state: 'info',
       detail: `>${PATROL_THRESHOLDS.convWarnRequests} 会话 ${previous.convsOver200} → ${current.convsOver200}（${sign(String(convDelta))}），最大请求 ${previous.maxRequests} → ${current.maxRequests}`,
+    },
+    {
+      id: 'meter_version',
+      state: 'info',
+      // 公式或来源集合改变后，正文与预算读数不能跨版本直接比较。
+      detail: previous.meterVersion === current.meterVersion
+        ? `计量 v${current.meterVersion ?? 'legacy'}`
+        : `计量版本 ${previous.meterVersion ?? 'legacy'} → ${current.meterVersion ?? 'legacy'}，正文与预算读数不可直接比较`,
     },
   ];
 }

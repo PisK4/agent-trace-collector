@@ -24,6 +24,7 @@ test('轻量快照不量存储、不求和元数据，存储值取闸门最近�
     expect(light.storage_measured_at_ms).toBe(2_000);
     expect(light).not.toHaveProperty('metadata');
     expect(light.derive_queue).toMatchObject({ pending_groups: 0 });
+    expect(light.capacity_meter).toMatchObject({ ok: true, version: 1, source_count: 4 });
     // 轻量端点不能触发全表求和：量测计数保持 0。
     expect((light.storage_measure as { count: number }).count).toBe(0);
 
@@ -55,6 +56,7 @@ test('/api/metrics 返回轻量指标且需要读取令牌', async () => {
     const body = await response.json() as Record<string, unknown>;
     expect(body.instance).toBe('proc-a');
     expect(body).not.toHaveProperty('metadata');
+    expect(body.capacity_meter).toMatchObject({ ok: true, source_count: 4 });
     expect((body.storage_measure as { count: number }).count).toBe(0);
   } finally {
     f.close();

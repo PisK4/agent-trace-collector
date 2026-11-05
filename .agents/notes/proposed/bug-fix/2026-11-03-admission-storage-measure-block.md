@@ -22,6 +22,8 @@ Status: proposed
 
 ## Proposal
 
+2026-11-05 的[容量计数与主线程阻塞回归](../../implemented/bug-fix/2026-11-05-capacity-meter-main-thread-regression.md)复核后改走本文「维护三张表的字节计数器」备选：v14 用四表触发器维护计数，在线只读四行；后台分块刷新、第二份缓存与回收同步精确量测不再实施。准入分块已经交付，本文保留原分块方案的取舍和验收依据。
+
 先补归因，再把量测从同步阻塞改成后台分块，闸门改用最近一次完成的值。
 
 第一步在 `createCapacityMetrics` 里加一组 `storage.measure` 计数：次数、合计耗时、最大耗时，随 `/api/ingest-metrics` 输出。这一步只增加观测，不改行为，用于确认 `measureStorage` 在真实窗口里的次数与分布；后续窗口可以拿它做前后对照。

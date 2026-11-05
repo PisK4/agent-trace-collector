@@ -8,6 +8,8 @@ import { addBodyReadStats, emptyBodyReadStats } from './body-cache';
 import type { BodyReadStats } from './body-cache';
 import { measureStorage } from './retention';
 import type { StorageUsage } from './retention';
+import { capacityMeterStatus, readCapacityMeter } from './capacity-meter';
+import type { CapacityMeterReading } from './capacity-meter';
 import { queuePendingSql } from './derive/state';
 
 /**
@@ -125,7 +127,10 @@ export type CapacityMetrics = {
     record(name: string, ms: number): void;
     snapshot(): Record<string, { count: number; total_ms: number; max_ms: number }>;
   };
-  /** 存储量测计数；与 `storage` 用量并列输出为 `storage_measure`。 */
+  /**
+   * 准入量测次数与耗时。范围是目录扫描、statfs、页计数与四行容量计数读取；
+   * 不包含任何来源表全表求和。
+   */
   storage: { measure: StorageMeasure };
   /** 同步派生消息块解码的进程累计；切片路径暂不计入。 */
   bodyRead: {
@@ -139,7 +144,7 @@ export type CapacityMetrics = {
   };
   snapshot(store: Store, dataDir: string): Record<string, unknown>;
   /**
-   * 轻量快照：只读进程内计数与队列待办，不执行存储全表求和、也不做元数据求和。
+   * 轻量快照：只读进程内计数与队列待办，不执行存储量测、也不做元数据求和。
    * 存储值取准入闸门最近一次量测并附量测时间；没有值时返回 null。
    */
   lightSnapshot(): Record<string, unknown>;
@@ -212,8 +217,9 @@ function byteSum(db: Database, table: string, columns: readonly string[],
 /**
  * 元数据增长只按逻辑载荷计：clean 组队列行、来源与投影 JSON、已发布代结果字段。
  * clean 行由 C 保留，不能只数 dirty 组；来源 JSON 单独计长，不解析、不截断。
+ * `raw_session_event` 与会话行数直接取 v14 计数，不再扫这张表。
  */
-export function metadataSnapshot(store: Store): {
+export function metadataSnapshot(store: Store, meter?: CapacityMeterReading): {
   clean_groups: number;
   source_facts_json_bytes: number;
   projection_meta_json_bytes: number;
@@ -225,6 +231,7 @@ export function metadataSnapshot(store: Store): {
   per_clean_group_bytes: number | null;
   per_request_bytes: number | null;
 } {
+  const capacity = meter ?? readCapacityMeter(store.read);
   const queueColumns = tableColumns(store.read, 'derive_queue');
   const hasState = queueColumns.includes('state');
   const cleanGroups = hasState
@@ -242,11 +249,9 @@ export function metadataSnapshot(store: Store): {
       ['title', 'title_source', 'input_preview', 'input_preview_kind', 'reply_preview',
         'basis_json', 'delta_ordinals', 'purpose_chain'],
       'JOIN derive_queue q ON q.published_generation=derive_request_result.generation');
-  const requestCount = numeric(store.read, 'SELECT COUNT(*) FROM request');
-  const rawSessionRows = hasTable(store.read, 'raw_session_event')
-    ? numeric(store.read, 'SELECT COUNT(*) FROM raw_session_event') : 0;
-  const rawSessionBytes = hasTable(store.read, 'raw_session_event')
-    ? byteSum(store.read, 'raw_session_event', ['payload_json']) : 0;
+  const requestCount = capacity.sources.request.row_count;
+  const rawSessionRows = capacity.sources.raw_session_event.row_count;
+  const rawSessionBytes = capacity.sources.raw_session_event.bytes;
   const total = queueCleanBytes + sourceFactsBytes + projectionMetaBytes + resultMetadataBytes;
   return {
     clean_groups: cleanGroups,
@@ -356,9 +361,10 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
       snapshot() { return eventLoop(); },
     },
     snapshot(target, targetDir) {
-      // 存储复用闸门最近一次量测（TTL 内新鲜）；没有闸门的实验环境退回现算。
-      // 全量求和每次 111–190 ms，探针按需拉本端点时把事件循环顶出长尾（F06）。
+      // 存储复用闸门最近一次量测；没有闸门的实验环境退回现算，都是常数成本。
       const last = options.admission?.() ?? null;
+      const capacity = capacityMeterStatus(target.read);
+      if (!capacity.ok) throw new Error(capacity.error);
       let storage: StorageUsage;
       if (last?.usage != null) {
         storage = last.usage;
@@ -382,7 +388,8 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
         storage,
         storage_measured_at_ms: last?.at_ms ?? null,
         storage_measure: storageMeasureSnapshot(),
-        metadata: metadataSnapshot(target),
+        capacity_meter: capacity,
+        metadata: metadataSnapshot(target, capacity),
         derive_queue: queueSnapshot(target),
       };
     },
@@ -404,6 +411,8 @@ export function createCapacityMetrics(store: Store, dataDir: string, startedAt =
         storage: last?.usage ?? null,
         storage_measured_at_ms: last?.at_ms ?? null,
         storage_measure: storageMeasureSnapshot(),
+        // 计数结构单独汇报：缺失或非法时给错误码，不补零伪装成容量充足。
+        capacity_meter: capacityMeterStatus(store.read),
         // 只取组级待办与最老 dirty 时间，不 JOIN 历史请求。
         derive_queue: queueBacklog(store),
         admission: last === null ? null : { mode: last.mode, reason: last.reason, at_ms: last.at_ms },

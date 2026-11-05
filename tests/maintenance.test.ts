@@ -591,7 +591,7 @@ test('precheck按schema版本三态放行或拒绝，且不做迁移写入', asy
     const io = { out: (line: string) => lines.push(line), err: (line: string) => errs.push(line) };
     // 新装库是当前版本：直接可启动。store.ts 升版而 CODE_SCHEMA_VERSION 没跟时，这条先报红。
     expect(await runMaintenance(['precheck', '--db', path], io)).toBe(0);
-    expect(JSON.parse(lines.at(-1)!)).toEqual({ ok: true, state: 'in_place', db_version: 13, code_version: 13 });
+    expect(JSON.parse(lines.at(-1)!)).toEqual({ ok: true, state: 'in_place', db_version: 14, code_version: 14 });
     // 有原地升级路径的旧版本放行，且预检不写库：user_version 原样保留。
     setVersion(11);
     expect(await runMaintenance(['precheck', '--db', path], io)).toBe(0);
@@ -604,9 +604,9 @@ test('precheck按schema版本三态放行或拒绝，且不做迁移写入', asy
     expect(await runMaintenance(['precheck', '--db', path], io)).toBe(1);
     expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'rebuild_required', db_version: 5 });
     // 比代码新与带表的空版本：不支持。
-    setVersion(14);
+    setVersion(15);
     expect(await runMaintenance(['precheck', '--db', path], io)).toBe(1);
-    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'unsupported', db_version: 14 });
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'unsupported', db_version: 15 });
     setVersion(0);
     expect(await runMaintenance(['precheck', '--db', path], io)).toBe(1);
     expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, state: 'unsupported', db_version: 0 });
@@ -619,6 +619,44 @@ test('precheck按schema版本三态放行或拒绝，且不做迁移写入', asy
     writeFileSync(garbage, 'this is not a database');
     expect(await runMaintenance(['precheck', '--db', garbage], io)).toBe(1);
     expect(errs.some(line => line.startsWith('precheck_failed:'))).toBe(true);
+  } finally {
+    f.close();
+  }
+});
+
+test('容量对账只读报告差异，修正要停服务与显式批准', async () => {
+  const f = fixture();
+  try {
+    f.store.write(db => db.run(
+      'INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?)',
+      [new Uint8Array([1, 2]), 'fp', new Uint8Array(64), 64],
+    ));
+    f.store.close();
+    const dbPath = join(f.dir, 'trace.db');
+    // 直接改计数模拟历史漂移：正常写入会由触发器同步。
+    const raw = new Database(dbPath);
+    raw.run("UPDATE capacity_meter SET bytes=bytes+1 WHERE source='block'");
+    raw.close();
+
+    const lines: string[] = [];
+    const errs: string[] = [];
+    const io = { out: (line: string) => lines.push(line), err: (line: string) => errs.push(line) };
+    expect(await runMaintenance(['capacity-check', '--db', dbPath], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({
+      ok: false,
+      sources: expect.arrayContaining([
+        expect.objectContaining({ source: 'block', meter_bytes: 65, exact_bytes: 64, byte_delta: 1 }),
+      ]),
+    });
+    // 修正必须显式批准；缺批准时不动库。
+    expect(await runMaintenance(['capacity-recount', '--db', dbPath, '--apply'], io)).toBe(1);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, error: 'approval_id_required' });
+    expect(await runMaintenance(['capacity-check', '--db', dbPath], io)).toBe(1);
+
+    expect(await runMaintenance(['capacity-recount', '--db', dbPath, '--apply',
+      '--approval-id', 'approval-synthetic-1'], io)).toBe(0);
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: true, applied: true, after: { ok: true } });
+    expect(await runMaintenance(['capacity-check', '--db', dbPath], io)).toBe(0);
   } finally {
     f.close();
   }
@@ -825,15 +863,15 @@ test('当前库备份写实际版本；v8/v7/v6包恢复后原地升级，白名
     backupBundle(f.dir, bundle);
     const manifestPath = join(bundle, 'manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
-    expect(manifest.schema).toBe(13);
+    expect(manifest.schema).toBe(14);
     const restored = join(f.dir, 'restored-v9');
     restoreBundle(bundle, restored);
     const store = openStore(join(restored, 'trace.db'));
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
     } finally { store.close(); }
 
-    // v8、v7 与 v6 包仍在白名单：恢复后首次打开原地升到 v13（纯新增表与索引）。
+    // v8、v7 与 v6 包仍在白名单：恢复后首次打开原地升到 v14（纯新增表与索引）。
     const db7 = new Database(join(f.dir, 'trace.db'));
     db7.run('PRAGMA user_version=7');
     db7.close();
@@ -845,7 +883,7 @@ test('当前库备份写实际版本；v8/v7/v6包恢复后原地升级，白名
     restoreBundle(bundle7, restored7);
     const store7 = openStore(join(restored7, 'trace.db'));
     try {
-      expect(store7.read.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(store7.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
     } finally { store7.close(); }
 
     const db6 = new Database(join(f.dir, 'trace.db'));
@@ -859,7 +897,7 @@ test('当前库备份写实际版本；v8/v7/v6包恢复后原地升级，白名
     restoreBundle(bundle6, restored6);
     const store6 = openStore(join(restored6, 'trace.db'));
     try {
-      expect(store6.read.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(store6.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
     } finally { store6.close(); }
 
     // 白名单外的版本两侧都拒：低版本没有升级路径，搬回来也打不开。
