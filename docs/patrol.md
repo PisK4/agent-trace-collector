@@ -8,7 +8,7 @@
 
 1. **容量与增长**（`weekly` 的 `body_ratio`、`growth`、`freelist`、`wal`、`free_space`）。它抓到 F38（正文预算只覆盖文件的一部分）与 F39（`diskTight` 用错停止条件），也是提前看到「多久撞容量线」的唯一路径。
 2. **hook→ledger 证据链**（`weekly` 的 `evidence_gap`、`pending_hook`、`hook_absent`）。它抓到 F09（三路证据齐全但正文永久 pending）、F13（同时间槽重复请求）与 F16（并发 hook 被拒且无重试队列），是数据完整性的主入口。`pairs` 与 `over_5m` 是两个稳定分母，误报只来自重启窗口。
-3. **摄入产出比**（`weekly` 的 `otlp_yield`、`otlp_issues`）。它抓到 F37（大量 OTLP span 只产出 1 条证据、0 条 body ref）。只比较两张表的计数，不依赖日志，是发现静默丢数据的唯一入口。
+3. **摄入产出比**（`weekly` 的 `otlp_yield`、`otlp_issues`）。巡查复用摄入映射识别保留窗内的 LLM span，按物理身份核对对应证据，发现应产出而未产出的调用；内部 span 与不提供正文的合法来源不单独触发故障。
 
 其余路径要么只产 P3，要么必须结合具体改动才有意义，见[不该进 routine 的路径](#不该进-routine-的路径)。
 
@@ -34,7 +34,7 @@ bun run patrol smoke                 # 默认端口 8320
 bun run patrol smoke --port 8396     # 临时实例
 ```
 
-判定：`limit` 与 `direction` 应为 400（`direction` 只在会话请求路由上校验）；畸形百分号编码当前返回 500，是 F20 未修前的已知基线，修好后应转 400；`body?from=1e20` 同理，F41 未修时返回 200。`limit=201` 若产品改成截断会合法返回 200，以响应体的 `error` 字段为准。脚本把 F20、F41 这两条已知基线记作 info，其余非 400 记作 over。证据：第 5 轮 F41、第 2 轮 F20。成本 10 秒。
+判定：非法 `limit`、`direction`、百分号编码和正文区间参数都必须返回 400；`direction` 只在会话请求路由上校验。F20/F41 的旧返回码同样记为 `over`，不能作为已知基线放行。`limit=201` 若产品改成截断会合法返回 200，以响应体的 `error` 字段为准。成本约 10 秒。
 
 **A3 健康抽检**（手工，非权威）。进程内指标与阈值告警归 `scripts/monitor.ts`：`bun scripts/monitor.ts inspect` 这套监控巡检的规则与落盘的 `checks/<day>.jsonl` 才是权威口径，`/api/stats` 的手工读取只用于当次确认，不构成第二套阈值。要看的是 `admission` 是否长时间非 `normal`、`probe` 是否非 `ok`、`open_gaps` 是否持续增长；批量导入、重启与维护窗口会让 `admission` 短暂变化，单次 HTTP 探针尖峰需结合任务与事件循环归因（F02）。`event_loop_max` 和 `service_unreadable` 按监控规则判定，不能作为单次尖峰忽略。`/api/stats` 的缓存陈旧（F33）靠这条命令发现不了，属于代码核查项。
 
@@ -53,7 +53,7 @@ bun run patrol weekly --if-due                          # 本期已有快照时�
 
 **B2 证据链**（核心 2）。`evidence_gap` 超比例、`pending_hook` 今日新增超过前 7 日均值的倍数、`hook_absent` 最近完整一天超过阈值且超过均值的倍数即越界。`hook_absent` 还要再看 agent 分布：claude 未装 hook 时持续增长是 F01 的已知行为，先排除它再定性；重启或升级窗口会临时抬高 gap；批量回填会让 `pairs` 一次跳增，不能直接做周环比。证据：第 1 轮 F09、F13、F16。
 
-**B3 摄入产出比**（核心 3）。`otlp_yield` 在 span 数达到门槛且证据比过低、或 span 存在但 `body_ref` 为 0 时越界；`otlp_issues` 按近 7 日单条理由计数。上游只发内部 span 或本就该采样时比例天然低，先用 `service`、`name` 分布确认有没有 LLM 形状的 span 再定性。证据：第 5 轮 F37。
+**B3 摄入产出比**（核心 3）。`otlp_yield` 只以 raw 保留窗内、当前 mapping 应识别的 LLM span 为分母，以同一批 span 的 `(trace_id, span_id)` 匹配证据为分子；样本量与覆盖率阈值由脚本定义。已过 TTL 的长期证据不进分子。内部 span 不进分母，`body_ref=0` 不单独越界；未知服务和未知形状由 `otlp_issues` 按近 7 日理由计数检查。mapping 变更会改变重分类结果，跨版本比较需核对规则差异。
 
 **B4 会话扇出**。`conversation_size` 只在单个会话超过上限时报越界；`>200` 的会话数只在 `conversation_delta` 里与上一期比较。长跑采集与自动化任务天然产生大会话，真正要看的是翻页契约（F40）是否已修。证据：第 5 轮 F40；第 3 轮 F29。
 

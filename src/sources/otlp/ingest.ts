@@ -38,6 +38,8 @@ export type AcceptOtlpTracesResult = {
   unknownShape: number;
   /** 未登记服务的 span 计数；按服务聚合的门铃明细在 service_not_registered issue。 */
   unknownServices: number;
+  /** 已登记服务里确认非 LLM 的内部 span；只观测，不是拒收，HTTP 仍按规范接受成功。 */
+  skipped: number;
   bodiesWired: number;
 };
 
@@ -102,7 +104,7 @@ export function acceptOtlpTraces(
   // 暂停时拒绝整批：收下却写不进只会多一条误导性的"成功"记录。
   if (admission.mode === 'paused') throw new Error('disk_full');
 
-  const result: AcceptOtlpTracesResult = { spans: 0, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0, unknownServices: 0, bodiesWired: 0 };
+  const result: AcceptOtlpTracesResult = { spans: 0, spanDuplicates: 0, requestsCreated: 0, unknownShape: 0, unknownServices: 0, skipped: 0, bodiesWired: 0 };
 
   store.write(db => {
     const existingStmt = db.prepare(
@@ -151,7 +153,11 @@ export function acceptOtlpTraces(
           issueStmt.run('otlp_span', refKey, 'span_shape_unknown', now);
           continue;
         }
-        if (verdict.kind === 'skipped') continue;
+        if (verdict.kind === 'skipped') {
+          // 确认非 LLM 的内部 span 只计数，不写入拒收：raw 已落，HTTP 仍是规范成功。
+          result.skipped += 1;
+          continue;
+        }
 
         const mapping = mapSpan(verdict.rule, span);
         const conv = otlpConv(mapping.session);

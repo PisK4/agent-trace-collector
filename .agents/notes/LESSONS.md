@@ -136,6 +136,7 @@
 **新增后台数据来源时，验证最慢同步单元和真实载荷量；async 与外层墙钟预算都不能中断一条同步 SQL。**
 - 证据：2026-11-05 F12（`88022f0`）在 `measureBodyBytesChunked` 为 WITHOUT ROWID 表加入整表求和，2 KiB 用例通过，生产同项只读实测 8.06 s；既有性能测试的 block/骨架仅 64 B/32 B，未覆盖 GiB 级载荷。`pruneRawBounded` 的 200 ms 判断也在单批返回后，生产单批 raw_prune 写事务曾到 29.4 s。评估与防护见[容量计数与主线程阻塞回归](implemented/bug-fix/2026-11-05-capacity-meter-main-thread-regression.md)。
 - 防护：每个新增表检查 INSERT/UPDATE/DELETE 与在线全部消费方；性能回归覆盖实际 timer/HTTP 装配、空命中和触顶命中、大行与真实字节规模。单独记录 max 同步耗时；没有 rowid 时检查复合主键分页或改变执行位置，不允许默认为整表快查。
+- 同日复现：容量计数正常后，生产 `raw_prune` 最长写事务仍到 156.9 s。主审发现准备阶段批量取 TEXT 长度会重读大载荷，准备超过预算后先退出又会永久不推进；应同时验证候选准备与首批进展。修复与 GiB 验收见[保留清理边界](implemented/bug-fix/2026-11-05-retention-batch-bounds-and-disk-target.md)。
 - Seen 1× (2026-11-05).
 
 **页面来源文案按行上的 agent 派生，不按第一个接入来源写死。**

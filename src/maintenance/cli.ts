@@ -5,7 +5,9 @@ import { Database } from 'bun:sqlite';
 import { localDay } from '../format';
 import { openStore } from '../store';
 import type { Store } from '../store';
-import { backupBundle, backupDatabase, restoreBundle } from './backup';
+import { backupBundle, backupDatabase, restoreBundle, withStoppedDatabase } from './backup';
+import { previewBodyConsistency, reclassifyBodyConsistency,
+  previewBodyBytesBackfill, backfillBodyBytes } from './body-consistency';
 import { assertWindow, hookDeliveryReport } from './delivery';
 import { previewCapacityMeter, recountCapacityMeter } from './capacity';
 import { acquireMaintenanceLock, type LockHandle } from './lock';
@@ -69,6 +71,8 @@ const USAGE = `usage:
   maintain precheck --db <path>
   maintain capacity-check --db <path>
   maintain capacity-recount --db <path> [--apply --approval-id <id>]
+  maintain body-consistency --db <path> [--apply --approval-id <id> --expected-candidates <n>]
+  maintain body-bytes-backfill --db <path> [--apply --approval-id <id> --expected-candidates <n>]
   maintain hook-delivery --db <path> --since <ISO|ms> --until <ISO|ms>
   maintain backup --db <path> --out <new-path>
   maintain bundle --dir <dataDir> --out <new-dir>
@@ -223,6 +227,38 @@ export async function runMaintenance(argv: string[], io: {
     } finally {
       lock?.release();
     }
+  }
+
+  if (command === 'body-consistency' || command === 'body-bytes-backfill') {
+    let lock: LockHandle | null = null;
+    const preview = command === 'body-consistency' ? previewBodyConsistency : previewBodyBytesBackfill;
+    const apply = command === 'body-consistency' ? reclassifyBodyConsistency : backfillBodyBytes;
+    try {
+      if (flags.get('apply') !== true) {
+        const db = new Database(dbPath, { readonly: true });
+        try {
+          const report = db.transaction(() => preview(db))();
+          out(JSON.stringify({ ok: true, applied: false, ...report }));
+        } finally { db.close(); }
+        return 0;
+      }
+      const approvalId = stringFlag(flags, 'approval-id');
+      if (approvalId === null || approvalId.trim().length === 0) throw new Error('approval_id_required');
+      const expected = stringFlag(flags, 'expected-candidates');
+      if (expected === null || !/^\d+$/.test(expected) || !Number.isSafeInteger(Number(expected))) {
+        throw new Error('expected_candidates_required');
+      }
+      lock = acquireMaintenanceLock(dirname(dbPath), `${command}:${process.pid}`);
+      if (lock === null) throw new Error('maintenance_lock_held');
+      const report = withStoppedDatabase(dbPath, db => apply(db, {
+        approvalId, expectedCandidates: Number(expected),
+      }));
+      out(JSON.stringify({ ok: true, applied: true, approval_id: approvalId, ...report }));
+      return 0;
+    } catch (error) {
+      err(`${command}_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
+    } finally { lock?.release(); }
   }
 
   if (command === 'verify' || command === 'purge-metadata' || command === 'purge-agent'

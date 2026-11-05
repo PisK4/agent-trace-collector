@@ -21,6 +21,9 @@ import { defaultDataDir } from '../src/config';
 import {
   CAPACITY_METER_VERSION, capacityMeterStatus, exactCapacitySums,
 } from '../src/capacity-meter';
+import { RAW_TTL_MS } from '../src/retention';
+import type { OtlpAttrs, OtlpSpan } from '../src/sources/otlp/decode';
+import { SPAN_RULES, classifySpan, ruleOwnsService } from '../src/sources/otlp/mapping';
 import { readToken } from './service-support';
 
 const MB = 1024 * 1024;
@@ -46,8 +49,10 @@ export const PATROL_THRESHOLDS = {
   evidenceGapRatio: 0.005,
   pendingHookMultiple: 2,
   hookAbsentDaily: 500,
-  otlpMinSpans: 10_000,
-  otlpEvidenceRatioMin: 0.001,
+  /** 应识别 LLM span 的最小样本量；低于它不判产出比。 */
+  otlpMinLlmSpans: 10,
+  /** 应识别 LLM span 的物理身份匹配证据比例下限。 */
+  otlpLlmCoverageMin: 0.99,
   issueDaily: 100,
   convMaxRequests: 10_000,
   convWarnRequests: 200,
@@ -83,8 +88,17 @@ export type WeeklyReading = {
   hookAbsentLatest: { day: string; n: number } | null;
   hookAbsentPriorMean: number;
   hookAbsentTopAgent: { agent: string; n: number } | null;
+  /** 窗口内（raw 保留期）的物理 span 数；全历史不再计入。 */
   spans: number;
+  /** 窗口内 raw span 按物理身份 JOIN 到的证据数，TTL 后的长期证据不算。 */
   spanEvidence: number;
+  /** 规则应识别的 LLM span；产出比的分母。 */
+  llmSpans: number;
+  llmMatched: number;
+  /** 确认非 LLM 的内部 span，天然不产出证据，不是故障。 */
+  nonLlmSpans: number;
+  /** 白名单服务、LLM 形状但选取规则没认的 span。 */
+  unknownShapeSpans: number;
   bodyRefs: number;
   issueReasons: { reason: string; n: number }[];
   convs: number;
@@ -103,6 +117,7 @@ export function evaluateWeekly(reading: WeeklyReading): Check[] {
   const freeRatio = reading.diskBytes > 0 ? reading.freeBytes / reading.diskBytes : 0;
   const gapRatio = reading.pairs > 0 ? reading.over5m / reading.pairs : 0;
   const otlpRatio = reading.spans > 0 ? reading.spanEvidence / reading.spans : 0;
+  const llmCoverage = reading.llmSpans > 0 ? reading.llmMatched / reading.llmSpans : 1;
   const maxIssue = reading.issueReasons.reduce((top, row) => Math.max(top, row.n), 0);
   const checks: Check[] = [];
 
@@ -170,11 +185,11 @@ export function evaluateWeekly(reading: WeeklyReading): Check[] {
   });
   checks.push({
     id: 'otlp_yield',
-    state: (reading.spans >= PATROL_THRESHOLDS.otlpMinSpans
-      && otlpRatio < PATROL_THRESHOLDS.otlpEvidenceRatioMin)
-      || (reading.spans > 0 && reading.bodyRefs === 0)
+    // 分母只算规则应识别的 LLM span：内部 span 与无正文来源天然不产出，不判越界。
+    state: reading.llmSpans >= PATROL_THRESHOLDS.otlpMinLlmSpans
+      && llmCoverage < PATROL_THRESHOLDS.otlpLlmCoverageMin
       ? 'over' : 'ok',
-    detail: `span ${reading.spans}，span 证据 ${reading.spanEvidence} = ${pct(otlpRatio)}，body_ref ${reading.bodyRefs}`,
+    detail: `LLM span ${reading.llmSpans}，匹配证据 ${reading.llmMatched} = ${pct(llmCoverage)}，下限 ${pct(PATROL_THRESHOLDS.otlpLlmCoverageMin)}；窗口内全 span ${reading.spans}，匹配 ${reading.spanEvidence} = ${pct(otlpRatio)}，内部/非 LLM ${reading.nonLlmSpans}，未知形状 ${reading.unknownShapeSpans}，body_ref ${reading.bodyRefs}`,
   });
   checks.push({
     id: 'otlp_issues',
@@ -232,9 +247,34 @@ export function collectWeekly(dbPath: string, dataDir: string, nowMs = Date.now(
       `SELECT agent, COUNT(*) AS n FROM request WHERE miss_reason='hook_absent' AND day >= ?
         GROUP BY agent ORDER BY n DESC LIMIT 1`).get(hookAbsentDays[0].day);
 
-    const spans = count(db, 'raw_otlp_span');
-    const spanEvidence = db.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM request_evidence WHERE source_kind='otlp_span'").get()?.n ?? 0;
+    // 产出核对只认同一窗口内的物理 span 身份；TTL 后的长期证据不计入分子。
+    const windowStart = nowMs - RAW_TTL_MS;
+    const rawSpans = db.query<
+      { service: string | null; name: string; attributes_json: string; matched: number },
+      [number]
+    >(`SELECT s.service,s.name,s.attributes_json,
+         EXISTS(SELECT 1 FROM request_evidence e WHERE e.source_kind='otlp_span'
+           AND e.ref_key=lower(hex(s.trace_id))||'/'||lower(hex(s.span_id))) AS matched
+       FROM raw_otlp_span s WHERE s.received_at>=?`).all(windowStart);
+    let spans = 0;
+    let spanEvidence = 0;
+    let llmSpans = 0;
+    let llmMatched = 0;
+    let nonLlmSpans = 0;
+    let unknownShapeSpans = 0;
+    for (const row of rawSpans) {
+      spans += 1;
+      if (row.matched === 1) spanEvidence += 1;
+      const shape = classifyRawSpan(row.service, row.name, row.attributes_json);
+      if (shape === 'llm') {
+        llmSpans += 1;
+        if (row.matched === 1) llmMatched += 1;
+      } else if (shape === 'unknown') {
+        unknownShapeSpans += 1;
+      } else {
+        nonLlmSpans += 1;
+      }
+    }
     const bodyRefs = count(db, 'otlp_body_ref');
     const issueReasons = db.query<{ reason: string; n: number }, [number]>(
       'SELECT reason, COUNT(*) AS n FROM ingest_issue WHERE observed_at >= ? GROUP BY reason ORDER BY n DESC LIMIT 6')
@@ -284,6 +324,10 @@ export function collectWeekly(dbPath: string, dataDir: string, nowMs = Date.now(
       hookAbsentTopAgent: topAgentRow === null ? null : { agent: topAgentRow.agent ?? '未知', n: topAgentRow.n },
       spans,
       spanEvidence,
+      llmSpans,
+      llmMatched,
+      nonLlmSpans,
+      unknownShapeSpans,
       bodyRefs,
       issueReasons,
       convs: convRow?.convs ?? 0,
@@ -294,6 +338,26 @@ export function collectWeekly(dbPath: string, dataDir: string, nowMs = Date.now(
   } finally {
     db.close();
   }
+}
+
+const EMPTY_ID = new Uint8Array(0);
+
+/** 复用生产 mapping 分类一行 raw span，巡查不另抄服务清单或形状键。 */
+function classifyRawSpan(
+  service: string | null, name: string, attributesJson: string,
+): 'llm' | 'unknown' | 'skipped' {
+  if (!SPAN_RULES.some(rule => ruleOwnsService(rule, service))) return 'skipped';
+  let attrs: OtlpAttrs;
+  try {
+    attrs = JSON.parse(attributesJson) as OtlpAttrs;
+  } catch {
+    return 'skipped';
+  }
+  const span: OtlpSpan = {
+    traceId: EMPTY_ID, spanId: EMPTY_ID, name, kind: 0,
+    startNano: 0n, endNano: null, attrs, statusCode: null,
+  };
+  return classifySpan(service, span).kind;
 }
 
 function count(db: Database, table: string): number {
@@ -325,24 +389,10 @@ function diskSpace(path: string): { freeBytes: number; totalBytes: number } {
 
 export type SmokeProbe = { name: string; status: number | null };
 
-/** 契约冒烟：每个探测只认一个期望码；F41 未修的区间基线与 200 合法截断单独记。 */
+/** 契约冒烟：非法参数必须返回 400，历史缺陷的返回码同样判为越界。 */
 export function judgeSmoke(probes: SmokeProbe[]): Check[] {
   return probes.map(probe => {
     if (probe.status === null) return { id: probe.name, state: 'over', detail: '请求未完成' };
-    if (probe.name === 'body_from_1e20') {
-      if (probe.status === 400) return { id: probe.name, state: 'ok', detail: '400' };
-      if (probe.status === 200) {
-        return { id: probe.name, state: 'info', detail: '200，F41 未修前的已知基线，修好后应变 400' };
-      }
-      return { id: probe.name, state: 'over', detail: `${probe.status}` };
-    }
-    if (probe.name === 'bad_pct') {
-      if (probe.status === 400) return { id: probe.name, state: 'ok', detail: '400' };
-      if (probe.status === 500) {
-        return { id: probe.name, state: 'info', detail: '500，F20 未修前的已知基线，修好后应变 400' };
-      }
-      return { id: probe.name, state: 'over', detail: `${probe.status}` };
-    }
     if (probe.name === 'limit=201' && probe.status === 200) {
       return { id: probe.name, state: 'info', detail: '200：产品若改成截断则合法，以响应体 error 字段为准' };
     }

@@ -283,7 +283,9 @@ v14 的 `capacity_meter` 由四张来源表的触发器在写事务内维护。�
 2. 清单可解析，`format=1`，`schema` 在白名单里，`salt_id` 与包内盐一致，`database_sha256` 与包内库一致。
 3. 复制到目标父目录下的 0700 staging，再校验一次哈希与 `integrity_check`。
 4. 以只读连接查包内数据库自身：盐绑定一致、`PRAGMA user_version` 与清单相等。
-5. `mkdir` 原子保留目标名后再 `rename`；目标已存在报 `destination_exists`。
+5. 在 staging 内用当前 `openStore` 执行迁移并检查关键表、schema 与盐绑定；失败报 `restore_migration_failed`，删除 staging，不发布目标。
+6. 关闭连接并确认 WAL 无未回放内容，按迁移后的库重写清单版本与哈希。
+7. `mkdir` 原子保留目标名后再 `rename`；目标已存在报 `destination_exists`。
 
 恢复不包含 `read.token`、`hook.token` 与 `otlp.token`。启动时这三个文件按首次启动规则重新生成，插件与 harness exporter 要拿新令牌重新注册——恢复盐连续性不等于恢复认证身份。
 
@@ -300,6 +302,7 @@ v14 的 `capacity_meter` 由四张来源表的触发器在写事务内维护。�
 | `redaction_salt_binding_invalid` | 绑定记录损坏 | 不要按缺失重建；先确认原盐 |
 | `backup_schema_unsupported` | 库结构版本不在可恢复白名单 | 用对应版本的代码备份，不要跨版本恢复 |
 | `restore_bundle_invalid` | 清单、哈希、版本或内容集合对不上 | 包已损坏或被改过，换一份备份 |
+| `restore_migration_failed` | staging 中的迁移、关键表或盐绑定验证失败 | 保留原包，核对旧 schema 与迁移支持；目标尚未发布 |
 | `insufficient_space` | 目标目录余量不足 | 换目录或先腾空间 |
 
 ### rebuild
@@ -373,9 +376,23 @@ v14 的 `capacity_meter` 由四张来源表的触发器在写事务内维护。�
 
 默认只预览：`requests`、`pending_hooks`、`raw_ledger` 是三个存量列里会改动的行数；`merges` 是重算后能唯一命中路由行的等待项数；`ambiguous` 是多候选、会留在队列里的数量；`without_id` 是没有 response id、无法按 id 关联的等待项。加 `--apply` 必须同时给 `--approval-id`，否则退出码 1 且错误码 `approval_id_required`。
 
-应用时先在一个写事务里重算三个列的存量键（`raw_ledger.response_id` 原始列不动），再循环调用 `reconcilePending`。唯一候选按 `mergeHookInto` 合并，正文迁到路由行，重复行删除，多候选保持 pending。只改派生键与等待队列，不动正文、不改 schema。重复执行时三个存量计数都是 0，已合并的等待项不再出现。
+应用前先检查规范化后的 `request` 键冲突；`conflicts` 列出无法经既有唯一路由与等待项合并消除的同键行。存在冲突时整批报 `response_id_conflict`、退出 1，任何键都不写。应用在一个写事务里重算三个列的存量键（`raw_ledger.response_id` 原始列不动），再循环调用 `reconcilePending`。唯一候选按 `mergeHookInto` 合并，正文迁到路由行，重复行删除，多候选保持 pending。重复执行时三个存量计数都是 0，已合并的等待项不再出现。
 
 这条命令用于修幂等规范化之前的存量；新到的 hook 已经按新规则剥到裸键，不需要再跑。`without_id` 的等待项不会因为这条命令合并，它们没有可用于 join 的响应键。
+
+### body-consistency 与 body-bytes-backfill
+
+两个命令默认用只读事务预览，不迁移 schema、不写行。`body-consistency` 只纠正 `pending + HAVE_BODY + 无骨架 + disk_body_paused` 的历史组合为 `partial`，正文仍不可读。`body-bytes-backfill` 只对骨架存在、引用完整且数量与序号符合 `msg_count` 的 available 行补 `body_bytes`；它按骨架与去重块的压缩长度计算，不解压、不猜 `redact_version`。`uncomputable` 记录无法明确重算的行，它们保持不变。
+
+```sh
+bun run maintain body-consistency --db '<dataDir>/trace.db'
+bun run maintain body-bytes-backfill --db '<dataDir>/trace.db'
+# 停服务并制作 bundle 后，使用刚预览的 candidates：
+bun run maintain body-consistency --db '<dataDir>/trace.db' --apply --approval-id '<id>' --expected-candidates '<n>'
+bun run maintain body-bytes-backfill --db '<dataDir>/trace.db' --apply --approval-id '<id>' --expected-candidates '<n>'
+```
+
+应用先取维护锁，再在同一个独占连接里验证停服并执行事务。在线应用报 `source_must_be_stopped`；缺审批标识或合法计数分别报 `approval_id_required`、`expected_candidates_required`。预览计数变化报 `body_consistency_scope_changed` 或 `body_bytes_scope_changed`，整批不写。报告区分 `changed` 与 `remaining`；重跑使用新预览计数即可。逐请求逻辑字节含共享块，不能累加成物理释放量。
 
 ### dedupe-sessions
 

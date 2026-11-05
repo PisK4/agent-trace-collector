@@ -61,6 +61,23 @@ test('protobuf traces 200 并落 via=otlp 请求行；响应是规范的 partial
   }
 });
 
+test('非 LLM 内部 span 仍按规范接受成功，响应保持 partialSuccess 空对象', async () => {
+  const f = fixture();
+  try {
+    const handler = makeHandler(f.store);
+    const response = await handler(otlpRequest('/v1/traces',
+      bytesBody(tracesProtobuf([{ resource: { service: 'claude-code' }, spans: [{
+        traceId: SYNTH.traceB, spanId: SYNTH.spanTool, name: 'fs.read_file',
+        startNano: SYNTH.msToNano(2000), attrs: { 'fs.path': 'synthetic/path' },
+      }] }])), { authorization: `Bearer ${OTLP_TOKEN}` }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ partialSuccess: {} });
+    expect((f.store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(1);
+  } finally {
+    f.close();
+  }
+});
+
 test('JSON traces 同样受理；重发第二次仍 200 且不产生新行', async () => {
   const f = fixture();
   try {

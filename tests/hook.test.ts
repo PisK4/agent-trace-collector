@@ -511,10 +511,10 @@ test('恢复路径二：合并取源行降级原因', () => {
   const f = fixture();
   try {
     seedMarkedPairThenHook(f, { body_omitted: true, omit_reason: 'collector_object_limit' });
-    // 源行无骨架，正文未迁移：目标保持 pending，降级原因随源行落到本行。
+    // 源行无骨架但已登记正文证据：目标不再保持 pending，降级原因随源行落到本行。
     expect(f.store.read.query<{ body_state: string; miss_reason: string | null }, [number]>(
       'SELECT body_state, miss_reason FROM request WHERE req_id=?').get(1))
-      .toEqual({ body_state: 'pending', miss_reason: 'collector_object_limit' });
+      .toEqual({ body_state: 'partial', miss_reason: 'collector_object_limit' });
   } finally { f.close(); }
 });
 

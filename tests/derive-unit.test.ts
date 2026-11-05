@@ -98,6 +98,59 @@ test('在线每轮最多完成十个组，维护排空仍按显式limit', async 
   } finally { f.close(); }
 });
 
+test('常驻失败组不阻塞健康组，新输入到达后仍会重试', async () => {
+  const f = fixture();
+  let clock = 1_000;
+  const now = spyOn(Date, 'now').mockImplementation(() => clock);
+  try {
+    seedGroups(f);
+    f.store.db.exec(`CREATE TRIGGER fail_group_a BEFORE UPDATE OF state ON derive_queue
+      WHEN NEW.conv_key='a' AND NEW.state='clean'
+      BEGIN SELECT RAISE(ABORT,'synthetic_ack_failure'); END`);
+    await expect(createDeriveUnit(f.store).run({ budgetMs: 400 })).rejects.toThrow('synthetic_ack_failure');
+    clock += 10;
+    // 旧的 conv_key 排序会再次先选中 a、一个健康组也轮不到；修复后先完成 b、c，
+    // 同一轮仍会尝试剩下的 a 并上抛，失败不掩盖健康组的进展。
+    await expect(createDeriveUnit(f.store).run({ budgetMs: 400 })).rejects.toThrow('synthetic_ack_failure');
+    expect(f.store.read.query('SELECT conv_key,state FROM derive_queue ORDER BY conv_key').all())
+      .toEqual([
+        { conv_key: 'a', state: 'dirty' },
+        { conv_key: 'b', state: 'clean' },
+        { conv_key: 'c', state: 'clean' },
+      ]);
+    expect(f.store.read.query("SELECT last_error FROM derive_queue WHERE conv_key='a'").get())
+      .toEqual({ last_error: 'synthetic_ack_failure' });
+
+    clock += 10;
+    f.store.db.exec('DROP TRIGGER fail_group_a');
+    seedPurposeRequest(f.store, { convKey: 'a', messages: [{ role: 'user', content: 'new input' }] });
+    expect(await createDeriveUnit(f.store).run({ budgetMs: 400 })).toEqual({ didWork: true, nextDueMs: 2000 });
+    expect(f.store.read.query("SELECT state,last_error FROM derive_queue WHERE conv_key='a'").get())
+      .toEqual({ state: 'clean', last_error: null });
+  } finally { now.mockRestore(); f.close(); }
+});
+
+test('全部组都失败时轮转调度，不反复重试同一组', async () => {
+  const f = fixture();
+  let clock = 1_000;
+  const now = spyOn(Date, 'now').mockImplementation(() => clock);
+  try {
+    for (const convKey of ['a', 'b']) {
+      seedPurposeRequest(f.store, { convKey, messages: [{ role: 'user', content: convKey }] });
+    }
+    f.store.db.exec(`CREATE TRIGGER fail_abort BEFORE UPDATE OF state ON derive_queue
+      WHEN NEW.conv_key IN ('a','b') AND NEW.state='clean'
+      BEGIN SELECT RAISE(ABORT,'synthetic_ack_failure'); END`);
+    for (let round = 0; round < 3; round++) {
+      await expect(createDeriveUnit(f.store).run({ budgetMs: 400 })).rejects.toThrow('synthetic_ack_failure');
+      clock += 10;
+    }
+    const rows = f.store.read.query<{ conv_key: string; attempts: number }, []>(
+      'SELECT conv_key,attempts FROM derive_queue ORDER BY conv_key').all();
+    expect(rows.map(row => row.attempts > 0)).toEqual([true, true]);
+  } finally { now.mockRestore(); f.close(); }
+});
+
 test('预算非法时在写入前拒绝', async () => {
   const f = fixture();
   try {

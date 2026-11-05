@@ -494,7 +494,12 @@ test('维护命令在目标库上执行并返回退出码', async () => {
     f.store.close();
 
     expect(await runMaintenance(['verify', '--db', source])).toBe(0);
-    expect(await runMaintenance(['backup', '--db', source, '--out', target])).toBe(0);
+    const backupLines: string[] = [];
+    expect(await runMaintenance(['backup', '--db', source, '--out', target], {
+      out: line => backupLines.push(line), err: () => {},
+    })).toBe(0);
+    // 只含数据库的备份成功仍是 ok:true；恢复不了采集连续性由独立字段说清。
+    expect(JSON.parse(backupLines[0]!)).toMatchObject({ ok: true, ingestion_restorable: false });
     expect(existsSync(target)).toBe(true);
     expect(await runMaintenance(['backup', '--db', source, '--out', target])).toBe(1);
     expect(await runMaintenance(['purge-metadata', '--db', source, '--before', '2026-09-01'])).toBe(0);

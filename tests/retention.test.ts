@@ -134,7 +134,7 @@ function usageAt(ratio: number, overrides: Partial<StorageUsage> = {}): StorageU
   return {
     body_bytes: 0, db_bytes: 0, wal_bytes: 0, temp_bytes: 0, other_bytes: 0,
     total_bytes: Math.round(16_000_000_000 * ratio), free_bytes: 500_000_000_000,
-    page_count: 0, freelist_count: 0,
+    page_size: 4096, page_count: 0, freelist_count: 0,
     ...overrides,
   };
 }
@@ -535,6 +535,220 @@ test('有界清理分批独立提交、批间让出，连续调用收敛到零',
     // 620 行 / 每调用 200 行 = 4 次调用；最后一次多一轮空查确认但不落写事务，
     // 共 7 个 raw_prune 写事务。
     expect(f.store.writeStats.by_name.raw_prune?.count).toBe(7);
+  } finally {
+    f.close();
+  }
+});
+
+test('单个死代际按行限批清理，不再整代际一次删完', () => {
+  const f = fixture();
+  try {
+    const rows = 250;
+    f.store.write(db => {
+      const insert = db.prepare(
+        `INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
+          line_type,event_at_ms,payload_json,privacy_version)
+         VALUES ('claude_session','gen-orphan',?,'s','user',10,? ,1)`);
+      for (let i = 0; i < rows; i++) insert.run(i, JSON.stringify({ i }));
+    });
+    const remaining = () => f.store.read.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM raw_session_event WHERE file_generation='gen-orphan'").get()!.n;
+
+    const pruned = pruneRaw(f.store, 100, 100);
+    expect(pruned.session).toBe(100);
+    expect(remaining()).toBe(rows - 100);
+  } finally {
+    f.close();
+  }
+});
+
+test('跨调用续取同一死代际，不因代际轮转跳过剩余行', async () => {
+  const f = fixture();
+  try {
+    const rows = 250;
+    f.store.write(db => {
+      const insert = db.prepare(
+        `INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
+          line_type,event_at_ms,payload_json,privacy_version)
+         VALUES ('claude_session','gen-orphan',?,'s','user',10,'{}',1)`);
+      for (let i = 0; i < rows; i++) insert.run(i);
+    });
+    const remaining = () => f.store.read.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM raw_session_event WHERE file_generation='gen-orphan'").get()!.n;
+
+    expect(pruneRaw(f.store, 100, 100).session).toBe(100);
+    expect(remaining()).toBe(150);
+    expect(await pruneRawBounded(f.store, 100, { maxBatches: 2, wallMs: 60_000 })).toMatchObject({ session: 150 });
+    expect(remaining()).toBe(0);
+  } finally {
+    f.close();
+  }
+});
+
+test('单个 raw 表按载荷预算截断，不把整批大 payload 一次删完', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => {
+      const insert = db.prepare(
+        `INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
+          line_type,event_at_ms,payload_json,privacy_version)
+         VALUES ('claude_session','gen-budget',?,'s','user',10,? ,1)`);
+      // JSON 字符串长度 42 字节；100 字节预算只容下两行。
+      for (let i = 0; i < 10; i++) insert.run(i, 'x'.repeat(40));
+    });
+    const remaining = () => f.store.read.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM raw_session_event WHERE file_generation='gen-budget'").get()!.n;
+
+    const pruned = pruneRaw(f.store, 100, 100, 100);
+    expect(pruned.session).toBe(2);
+    expect(remaining()).toBe(8);
+  } finally {
+    f.close();
+  }
+});
+
+function seedOneAvailableBody(f: ReturnType<typeof fixture>): void {
+  f.store.write(db => {
+    db.run(
+      "INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at) VALUES (1,1,'2026-10-19','hook','pending',0,1,1,1)",
+    );
+    persistBodyTx(db, 1, {
+      protocol: 'anthropic',
+      request: { messages: [{ role: 'user', content: [{ type: 'text', text: 'keep synthetic body' }] }] },
+      reply: { id: 'msg_keep', content: [{ type: 'text', text: 'ok' }] },
+      redact_version: 1,
+    });
+  });
+}
+
+test('磁盘目标不可达时仍独立执行已超限的正文预算', () => {
+  const f = fixture();
+  try {
+    seedOneAvailableBody(f);
+    expect(enforceBodyBudget(f.store, f.dir, { bodyBudget: 1, diskLimit: 1 },
+      { invalidate: () => {} })).toBe(1);
+    expect(f.store.read.query('SELECT body_state FROM request WHERE req_id=1').get())
+      .toEqual({ body_state: 'evicted' });
+  } finally { f.close(); }
+});
+
+test('磁盘触顶先回收空闲页，回到阈值下就不淘汰正文', () => {
+  const f = fixture();
+  try {
+    seedOneAvailableBody(f);
+    f.store.write(db => {
+      db.exec('CREATE TABLE shrink_seed(z BLOB)');
+      const insert = db.prepare('INSERT INTO shrink_seed(z) VALUES (?)');
+      for (let i = 0; i < 256; i++) insert.run(crypto.getRandomValues(new Uint8Array(32768)));
+    });
+    f.store.write(db => db.exec('DROP TABLE shrink_seed'));
+    const before = measureStorage(f.store, f.dir);
+    expect(before.freelist_count).toBeGreaterThan(0);
+
+    // 触顶但回收空闲页后能回到 80% 以下：不应为磁盘压力删正文。
+    const diskLimit = Math.ceil(before.total_bytes / 0.85);
+    let invalidated = 0;
+    const evicted = enforceBodyBudget(f.store, f.dir,
+      { bodyBudget: 1_000_000_000, diskLimit },
+      { invalidate: () => { invalidated += 1; } });
+
+    expect(evicted).toBe(0);
+    expect(f.store.read.query<{ body_state: string }, []>(
+      'SELECT body_state FROM request WHERE req_id=1').get()).toEqual({ body_state: 'available' });
+    expect(measureStorage(f.store, f.dir).freelist_count).toBeLessThan(before.freelist_count);
+    expect(invalidated).toBe(1);
+  } finally {
+    f.close();
+  }
+});
+
+test('磁盘压力用独立目标，按可回收上界继续淘汰而不是每轮只删一批', () => {
+  const f = fixture();
+  try {
+    const requests = 500;
+    f.store.write(db => {
+      const insert = db.prepare(
+        "INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at) VALUES (?,?,'2026-10-19','hook','pending',0,1,1,1)");
+      for (let i = 1; i <= requests; i++) insert.run(i, i);
+      for (let i = 1; i <= requests; i++) {
+        // 随机内容保证压缩后仍有约 4 KiB，正文逻辑量能覆盖磁盘缺口。
+        const text = `synthetic body ${i} ${Buffer.from(crypto.getRandomValues(new Uint8Array(4096))).toString('base64')}`;
+        persistBodyTx(db, i, {
+          protocol: 'anthropic',
+          request: { messages: [{ role: 'user', content: [{ type: 'text', text }] }] },
+          reply: { id: `msg_${i}`, content: [{ type: 'text', text: 'ok' }] },
+          redact_version: 1,
+        });
+      }
+    });
+    // 撑到约 12 MiB 盘占用：磁盘目标与当前占用差约 1.5 MiB，正文逻辑量约 2 MiB，
+    // 旧实现只删一批 100 笔就因子句退出，新实现应继续淘汰到磁盘目标。
+    // 先截断 WAL 再定预算：回收循环开头的 checkpoint 会清掉 WAL，否则测到的比例会回落。
+    f.store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    const before = measureStorage(f.store, f.dir);
+    const targetTotal = 12 * MiB;
+    if (before.total_bytes < targetTotal) {
+      writeFileSync(join(f.dir, 'padding.bin'), Buffer.alloc(targetTotal - before.total_bytes, 1));
+    }
+    const total = measureStorage(f.store, f.dir);
+    const diskLimit = Math.ceil(total.total_bytes / 0.85);
+    const evicted = enforceBodyBudget(f.store, f.dir,
+      { bodyBudget: 1_000_000_000, diskLimit },
+      { invalidate: () => {} });
+
+    expect(evicted).toBeGreaterThan(100);
+    expect(f.store.read.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM request WHERE body_state='available'").get()!.n)
+      .toBeLessThan(requests - 100);
+  } finally {
+    f.close();
+  }
+});
+
+test('回收统计包含独占块字节，不计仍被引用的共享块', () => {
+  const f = fixture();
+  try {
+    f.store.write(db => {
+      db.run(
+        `INSERT INTO request(req_id,started_ms,day,via,body_state,derive_version,have,created_at,updated_at,skeleton_z)
+         VALUES (1,1,'2026-10-19','hook','pending',0,1,1,1,?),
+                (2,2,'2026-10-20','hook','pending',0,1,1,1,?)`,
+        [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])],
+      );
+      db.run(
+        `INSERT INTO block(id,hash,fingerprint,z,raw_size) VALUES
+           (10,?,'fp-shared',?,10),
+           (11,?,'fp-only',?,20)`,
+        [new Uint8Array([1]), new Uint8Array(10).fill(7), new Uint8Array([2]), new Uint8Array(20).fill(8)],
+      );
+      db.run('INSERT INTO request_block(req_id,ord,role,block) VALUES (1,0,0,10),(1,1,1,11),(2,0,0,10)');
+    });
+    const result = evictOldestBodyBatch(f.store, 1000, 1);
+    // req 1 的独占块 20 B + 骨架 3 B；共享块仍被 req 2 引用，不计入释放量。
+    expect(result).toMatchObject({ requests: 1, blocks: 1, releasedLogicalBytes: 23 });
+    expect(f.store.read.query('SELECT id FROM block ORDER BY id').all()).toEqual([{ id: 10 }]);
+  } finally {
+    f.close();
+  }
+});
+
+test('准备阶段超出墙钟预算时仍至少提交一批，避免每个 tick 空转', async () => {
+  const f = fixture();
+  try {
+    f.store.write(db => {
+      const insert = db.prepare(
+        `INSERT INTO raw_otlp_span(trace_id,span_id,received_at,service,name,start_ms,attributes_json,mapping_version,privacy_version)
+         VALUES (?,?,10,'oh-my-pi','chat synth',10,'{}',1,1)`);
+      for (let i = 0; i < 200; i++) {
+        const spanId = new Uint8Array(8);
+        new DataView(spanId.buffer).setUint32(0, i);
+        insert.run(new Uint8Array(16).fill(0xab), spanId);
+      }
+    });
+    // wallMs=0 模拟准备阶段已经耗尽预算：首批仍须执行，否则永远不推进。
+    const result = await pruneRawBounded(f.store, 100, { maxBatches: 2, wallMs: 0 });
+    expect(result.otlpSpan).toBe(100);
+    expect(f.store.writeStats.by_name.raw_prune?.count).toBe(1);
   } finally {
     f.close();
   }

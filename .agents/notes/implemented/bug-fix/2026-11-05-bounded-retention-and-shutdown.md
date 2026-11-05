@@ -38,6 +38,8 @@ Status: implemented
 
 [容量计数与主线程阻塞回归](2026-11-05-capacity-meter-main-thread-regression.md)复核 F12 整表量测和 F11 单批耗时的生产风险并交付 v14 计数；本记录的代际保留与停止语义仍适用。
 
+本记录的 F11 部分已被[保留清理的单批边界与磁盘回收目标](2026-11-05-retention-batch-bounds-and-disk-target.md)取代：`raw_session_event` 不再整代际一次删，单批也新增载荷预算与逐代际续取；F12 与 F42 的决策仍以本记录为准。
+
 ## Testing
 
 - `tests/retention.test.ts`「有界清理分批独立提交、批间让出，连续调用收敛到零」：620 行超期 span、`maxBatches=2` 的合成种子——单次调用删 200 行停手、两次独立的 `raw_prune` 写事务、批间 `setImmediate` 链获得执行机会、4 次调用共 7 个写事务后累计删除等于种子行数且超期计数归零。

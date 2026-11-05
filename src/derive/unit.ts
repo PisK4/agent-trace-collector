@@ -64,12 +64,14 @@ async function drain(store: Store, limit: number, scope: DeriveScope | undefined
   for (let index = 0; index < limit && performance.now() - started < budgetMs; index++) {
     const runtime = store.deriveRuntime;
     if (runtime === undefined) {
+      // 失败组排在健康组之后；全部失败时按 attempts/last_completed_ms 轮转，不让首组独占重试。
       const candidate = store.read.query<{ conv_key: string; actor: string }, [string | null, string | null]>(`
         SELECT q.conv_key,q.actor FROM derive_queue q
         WHERE ${queuePendingSql('q')} AND (? IS NULL OR q.conv_key=?)
           AND NOT EXISTS (SELECT 1 FROM request r WHERE r.conv_key=q.conv_key AND r.actor=q.actor
             AND r.actor_state='known' AND r.purpose_pending=1)
-        ORDER BY q.conv_key,q.actor LIMIT 1`).get(scope?.convKey ?? null, scope?.convKey ?? null);
+        ORDER BY (q.last_error IS NOT NULL),q.attempts,q.last_completed_ms,q.conv_key,q.actor LIMIT 1`)
+        .get(scope?.convKey ?? null, scope?.convKey ?? null);
       if (candidate === null) break;
       // 计算不持写锁；落库另起一个短写事务，CAS 挡住计算期间到达的输入。
       // 认领单独一个短事务，落在计算快照之前：写侧边界因此比真实快照更保守。
