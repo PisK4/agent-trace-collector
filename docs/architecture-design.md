@@ -519,11 +519,11 @@ SQLite，WAL，单文件，放仓库外。默认路径按平台惯例落在数�
 
 ### 版本与破坏式替换
 
-当前结构版本是 v13。空库在同一个事务里建到 v13。存量库的原地升级路径：v6 到 v12 打开时在单个事务里升到 v13（纯新增表、列与索引，不动旧行），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
+当前结构版本是 v14。空库在同一个事务里建到 v14。存量库的原地升级路径：v6 到 v13 打开时在单个事务里升到 v14（纯新增表、列、索引与计数器，不动旧行），更早的版本报 `schema_rebuild_required`，高版本报 `schema_version_unsupported`。
 
-首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6 起不走这条路，原因是仓库已有本机真实数据且各步变更纯新增，原地升级可执行、可验证。备份白名单收 v6 到 v13，低版本包恢复后首次打开时同样原地升级。
+首版发布前的破坏式替换只对 v6 之前的库：停采集器、把数据目录整体移走或删除，让新版本建新库，旧库里的正文与派生结果一起丢弃，不存在"结构已升级、数据未迁移"的中间态。v6 起不走这条路，原因是仓库已有本机真实数据且各步变更纯新增，原地升级可执行、可验证。备份白名单收 v6 到 v14，低版本包恢复后首次打开时同样原地升级。
 
-v13 在 v12 之上给 `session_usage` 加一条读侧索引 `i_session_usage_session`（`(session, agent)`）：会话摘要按 session 取累计用量，主键以 agent 开头绕不过前缀；索引 `IF NOT EXISTS`，不扫描正文，停顿毫秒级。v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列：五个本地 Agent 适配器复用同一张原始层，不再各建一张同形表。改名与加列在同一事务里，旧行保留并补上 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若同时存在两张表，旧表行按 `INSERT OR IGNORE` 并入后删除。v11 在 v10 之上加的是 droid 原始层 `raw_droid_event` 与会话累计 `session_usage` 两张表，建表与索引全是 `IF NOT EXISTS`，不扫描存量。v10 在 v9 之上给 `request` 加 `user_fingerprint` 与 `turn_ref` 两列和两条按非空值的部分索引。v9 在 v8 之上给 `derive_queue` 加 `claim_from_sort` 列，带常量默认值。v8 在 v7 之上加的是两条部分反向索引：`i_req_prev`（`request(prev_req_id) WHERE prev_req_id IS NOT NULL`）与 `i_tool_result_req`（`tool_call(result_req) WHERE result_req IS NOT NULL`）。hook 合并按旧 id 反向改指前驱与工具结果位置，这两条 UPDATE 没有索引时是全表扫描（[采集期间交互延迟](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)）；部分形状匹配写路径，两个更新绑定的参数都非空。存量库建索引的启动停顿与失败恢复归[运维手册](operations.md#schema-版本)。
+v14 在 v13 之上加 `capacity_meter` 与 12 个触发器，见[四源容量计数](#四源容量计数)。v13 在 v12 之上给 `session_usage` 加一条读侧索引 `i_session_usage_session`（`(session, agent)`）：会话摘要按 session 取累计用量，主键以 agent 开头绕不过前缀；索引 `IF NOT EXISTS`，不扫描正文，停顿毫秒级。v12 把 v11 的 `raw_droid_event` 原地改名为 `raw_session_event` 并加 `source_kind` 列：五个本地 Agent 适配器复用同一张原始层，不再各建一张同形表。改名与加列在同一事务里，旧行保留并补上 `droid_transcript` 默认值，索引重建为 `(source_kind, session_id)`；新装库若同时存在两张表，旧表行按 `INSERT OR IGNORE` 并入后删除。v11 在 v10 之上加的是 droid 原始层 `raw_droid_event` 与会话累计 `session_usage` 两张表，建表与索引全是 `IF NOT EXISTS`，不扫描存量。v10 在 v9 之上给 `request` 加 `user_fingerprint` 与 `turn_ref` 两列和两条按非空值的部分索引。v9 在 v8 之上给 `derive_queue` 加 `claim_from_sort` 列，带常量默认值。v8 在 v7 之上加的是两条部分反向索引：`i_req_prev`（`request(prev_req_id) WHERE prev_req_id IS NOT NULL`）与 `i_tool_result_req`（`tool_call(result_req) WHERE result_req IS NOT NULL`）。hook 合并按旧 id 反向改指前驱与工具结果位置，这两条 UPDATE 没有索引时是全表扫描（[采集期间交互延迟](../.agents/notes/implemented/bug-fix/2026-11-01-collection-interactive-latency.md)）；部分形状匹配写路径，两个更新绑定的参数都非空。存量库建索引的启动停顿与失败恢复归[运维手册](operations.md#schema-版本)。
 
 v7 在 v6 之上加的是 OTLP 三张表：`raw_otlp_span`（span 原始层，主键 `(trace_id, span_id)`）、`raw_otlp_log`（logs 原始层，按记录内容哈希判重）与 `otlp_body_ref`（Claude Code 正文指针状态机）。v6 在 v5 之上加的是派生代际结构：`derive_generation`（一代一行）、`derive_request_result`、`derive_tool_result` 与四张只建不改的工作表（`derive_chain_work`、`derive_role_work`、`derive_call_work`、`derive_result_work`），并把 `derive_queue` 原地补上 `published_generation` 等列。派生结果从 `request` 行搬进代际结果表；`request` 上的旧列这一版保留不动，切片模式不写它们，同步模式照旧写。
 
@@ -1295,7 +1295,7 @@ droid 行在落库时由转录重建正文，正常为 `available`；行建好�
 
 ### 两个预算
 
-10 GB 只覆盖正文，实际有两笔账要算。正文预算默认 10 GB、可配置，计入 `block.z`、`skeleton_z`、`raw_hook` 里未清空的正文副本，这是回收的对象。总磁盘上限默认 16 GB，计入数据库文件、WAL、临时文件与库外产物，到线时停止接收正文、只记元数据，并告警。
+10 GB 只覆盖正文，实际有两笔账要算。正文预算默认 10 GB、可配置，按四张来源表的逻辑载荷计量：`block.z`、`request.skeleton_z`、`raw_hook` 未清空的 `request_z` 与 `response_z`、`raw_session_event.payload_json`。回收对象仍是前两类正文；raw 层按自己的 TTL 清理。总磁盘上限默认 16 GB，计入数据库文件、WAL、临时文件与库外产物，到线时停止接收正文、只记元数据，并告警。
 
 按 43.6 KB 一笔：
 
@@ -1309,7 +1309,7 @@ droid 行在落库时由转录重建正文，正常为 `available`；行建好�
 
 16 GB 是硬上限。只停正文挡不住整个库的增长：`request`、`request_evidence`、`route_summary` 都是长期保留的，正文停了它们照涨。按每笔约 2 KB 的读数字段加索引，4,000 笔/天约 8 MB/天，一年 2.9 GB 左右；请求量翻十倍就是 29 GB，单靠元数据就会超过 16 GB。
 
-会话原始层单独计量：`metadataSnapshot` 在全量 `/api/ingest-metrics` 给出 `raw_session_rows` 与 `raw_session_bytes`，轻量 `/api/metrics` 快照不做全表求和。它按 7 天 TTL 清孤儿代际与封口代际，追加代际随会话增长，当前没有按年龄回收。
+会话原始层与四源总量由 v14 计数直接读取：`metadataSnapshot` 的 `raw_session_rows`、`raw_session_bytes` 与请求行数不再是全表求和，轻量 `/api/metrics` 也带计数结构状态。raw 层仍按 7 天 TTL 清孤儿代际与封口代际，追加代际随会话增长，当前没有按年龄回收。
 
 所以分两级：
 
@@ -1334,6 +1334,23 @@ OTLP 摄入走同一梯度：80% 档 span 与摘要照收，body_ref 停止读�
 3. 训练 zstd 字典。对块内容训练一个 64 KB 的字典，小块压缩比能改善。代价是多一套训练与版本管理流程。
 
 第一版只做分级保留，另两个留接口不做。
+
+### 四源容量计数
+
+v14 的 `capacity_meter` 给四个来源各存一行 `bytes` 与 `row_count`。计量口径固定：
+
+| 来源 | 字节 | 行数 |
+| --- | --- | --- |
+| `block` | `length(z)` | 块行数，共享块只计一次 |
+| `request` | `length(CAST(skeleton_z AS BLOB))`，NULL 记 0 | 请求行数 |
+| `raw_hook` | 可空的 `request_z`、`response_z` 各自 `IFNULL` 后相加 | hook 行数 |
+| `raw_session_event` | `length(CAST(payload_json AS BLOB))` | 事件行数 |
+
+`CAST AS BLOB` 把 TEXT 按 UTF-8 字节计，不能直接 `length()` 取字符数；可空列分别 `IFNULL`，一侧 NULL 不影响另一侧。12 个触发器覆盖四表的 INSERT、影响载荷列的 UPDATE 与 DELETE，计数与来源行在同一事务提交、回滚。打开写连接时设 `PRAGMA recursive_triggers=ON`，未来若出现 `INSERT OR REPLACE`，隐式删除也会走 DELETE 分支；当前写路径没有使用 REPLACE。
+
+在线路径只读这四行：准入初始值、TTL 刷新、`invalidate()`、回收判断与批间复测共用。全表求和只出现在迁移初始化与显式 `capacity-check` / `capacity-recount`；正常重启只校验四行与 12 个触发器，不重扫历史。存量库迁移、失败回滚与维护命令见[运维手册](operations.md#容量计数与对账)。
+
+计数只代表逻辑载荷，不代表页分配、索引、WAL 或文件回收。物理磁盘保护仍由上面的两个预算与准入梯度承担。
 
 ### 回收
 
@@ -1374,11 +1391,11 @@ OTLP 摄入走同一梯度：80% 档 span 与摘要照收，body_ref 停止读�
 
 监控分三层，避免观测本身成为事件循环上的负载。
 
-**轻量指标。** `GET /api/metrics` 复用进程内计数，不执行 `measureStorage`（正文全表求和），也不做 `metadataSnapshot`（元数据求和）。存储值直接取准入闸门最近一次量测，附 `storage_measured_at_ms`；没有量测时为 null，不把 0 当正常。派生队列只数组级待办与最老 `dirty_since_ms`，不 JOIN 历史请求。完整快照仍在 `/api/stats`，供人工排查。
+**轻量指标。** `GET /api/metrics` 复用进程内计数，不执行 `metadataSnapshot`（元数据求和）。存储值直接取准入闸门最近一次量测，附 `storage_measured_at_ms`；没有量测时为 null，不把 0 当正常。`measureStorage` 本身已是常数成本（目录扫描、`statfs`、页计数与四行计数），但轻量端点仍不复用它，避免额外磁盘遍历。派生队列只数组级待办与最老 `dirty_since_ms`，不 JOIN 历史请求。快照带 `capacity_meter` 计数结构状态；完整快照仍在 `/api/stats`，供人工排查。
 
 **结构化诊断日志。** 单行 JSON 输出到 launchd 已接管的 stdout，共同字段只留时间、进程实例、`kind`、操作名、关联编号、阶段、耗时与结果码。HTTP 慢请求只写路由模板，错误只写固定分类，自由文本归 `unclassified`；日志不记录正文、请求参数、令牌、账号、会话标题或 SQL 参数。同步读取、具名写事务与容量量测以 100 ms 起记，Worker 计算以 500 ms 起记；同一 key 60 秒内重复只出第一条，窗口后的第一条带 `suppressed` 次数。派生轮把 Worker 计算与主线程落库的耗时分开记，共用同一个关联编号，空闲 tick 不记录。启动日志带实际检出的代码版本。日志文件本身不由采集器轮转。
 
-**外部采样与告警。** `scripts/monitor.ts` 由独立 launchd 任务 `local.tracery-monitor` 每 300 秒执行 `sample` 与 `check`。样本、告警与巡检记录写数据目录 `monitor/` 下的按日 JSONL，只存允许列表里的计数、状态、时间与进程实例；超时、连不上或读数失败也照实写一条，不把缺数据补成正常。阈值：事件循环 p99 超过 330 ms 连续 30 分钟（按 2026-11-03 全天 91 个有效样本校准，100 ms 等于常亮）；`event_loop.max_ms` 超过 2 s 立即告警，单独抓单次主线程停顿；派生积压最老排队超过 10 分钟且组数没有下降；准入模式非 `normal` 持续 10 分钟；`open_gaps` 大于 0 持续 15 分钟且无下降；正文达到预算 90% 或磁盘可用跌破 100 GB；RSS 超过 4 GB 持续 15 分钟；服务探不到立即告警；相邻样本断档超过一个采样周期在 15 分钟窗口内提醒（采样自身停摆不被 stale 短路）。断档在存活阈值内不清持续窗口，超过才重新起算。首次告警通知，之后每 30 分钟提醒一次；恢复要连续 15 分钟无命中才写 `recovered` 事件，缺样本期不计时、不判恢复，恢复只记事件不通知。`check` 的退出码交代采样证据：最新样本缺失或失败返回非 0，launchd 作业层因此看得见采样失败；`inspect` 子命令每次巡检追加一行判据结果到 `monitor/checks/`，成功也写。累计计数只在同一进程实例内比较，重启不继承差值。
+**外部采样与告警。** `scripts/monitor.ts` 由独立 launchd 任务 `local.tracery-monitor` 每 300 秒执行 `sample` 与 `check`。样本、告警与巡检记录写数据目录 `monitor/` 下的按日 JSONL，只存允许列表里的计数、状态、时间与进程实例；超时、连不上或读数失败也照实写一条，不把缺数据补成正常。阈值：事件循环 p99 超过 330 ms 连续 30 分钟（按 2026-11-03 全天 91 个有效样本校准，100 ms 等于常亮）；`event_loop.max_ms` 超过 2 s 立即告警，单独抓单次主线程停顿；容量计数缺失、非法、版本不符或来源数不为 4 也单独告警，不按 0 字节处理；派生积压最老排队超过 10 分钟且组数没有下降；准入模式非 `normal` 持续 10 分钟；`open_gaps` 大于 0 持续 15 分钟且无下降；正文达到预算 90% 或磁盘可用跌破 100 GB；RSS 超过 4 GB 持续 15 分钟；服务探不到立即告警；相邻样本断档超过一个采样周期在 15 分钟窗口内提醒（采样自身停摆不被 stale 短路）。断档在存活阈值内不清持续窗口，超过才重新起算。首次告警通知，之后每 30 分钟提醒一次；恢复要连续 15 分钟无命中才写 `recovered` 事件，缺样本期不计时、不判恢复，恢复只记事件不通知。`check` 的退出码交代采样证据：最新样本缺失或失败返回非 0，launchd 作业层因此看得见采样失败；`inspect` 子命令每次巡检追加一行判据结果到 `monitor/checks/`，成功也写。累计计数只在同一进程实例内比较，重启不继承差值。
 
 **保留。** 采样与告警保留 14 天；launchd 诊断日志达到 64 MiB 时先复制到 `monitor/logs/` 再清空 live 文件（launchd 仍握着原 fd，不能改名或删除），归档保留 14 天、总量上限 512 MiB，超限从最老开始删。轮转只由监控任务执行，普通启动路径不清理文件。
 

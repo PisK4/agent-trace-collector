@@ -13,9 +13,14 @@ import type { MetricsView, Sample, RuleContext, AlertState } from '../scripts/mo
 import {
   KEEP_DAYS, THRESHOLDS, transitionAlerts, pruneArchives, rotateLog, pruneMonitorData,
 } from '../scripts/monitor';
+import { CAPACITY_METER_VERSION } from '../src/capacity-meter';
 
 const NOW = 1_800_000_000_000;
 const MINUTE = 60_000;
+
+const HEALTHY_METER = {
+  ok: true, version: CAPACITY_METER_VERSION, source_count: 4, body_bytes: 1, error: null,
+};
 
 function metrics(overrides: Partial<MetricsView> = {}): MetricsView {
   return {
@@ -33,6 +38,8 @@ function metrics(overrides: Partial<MetricsView> = {}): MetricsView {
     derive_queue: { pending_groups: 0, oldest_dirty_age_ms: null },
     admission: null,
     ...overrides,
+    capacity_meter: overrides.capacity_meter === undefined
+      ? HEALTHY_METER : overrides.capacity_meter,
   };
 }
 
@@ -68,6 +75,19 @@ test('采样只保留允许列表，正文与会话标题字段不进样本', ()
   expect(Object.keys(view ?? {})).not.toContain('metadata');
   const stats = extractStats({ open_gaps: 1, pending_hooks: 2, cursors: [1], issues: [] });
   expect(stats).toEqual({ open_gaps: 1, pending_hooks: 2, requests: 0, cursors: 1, issues: 0 });
+});
+
+test('计数结构缺失、非法、版本不符或少来源都单独告警', () => {
+  const detail = (overrides: Partial<MetricsView>) =>
+    evaluateRules([sample(NOW, overrides)], context())
+      .find(hit => hit.rule === 'capacity_meter')?.detail;
+  expect(detail({})).toBeUndefined();
+  expect(detail({ capacity_meter: null })).toBe('missing');
+  expect(detail({
+    capacity_meter: { ...HEALTHY_METER, ok: false, error: 'capacity_meter_invalid' },
+  })).toBe('capacity_meter_invalid');
+  expect(detail({ capacity_meter: { ...HEALTHY_METER, version: 2 } })).toBe('version:2');
+  expect(detail({ capacity_meter: { ...HEALTHY_METER, source_count: 3 } })).toBe('sources:3');
 });
 
 test('服务探不到时立即告警，不因缺样本判成正常', () => {

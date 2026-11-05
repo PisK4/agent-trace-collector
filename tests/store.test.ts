@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { fixture } from './fixtures';
 import { commitUnit, openStore } from '../src/store';
+import { exactCapacitySums } from '../src/capacity-meter';
 
 /** 库里用户表上的全部索引名。 */
 function indexNames(db: Database): string[] {
@@ -36,14 +37,14 @@ test('事务失败不留下证据或游标', () => {
   }
 });
 
-test('建库包含32个业务表且使用AUTOINCREMENT', () => {
+test('建库包含33个业务表且使用AUTOINCREMENT', () => {
   const f = fixture();
   try {
     const names = (f.store.read.query(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
     ).all() as { name: string }[]).map(row => row.name);
     expect(names).toEqual([
-      'bg_job', 'block', 'collector_state', 'cost_observation',
+      'bg_job', 'block', 'capacity_meter', 'collector_state', 'cost_observation',
       'derive_call_work', 'derive_chain_work', 'derive_generation', 'derive_queue',
       'derive_request_result', 'derive_result_work', 'derive_role_work', 'derive_tool_result',
       'ingest_issue', 'otlp_body_ref', 'pending_hook', 'purged_evidence', 'raw_hook',
@@ -261,7 +262,7 @@ test('拒绝未知的高版本schema', () => {
     const raw = new Database(path);
     raw.exec('PRAGMA user_version=99');
     raw.close();
-    expect(() => openStore(path)).toThrow(/schema_version_unsupported: db v99 > code v13/);
+    expect(() => openStore(path)).toThrow(/schema_version_unsupported: db v99 > code v14/);
   } finally {
     f.close();
   }
@@ -275,10 +276,10 @@ test('过低版本库拒绝打开，空库建到当前版本', () => {
     const raw = new Database(legacy);
     raw.exec('CREATE TABLE legacy(x); PRAGMA user_version=4');
     raw.close();
-    expect(() => openStore(legacy)).toThrow(/schema_rebuild_required: db v4 needs code v13/);
+    expect(() => openStore(legacy)).toThrow(/schema_rebuild_required: db v4 needs code v14/);
     const store = openStore(join(dir, 'fresh', 'trace.db'));
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
     } finally { store.close(); }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -300,7 +301,7 @@ test('v6库原地升到当前版本：纯新增表与索引，既有数据不动
     raw.close();
     const store = openStore(path);
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
       expect((store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number }).n).toBe(1);
       // 升级是纯新增：OTLP 原始层表就位且为空，反向索引就位。
       expect((store.read.query('SELECT COUNT(*) AS n FROM raw_otlp_span').get() as { n: number }).n).toBe(0);
@@ -327,7 +328,7 @@ test('v10库原地升到当前版本：会话原始层、用量表与共享来�
     raw.close();
     const store = openStore(path);
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
       expect(store.read.query('SELECT COUNT(*) AS n FROM request').get()).toEqual({ n: 1 });
       expect(store.read.query('SELECT COUNT(*) AS n FROM raw_session_event').get()).toEqual({ n: 0 });
       expect(store.read.query('SELECT COUNT(*) AS n FROM session_usage').get()).toEqual({ n: 0 });
@@ -353,10 +354,108 @@ test('v12库原地升到当前版本：用量表读侧索引就位，既有行�
     raw.close();
     const store = openStore(path);
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
       expect(store.read.query('SELECT COUNT(*) AS n FROM session_usage').get()).toEqual({ n: 1 });
       expect(indexNames(store.read)).toContain('i_session_usage_session');
     } finally { store.close(); }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v13库原地升到当前版本：计数从四源回填，重启不重扫且后续写入继续计数', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'atc-store-v14-upgrade-'));
+  try {
+    const path = join(dir, 'trace.db');
+    const seed = openStore(path);
+    seed.write(db => {
+      db.run('INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?)',
+        [new Uint8Array([1, 2, 3]), 'fp-1', new Uint8Array(100).fill(9), 100]);
+      db.run(
+        `INSERT INTO request(started_ms,day,via,body_state,derive_version,have,created_at,updated_at,skeleton_z)
+         VALUES (1,'2026-11-05','hook','pending',0,1,1,1,?)`, ['中文ab'],
+      );
+      db.run("INSERT INTO raw_hook(hook_id,received_at,parse_state,request_z) VALUES ('h1',1,'ok',?)",
+        [new Uint8Array(7).fill(1)]);
+      db.run(
+        `INSERT INTO raw_session_event(source_kind,file_generation,byte_offset,session_id,
+          line_type,event_at_ms,payload_json,privacy_version)
+         VALUES ('claude_session','g',0,'s','user',1,?,1)`, ['x'.repeat(5)],
+      );
+    });
+    seed.close();
+    // 模拟 v13 库：计数表与触发器不存在，版本停在 13。
+    const raw = new Database(path);
+    raw.exec("DELETE FROM capacity_meter; DROP TABLE capacity_meter; DELETE FROM collector_state WHERE key='capacity.meter'");
+    for (const row of raw.query(
+      "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'capacity_meter_%'",
+    ).all() as { name: string }[]) {
+      raw.exec(`DROP TRIGGER ${row.name}`);
+    }
+    raw.exec('PRAGMA user_version=13');
+    raw.close();
+
+    const skeletonBytes = Buffer.byteLength('中文ab');
+    const store = openStore(path);
+    try {
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
+      expect(exactCapacitySums(store.read)).toEqual({
+        block: { bytes: 100, rows: 1 },
+        request: { bytes: skeletonBytes, rows: 1 },
+        raw_hook: { bytes: 7, rows: 1 },
+        raw_session_event: { bytes: 5, rows: 1 },
+      });
+      expect(store.read.query('SELECT source,bytes,row_count FROM capacity_meter ORDER BY source').all()).toEqual([
+        { source: 'block', bytes: 100, row_count: 1 },
+        { source: 'raw_hook', bytes: 7, row_count: 1 },
+        { source: 'raw_session_event', bytes: 5, row_count: 1 },
+        { source: 'request', bytes: skeletonBytes, row_count: 1 },
+      ]);
+      expect(store.read.query(
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='trigger' AND name LIKE 'capacity_meter_%'",
+      ).get()).toEqual({ n: 12 });
+    } finally { store.close(); }
+
+    const reopened = openStore(path);
+    try {
+      expect(reopened.read.query('SELECT COUNT(*) AS n FROM capacity_meter').get()).toEqual({ n: 4 });
+      reopened.write(db => db.run('INSERT INTO block(hash,fingerprint,z,raw_size) VALUES (?,?,?,?)',
+        [new Uint8Array([4, 5, 6]), 'fp-2', new Uint8Array(3).fill(2), 3]));
+      expect(reopened.read.query("SELECT bytes,row_count FROM capacity_meter WHERE source='block'").get())
+        .toEqual({ bytes: 103, row_count: 2 });
+    } finally { reopened.close(); }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v14迁移失败整体回滚：不留计数表，版本停在13', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'atc-store-v14-rollback-'));
+  try {
+    const path = join(dir, 'trace.db');
+    const seed = openStore(path);
+    seed.close();
+    const raw = new Database(path);
+    raw.exec("DELETE FROM capacity_meter; DROP TABLE capacity_meter; DELETE FROM collector_state WHERE key='capacity.meter'");
+    for (const row of raw.query(
+      "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'capacity_meter_%'",
+    ).all() as { name: string }[]) {
+      raw.exec(`DROP TRIGGER ${row.name}`);
+    }
+    // 破坏一张来源表的列，让建触发器/回填失败。
+    raw.exec('ALTER TABLE raw_session_event DROP COLUMN payload_json; PRAGMA user_version=13');
+    raw.close();
+
+    expect(() => openStore(path)).toThrow();
+    const check = new Database(path, { readonly: true });
+    try {
+      expect(check.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(check.query("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='capacity_meter'").get())
+        .toEqual({ n: 0 });
+      expect(check.query(
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='trigger' AND name LIKE 'capacity_meter_%'",
+      ).get()).toEqual({ n: 0 });
+    } finally { check.close(); }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -381,7 +480,7 @@ test('v8库原地升到当前版本：队列多一列认领边界，既有行不
     raw.close();
     const store = openStore(path);
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
       // 升级是纯新增：既有行原样保留，新列取默认空串（未知边界）。
       expect(store.read.query('SELECT from_sort,published_revision,claim_from_sort FROM derive_queue').get())
         .toEqual({ from_sort: '0000000000001000', published_revision: 3, claim_from_sort: '' });
@@ -416,7 +515,7 @@ test('v7库原地升到当前版本：引用不变，中断后的半迁移状态
     };
     const store = openStore(path);
     try {
-      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 13 });
+      expect(store.read.query('PRAGMA user_version').get()).toEqual({ user_version: 14 });
       expect(indexNames(store.read)).toContain('i_req_prev');
       expect(indexNames(store.read)).toContain('i_tool_result_req');
       expect(queryAll(store.read, 'SELECT req_id, prev_req_id FROM request ORDER BY req_id')).toEqual(before.prev);

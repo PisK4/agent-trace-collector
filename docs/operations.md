@@ -132,6 +132,13 @@ bun run maintain verify --db '<dataDir>/trace.db'
 # 只读预检：这份库能否被当前代码直接启动（schema 版本三态）
 bun run maintain precheck --db '<dataDir>/trace.db'
 
+# 容量计数只读对账：逐来源比较计数与全表求和，服务运行中可用
+bun run maintain capacity-check --db '<dataDir>/trace.db'
+
+# 容量计数修正：默认预览；--apply 需要停采集器、维护锁与显式批准
+bun run maintain capacity-recount --db '<dataDir>/trace.db'
+bun run maintain capacity-recount --db '<dataDir>/trace.db' --apply --approval-id '<你的审批标识>'
+
 # hook 投递的只读窗口诊断：缺口、等待队列与已到达回调
 bun run maintain hook-delivery --db '<dataDir>/trace.db' --since '2026-10-26T00:00:00Z' --until '2026-10-27T00:00:00Z'
 
@@ -196,6 +203,15 @@ bun run maintain purge-agent --db '<dataDir>/trace.db' --agent hermes --apply --
 | `unsupported` | 库比代码新，或带表但版本为 0（`schema_unknown`） | 1 |
 
 打不开或不是 SQLite 文件报 `precheck_failed:<原因>`，同样退出 1。预检通过不替代备份，也不保证迁移一定成功；它只把「schema 不兼容」的发现时机从重启窗口提前到部署前。
+
+### 容量计数与对账
+
+v14 的 `capacity_meter` 由四张来源表的触发器在写事务内维护。在线读取只取四行；全表求和只出现在迁移初始化与下面两个命令里。
+
+- `capacity-check`：只读打开库，在显式读事务里固定快照，逐来源比较 `bytes` / `row_count` 与全表求和。不取维护锁，服务运行中可用。输出 `ok:true` 表示四源一致；有差异时 `ok:false`、退出 1，`sources[]` 给出每项的 `meter_*`、`exact_*` 与 `*_delta`。
+- `capacity-recount`：默认只预览，不改库。加 `--apply --approval-id` 才执行：先取维护锁，再要求库处于停服务状态（`withStoppedDatabase`），在一个事务里写回精确值并复核。采集器仍在运行时失败 `source_must_be_stopped`，不做在线覆盖。结构缺失、来源缺项或版本不符时直接拒绝，不用零值自动修复。
+
+正常启动只校验四行与 12 个触发器，不回填历史。v14 迁移会扫描四张来源表做一次初始化与核对；耗时随逻辑载荷和缓存变化，部署时按停机窗口处理。
 
 ### hook-delivery
 
@@ -587,7 +603,9 @@ sqlite3 "$HOME/Library/Application Support/tracery/trace.db" \
 
 ## schema 版本
 
-当前 `user_version=13`。空数据目录首次启动直接建到 v13；v6 到 v12 库打开时在单个事务里原地升到 v13，更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 到 v13，旧版本包恢复后首次打开同样原地升级。部署或恢复前可先跑 `maintain precheck` 只读预判同一套判据，不必等服务启动失败（见[维护命令](#维护命令)）。
+当前 `user_version=14`。空数据目录首次启动直接建到 v14；v6 到 v13 库打开时在单个事务里原地升到 v14，更早版本报 `schema_rebuild_required`（错误信息带 db 与 code 的版本号），高版本报 `schema_version_unsupported`。可恢复 bundle 的结构版本白名单是 v6 到 v14，旧版本包恢复后首次打开同样原地升级。部署或恢复前可先跑 `maintain precheck` 只读预判同一套判据，不必等服务启动失败（见[维护命令](#维护命令)）。
+
+v14 在 v13 之上建 `capacity_meter` 与 12 个触发器，并从 `block`、`request`、`raw_hook`、`raw_session_event` 回填四行计数。建表、建触发器、回填、核对与 `user_version` 推进在同一个事务里，失败整体回滚；已有计数只核对不覆盖。初始化要扫描四张来源表，耗时随逻辑载荷和缓存变化，部署时按停机窗口处理。不能直接换回 v13 二进制：旧代码会把 v14 库判成高版本并拒绝启动，回滚要先恢复 v13 的 bundle。计数器不是页分配或文件回收量，物理容量判断仍看[两个预算](architecture-design.md#两个预算)。
 
 v13 在 v12 之上给 `session_usage` 加一条 `IF NOT EXISTS` 读侧索引 `i_session_usage_session`（`(session, agent)`）：会话摘要按 session 取累计用量走索引，不全表扫描。迁移不扫描正文、不回填，停顿毫秒级，无部署顺序变化。
 
@@ -603,11 +621,11 @@ v8 在 v7 之上加的两条部分索引（`i_req_prev`、`i_tool_result_req`）
 
 首版发布前的破坏式替换只对 v6 之前的库：升级代码前先停采集器，把旧数据目录整体移走或删除，再让新版本建新库；旧库里的正文与派生结果一起丢弃，没有"结构已升级、数据未迁移"的中间态。重建后的历史只有元数据：账本与路由的重放不产生正文，正文只能从 hook 或 OTLP 的 body_ref 拿到，所以重建前的正文、预览与工具配对都补不回来。要留住正文就在升级前导出：正文落在旧库的 `block.z` 与 `request.skeleton_z`，`raw_hook` 里的原文在完成关联后通常已经清空，不是可靠的导出源。`scripts/backfill-fingerprint.ts` 补的是 v3/v4 时代的派生列，不是到当前版本的路径——它把 `user_version` 写成 4，当前代码打不开它。不要手改 `user_version`。
 
-### 部署顺序：重启只完成迁移，不回填存量
+### 部署顺序：重启完成迁移与计数初始化，不回填派生
 
 带 schema 变更或判据变更的发布，顺序固定是**备份 → 重启 → 显式 rebuild → 验证**，不是"重启完就生效"：
 
 1. **备份**：`maintain bundle` 要求源库已停，所以先 `bun run service stop`，bundle 到数据目录之外。失败时保留库与 WAL 文件，按错误码处理后在低峰重试。启动新代码前对源库跑一次 `bun run maintain precheck --db '<dataDir>/trace.db'`：`rebuild_required` / `unsupported` 先按「schema 版本」节处理，别带病重启。
-2. **重启**：`openStore` 在启动路径里完成原地迁移（一次性索引扫描停顿，见上）。重启后先只读核对：`PRAGMA user_version` 到目标版本、`integrity_check` 为 ok。
-3. **显式 rebuild**：迁移只加表、列或索引，不回填存量；需要让存量会话按新判据收敛时，逐会话（或分批）跑 `bun run maintain rebuild --session '<conv_key>'`。不要在重启窗口顺手跑全量 rebuild——大会话的升级在秒级，会占主线程。
-4. **验证**：区分「迁移成功」与「回填完成」。迁移成功的只读自检是本批新增表或列随新流量开始出现行（例如 v12 的 `raw_session_event.source_kind` 与各 `*_session` 游标）；回填完成的验收是 `GET /api/sessions` 的标题、flags 与 request_count 符合新规则预期。重启后立刻看会话列表，看到旧行为是「还没 rebuild」，不是「功能没生效」。
+2. **重启**：`openStore` 在启动路径里完成原地迁移（一次性索引扫描或 v14 计数初始化停顿，见上）。重启后先只读核对：`PRAGMA user_version` 到目标版本、`integrity_check` 为 ok；需要确认计数一致时再跑 `maintain capacity-check`。
+3. **显式 rebuild**：迁移只加表、列、索引与容量计数，不重算存量派生；需要让存量会话按新判据收敛时，逐会话（或分批）跑 `bun run maintain rebuild --session '<conv_key>'`。不要在重启窗口顺手跑全量 rebuild——大会话的升级在秒级，会占主线程。
+4. **验证**：区分「迁移成功」与「回填完成」。迁移成功的只读自检是本批新增表或列随新流量开始出现行（例如 v12 的 `raw_session_event.source_kind` 与各 `*_session` 游标；v14 的 `capacity_meter` 四行与 `capacity-check` 一致）；回填完成的验收是 `GET /api/sessions` 的标题、flags 与 request_count 符合新规则预期。重启后立刻看会话列表，看到旧行为是「还没 rebuild」，不是「功能没生效」。

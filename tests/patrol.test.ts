@@ -20,6 +20,10 @@ function reading(overrides: Partial<WeeklyReading> = {}): WeeklyReading {
     blockBytes: 600 * MB,
     skeletonBytes: 1_100 * MB,
     rawHookBytes: 50 * MB,
+    rawSessionBytes: 20 * MB,
+    meterUsed: true,
+    meterVersion: 1,
+    meterError: null,
     walBytes: 2 * MB,
     freeBytes: 300_000 * MB,
     diskBytes: 1_000_000 * MB,
@@ -180,6 +184,36 @@ test('周环比给出增量、占上期百分比和是否越过阈值', () => {
 
   const steep = compareSnapshots(snapshot('2026-W45', now, 7_800), previous);
   expect(steep.find(check => check.id === 'growth_delta')?.state).toBe('over');
+});
+
+test('四源预算单列，计数不可用时显式标出', () => {
+  const healthy = evaluateWeekly(reading({ rawSessionBytes: 200 * MB }));
+  expect(healthy.find(check => check.id === 'body_budget')?.detail).toContain('四源逻辑载荷 1950.0 MiB');
+  expect(healthy.find(check => check.id === 'body_budget')?.detail).toContain('raw_session 200.0）');
+  expect(healthy.find(check => check.id === 'capacity_meter')?.state).toBe('ok');
+
+  // v13 旧库回退全表求和是预期状态，只做提示；结构坏了才越界。
+  const legacy = evaluateWeekly(reading({
+    meterUsed: false, meterVersion: null, meterError: 'capacity_meter_missing',
+  }));
+  expect(legacy.find(check => check.id === 'capacity_meter')?.state).toBe('info');
+  const broken = evaluateWeekly(reading({
+    meterUsed: false, meterVersion: null, meterError: 'capacity_meter_invalid',
+  }));
+  expect(broken.find(check => check.id === 'capacity_meter')?.state).toBe('over');
+  expect(broken.find(check => check.id === 'capacity_meter')?.detail).toContain('增量计数未生效');
+});
+
+test('计量版本变化时提示读数不可直接比较', () => {
+  const now = Date.now();
+  const v2 = snapshot('2026-W45', now, 5_000, { meterVersion: 2 });
+  const upgraded = compareSnapshots(v2, snapshot('2026-W44', now - 7 * DAY_MS, 4_800, { meterVersion: 1 }));
+  expect(upgraded.find(check => check.id === 'meter_version')?.detail).toContain('计量版本 1 → 2');
+  expect(upgraded.find(check => check.id === 'meter_version')?.detail).toContain('不可直接比较');
+  const same = compareSnapshots(v2, snapshot('2026-W44', now - 7 * DAY_MS, 4_800, { meterVersion: 2 }));
+  expect(same.find(check => check.id === 'meter_version')?.detail).toBe('计量 v2');
+  const legacy = compareSnapshots(v2, snapshot('2026-W44', now - 7 * DAY_MS, 4_800));
+  expect(legacy.find(check => check.id === 'meter_version')?.detail).toContain('legacy → 2');
 });
 
 test('历史文件损坏时退化成无上期可比，下一次写入重建', () => {

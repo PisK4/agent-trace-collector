@@ -6,6 +6,44 @@
 
 记录里的数字、端口、pid 与耗时都来自作者机器，用于说明当时怎么判断，不是可复现的基准。
 
+## 容量计数与主线程阻塞回归（合成，2026-11-05）
+
+前提：隔离 worktree `.codex-worktrees/atc-capacity-meter` 的 `fix/capacity-meter-incremental` 分支，基于 master `39f1c49`。验收只使用合成库与临时目录，没有复制真实正文、会话键、账号或令牌，也没有迁移、重启或部署生产服务。
+
+### 合成数据
+
+| 检查 | 结果 |
+| --- | --- |
+| 四源计数一致 | 中文、emoji、TEXT 按 UTF-8 字节、单边 NULL hook、共享块只计一次；计数与全表逐来源一致 |
+| 写路径 | 普通 INSERT、`INSERT OR IGNORE`、`ON CONFLICT DO UPDATE`、`INSERT OR REPLACE`、DELETE 与事务回滚后计数一致 |
+| 在线装配 | `createAdmissionGate` 实际检查只出现 `capacity_meter` 与 PRAGMA 查询，不出现四张来源表的 `FROM`；量测 max 0.16 ms |
+| 迁移 | 空库建到 v14；v13 库回填四源后 `capacity-check` 一致；故意缺列时迁移失败整体回滚，`user_version` 停在 13，计数表与触发器都不留 |
+| 对账命令 | `capacity-check` 对人工改坏的计数返回 `ok:false` 与逐项 delta；`capacity-recount --apply` 缺批准时不动库，修正后复查通过；服务运行时拒绝停服务修正 |
+| 巡查与监控 | v13 快照回退全表求和并标 `meterUsed=false`；计数缺失、非法、版本不符、来源数不足各自告警，不补零 |
+
+自动化：`bun test` 1334 pass / 0 fail（117 个文件）；`bun run typecheck` 退出 0；`verify:notes` 见提交前记录。
+
+### 显式容量实验
+
+`bun scripts/perf-capacity-meter.ts`，默认 1,152 MiB 合成载荷：112 行 × 8 MiB `raw_session_event`（稀疏 `byte_offset`）、64 块 × 2 MiB 共享块、1,024 个请求 × 64 KiB 骨架、64 个 hook × 1 MiB。一次运行读数：
+
+| 检查 | 实测 |
+| --- | --- |
+| 在线准入检查（200 次，1 ms 间隔小写入） | 单次 max 0.16 ms、p95 0.11 ms；事件循环 max 1.34 ms |
+| 带触发器摄入 | 61 笔、1,152 MiB；p95 88.2 ms、p99 95.9 ms、426 MiB/s、WAL 0.03 MiB |
+| 同种子无触发器基线 | p95 98.8 ms、p99 108.2 ms、395 MiB/s、WAL 0.03 MiB |
+| 吞吐变化 | 带触发器 +7.8%，未出现超过 15% 的退化 |
+| 触顶 `enforceBodyBudget` | 1,143 ms，淘汰 1,000 个请求；单次不可抢占 |
+| 单次 `pruneRaw` | 1,000 ms；删除 112 行会话事件、64 行 hook |
+| `shrinkStorage` + checkpoint | 2,999 ms |
+
+### 未覆盖
+
+- 生产迁移、重启与部署验收未执行；部署后按巡查 C2 复测 15–30 分钟同负载窗口，本次不改写生产读数。
+- `pruneRaw` 单事务、`enforceBodyBudget` 多批循环与 `shrinkStorage` 仍是不可抢占单元，时长超过外层 200 ms 预算；F11 的单事务清理与 F38/F39 的预算归属没有在本轮解决。
+- 写入对比是 61 笔大事务的合成形状，不等于生产高频小事务与 TEXT 更新的开销；触发器写放大仍需真实流量观察。
+- 计数只证明逻辑载荷，不证明页分配、索引与文件回收；物理容量仍按两个预算判断。
+
 ## 覆盖护栏（合成 + 生产真实流量，2026-11-04）
 
 前提：隔离 worktree `.codex-worktrees/atc-coverage-foundation` 的 `feat/coverage-foundation` 分支，基于 master `0f81367`。代码、测试与文档提交为 `c9485ed` 与 `d091502`，以 `--no-ff` 合并为 `073c329`；2026-11-04 18:22:09 用 `bun run service restart` 重启采集器，pid 13304，`service status` 显示 src 未落后。合成验收只进临时库；真实流量读数来自生产库只读查询与全量 `/api/ingest-metrics`，没有把正文、账号或令牌写入本记录。

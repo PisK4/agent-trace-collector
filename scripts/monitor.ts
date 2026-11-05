@@ -15,6 +15,7 @@ import {
   renameSync, rmSync, statSync, truncateSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { CAPACITY_METER_VERSION } from '../src/capacity-meter';
 import { loadConfig } from '../src/config';
 import {
   findServiceEntry, listeningPort, probeJson, probeStats, readServiceState, readToken,
@@ -104,6 +105,11 @@ export type MetricsView = {
   };
   derive_queue: { pending_groups: number; oldest_dirty_age_ms: number | null };
   admission: { mode: string; reason: string | null; at_ms: number | null } | null;
+  /** 计数结构；null 表示接口没有这个字段（旧版本），不表示计数为 0。 */
+  capacity_meter: {
+    ok: boolean; version: number | null; source_count: number;
+    body_bytes: number; error: string | null;
+  } | null;
 };
 
 export type StatsView = {
@@ -129,7 +135,7 @@ export type Sample = {
 };
 
 export type Rule = 'service_unreadable' | 'event_loop_p99' | 'event_loop_max' | 'derive_backlog'
-  | 'storage_mode' | 'collection_gap' | 'sample_gap' | 'capacity';
+  | 'storage_mode' | 'collection_gap' | 'sample_gap' | 'capacity' | 'capacity_meter';
 
 export type RuleHit = { rule: Rule; detail: string };
 
@@ -165,6 +171,7 @@ export function extractMetrics(body: unknown): MetricsView | null {
   const loop = recordOf(root.event_loop);
   const queue = recordOf(root.derive_queue);
   const admission = recordOf(root.admission);
+  const meter = recordOf(root.capacity_meter);
   return {
     started_at_ms: numberOrNull(root.started_at_ms),
     uptime_ms: numberOrNull(root.uptime_ms),
@@ -206,6 +213,13 @@ export function extractMetrics(body: unknown): MetricsView | null {
       mode: typeof admission.mode === 'string' ? admission.mode : 'unknown',
       reason: typeof admission.reason === 'string' ? admission.reason : null,
       at_ms: numberOrNull(admission.at_ms),
+    },
+    capacity_meter: meter === null ? null : {
+      ok: meter.ok === true,
+      version: numberOrNull(meter.version),
+      source_count: numberOrNull(meter.source_count) ?? 0,
+      body_bytes: numberOrNull(meter.body_bytes) ?? 0,
+      error: typeof meter.error === 'string' ? meter.error : null,
     },
   };
 }
@@ -352,6 +366,20 @@ export function evaluateRules(samples: Sample[], ctx: RuleContext): RuleHit[] {
   }
   if (ctx.stale) return hits;
   if (latest === undefined) return hits;
+
+  // 计数结构单独告警：缺失、非法或版本不符不能按 0 字节容量处理。
+  if (latest.ok) {
+    const meter = metricSample(latest)!.capacity_meter;
+    if (meter === null) {
+      hits.push({ rule: 'capacity_meter', detail: 'missing' });
+    } else if (!meter.ok) {
+      hits.push({ rule: 'capacity_meter', detail: meter.error ?? 'invalid' });
+    } else if (meter.version !== CAPACITY_METER_VERSION) {
+      hits.push({ rule: 'capacity_meter', detail: `version:${meter.version ?? 'null'}` });
+    } else if (meter.source_count !== 4) {
+      hits.push({ rule: 'capacity_meter', detail: `sources:${meter.source_count}` });
+    }
+  }
 
   const loopRun = trailingRun(samples, sample => (metricSample(sample)?.event_loop.p99_ms ?? 0)
     > ctx.thresholds.p99Ms, ctx.thresholds.continuityGapMs);

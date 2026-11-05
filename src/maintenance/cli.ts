@@ -7,6 +7,7 @@ import { openStore } from '../store';
 import type { Store } from '../store';
 import { backupBundle, backupDatabase, restoreBundle } from './backup';
 import { assertWindow, hookDeliveryReport } from './delivery';
+import { previewCapacityMeter, recountCapacityMeter } from './capacity';
 import { acquireMaintenanceLock, type LockHandle } from './lock';
 import { previewHookIdentityMigration, migrateHookIdentity } from './identity';
 import { previewAgentPurge, previewMetadataPurge, purgeAgent, purgeMetadata } from './purge';
@@ -66,6 +67,8 @@ function isCalendarDay(value: string): boolean {
 const USAGE = `usage:
   maintain verify --db <path>
   maintain precheck --db <path>
+  maintain capacity-check --db <path>
+  maintain capacity-recount --db <path> [--apply --approval-id <id>]
   maintain hook-delivery --db <path> --since <ISO|ms> --until <ISO|ms>
   maintain backup --db <path> --out <new-path>
   maintain bundle --dir <dataDir> --out <new-dir>
@@ -177,6 +180,47 @@ export async function runMaintenance(argv: string[], io: {
     } catch (error) {
       err(`precheck_failed:${error instanceof Error ? error.message : 'unknown'}`);
       return 1;
+    }
+  }
+
+  if (command === 'capacity-check') {
+    // 只读对账：显式读事务固定快照，可以在服务运行时用，不取维护锁。
+    try {
+      const report = previewCapacityMeter(dbPath);
+      out(JSON.stringify(report));
+      return report.ok ? 0 : 1;
+    } catch (error) {
+      err(`capacity-check_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
+    }
+  }
+
+  if (command === 'capacity-recount') {
+    let lock: LockHandle | null = null;
+    try {
+      const preview = previewCapacityMeter(dbPath);
+      if (flags.get('apply') !== true) {
+        out(JSON.stringify({ applied: false, ...preview }));
+        return preview.ok ? 0 : 1;
+      }
+      const approvalId = stringFlag(flags, 'approval-id');
+      if (approvalId === null) {
+        out(JSON.stringify({ applied: false, ...preview, ok: false, error: 'approval_id_required' }));
+        return 1;
+      }
+      lock = acquireMaintenanceLock(dirname(dbPath), `capacity-recount:${process.pid}`);
+      if (lock === null) {
+        err('maintenance_lock_held');
+        return 1;
+      }
+      const result = recountCapacityMeter(dbPath);
+      out(JSON.stringify({ ok: true, applied: true, approval_id: approvalId, ...result }));
+      return 0;
+    } catch (error) {
+      err(`capacity-recount_failed:${error instanceof Error ? error.message : 'unknown'}`);
+      return 1;
+    } finally {
+      lock?.release();
     }
   }
 

@@ -34,6 +34,10 @@ Status: implemented
 - 停止等待有上限后，超时的那一轮派生会被 Worker close 丢弃，日志出现 `derive_worker_closed` / `derive.run` failure：这是如实报告（组仍 dirty，重启后重建），不是静默丢失。
 - `store.close()` 对所有调用方做 checkpoint：正常停止后数据目录的 `-wal` 为 0 B，重启免去回放；checkpoint 忙或失败只记一行结构化日志，不影响退出。
 
+## Related
+
+[容量计数与主线程阻塞回归](2026-11-05-capacity-meter-main-thread-regression.md)复核 F12 整表量测和 F11 单批耗时的生产风险并交付 v14 计数；本记录的代际保留与停止语义仍适用。
+
 ## Testing
 
 - `tests/retention.test.ts`「有界清理分批独立提交、批间让出，连续调用收敛到零」：620 行超期 span、`maxBatches=2` 的合成种子——单次调用删 200 行停手、两次独立的 `raw_prune` 写事务、批间 `setImmediate` 链获得执行机会、4 次调用共 7 个写事务后累计删除等于种子行数且超期计数归零。
