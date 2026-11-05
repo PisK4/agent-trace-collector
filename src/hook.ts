@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
+import { convDigestOf } from './conv-digest';
 import type { Store } from './store';
 import { commitUnit } from './store';
 import { persistBodyTx } from './body';
@@ -87,42 +87,8 @@ function bytesOf(value: unknown): Uint8Array {
   return new Uint8Array(Buffer.from(JSON.stringify(value) ?? '', 'utf8'));
 }
 
-/**
- * 复刻 magpie `conversationID` 的摘要口径：从请求对象里找首条 role="user"
- * 元素（messages 优先、gemini contents 次之、input 兜底），取其 JSON 字节做
- * sha256 前 12 字节 hex、加 magpie- 前缀。算不出时返回 null——fail-safe，
- * 调用方必须退回 hookConv 的默认组键，不能猜时间近邻。
- *
- * 与 magpie [gateway.go:6720-6766] 保持一致：magpie 操作的是原始 JSON 字节，
- * 这里拿的是 envelope 里 parse 后再 JSON.stringify 的元素，Hermes 客户端
- * 实测 63/63 命中（±250ms 唯一候选、0 歧义）。
- */
-export function convDigestOf(request: unknown): ConvRef | null {
-  if (request === null || request === undefined || typeof request !== 'object') return null;
-  const obj = request as Record<string, unknown>;
-  const geminiContents = Array.isArray(obj.messages) === false && Array.isArray(obj.contents);
-  const items = Array.isArray(obj.messages) ? obj.messages
-    : Array.isArray(obj.contents) ? obj.contents
-      : Array.isArray(obj.input) ? obj.input
-        : null;
-  if (items === null || items.length === 0) return null;
-  // 选首条 role="user" 元素，或 gemini contents 的空 role 元素；都没挑第一条。
-  let first = items[0];
-  for (const it of items) {
-    const el = it as Record<string, unknown> | null;
-    if (el === null || typeof el !== 'object') continue;
-    const role = el.role;
-    if (role === 'user' || (geminiContents && role === '')) { first = it; break; }
-  }
-  let bytes: Uint8Array;
-  try {
-    bytes = Buffer.from(JSON.stringify(first), 'utf8');
-  } catch { return null; }
-  if (bytes.length === 0) return null;
-  const hex = createHash('sha256').update(bytes).digest('hex').slice(0, 24);
-  const digest = 'magpie-' + hex;
-  return { key: JSON.stringify(['conv', digest]), source: 'conv-digest' };
-}
+// 摘要口径归 src/conv-digest.ts：本地会话适配器与 hook 共用一份。
+export { convDigestOf };
 
 /**
  * 按规范化 response ID 找候选。只认 route_id 非空的存活请求；

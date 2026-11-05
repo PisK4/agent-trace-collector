@@ -33,7 +33,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { agent: 'codebuddy', sourceKind: null, format: 'jsonl', status: 'unimplemented' },
   { agent: 'droid', sourceKind: 'droid_transcript', format: 'transcript', status: 'implemented' },
   { agent: 'cursor', sourceKind: null, format: 'sqlite+transcript', status: 'unimplemented' },
-  { agent: 'hermes', sourceKind: null, format: 'sqlite', status: 'local_data' },
+  { agent: 'hermes', sourceKind: 'hermes_session', format: 'sqlite', status: 'implemented' },
   { agent: 'alma', sourceKind: null, format: 'sqlite', status: 'unimplemented' },
   { agent: 'kimi', sourceKind: null, format: 'jsonl', status: 'unimplemented' },
   { agent: 'agy', sourceKind: null, format: 'jsonl+sqlite', status: 'unimplemented' },
