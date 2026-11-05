@@ -44,6 +44,26 @@
 - 写入对比是 61 笔大事务的合成形状，不等于生产高频小事务与 TEXT 更新的开销；触发器写放大仍需真实流量观察。
 - 计数只证明逻辑载荷，不证明页分配、索引与文件回收；物理容量仍按两个预算判断。
 
+## 容量计数生产部署（真实流量，2026-11-05）
+
+前提：master `732d281` 合并了容量计数分支；12:47:01 停服务，`maintain bundle` 把 v13 库备份到 `~/tracery-backups/bundle-2026-11-05-before-v14`（7.0 GB，manifest 校验通过），`maintain precheck` 返回 `in_place`（db 13、code 14），12:47:35 `bun run service start`，pid 12084，7 秒进入服务。13:04:40 另一个会话重启部署 Hermes 修复 `3e2209e`，pid 69138；本节的 15 分钟窗口取重启前 pid 12084 的样本。
+
+合并提交上的自动化：`bun test` 1341 pass / 0 fail（118 个文件），`bun run typecheck` 退出 0，`verify:notes:range` 通过。
+
+| 检查 | 实测 |
+| --- | --- |
+| 迁移 | `PRAGMA user_version=14`，`integrity_check=ok`；v13 存量在启动事务内回填四源计数，没有执行 rebuild |
+| 启动对账 | 12:48:02 `capacity-check` `ok:true`；block 967,223,818 B / 244,201 行、request 1,507,090,592 B / 119,160 行、raw_hook 0 B / 47,121 行、raw_session_event 1,179,468,168 B / 214,385 行；四项 `byte_delta` 与 `row_delta` 全为 0 |
+| 实时对账 | 13:03:42 再次 `capacity-check` `ok:true`；block 248,956 行、request 121,203 行、raw_hook 47,439 行、raw_session_event 215,699 行，delta 仍为 0；计数随真实写入同步 |
+| 接口 | 部署后（pid 12084）`/api/metrics` 1.3–2.4 ms；`/api/stats` 冷计算 0.48–1.07 s，5 秒缓存内约 3 ms；部署前的 13.8 s / 57.7 s 不再出现。剩余时间花在 `metadataSnapshot` 的其它元数据聚合，不是四源正文扫描。13:04:29 起的 29 次补充探针跨越并发重启，28 次 200，1 次 000 出现在重启前 1 秒，不作为容量路径基线 |
+| 存储量测 | 监控窗口内 `storage_measure` 累计 248 次、max 6.7 ms；目录扫描、`statfs` 与四行计数之外的同步量测没有回到秒级 |
+| 15 分钟窗口 | 12:51、12:56、13:02 三个监控样本均为 `capacity_meter.ok=true`、source_count=4，body_bytes 从 3.661 GB 增至 3.682 GB；事件循环 p50 约 1.0 ms、p95 7–16 ms、p99 449–470 ms，滚动 max 从启动后的 6.69 s 降到 2.24 s。13:07 的样本已属于 pid 69138，`capacity_meter` 仍为 ok |
+| 告警 | 12:46:57 停机窗口读到旧实例缺 `capacity_meter` 字段，监控按设计告警；新实例首个样本后进入恢复窗口，13:07 写入 `recovered:capacity_meter` |
+
+13:10 的 `patrol weekly` 给出 `capacity_meter` ok、`body_budget` 3,511.9 MiB；同次 `body_ratio` 32.5% 与 `freelist` 11,952 页越界，前者是三源比例与四源预算的既定分界，后者与并发来源重置后的空闲页一致，都不是计数与全表的差异。`monitor inspect` 记录 2 个活动告警（事件循环 p99 与 max），容量计数已恢复。
+
+部署后仍保留的长尾与容量路径无关：`pruneRaw` 单事务、`enforceBodyBudget` 多批循环与 `shrinkStorage` 仍是不可抢占单元；`event_loop_p99` 仍高于 330 ms 告警线，本轮没有把它归因到单个任务。13:04:40 的并发重启同时执行了 Hermes 来源重置，13:10:05 在 pid 69138 上再次 `capacity-check` 仍为 `ok:true`、四项 delta 0；行数与 13:03 的序列不可直接比较。回滚必须先恢复 v13 bundle，v14 库不能被 v13 代码打开。
+
 ## 覆盖护栏（合成 + 生产真实流量，2026-11-04）
 
 前提：隔离 worktree `.codex-worktrees/atc-coverage-foundation` 的 `feat/coverage-foundation` 分支，基于 master `0f81367`。代码、测试与文档提交为 `c9485ed` 与 `d091502`，以 `--no-ff` 合并为 `073c329`；2026-11-04 18:22:09 用 `bun run service restart` 重启采集器，pid 13304，`service status` 显示 src 未落后。合成验收只进临时库；真实流量读数来自生产库只读查询与全量 `/api/ingest-metrics`，没有把正文、账号或令牌写入本记录。
