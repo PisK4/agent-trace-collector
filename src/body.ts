@@ -32,6 +32,16 @@ export type BodyInput = {
   redact_version: number;
 };
 
+/**
+ * 同一次写入事务里上一笔请求的块引用快照。
+ *
+ * 相邻调用的消息数组通常共享一长段前缀（适配器把同一批消息对象追加进新数组），
+ * 前缀块的字节完全相同。带上这份快照就能整段复制引用，省掉逐条序列化、哈希
+ * 和插入，而不改变落库结果。跨事务不能复用：行是否还在不做保证。
+ */
+export type BodyPrefix = { reqId: number; messages: readonly unknown[] };
+
+
 export const REDACT_VERSION = 1;
 
 /** request_block.role：0 user / 1 assistant / 2 system / 3 tool / 4 unknown。 */
@@ -89,11 +99,19 @@ function skeletonOf(body: BodyInput, items: RequestItems): Skeleton {
   };
 }
 
+/** 共享前缀按对象同一性计数：同一批里适配器复用同一批消息对象，比较不碰内容。 */
+function sharedMessagePrefix(previous: readonly unknown[], next: readonly unknown[]): number {
+  const limit = Math.min(previous.length, next.length);
+  let ord = 0;
+  while (ord < limit && previous[ord] === next[ord]) ord += 1;
+  return ord;
+}
+
 /**
  * 在调用方的 writer 事务里保存正文。块的插入、引用的替换、骨架与状态更新
  * 必须一起提交：任何一步失败都回滚，不能留下"看起来可用"的请求。
  */
-export function persistBodyTx(db: Database, reqId: number, body: BodyInput): void {
+export function persistBodyTx(db: Database, reqId: number, body: BodyInput, prefix?: BodyPrefix): void {
   const exists = db.query('SELECT req_id FROM request WHERE req_id=?').get(reqId);
   if (exists == null) throw new Error('body_request_missing');
 
@@ -112,9 +130,19 @@ export function persistBodyTx(db: Database, reqId: number, body: BodyInput): voi
   );
   const insertRef = db.query('INSERT INTO request_block(req_id,ord,role,block) VALUES (?,?,?,?)');
 
-  let blockBytes = skeletonZ.length;
-  const seen = new Map<number, number>();
-  for (let ord = 0; ord < (messages?.length ?? 0); ord++) {
+  // 同一批里相邻调用的消息数组共享前缀：前缀块的字节完全相同，整段复制引用
+  // 即可，不必逐条重复序列化、哈希与插入。prefix 来自本次事务里刚提交的请求，
+  // 引用行一定存在；跨事务不做复用。
+  const reused = messages === null || prefix === undefined
+    ? 0
+    : sharedMessagePrefix(prefix.messages, messages);
+  if (reused > 0) {
+    db.run(
+      'INSERT INTO request_block(req_id,ord,role,block) SELECT ?,ord,role,block FROM request_block WHERE req_id=? AND ord<?',
+      [reqId, prefix!.reqId, reused],
+    );
+  }
+  for (let ord = reused; ord < (messages?.length ?? 0); ord++) {
     const raw = serialize(messages![ord]);
     const hash = createHash('sha256').update(raw).digest();
     const fingerprint = fingerprintHash(messageFingerprint(messages![ord]));
@@ -127,14 +155,15 @@ export function persistBodyTx(db: Database, reqId: number, body: BodyInput): voi
       if (inserted == null) throw new Error('body_block_insert_failed');
       blockId = inserted.id;
     }
-    // 共享块只在本请求里计一次，body_bytes 表示这笔请求真正新增的存储量级。
-    if (!seen.has(blockId)) {
-      seen.set(blockId, raw.length);
-      const size = db.query<{ size: number }, [number]>('SELECT length(z) AS size FROM block WHERE id=?').get(blockId);
-      blockBytes += size?.size ?? 0;
-    }
     insertRef.run(reqId, ord, roleCode(messages![ord]), blockId);
   }
+
+  // 共享块只在本请求里计一次，body_bytes 表示这笔请求真正新增的存储量级。
+  const blockSum = db.query<{ bytes: number }, [number]>(`
+    SELECT COALESCE(SUM(length(b.z)),0) AS bytes
+    FROM (SELECT DISTINCT block FROM request_block WHERE req_id=?) AS d
+    JOIN block b ON b.id=d.block`).get(reqId);
+  const blockBytes = skeletonZ.length + (blockSum?.bytes ?? 0);
 
   db.run(
     `UPDATE request SET skeleton_z=?, body_state='available', body_prev_state=NULL,

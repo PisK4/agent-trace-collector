@@ -364,3 +364,46 @@ test('骨架损坏时分页返回空字段与未知协议，不拒绝整页', ()
     f.close();
   }
 });
+
+test('相邻调用共享消息前缀时整段复用块引用，结果与完整写入一致', () => {
+  const f = fixture();
+  try {
+    seedRequest(f.store, 1);
+    seedRequest(f.store, 2);
+    seedRequest(f.store, 3);
+    const first = [
+      { role: 'user', content: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'B' }] },
+    ];
+    const appended = { role: 'user', content: [{ type: 'text', text: 'C' }] };
+    const base: BodyInput = {
+      protocol: 'anthropic',
+      request: { messages: first },
+      reply: { id: 'msg_1', content: [{ type: 'text', text: 'B' }] },
+      redact_version: 1,
+    };
+    const next: BodyInput = {
+      ...base,
+      request: { messages: [first[0], first[1], appended] },
+      reply: { id: 'msg_2', content: [{ type: 'text', text: 'D' }] },
+    };
+    persistBody(f.store, 1, base);
+    // 复用只共享前两条对象引用；第三爻走正常写入。
+    f.store.write(db => persistBodyTx(db, 2, next, { reqId: 1, messages: first }));
+    persistBody(f.store, 3, next);
+
+    const refs = (id: number) => f.store.read.query(
+      'SELECT ord,role,block FROM request_block WHERE req_id=? ORDER BY ord',
+    ).all(id);
+    const meta = (id: number) => f.store.read.query(
+      'SELECT msg_count,body_bytes,parse_state,reply_state FROM request WHERE req_id=?',
+    ).get(id);
+    expect(refs(2)).toEqual(refs(3));
+    expect(meta(2)).toEqual(meta(3));
+    expect(restoreBody(f.store, 2)).toEqual(next);
+    expect(f.store.read.query('SELECT count(*) AS n FROM block').get()).toEqual({ n: 3 });
+  } finally {
+    f.close();
+  }
+});
+
