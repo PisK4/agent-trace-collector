@@ -632,8 +632,15 @@ export function buildReport(samples: Sample[], nowMs: number, thresholds = THRES
   if (samples.length === 0) return ['没有可用样本：检查监控任务是否在运行。'];
   const lines: string[] = [];
   const failed = samples.filter(sample => !sample.ok);
-  const restarts = samples.filter((sample, index) => index > 0
-    && sample.instance !== samples[index - 1]!.instance);
+  let previousInstance: string | null = null;
+  let knownSamples = 0;
+  let restarts = 0;
+  for (const sample of samples) {
+    if (!sample.ok || !sample.instance) continue;
+    knownSamples += 1;
+    if (previousInstance !== null && previousInstance !== sample.instance) restarts += 1;
+    previousInstance = sample.instance;
+  }
   const missing: number[] = [];
   for (let index = 1; index < samples.length; index += 1) {
     const gap = samples[index]!.ts_ms - samples[index - 1]!.ts_ms;
@@ -665,8 +672,10 @@ export function buildReport(samples: Sample[], nowMs: number, thresholds = THRES
     : `事件循环 p99 最高 ${Math.round(Math.max(...p99))} 毫秒，样本 ${loops.length} 个。`
       + (p99.some(value => value > thresholds.p99Ms) ? ' 有超过阈值的窗口。' : ''));
   lines.push(`派生队列峰值 ${maxPending} 组，最老排队 ${Math.round(maxAge / 1000)} 秒。`);
-  lines.push(restarts.length === 0 ? '进程实例未变化。'
-    : `进程实例变化 ${restarts.length} 次；实例变化后不跨进程做计数差。`);
+  lines.push(knownSamples === 0
+    ? '进程实例未知（没有成功且带标识的样本）。'
+    : restarts === 0 ? '进程实例未变化。'
+      : `进程实例变化 ${restarts} 次；实例变化后不跨进程做计数差。`);
   lines.push(storage === null ? '存储值未知（闸门尚未量测）。'
     : `正文 ${storage.body_bytes} 字节，总量 ${storage.total_bytes} 字节，可用 ${storage.free_bytes} 字节。`);
   lines.push(admission === null ? '准入模式 normal（无切换记录）。'

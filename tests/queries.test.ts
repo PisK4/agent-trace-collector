@@ -105,6 +105,54 @@ test('stats暴露游标、issue与正文状态分布', () => {
   }
 });
 
+test('stats正文分布与全量分组等价且不返回零计数组', () => {
+  const cases = [
+    [],
+    ['available', 'available'],
+    ['pending'],
+    ['available', 'evicted', 'partial', 'pending', 'summary', 'unsupported'],
+  ];
+  for (const states of cases) {
+    const f = fixture();
+    try {
+      insertRequests(f.store, 'synthetic-stats-states', states.length, false);
+      f.store.write(db => {
+        const rows = db.query('SELECT req_id FROM request ORDER BY req_id').all() as { req_id: number }[];
+        rows.forEach((row, index) => db.run(
+          'UPDATE request SET body_state=? WHERE req_id=?',
+          [states[index]!, row.req_id],
+        ));
+      });
+      const reference = f.store.read.query<{ state: string; count: number }, []>(`
+        SELECT body_state AS state, COUNT(*) AS count
+        FROM request GROUP BY body_state ORDER BY body_state`).all();
+      expect(getStats(f.store).body_states).toEqual(reference);
+    } finally { f.close(); }
+  }
+});
+
+test('stats正文分组只扫正文状态部分索引且不建临时分组B树', () => {
+  const f = fixture();
+  try {
+    insertRequests(f.store, JSON.stringify(['session', 'stats-plan']), 6, false);
+    const hook = captureReadQueries(f.store);
+    try {
+      getStats(f.store);
+    } finally {
+      hook.restore();
+    }
+    const group = hook.captured.find(c => c.sql.includes('GROUP BY body_state'));
+    if (group === undefined) throw new Error('group_query_not_captured');
+    const detail = explainPlan(f.store.read, group.sql, group.params);
+    expect(detail).toContain('USING COVERING INDEX i_req_body');
+    expect(detail).not.toContain('TEMP B-TREE');
+    // 覆盖索引扫描是允许的形式；不带索引的裸 SCAN request 不是。
+    expect(detail.split(' | ').some(line => line.trim() === 'SCAN request')).toBe(false);
+  } finally {
+    f.close();
+  }
+});
+
 test('请求列表查询计划命中会话时间索引', () => {
   const f = fixture();
   try {

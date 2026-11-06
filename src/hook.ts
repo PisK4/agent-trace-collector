@@ -412,9 +412,11 @@ export function markHookAbsent(store: Store, now: number): number {
   commitUnit(store, 'hook_absent', read => {
     // NOT EXISTS 而非 NOT IN：response_id_norm 为 NULL 的行在 NOT IN 下永远
     // 不命中；EXISTS 的等值比较对 NULL 两边都过滤，NULL 行自然放行为"无指向、可标注"。
+    // body_state!='available' 显式重述 i_req_body 的部分索引条件；SQLite 不自行从 body_state='pending' 推导它。
     const rows = read.query<{ req_id: number }, [number, number]>(`
       SELECT req_id FROM request
-      WHERE body_state='pending' AND (have & ${HAVE_BODY})=0 AND miss_reason IS NULL
+      WHERE body_state='pending' AND body_state!='available'
+        AND (have & ${HAVE_BODY})=0 AND miss_reason IS NULL
         AND started_ms < ?
         AND NOT EXISTS (SELECT 1 FROM pending_hook ph
           WHERE ph.response_id_norm = request.response_id_norm)

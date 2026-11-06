@@ -55,7 +55,7 @@ hook 其实到过。raw_hook 里 `a59f14a6`（00:10:17，success=0）恰在 6005
 - **动作**：只写 `miss_reason='hook_absent'`，不改 `body_state`。`body_state` 回答"正文现在在不在"（`src/store.ts` 的类型注释），`miss_reason` 回答"为什么没有"；正文确实没有，pending 仍是事实。判定依据按证据能力表述：等满阈值，仍没有任何 hook 证据关联到本请求，且等待关联队列中没有指向本行的候选。不宣称 hook 从未发生——生产库 47 笔孤儿 hook 证明这个断言会出错。`miss_reason` 已在列表行投影上（`src/queries/projection.ts`），store 落地后阅读器自动获得准确文案。
 - **阈值**：常量 `HOOK_ABSENT_THRESHOLD_MS`，默认 1 小时。依据：本会话正常 chat 请求实测最长约 129 秒，1 小时留了一个数量级余量。偏长的代价只是标签晚出现；偏短的代价是给仍在运行的超长请求写错误事实，违背"报告忠实"。
 - **合并时的原因对账**：`mergeHookInto()` 只迁移正文、正文引用与证据，原本不碰 `miss_reason`；现在合并事务内按合并后的正文现实对账一次：正文完整（`available`，无论迁移与否）→ `miss_reason=NULL`；否则取源行的 `miss_reason`——迁移了是源行正文自己的降级原因，未迁移时源行的降级原因仍是本行正文现实的最好描述，源行没有就清空。hook 证据已关联，"`hook_absent`"必为假，这一条规则在三种形态（迁移后 available、迁移后 partial、无骨架未迁移）下都把它解除。合并后 have 位已置（步骤 5 的 `have=have|HAVE_BODY`），守卫条件 2 保证不会重标，无震荡。
-- **每轮限额**：每轮最多 200 笔：先 SELECT 命中 id（按 `started_ms` 升序），再按 `IN (...)` UPDATE。部署首轮即清完积压；partial index（`WHERE body_state='pending'`）留待量级增长后再评估。
+- **每轮限额**：每轮最多 200 笔：先 SELECT 命中 id（按 `started_ms` 升序），再按 `IN (...)` UPDATE。候选显式包含 `body_state!='available'` 以使用现有部分索引，读取成本与后续评估见[首页查询扫描修复](2026-11-06-homepage-timeout-query-scans.md)。
 
 ### 评审决策点的落点
 
@@ -99,4 +99,4 @@ hook 其实到过。raw_hook 里 `a59f14a6`（00:10:17，success=0）恰在 6005
 
 误标仍在运行的超长请求的代价被控制在临时错标：阈值 1 小时起步偏保守，两条清除路径（直接命中、后台合并）把误标降为可自动解除的状态。若生产出现真实的超过 1 小时的 hook 迟到案例，上调 `HOOK_ABSENT_THRESHOLD_MS` 即可。rejected 行也被标注，是接受的一点噪音（它们永远不会拿到 hook，标注不会解除）。
 
-每轮守卫的 SELECT 按 `body_state='pending'` 过滤，现有部分索引可服务；当前量级（两位数）无压力，量级增长后需评估 partial index。对账 UPDATE 在每次后台合并生效，不只为带标注的行：无标注时多数是同值写，代价可忽略。
+每轮守卫的 SELECT 显式匹配 `i_req_body` 的部分索引条件；输出上限不限制读取工作量，性能回归同时覆盖空命中与满批。对账 UPDATE 在每次后台合并生效，不只为带标注的行。候选回表与排序仍可能随 pending 历史增长，评估见[首页查询扫描修复](2026-11-06-homepage-timeout-query-scans.md)。

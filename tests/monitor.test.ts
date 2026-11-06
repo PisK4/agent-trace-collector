@@ -205,6 +205,19 @@ test('报告标出采样中断与进程实例变化，不跨进程做计数差',
   expect(lines.join('\n')).toContain('不跨进程');
 });
 
+test('失败样本不冒充实例变化，跨失败间隔仍识别真实变化', () => {
+  const a = sample(NOW - 2 * MINUTE);
+  const failed = { ...sample(NOW - MINUTE, {}, false), instance: null };
+  const same = sample(NOW);
+  expect(buildReport([a, failed, same], NOW).join('\n'))
+    .toContain('进程实例未变化');
+  const b = { ...same, instance: 'proc-b' };
+  expect(buildReport([a, failed, b], NOW).join('\n'))
+    .toContain('进程实例变化 1 次');
+  expect(buildReport([failed], NOW).join('\n'))
+    .toContain('进程实例未知');
+});
+
 test('报告的存储与准入取窗口内最新值', () => {
   const old = sample(NOW - 10 * MINUTE, {
     storage: { body_bytes: 1, db_bytes: 2, wal_bytes: 0, total_bytes: 3, free_bytes: 4 },

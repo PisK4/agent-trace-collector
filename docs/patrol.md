@@ -115,7 +115,9 @@ mount | grep atc-cap || echo 'no temp mount'
 
 **C4 动查询、分页、时间窗口**
 
-先跑 `bun run patrol smoke`，再加跨会话游标探测：
+先从实际函数调用捕获 SQL，核对 `EXPLAIN QUERY PLAN` 的索引与回表范围；`LIMIT` 只限制输出，空命中也要测候选准备工作。后台候选与 stats 聚合改动同时跑合成宽行实验，分别覆盖零候选、满批与强制重算，做法与门槛见[查询扫描修复](../.agents/notes/implemented/bug-fix/2026-11-06-homepage-timeout-query-scans.md)。单测守查询计划，显式实验记录最慢同步单元，不把 writer 提交耗时当准备查询耗时。
+
+再跑 `bun run patrol smoke`，需要验证分页时加跨会话游标探测：
 
 ```bash
 BASE=http://127.0.0.1:8320
@@ -130,7 +132,7 @@ curl -s -o /dev/null -w 'cross_conv %{http_code}\n' -G -H "Authorization: Bearer
   --data-urlencode "cursor=$CUR" --data "limit=1" --data "direction=forward" "$BASE/api/sessions/$EB/requests"
 ```
 
-判定：跨会话复用游标应为 4xx（当前 200，F40 未修的已知基线）；同一会话翻页不出现漏行或重复；`limit` 越界返回 400。游标为空时命令会退回首页并返回 200，先确认 `CUR` 非空；会话被合并或改写 `started_ms` 时会天然出现跨页错位，属 F40 本体。证据：第 5 轮 F40、F41；第 1 轮 F15（改动查询时用 `EXPLAIN QUERY PLAN` 复验 `session_usage`）。
+判定：跨会话复用游标必须为 400；同一会话翻页不出现漏行或重复；`limit` 越界返回 400。游标为空时命令会退回首页并返回 200，先确认 `CUR` 非空；会话被合并或改写 `started_ms` 时会天然出现跨页错位，属 F40 本体。证据：第 5 轮 F40、F41；第 1 轮 F15（改动查询时用 `EXPLAIN QUERY PLAN` 复验 `session_usage`）。
 
 **C5 动生命周期、关闭路径**
 
@@ -182,7 +184,7 @@ rm -rf "$TMP"
 前置：只读。生产库 $HOME/Library/Application Support/tracery/trace.db；不写、不重启、不 kill 生产进程；不读真实请求正文与令牌明文。
 
 1. 门禁：按根 AGENTS.md「命令」一节跑类型检查、测试、note 两项；任一非 0 立即停。
-2. 跑 bun run patrol smoke；limit=0/201/1.5、direction=sideways、body?from=1e20、%ZZ 路径逐项看状态码；越界项记录，F41 的 200、F20 的 500 与 `limit=201` 的 200 都记作 info，不另立 finding。
+2. 跑 bun run patrol smoke；limit=0/201/1.5、direction=sideways、body?from=1e20、%ZZ 路径逐项看状态码，均应为 400；任何不符都记录为 over，不沿用历史返回码豁免。
 3. 跑 bun run patrol weekly --if-due；未到期只打印一行并退出 0，到期则写入本期快照并与上一期比较（首次显示「无上期可比」）；把整段输出贴进周报。
 4. 需要进程内指标时跑 bun scripts/monitor.ts inspect；它的规则是权威口径，不要用本文或记忆里的数字另立标准。
 5. 动到 schema、保留层、摄入、查询、生命周期时，按 C1–C5 对应项加跑；临时目录或 ≤300 MB 镜像，结束卸载并 rm，确认 mount 无残留。
