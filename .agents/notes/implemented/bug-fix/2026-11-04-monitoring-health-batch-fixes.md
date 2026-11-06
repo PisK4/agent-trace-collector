@@ -37,7 +37,7 @@ Status: implemented
 
 **派生失败进结构化诊断（fix(derive)）。** 轮失败的错误码在 derive 边界归一：SQLite 锁冲突映射 `database_locked` / `table_locked`，其余走通用分类；`onRound` 的 failure 事件同时写 `kind:"error"`、`op:"derive.run"`（按 op+code 限流），巡检按错误计数找 Worker 失败不再漏掉整轮丢弃。
 
-**F26 后续：跨组子查询定死 title 侧驱动（fix(sessions)，同日追加）。** 部署后复采发现会话列表仍慢（原始 SQL 75 ms），归因到候选①的风险预言成真：参与链指纹随流量增长，短路守卫对每个真实会话组都放行，而跨组子查询由 qt（全部 current 组，1,310 个）驱动、按组反查 title 行——成本是 O(current 组数) × 页内指纹会话数，页内 4 组指纹即 47 ms 增量，模拟页内 50 组指纹 367 ms。修法用 SQLite 的 `CROSS JOIN`（唯一能定死连接次序的内连接写法）让 t 侧先驱动：指纹部分索引只有 161 行非空、title 行是少数，qt 退为主键回查。同状态 75 → 14.7 ms，模拟态 367 → 6.9 ms，1,310 个会话标题与 flags 逐条差异 0；成本不再随指纹覆盖增长。
+**F26 后续：跨组子查询定死 title 侧驱动（fix(sessions)，同日追加）。** 部署后复采发现会话列表仍慢（原始 SQL 75 ms），归因到候选①的风险预言成真：参与链指纹随流量增长，短路守卫对每个真实会话组都放行，而跨组子查询由 qt（全部 current 组，1,310 个）驱动、按组反查 title 行——成本是 O(current 组数) × 页内指纹会话数，页内 4 组指纹即 47 ms 增量，模拟页内 50 组指纹 367 ms。修法用 SQLite 的 `CROSS JOIN`（唯一能定死连接次序的内连接写法）让 t 侧先驱动：指纹部分索引只有 161 行非空、title 行是少数，qt 退为主键回查。同状态 75 → 14.7 ms，模拟态 367 → 6.9 ms，1,310 个会话标题与 flags 逐条差异 0。该测量覆盖当时 161 条非空指纹；`t` 仍按全局非空指纹范围查找，增长后的成本不能由这次测量保证。后续有界复核见[生产回归](../../../../docs/acceptance.md#首页超时修复部署与回归真实生产2026-11-06)。
 
 **会话列表并发（fix(http) + fix(web)）。** 服务端同 key（`limit`+`cursor` 的 search 串）单飞：迟来的请求 `await` 同一个在途 Promise，只付一次聚合；Promise 永不 reject——参数错误也走共享 rejection、由各请求的外层错误映射出 400，等待者不挂起；响应完成立即出表，不做跨请求缓存，live 字段（60 秒活跃窗）每次执行现算。前端 `reader-store` 的 `sessionsLoading` 布尔闸门改成 `sessionsInflight` Promise 共享：同 tab 并发调用等待同一结果而不是被静默丢弃。跨 tab 的放大只能靠服务端单飞兜住，这与核查记录 F29 的判断一致。
 

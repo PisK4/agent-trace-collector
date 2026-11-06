@@ -1,6 +1,6 @@
 # 首页超时修复实施计划
 
-> **For agentic workers:** 使用当前可用的 subagent 分工实施，主 Agent 逐项审查后整合。Task 1、Task 2、Task 3 可由不同 subagent 并行，只编辑各自代码和测试；共享 note 与 Git 暂存、提交由主 Agent 串行处理。Task 4、Task 5、Task 6 由主 Agent 串行完成。执行步骤用复选框跟踪。用户已授权实施。代码与合成回归完成，主 Agent 正在收尾文档和部署准备；生产结果归验收记录。Task 1–3 整合为同一修复提交，共享 note 由主 Agent 统一维护。
+> **For agentic workers:** 使用当前可用的 subagent 分工实施，主 Agent 逐项审查后整合。Task 1、Task 2、Task 3 可由不同 subagent 并行，只编辑各自代码和测试；共享 note 与 Git 暂存、提交由主 Agent 串行处理。Task 4、Task 5、Task 6 由主 Agent 串行完成。执行步骤用复选框跟踪。用户已授权实施。代码与合成回归完成，`61c14be` 已合并 `285ac99` 并部署；生产窗口显示部分改善，整体性能门槛尚未通过，待办保持开放。结果归[验收记录](../../acceptance.md#首页超时修复部署与回归真实生产2026-11-06)。Task 1–3 整合为同一修复提交，共享 note 由主 Agent 统一维护。
 
 **Goal:** 消除已确认的 pending 历史范围扫描和 stats 宽表聚合，修正监控的实例变化误计，并用合成负载与生产持续窗口验证首页可用性。
 
@@ -277,9 +277,9 @@ git diff --cached --check
 
 ### 部署前与停服窗口
 
-- [ ] 沿用已记录的 145 次采样/69 失败、主页 15–20 秒超时基线。部署前只再确认主检出、待发布 SHA、src 是否一致、launchd pid 与运行入口，不重跑原始重查询或全库 integrity_check。
-- [ ] 用只读连接确认生产 schema=14，候选 hook SELECT 计划使用 i_req_body，stats 非 available 分组使用覆盖索引。最多计时三次候选新查询，记录与合成实验的差别；不输出真实 ID 或正文，不执行 ANALYZE/optimize/建索引。
-- [ ] 在仍为旧生产代码的主检出下预检并停服；若在合并前做停服准备，代码合并只在停服后进行，避免服务中途装入新 Worker 或模块。候选回归通过后才进入这个窗口。
+- [x] 沿用已记录的 145 次采样/69 失败、主页 15–20 秒超时基线。部署前只再确认主检出、待发布 SHA、src 是否一致、launchd pid 与运行入口，不重跑原始重查询或全库 integrity_check。
+- [x] 用只读连接确认生产 schema=14，候选 hook SELECT 计划使用 i_req_body，stats 非 available 分组使用覆盖索引。最多计时三次候选新查询，记录与合成实验的差别；不输出真实 ID 或正文，不执行 ANALYZE/optimize/建索引。
+- [x] 在仍为旧生产代码的主检出下预检并停服；若在合并前做停服准备，代码合并只在停服后进行，避免服务中途装入新 Worker 或模块。候选回归通过后才进入这个窗口。
 
 ```sh
 ATC_DATA_DIR="$HOME/Library/Application Support/tracery"
@@ -289,7 +289,7 @@ bun run service stop
 
 precheck 必须 `ok:true`、`state:in_place`、db/code 均为 14；stop 必须确认作业消失、端口释放。失败则停止发布，不使用 kill。
 
-- [ ] 在数据目录外制作新的 0700 私有备份父目录；bundle 目标必须尚不存在。备份包含数据库、盐与 manifest，生成后检查权限和 manifest，不打印盐。路径保存在本机验收材料中，不提交备份内容：
+- [x] 在数据目录外制作新的 0700 私有备份父目录；bundle 目标必须尚不存在。备份包含数据库、盐与 manifest，生成后检查权限和 manifest，不打印盐。路径保存在本机验收材料中，不提交备份内容：
 
 ```sh
 ATC_BACKUP_PARENT="$(mktemp -d "$HOME/Library/Application Support/tracery-homepage-20261106.XXXXXX")"
@@ -298,7 +298,7 @@ bun run maintain bundle --dir "$ATC_DATA_DIR" --out "$ATC_BACKUP_PARENT/bundle"
 
 备份失败时确认主检出 src 仍为发布前版本，再按手册启动旧服务，记录停服时段；不带着失败备份继续发布。没有删备份的收尾动作。
 
-- [ ] 在停服期间完成已验证实现的 `--no-ff` 合并，记录 merge SHA；再次 precheck，确认 schema 仍为 14，然后只调用一次 start：
+- [x] 在停服期间完成已验证实现的 `--no-ff` 合并，记录 merge SHA；再次 precheck，确认 schema 仍为 14，然后只调用一次 start：
 
 ```sh
 bun run maintain precheck --db "$ATC_DATA_DIR/trace.db"
@@ -326,9 +326,9 @@ readiness 失败、返回非预期 schema、启动退出或发生数据/输出�
 
 ### 15 分钟窗口
 
-- [ ] start/readiness 完成后记录 `pid`、`instance`、发布 SHA、窗口起点和启动阶段的 loop/jobs 数值。稳定窗口至少 15 分钟；任一失败或自然流量不足时延长至 30 分钟，不能用重试覆盖首次失败。
-- [ ] 使用仓库外受限脚本，每 15 秒启动一轮，顺序 GET `/`、`/api/metrics`、`/api/stats`、`/api/sessions?limit=10`。每次独立超时 5 秒，不重叠堆积轮次；轮次超过 15 秒则跳过到下一轮，不追赶补发。记录每个端点实际尝试数、成功数、错误分类、状态码与 min/p50/p95/max。
-- [ ] 脚本只在内存中从 read.token 生成认证头，禁用代理；不打印认证头、完整响应、真实会话键、ID 或正文。读取 metrics 后只保留允许列表指标；sessions 仅保留列表条数、响应大小与耗时。
+- [x] start/readiness 完成后记录 `pid`、`instance`、发布 SHA、窗口起点和启动阶段的 loop/jobs 数值。稳定窗口至少 15 分钟；任一失败或自然流量不足时延长至 30 分钟，不能用重试覆盖首次失败。
+- [x] 使用仓库外受限脚本，每 15 秒启动一轮，顺序 GET `/`、`/api/metrics`、`/api/stats`、`/api/sessions?limit=10`。每次独立超时 5 秒，不重叠堆积轮次；轮次超过 15 秒则跳过到下一轮，不追赶补发。记录每个端点实际尝试数、成功数、错误分类、状态码与 min/p50/p95/max。
+- [x] 脚本只在内存中从 read.token 生成认证头，禁用代理；不打印认证头、完整响应、真实会话键、ID 或正文。读取 metrics 后只保留允许列表指标；sessions 仅保留列表条数、响应大小与耗时。
 
 以下是本次建议的发布门槛，不是对 monitor 现有阈值的修改：
 
@@ -346,12 +346,12 @@ readiness 失败、返回非预期 schema、启动退出或发生数据/输出�
 
 ### monitor、契约与浏览器
 
-- [ ] 读取现有后台 monitor 的真实样本，稳定窗口内至少覆盖 3 个成功样本，不通过临时密集采样伪造后台连续性。必要时延长窗口；monitor 的 15 分钟恢复计时从第一次无命中判定开始，和 HTTP 窗口分别记录。
-- [ ] 执行 `bun scripts/monitor.ts inspect`、`bun scripts/monitor.ts report --days 1`。日报历史失败仍应保留，不能要求发布后 24 小时失败数归零；验证失败样本不再被算成实例变化。
+- [x] 读取现有后台 monitor 的真实样本，稳定窗口内至少覆盖 3 个成功样本，不通过临时密集采样伪造后台连续性。必要时延长窗口；monitor 的 15 分钟恢复计时从第一次无命中判定开始，和 HTTP 窗口分别记录。
+- [x] 执行 `bun scripts/monitor.ts inspect`、`bun scripts/monitor.ts report --days 1`。日报历史失败仍应保留，不能要求发布后 24 小时失败数归零；验证失败样本不再被算成实例变化。
 - [ ] 确认 `service_unreadable`、`event_loop_max` 按既有恢复规则得到 recovered。15 分钟时仍在恢复等待则延长观察；其他既有告警逐项说明，不能写成全部正常。
-- [ ] 运行一次 `bun run patrol smoke`。六项均须按当前契约为 ok；不沿用旧文档里 F40/F41 的 200 基线。`weekly --if-due` 可报告本周跳过，但跳过不计为验收通过；本批不改摄入映射、schema 或容量策略，不为收尾强跑 dbstat/raw 属性全扫。
-- [ ] 使用 ego-browser 进行真实页面验收：主页连续重新打开三次；打开一个合并来源会话与一个纯本地会话；翻页、打开一条正文和右栏证据，再切回列表。记录首屏可用时间、HTTP 失败和浏览器错误，不把真实内容写进报告。若浏览器不可用，HTTP 验证继续，但页面验收明确未完成。
-- [ ] 整理最后状态：合成结果、部署停服时段与备份位置、HTTP 窗口、自然流量覆盖、monitor 恢复、页面操作及未通过项分别记录进验收文档。故障恢复、性能达标、自然流量覆盖和历史数据完整性不得相互替代。
+- [x] 运行一次 `bun run patrol smoke`。六项均须按当前契约为 ok；不沿用旧文档里 F40/F41 的 200 基线。`weekly --if-due` 可报告本周跳过，但跳过不计为验收通过；本批不改摄入映射、schema 或容量策略，不为收尾强跑 dbstat/raw 属性全扫。
+- [x] 使用 ego-browser 进行真实页面验收：主页连续重新打开三次；打开一个合并来源会话与一个纯本地会话；翻页、打开一条正文和右栏证据，再切回列表。记录首屏可用时间、HTTP 失败和浏览器错误，不把真实内容写进报告。若浏览器不可用，HTTP 验证继续，但页面验收明确未完成。
+- [x] 整理最后状态：合成结果、部署停服时段与备份位置、HTTP 窗口、自然流量覆盖、monitor 恢复、页面操作及未通过项分别记录进验收文档。故障恢复、性能达标、自然流量覆盖和历史数据完整性不得相互替代。
 - [ ] 合成与生产门槛通过后，任务才标完成；仅部分改善则保留待办和下一步归因。确认本轮 worktree 没有未提交文件后移除目录，保留实现分支名；不删除生产 bundle。
 
 ## 计划自检
