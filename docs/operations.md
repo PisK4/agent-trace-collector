@@ -44,6 +44,8 @@ bun run service restart    # kickstart -k，等到新 pid 可用
 
 服务条目按 plist 的 `ProgramArguments` 认本检出的 `src/main.ts`，不按 label 猜。在 worktree 里跑时找不到就报 `service_not_managed`，不会操作另一份检出的服务。脚本读 plist 的 `EnvironmentVariables` 决定数据目录，不读调用者的 shell 环境。
 
+plist 的 `ProcessType` 必须是 `Standard`（或省略），不要写成 `Background`：后者把整条进程按后台任务调度，同一份派生代码会慢约 4 倍，而日志里的 `compute_ms` 只会显示变慢、看不出原因。来由见[派生链前驱匹配的三次方开销与 launchd 后台调度](../.agents/notes/implemented/bug-fix/2026-11-06-derive-chain-match-cubic.md)。
+
 plist 的 `ProgramArguments[0]` 指向 `~/.local/libexec/tracery`，一份 bun 二进制的硬链接；系统界面按可执行文件名显示进程。链接与源文件共享 inode，不占额外空间。bun 升级换掉源文件后链接仍指向旧版本，升级之后重建：
 
 ```sh
