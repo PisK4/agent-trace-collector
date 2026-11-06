@@ -17,6 +17,7 @@ import {
 } from '../../evidence';
 import { localDay, modelTimeTitle } from '../../format';
 import { persistBodyTx } from '../../body';
+import type { BodyPrefix } from '../../body';
 import { findRequestOwnerTx } from '../../owner';
 import { markRequestInputTx } from '../../derive/state';
 import { emptySourceFacts, readSourceFacts, serializeFacts } from '../facts';
@@ -76,11 +77,17 @@ function bodyOf(adapter: SessionAdapter, call: SessionCall): {
   return { protocol: adapter.bodyProtocol, request, reply };
 }
 
-function persistSessionBodyTx(db: Database, reqId: number, adapter: SessionAdapter, call: SessionCall): void {
+function persistSessionBodyTx(
+  db: Database,
+  reqId: number,
+  adapter: SessionAdapter,
+  call: SessionCall,
+  prefix?: BodyPrefix,
+): void {
   persistBodyTx(db, reqId, {
     ...bodyOf(adapter, call),
     redact_version: PRIVACY_TRANSFORM_VERSION,
-  });
+  }, prefix);
 }
 
 function insertSessionRequestTx(
@@ -232,7 +239,8 @@ function ingestCallTx(
   generation: string,
   offset: number,
   now: number,
-): 'inserted' | 'merged' {
+  prefix?: BodyPrefix,
+): number | 'merged' {
   const owner = findRequestOwnerTx(db, {
     responseIdNorm: call.responseIdNorm,
     turnRef: call.turnRef,
@@ -253,8 +261,8 @@ function ingestCallTx(
   const reqId = insertSessionRequestTx(db, adapter, call, generation, offset, now);
   insertEvidenceTx(db, reqId, adapter.evidenceKind, refKey, 'merged',
     owner.outcome === 'ambiguous' ? MATCH_AMBIGUOUS : MATCH_ABSENT, now);
-  persistSessionBodyTx(db, reqId, adapter, call);
-  return 'inserted';
+  persistSessionBodyTx(db, reqId, adapter, call, prefix);
+  return reqId;
 }
 
 /** 脱敏后的整行原文：对象按脱敏后的 JSON 存，无法解析的行按字符串替换敏感片段。 */
@@ -336,6 +344,9 @@ export async function ingestSessionFile(
       }
     }
 
+    // 同一批内每个会话最近一次落库的正文快照：相邻调用的消息数组共享前缀，
+    // 下一笔直接复制块引用，避免 O(调用数 × 历史消息数) 的重复序列化与插入。
+    const bodyPrefixes = new Map<string, BodyPrefix>();
     const acceptCall = (call: SessionCall, lineOffset: number, rawChanged: boolean): void => {
       const refKey = evidenceRef(call);
       const owned = db.query<{ req_id: number }, [string, string]>(
@@ -346,13 +357,21 @@ export async function ingestSessionFile(
         if (adapter.mutable && (rawChanged || adapter.refreshOnDuplicate === true)) {
           refreshSessionCallTx(db, adapter, owned.req_id, call, read.generation, lineOffset, now);
           result.refreshed += 1;
+          // 正文被原地重写后，旧快照的前缀块不再与这条会话对应。
+          bodyPrefixes.delete(call.convKey);
         }
         return;
       }
-      if (ingestCallTx(db, adapter, call, read.generation, lineOffset, now) === 'merged') {
+      const persisted = ingestCallTx(
+        db, adapter, call, read.generation, lineOffset, now, bodyPrefixes.get(call.convKey),
+      );
+      if (persisted === 'merged') {
         result.merged += 1;
       } else {
         result.calls += 1;
+        if (call.requestMessages !== undefined) {
+          bodyPrefixes.set(call.convKey, { reqId: persisted, messages: call.requestMessages });
+        }
       }
     };
 
