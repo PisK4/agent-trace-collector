@@ -32,7 +32,7 @@ Status: implemented
 
 **读路径提速（perf(stats)）。** 两个决定：
 
-- `getStats` 按**写世代**缓存：`store.writeStats.count` 不变就直接复用上一次结果。所有写都经 `store.write` 计数、维护命令要求停服，世代不变就没有任何聚合会变——比短 TTL 缓存多两层好处：零陈旧、探针在安静期也不再付冷页成本。
+- `getStats` 按写世代缓存，世代变化立即重算；同世代还受 5 秒 TTL 约束，避免进程外写入长期不可见。正文状态聚合的读取成本与实例报告缺失标识的处理见[首页查询扫描修复](2026-11-06-homepage-timeout-query-scans.md)。
 - `/api/ingest-metrics` 的存储改用准入闸门最近一次量测（与轻量端点同源），无闸门的容量实验环境退回现算；响应新增 `storage_measured_at_ms` 标新鲜度。全量求和每次 111–190 ms，是探针按需拉本端点时事件循环长尾的直接来源。
 
 **派生失败进结构化诊断（fix(derive)）。** 轮失败的错误码在 derive 边界归一：SQLite 锁冲突映射 `database_locked` / `table_locked`，其余走通用分类；`onRound` 的 failure 事件同时写 `kind:"error"`、`op:"derive.run"`（按 op+code 限流），巡检按错误计数找 Worker 失败不再漏掉整轮丢弃。

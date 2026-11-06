@@ -1265,6 +1265,8 @@ droid 行在落库时由转录重建正文，正常为 `available`；行建好�
 | `GET /api/requests/:id/route` | 路由决策与尝试链，来自 `route_summary` | 无 |
 | `GET /api/stats` | 体积、覆盖位统计、健康状态、探针结果、存储准入 | 无 |
 
+stats 在同一个只读事务内通过窄索引计总请求数，通过 `i_req_body` 覆盖索引分组统计非 available 状态；available 数量由两者相减得到，只输出非零状态并按状态名排序。缓存按进程内写世代失效，进程外写入由 5 秒 TTL 约束陈旧时间。
+
 列表接口不返回骨架。会话内 1,825 笔的列表，每笔骨架 9.5 KB，全取就是 17 MB，列表只返回 `req_id`、时间、状态、模型、四个读数、标题、`have`、`body_state`、`via`。
 
 会话列表分两阶段在同一个只读事务里读：先沿 `i_req_session_time` 覆盖索引取会话键与真实最近请求时间，排序取 `limit + 1` 个候选，游标条件应用在分组之后；再以页内会话键的 `IN` 列表复用标题、计数、agents 与 flags 聚合，多取的一条只判断续页。页外会话不参与宽字段计算，列表读取不触碰正文。来由见[会话列表按页聚合与首屏剩余延迟](../.agents/notes/implemented/bug-fix/2026-11-01-session-list-query.md)。

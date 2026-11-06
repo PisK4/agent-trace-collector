@@ -137,7 +137,8 @@
 - 证据：2026-11-05 F12（`88022f0`）在 `measureBodyBytesChunked` 为 WITHOUT ROWID 表加入整表求和，2 KiB 用例通过，生产同项只读实测 8.06 s；既有性能测试的 block/骨架仅 64 B/32 B，未覆盖 GiB 级载荷。`pruneRawBounded` 的 200 ms 判断也在单批返回后，生产单批 raw_prune 写事务曾到 29.4 s。评估与防护见[容量计数与主线程阻塞回归](implemented/bug-fix/2026-11-05-capacity-meter-main-thread-regression.md)。
 - 防护：每个新增表检查 INSERT/UPDATE/DELETE 与在线全部消费方；性能回归覆盖实际 timer/HTTP 装配、空命中和触顶命中、大行与真实字节规模。单独记录 max 同步耗时；没有 rowid 时检查复合主键分页或改变执行位置，不允许默认为整表快查。
 - 同日复现：容量计数正常后，生产 `raw_prune` 最长写事务仍到 156.9 s。主审发现准备阶段批量取 TEXT 长度会重读大载荷，准备超过预算后先退出又会永久不推进；应同时验证候选准备与首批进展。修复与 GiB 验收见[保留清理边界](implemented/bug-fix/2026-11-05-retention-batch-bounds-and-disk-target.md)。
-- Seen 1× (2026-11-05).
+- 再次复现：2026-11-06 pending 累计约 8 小时，writer.pending 与 writer.hook_absent 合计不足 1 秒；准备 SELECT 每轮沿时间索引回表，LIMIT 200 不限制空命中的历史扫描。实际 SQL 计划与宽行回归见[首页查询扫描修复](implemented/bug-fix/2026-11-06-homepage-timeout-query-scans.md)。
+- Seen 2× (2026-11-05, 2026-11-06).
 
 **页面来源文案按行上的 agent 派生，不按第一个接入来源写死。**
 - 证据：2026-11-05 Hermes 人工走查发现右栏身份行、路由页与证据结论把 `via='session'` 一律写成「droid 会话文件」与回调路径解释；Hermes 本地行被标错来源。`grep droid` 正好只有这些文案点，库内对账全对，页面却错。修复见[会话文件来源标签 note](implemented/bug-fix/2026-11-05-session-source-tag.md)。

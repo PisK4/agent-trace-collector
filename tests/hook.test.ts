@@ -384,6 +384,30 @@ test('超龄无hook证据的行标注hook_absent，body_state保持pending', () 
   } finally { f.close(); }
 });
 
+test('无候选时缺席查询仍使用pending部分索引', () => {
+  const f = fixture();
+  const original = f.store.read.query;
+  let sql = '';
+  try {
+    seedLedgerRow(f, 1, 'old', AGED, { missReason: 'hook_absent' });
+    const query = original.bind(f.store.read);
+    f.store.read.query = ((text: string) => {
+      sql = text;
+      return query(text);
+    }) as typeof original;
+    expect(markHookAbsent(f.store, NOW)).toBe(0);
+    f.store.read.query = original;
+    const plan = f.store.read.query(`EXPLAIN QUERY PLAN ${sql}`)
+      .all(NOW - HOOK_ABSENT_THRESHOLD_MS, 200)
+      .map(row => (row as { detail: string }).detail).join('\n');
+    expect(plan).toContain('i_req_body');
+    expect(plan).not.toContain('i_req_time');
+  } finally {
+    f.store.read.query = original;
+    f.close();
+  }
+});
+
 test('等待关联队列指向本行时不标注，合并完成后不残留', () => {
   const f = fixture();
   try {

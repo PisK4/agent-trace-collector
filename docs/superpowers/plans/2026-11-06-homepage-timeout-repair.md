@@ -1,6 +1,6 @@
 # 首页超时修复实施计划
 
-> **For agentic workers:** 使用当前可用的 subagent 分工实施，主 Agent 逐项审查后整合。Task 1、Task 2、Task 3 可由不同 subagent 并行，只编辑各自代码和测试；共享 note 与 Git 暂存、提交由主 Agent 串行处理。Task 4、Task 5、Task 6 由主 Agent 串行完成。执行步骤用复选框跟踪。当前只完成规划，不执行代码修改、Git 提交、合并或生产部署。
+> **For agentic workers:** 使用当前可用的 subagent 分工实施，主 Agent 逐项审查后整合。Task 1、Task 2、Task 3 可由不同 subagent 并行，只编辑各自代码和测试；共享 note 与 Git 暂存、提交由主 Agent 串行处理。Task 4、Task 5、Task 6 由主 Agent 串行完成。执行步骤用复选框跟踪。用户已授权实施。代码与合成回归完成，主 Agent 正在收尾文档和部署准备；生产结果归验收记录。Task 1–3 整合为同一修复提交，共享 note 由主 Agent 统一维护。
 
 **Goal:** 消除已确认的 pending 历史范围扫描和 stats 宽表聚合，修正监控的实例变化误计，并用合成负载与生产持续窗口验证首页可用性。
 
@@ -18,7 +18,7 @@
 - 每个行为变更只跑能对该回归失败的最窄测试，提交前不重复已经通过的检查；全量套件与平台矩阵留给显式动作。
 - 实现在仓库上级 `.codex-worktrees/atc-homepage-timeouts` 的 `fix/homepage-timeouts` 分支进行；master 只以 `--no-ff` 合并实现，合并后移除 worktree 目录、保留分支名。
 - 这批首选方案保持 schema v14，以及 PURPOSE、GROUP、DERIVE 版本不变。不运行 rebuild、reparse、reset-source、capacity-recount 或 F09/F24 的存量订正。
-- 本计划中的 Git 提交、合并与服务变更属于后续实施阶段；本次规划不执行这些动作。用户授权实施时，应明确是否包含提交、合并和生产部署；已经明确授权的动作不重复询问。
+- 用户通过开始落地授权执行本计划的实现提交、合并和生产部署；不包含 push、恢复覆盖或历史数据订正。
 
 ### 修复取舍
 
@@ -41,7 +41,7 @@ stats 使用总请求数减去非 available 计数得到 available 数量。总�
 | `scripts/monitor.ts` | 仅根据成功且有实例标识的样本统计实例变化 |
 | `tests/monitor.test.ts` | 失败间隔不冒充重启、跨失败间隔的真实实例变化仍可见 |
 | `scripts/perf-pending-stats.ts` | 新增显式合成宽行实验；不连接生产、不加入默认测试套件 |
-| `.agents/notes/proposed/bug-fix/2026-11-06-homepage-timeout-query-scans.md` | 实施前记录取舍；合并时转为 implemented，并与原决策互链 |
+| `.agents/notes/implemented/bug-fix/2026-11-06-homepage-timeout-query-scans.md` | 实施前记录取舍；合并时转为 implemented，并与原决策互链 |
 | `docs/architecture-design.md` | 只补正文状态统计读取方式的现行事实 |
 | `docs/patrol.md` | 补查询改动时的空命中与宽行性能回归要求，不复制阈值 |
 | `docs/acceptance.md` | 追加合成、部署、真实流量和未覆盖项，保留排查历史 |
@@ -53,7 +53,7 @@ stats 使用总请求数减去非 available 计数得到 available 数量。总�
 
 **Interfaces:** 保持 `markHookAbsent(store: Store, now: number): number` 和 `reconcilePending` 的签名与返回值不变。候选仍按 started_ms 升序，每轮最多更新 200 行，NOT EXISTS 的 NULL 语义不变。
 
-- [ ] 进入实施时，先处理主检出中的本轮验收记录与本计划；获得提交授权后定向提交这些文档，再从当前 master 建实现 worktree。不得把其他会话文件混入提交。新 worktree 依赖按既有[工作规则](../../../.agents/notes/implemented/process/2026-10-28-implementation-worktree.md)处理。
+- [x] 进入实施时，先处理主检出中的本轮验收记录与本计划；获得提交授权后定向提交这些文档，再从当前 master 建实现 worktree。不得把其他会话文件混入提交。新 worktree 依赖按既有[工作规则](../../../.agents/notes/implemented/process/2026-10-28-implementation-worktree.md)处理。
 
 ```sh
 ATC_REPO="$(git rev-parse --show-toplevel)"
@@ -61,8 +61,8 @@ ATC_WT="$(dirname "$ATC_REPO")/.codex-worktrees/atc-homepage-timeouts"
 git worktree add -b fix/homepage-timeouts "$ATC_WT" master
 ```
 
-- [ ] 在 worktree 新建 proposed bug-fix note，Problem 链接现场证据；Proposal 说明保留 v14、复用索引；Alternatives considered 写明暂不新增索引、改队列重试或 Worker 化的依据。原 hook 缺席 note 与监控批次 note 仅部分相关，保留活跃，不归档；实现交付时更新其性能描述并互链。
-- [ ] 在 `tests/hook.test.ts` 追加一个回归，从真实 `markHookAbsent` 调用捕获 SELECT，再编译其查询计划。该文件已有 `fixture`、`seedLedgerRow`、`NOW`、`AGED` 和 `markHookAbsent` 导入，可复用：
+- [x] 在 worktree 新建 proposed bug-fix note，Problem 链接现场证据；Proposal 说明保留 v14、复用索引；Alternatives considered 写明暂不新增索引、改队列重试或 Worker 化的依据。原 hook 缺席 note 与监控批次 note 仅部分相关，保留活跃，不归档；实现交付时更新其性能描述并互链。
+- [x] 在 `tests/hook.test.ts` 追加一个回归，从真实 `markHookAbsent` 调用捕获 SELECT，再编译其查询计划。该文件已有 `fixture`、`seedLedgerRow`、`NOW`、`AGED` 和 `markHookAbsent` 导入，可复用：
 
 ```ts
 test('无候选时缺席查询仍使用pending部分索引', () => {
@@ -90,13 +90,13 @@ test('无候选时缺席查询仍使用pending部分索引', () => {
 });
 ```
 
-- [ ] 先运行该用例，确认旧代码因查询计划仍走 i_req_time 而失败。
+- [x] 先运行该用例，确认旧代码因查询计划仍走 i_req_time 而失败。
 
 ```sh
 bun test tests/hook.test.ts --test-name-pattern '无候选时缺席查询'
 ```
 
-- [ ] 只在原候选 WHERE 中增加等价谓词，并用一句注释说明 SQLite 需要显式匹配部分索引条件：
+- [x] 只在原候选 WHERE 中增加等价谓词，并用一句注释说明 SQLite 需要显式匹配部分索引条件：
 
 ```sql
 WHERE body_state='pending' AND body_state!='available'
@@ -105,8 +105,8 @@ WHERE body_state='pending' AND body_state!='available'
 
 生产 TypeScript 模板里的位常量继续使用 `${HAVE_BODY}`，不得改成另一份魔法数字。
 
-- [ ] 运行 `bun test tests/hook.test.ts`，保留既有 NULL response ID、歧义排除、等待关联保护、200 条续标、迟到 hook 两条清除路径，以及稳定歧义不重写、十项动作上限的断言。
-- [ ] 形成独立提交 `fix(hook): use the partial index for hook absence candidates`，与本批 note 变更一起提交；按实际测试结果填写验证说明。
+- [x] 运行 `bun test tests/hook.test.ts`，保留既有 NULL response ID、歧义排除、等待关联保护、200 条续标、迟到 hook 两条清除路径，以及稳定歧义不重写、十项动作上限的断言。
+- [x] 与 Task 2、Task 3 形成同一完整修复提交；按实际测试结果填写验证说明。
 
 ## Task 2：消除 stats 正文状态的宽表聚合
 
@@ -114,7 +114,7 @@ WHERE body_state='pending' AND body_state!='available'
 
 **Interfaces:** `getStats(store: Store): Stats`、`Stats.body_states` 和 HTTP JSON 字段不变。总数、各状态、游标与健康字段仍来自一个只读事务；写世代失效与 5 秒 TTL 不变。
 
-- [ ] 在 `tests/queries.test.ts` 使用既有 `insertRequests` 和 `fixture` 增加差分用例。空库、全 available、全 pending、六种合法状态混合分别建新 fixture；参考分组只在合成测试里执行。
+- [x] 在 `tests/queries.test.ts` 使用既有 `insertRequests` 和 `fixture` 增加差分用例。空库、全 available、全 pending、六种合法状态混合分别建新 fixture；参考分组只在合成测试里执行。
 
 ```ts
 test('stats正文分布与全量分组等价且不返回零计数组', () => {
@@ -144,8 +144,8 @@ test('stats正文分布与全量分组等价且不返回零计数组', () => {
 });
 ```
 
-- [ ] 增加实际 SQL 的计划回归：截取 `getStats` 执行中包含 `GROUP BY body_state` 的查询，用 `EXPLAIN QUERY PLAN` 编译；要求 `USING COVERING INDEX i_req_body`，不允许无索引 `SCAN request` 或分组临时 B-tree。先单跑这条计划回归，确认旧代码失败；行为差分在旧代码下通过是预期。
-- [ ] 将原 bodyStates 聚合替换为以下代码，保留它所在的读事务：
+- [x] 增加实际 SQL 的计划回归：截取 `getStats` 执行中包含 `GROUP BY body_state` 的查询，用 `EXPLAIN QUERY PLAN` 编译；要求 `USING COVERING INDEX i_req_body`，不允许无索引 `SCAN request` 或分组临时 B-tree。先单跑这条计划回归，确认旧代码失败；行为差分在旧代码下通过是预期。
+- [x] 将原 bodyStates 聚合替换为以下代码，保留它所在的读事务：
 
 ```ts
 const bodyStates = store.read.query<{ state: string; count: number }, []>(`
@@ -159,9 +159,9 @@ bodyStates.sort((left, right) =>
   left.state < right.state ? -1 : left.state > right.state ? 1 : 0);
 ```
 
-- [ ] 修正 `getStats` 注释：写世代变化会立即重算，TTL 只约束进程外写入的缓存陈旧时间；删除最多每 5 秒重算一次的错误保证，不放宽实际新鲜度。
-- [ ] 运行 `bun test tests/queries.test.ts --test-name-pattern 'stats|getStats'`，覆盖新增等价与计划回归、既有写入后立即失效。HTTP 字段完整性留给 Task 4 的整合回归，不另造第二份端点。
-- [ ] 由主 Agent 在本批 note 中同步覆盖索引聚合的取舍，将该 note 与代码、测试一起暂存，运行 `bun run verify:notes:staged` 后形成独立提交 `perf(stats): aggregate body states through covering indexes`。
+- [x] 修正 `getStats` 注释：写世代变化会立即重算，TTL 只约束进程外写入的缓存陈旧时间；删除最多每 5 秒重算一次的错误保证，不放宽实际新鲜度。
+- [x] 运行 `bun test tests/queries.test.ts --test-name-pattern 'stats|getStats'`，覆盖新增等价与计划回归、既有写入后立即失效。HTTP 字段完整性留给 Task 4 的整合回归，不另造第二份端点。
+- [x] 由主 Agent 在本批 note 中同步覆盖索引聚合的取舍，将该 note 与代码、测试一起暂存，运行 `bun run verify:notes:staged` 后与 Task 1、Task 3 一并提交。
 
 ## Task 3：修正 monitor 实例变化报告
 
@@ -169,7 +169,7 @@ bodyStates.sort((left, right) =>
 
 **Interfaces:** `buildReport(samples, nowMs, thresholds?, earliestArchived?)` 的参数和采样文件格式不变。失败样本继续参与失败次数、断档与告警判定；只从实例比较中排除。
 
-- [ ] 添加以下回归。已有 `sample`、`NOW`、`MINUTE` 和 `buildReport` 可直接复用：
+- [x] 添加以下回归。已有 `sample`、`NOW`、`MINUTE` 和 `buildReport` 可直接复用：
 
 ```ts
 test('失败样本不冒充实例变化，跨失败间隔仍识别真实变化', () => {
@@ -186,8 +186,8 @@ test('失败样本不冒充实例变化，跨失败间隔仍识别真实变化',
 });
 ```
 
-- [ ] 单跑新测试，确认旧实现将 A → null → A 算成两次变化。
-- [ ] 将相邻样本比较替换为成功样本的已知实例序列比较；保留报告其余内容：
+- [x] 单跑新测试，确认旧实现将 A → null → A 算成两次变化。
+- [x] 将相邻样本比较替换为成功样本的已知实例序列比较；保留报告其余内容：
 
 ```ts
 let previousInstance: string | null = null;
@@ -207,8 +207,8 @@ lines.push(knownSamples === 0
 
 这段替换原报告中的实例变化输出，不能另追加一条重复结论。告警阈值、恢复窗口、失败样本字段与 `collectSample` 不改。
 
-- [ ] 运行 `bun test tests/monitor.test.ts`，确认原有断档、告警、恢复、日志与实例变化测试一起通过。
-- [ ] 由主 Agent 在本批 note 中同步失败样本与已知实例比较的取舍，将该 note 与代码、测试一起暂存，运行 `bun run verify:notes:staged` 后形成独立提交 `fix(monitor): ignore missing instances when reporting restarts`。
+- [x] 运行 `bun test tests/monitor.test.ts`，确认原有断档、告警、恢复、日志与实例变化测试一起通过。
+- [x] 由主 Agent 在本批 note 中同步失败样本与已知实例比较的取舍，将该 note 与代码、测试一起暂存，运行 `bun run verify:notes:staged` 后与 Task 1、Task 2 一并提交。
 
 ## Task 4：整合、显式负载与文档
 
@@ -216,15 +216,15 @@ lines.push(knownSamples === 0
 
 **Interfaces:** 性能脚本只用自己创建的临时合成库，调用真实 `reconcilePending`、`markHookAbsent` 和 `getStats`，输出计数、逻辑载荷、计划与耗时，不读取本机 Agent 目录或生产配置。不新增生产运行选项。
 
-- [ ] 脚本沿用 `scripts/perf-capacity-meter.ts` 的临时目录、`openStore`、finally 关闭与清理方式。CLI 接受下面两种调用，其他参数退出 2；不接受数据库路径，因此不能误指向生产。
+- [x] 脚本沿用 `scripts/perf-capacity-meter.ts` 的临时目录、`openStore`、finally 关闭与清理方式。CLI 接受下面两种调用，其他参数退出 2；不接受数据库路径，因此不能误指向生产。
 
 ```sh
 bun scripts/perf-pending-stats.ts --rows 8192 --payload-bytes 4096
 bun scripts/perf-pending-stats.ts --rows 131072 --payload-bytes 16384
 ```
 
-- [ ] 参数须为正安全整数，最多 262,144 行、每行最多 65,536 字节、总合成载荷最多 3 GiB；先打印预计字节并检查临时目录可用空间不少于预计载荷的三倍，失败直接退出，不降规格冒充通过。
-- [ ] 使用下述数据构造 SQL；所有字段均为合成值，宽 BLOB 只用于重现表页读取成本，不承担正文可读性验收，不启动派生或真实来源适配器。每 1,024 行独立写事务，避免造数阶段把单个事务扩大为整个实验。
+- [x] 参数须为正安全整数，最多 262,144 行、每行最多 65,536 字节、总合成载荷最多 3 GiB；先打印预计字节并检查临时目录可用空间不少于预计载荷的三倍，失败直接退出，不降规格冒充通过。
+- [x] 使用下述数据构造 SQL；所有字段均为合成值，宽 BLOB 只用于重现表页读取成本，不承担正文可读性验收，不启动派生或真实来源适配器。每 1,024 行独立写事务，避免造数阶段把单个事务扩大为整个实验。
 
 ```sql
 INSERT INTO request(
@@ -240,7 +240,7 @@ VALUES (?, ?, ?);
 
 其中九成请求为 available/have=1，其余为 pending/have=0/miss_reason=hook_absent；时间全部早于一小时阈值。等待队列固定 1,579 条，7 条带不匹配的合成 response ID，其余为 NULL，first_seen 为实验 now 前一天，不触发 14 天 TTL。
 
-- [ ] 先做零候选轮次三次，再插入 201 条未标记的超龄 pending 请求。第一轮必须标记 200 条、第二轮 1 条、第三轮 0 条。每次测整个同步任务体，不能用 writer 提交时间代替候选准备耗时：
+- [x] 先做零候选轮次三次，再插入 201 条未标记的超龄 pending 请求。第一轮必须标记 200 条、第二轮 1 条、第三轮 0 条。每次测整个同步任务体，不能用 writer 提交时间代替候选准备耗时：
 
 ```ts
 const started = performance.now();
@@ -249,19 +249,19 @@ const marked = markHookAbsent(store, now);
 const pendingMs = performance.now() - started;
 ```
 
-- [ ] 测三次 stats 计算，每次调用前经 `store.write` 更新一个合成 collector_state 键，使缓存失效；计时仅包含 `getStats`。对照六种状态的参考 GROUP BY 只在合成库上运行，断言计数完全一致。输出 cold-first、后续各次和 max，不把操作系统热缓存描述为真实冷盘。
-- [ ] 实验门槛是本次新增验收目标，不修改 monitor 常量：零候选与命中轮次的 pending 同步 max ≤500 ms，后续热轮次目标 ≤100 ms；stats 强制重算 max ≤250 ms。查询计划回归是硬约束，墙钟实验单独报告机器和规模。若越界，记录实际值并定位，不继续部署，也不自动加入 v15 索引。
-- [ ] 首次在修复前基点的合成库记录旧方案；候选代码在相同规格重新运行。大规模实验串行执行，不与别的 GiB 实验竞争 IO。此步骤是显式动作，不并入 `bun test`。
-- [ ] 主 Agent 审查差异与调用方后，运行一次整合回归：
+- [x] 测三次 stats 计算，每次调用前经 `store.write` 更新一个合成 collector_state 键，使缓存失效；计时仅包含 `getStats`。参考 GROUP BY 只在合成库上运行；六种状态的分布对照由单测覆盖，断言计数完全一致。输出首次、后续各次和 max，不把操作系统热缓存描述为真实冷盘。
+- [x] 实验门槛是本次新增验收目标，不修改 monitor 常量：零候选与命中轮次的 pending 同步 max ≤500 ms，后续热轮次目标 ≤100 ms；stats 强制重算 max ≤250 ms。查询计划回归是硬约束，墙钟实验单独报告机器和规模。若越界，记录实际值并定位，不继续部署，也不自动加入 v15 索引。
+- [x] 首次在修复前基点的合成库记录旧方案；候选代码在相同规格重新运行。大规模实验串行执行，不与别的 GiB 实验竞争 IO。此步骤是显式动作，不并入 `bun test`。
+- [x] 主 Agent 审查差异与调用方后，运行一次整合回归：
 
 ```sh
 bun test tests/hook.test.ts tests/queries.test.ts tests/http.test.ts tests/monitor.test.ts tests/metrics-light.test.ts tests/patrol.test.ts
 bun run typecheck
 ```
 
-- [ ] note 转入 implemented：将 Proposal 改为 Decision，以真实交付改写结果；保留否决方案与未覆盖项。更新原 hook 缺席 note 中现有部分索引自动可用的错误描述，与本批 note 互链。监控批次旧 note 保留，只补当前机制引用；不复写本次验收数字。
-- [ ] 架构文档只记录 stats 的同快照窄索引聚合方式；巡查 C4 增加实际查询计划、空命中、候选满批与宽行载荷检查，门槛链接本批 note/实验，不把 500/250 ms 再抄一份。验收记录追加合成结果；LESSONS 对已有最慢同步单元条目补本次 pending 准备读的证据与 Seen 日期，不重复新建同类教训。
-- [ ] 暂存最终文件后运行 notes 门禁；未修改的测试不重复运行：
+- [x] note 转入 implemented：将 Proposal 改为 Decision，以真实交付改写结果；保留否决方案与未覆盖项。更新原 hook 缺席 note 中现有部分索引自动可用的错误描述，与本批 note 互链。监控批次旧 note 保留，只补当前机制引用；不复写本次验收数字。
+- [x] 架构文档只记录 stats 的同快照窄索引聚合方式；巡查 C4 增加实际查询计划、空命中、候选满批与宽行载荷检查，门槛链接本批 note/实验，不把 500/250 ms 再抄一份。验收记录追加合成结果；LESSONS 对已有最慢同步单元条目补本次 pending 准备读的证据与 Seen 日期，不重复新建同类教训。
+- [x] 暂存最终文件后运行 notes 门禁；未修改的测试不重复运行：
 
 ```sh
 bun run verify:notes:staged
@@ -269,7 +269,7 @@ bun run verify:notes
 git diff --cached --check
 ```
 
-- [ ] 取得提交授权后提交整合结果，记录候选分支 tip、主检出的发布前 SHA 和待合并范围。实际 `--no-ff` 合并留到 Task 5 停服且 bundle 成功之后，运行中的主检出不提前更换 src。工作区不干净或出现别的会话改动时，先定向协调，不做整库 stash、reset 或覆盖。合并冲突改到代码时只补跑受影响的检查。
+- [x] 取得提交授权后提交整合结果，记录候选分支 tip、主检出的发布前 SHA 和待合并范围。实际 `--no-ff` 合并留到 Task 5 停服且 bundle 成功之后，运行中的主检出不提前更换 src。工作区不干净或出现别的会话改动时，先定向协调，不做整库 stash、reset 或覆盖。合并冲突改到代码时只补跑受影响的检查。
 
 ## Task 5：生产部署与代码回退
 
@@ -360,4 +360,4 @@ readiness 失败、返回非预期 schema、启动退出或发生数据/输出�
 - 原有 schema、正文状态、迟到合并、写世代缓存、告警阈值和恢复规则保持原义。
 - 实施分工包含代码、实际 SQL 计划、行为回归、显式宽行载荷、部署、回退和真实页面。
 - 生产读取与合成数据实验分开；停止条件不依赖只有 writer 才能看见的耗时。
-- 尚未执行代码测试、GiB 实验、提交、合并、生产重启和持续验收。本文件中的复选框均为待执行。
+- 合成回归与类型检查的结果见[验收记录](../../acceptance.md#首页超时修复回归合成2026-11-06)。部署及生产复选框只随实际完成更新。

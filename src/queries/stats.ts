@@ -33,13 +33,9 @@ function admissionOf(value: unknown): Stats['admission'] {
 }
 
 /**
- * 健康统计的进程内缓存，按写世代失效，TTL 兜住进程外写入。
- *
- * 汇总里有 request 全表 COUNT 与 GROUP BY，在 4 GB 库上冷页一次 200–570 ms，
- * 探针与页面并发时每笔都付一遍。所有进程内写都经 `store.write` 计数，世代不变
- * 就没有任何进程内聚合会变，直接复用上一次结果（F06）；外部进程（回填脚本、
- * 手工 SQL）的写不改计数，TTL 保证它们最迟 5 秒反映到统计里，同时把监控轮询
- * 放大的全量重算压到最多每 5 秒一次。
+ * 同一写世代且缓存未满 5 秒时返回同一份只读统计对象，调用方不得原地修改。
+ * 进程内写改变世代后下一次调用立即重算；进程外写不改计数，以缓存计算时点起的
+ * TTL 约束陈旧时间。各字段在同一个读事务里聚合，窄索引避免读取请求骨架。
  */
 const STATS_TTL_MS = 5_000;
 const statsCache = new WeakMap<Store, { generation: number; at_ms: number; value: Stats }>();
@@ -70,9 +66,15 @@ function computeStats(store: Store): Stats {
       ORDER BY source_kind, source_name, from_off`).all() as Stats['gaps'];
     const pending = store.read.query('SELECT COUNT(*) AS n FROM pending_hook').get() as { n: number };
     const requests = store.read.query('SELECT COUNT(*) AS n FROM request').get() as { n: number };
-    const bodyStates = store.read.query(`
-      SELECT body_state AS state, COUNT(*) AS count FROM request GROUP BY body_state ORDER BY body_state`)
-      .all() as Stats['body_states'];
+    const bodyStates = store.read.query<{ state: string; count: number }, []>(`
+      SELECT body_state AS state, COUNT(*) AS count
+      FROM request WHERE body_state!='available'
+      GROUP BY body_state ORDER BY body_state`).all();
+    const available = requests.n
+      - bodyStates.reduce((total, row) => total + row.count, 0);
+    if (available > 0) bodyStates.push({ state: 'available', count: available });
+    bodyStates.sort((left, right) =>
+      left.state < right.state ? -1 : left.state > right.state ? 1 : 0);
     const openGaps = store.read.query(
       "SELECT COUNT(*) AS n FROM source_gap WHERE state IN ('open','resumable')").get() as { n: number };
     const probe = store.read.query<{ value_json: string }, [string]>(
