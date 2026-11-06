@@ -248,6 +248,11 @@ export type PredecessorMatch = {
  * 分叉。本笔的上下文完整包含了某笔祖先时，那才是真正的前驱，哪怕中间还
  * 夹着别的请求。判据仍然严格：只有"祖先序列是本笔的完整前缀"才算确认。
  *
+ * 正常会话是"每一笔都续自上笔"的单链，此时最长祖先整条就是本笔的前缀。
+ * 那一条既是父节点、也是最近祖先：没有更长的祖先能分享更多前缀，更短的
+ * 祖先分享长度必然更小，所以只比这一条就能得出结论，不必扫全部祖先。
+ * 取"最早出现的最大长度祖先"，与下面并列最长时保留先遇到的那条一致。
+ *
  * @param ancestors 已按时间正序处理过的请求，携带各自的指纹序列
  * @param current 本笔的指纹序列
  * @param hasEarlier 本笔之前还有参与请求（哪怕它的正文不可读）
@@ -259,6 +264,27 @@ export function matchPredecessor(
   hasEarlier = ancestors.length > 0,
   unreadableEarlier = false,
 ): PredecessorMatch {
+  let longest = -1;
+  for (let index = 0; index < ancestors.length; index += 1) {
+    if (longest < 0 || ancestors[index]!.fingerprints.length > ancestors[longest]!.fingerprints.length) {
+      longest = index;
+    }
+  }
+  if (longest >= 0) {
+    const candidate = ancestors[longest]!;
+    const length = candidate.fingerprints.length;
+    // 零长度祖先不构成证据：空序列是任何序列的前缀，不能当父节点。
+    if (length > 0 && commonPrefix(candidate.fingerprints, current) === length) {
+      return {
+        ...settleRelation({
+          current, parent: { reqId: candidate.reqId, length },
+          sawEarlier: hasEarlier, unreadableEarlier,
+        }),
+        near: { reqId: candidate.reqId, shared: length },
+      };
+    }
+  }
+
   let best: { reqId: number; shared: number } | null = null;
   let parent: { reqId: number; length: number } | null = null;
 

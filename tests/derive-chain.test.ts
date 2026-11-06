@@ -58,6 +58,55 @@ test('前驱在链上任意祖先里找，不只看上一笔', () => {
   expect(branch.near).toBeNull();
 });
 
+test('最长祖先整条是本笔前缀时，父节点与最近祖先都取它', () => {
+  // 单链常态：最长祖先整条在本笔里。短路必须给出与全扫描相同的结论。
+  const ancestors = [
+    { reqId: 1, fingerprints: ['u:a'] },
+    { reqId: 2, fingerprints: ['u:a', 'a:b'] },
+    { reqId: 3, fingerprints: ['u:a', 'a:b', 'u:c'] },
+  ];
+  expect(matchPredecessor(ancestors, ['u:a', 'a:b', 'u:c', 'a:d'])).toEqual({
+    parent: 3, relation: 'confirmed', delta: [3],
+    near: { reqId: 3, shared: 3 },
+  });
+});
+
+test('并列最长且只有后一条是完整前缀时，父节点取后一条、最近祖先取前一条', () => {
+  // 两条祖先同样长：前一条不完整、后一条完整。父节点不能因并列而停留在前一条，
+  // 最近祖先则按"共享最多且先到"留在前一条。
+  const ancestors = [
+    { reqId: 1, fingerprints: ['u:a', 'u:b'] },
+    { reqId: 2, fingerprints: ['u:a', 'a:c'] },
+  ];
+  expect(matchPredecessor(ancestors, ['u:a', 'a:c', 'a:d'])).toEqual({
+    parent: 2, relation: 'confirmed', delta: [2],
+    near: { reqId: 2, shared: 2 },
+  });
+});
+
+test('并列最长且两条都完整时，父节点与最近祖先都保留先到的那条', () => {
+  const ancestors = [
+    { reqId: 1, fingerprints: ['u:a'] },
+    { reqId: 2, fingerprints: ['u:a'] },
+  ];
+  expect(matchPredecessor(ancestors, ['u:a', 'a:b'])).toEqual({
+    parent: 1, relation: 'confirmed', delta: [1],
+    near: { reqId: 1, shared: 1 },
+  });
+});
+
+test('最长祖先不完整时回落到全扫描：父节点取更短的完整前缀', () => {
+  // 最长祖先（长度 3）只共享 2 段，不是前缀；更短的祖先整条都在本笔里。
+  const ancestors = [
+    { reqId: 1, fingerprints: ['u:a', 'u:b', 'u:c'] },
+    { reqId: 2, fingerprints: ['u:a', 'u:b'] },
+  ];
+  expect(matchPredecessor(ancestors, ['u:a', 'u:b', 'x'])).toEqual({
+    parent: 2, relation: 'confirmed', delta: [2],
+    near: { reqId: 1, shared: 2 },
+  });
+});
+
 test('缓存断点移动不打断增量', () => {
   // 同一段历史消息，只因 cache_control 位置不同而字节不同，指纹必须相同。
   const withBreakpoint = { role: 'user', content: [{ type: 'text', text: '同一条消息', cache_control: { type: 'ephemeral' } }] };
