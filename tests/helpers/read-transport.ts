@@ -12,7 +12,7 @@ import type {
   ReadErrorCode, ReadInput, ReadOperations, ReadOutput, ReadTransport,
 } from '../../src/read-contract';
 import type { Store } from '../../src/store';
-import { listSessions } from '../../src/queries/sessions';
+import { listSessions, getSessionTitles } from '../../src/queries/sessions';
 import { listRequests } from '../../src/queries/requests';
 import {
   getContextItemReading, getReadingBatch, getReadingBody, getReadingDetail,
@@ -178,7 +178,11 @@ async function dispatchQuery(store: Store, operation: keyof ReadOperations,
   switch (operation) {
     case 'sessions': {
       const input = rawInput as ReadInput<'sessions'>;
-      return listSessions(store, input.limit, input.cursor);
+      return listSessions(store, input.limit, input.cursor, null, input.title ?? 'full');
+    }
+    case 'sessionsTitle': {
+      const input = rawInput as ReadInput<'sessionsTitle'>;
+      return { titles: getSessionTitles(store, input.keys) };
     }
     case 'requests': {
       const input = rawInput as ReadInput<'requests'>;

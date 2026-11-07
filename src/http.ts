@@ -10,7 +10,7 @@ import type { SummaryEntriesQuery } from './queries/session-summary';
 import { getRequest, listRequests } from './queries/requests';
 import { getRoute } from './queries/routes';
 import { getStats } from './queries/stats';
-import { listSessions } from './queries/sessions';
+import { listSessions, getSessionTitles } from './queries/sessions';
 import type { LiveActivity } from './activity';
 import { listTurns } from './queries/turns';
 import { listBgJobs } from './queries/bg-jobs';
@@ -568,7 +568,9 @@ export function createHandler(
           const active = live === undefined
             ? null
             : { now: Date.now(), inflight: (key: string) => live.inflight(key) };
-          return json(listSessions(store, limit, url.searchParams.get('cursor'), active));
+          const titleParam = url.searchParams.get('title');
+          const title = titleParam === 'light' ? 'light' : 'full';
+          return json(listSessions(store, limit, url.searchParams.get('cursor'), active, title));
         })();
         sessionsInflight.set(key, promise);
         try {
@@ -576,6 +578,22 @@ export function createHandler(
         } finally {
           sessionsInflight.delete(key);
         }
+      }
+
+      if (path === '/api/sessions/titles') {
+        const keysParam = url.searchParams.get('keys');
+        if (keysParam === null) return json({ error: 'invalid_query' }, 400);
+        let keys: unknown;
+        try {
+          keys = JSON.parse(keysParam);
+        } catch {
+          return json({ error: 'invalid_query' }, 400);
+        }
+        if (!Array.isArray(keys) || keys.length === 0 || keys.length > 100
+          || !keys.every(k => typeof k === 'string')) {
+          return json({ error: 'invalid_query' }, 400);
+        }
+        return json({ titles: getSessionTitles(store, keys as string[]) });
       }
 
       const requestsMatch = /^\/api\/sessions\/([^/]+)\/requests$/.exec(path);

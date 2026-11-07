@@ -199,11 +199,25 @@ const SESSION_TITLE_SQL = `COALESCE(
 const SESSION_TITLE_GUARD_SQL = `EXISTS (SELECT 1 FROM derive_queue g
   WHERE g.conv_key = request.conv_key AND ${groupCurrentSql('g')})`;
 
+export type SessionTitleMap = { conv_key: string; title: string }[];
+
+export function getSessionTitles(store: Store, keys: string[]): SessionTitleMap {
+  if (keys.length === 0) return [];
+  const rows = store.read.query<{ conv_key: string; title: string | null }, string[]>(
+    `SELECT request.conv_key AS conv_key,
+            CASE WHEN ${SESSION_TITLE_GUARD_SQL} THEN ${SESSION_TITLE_SQL} END AS title
+     FROM request
+     WHERE conv_key IN (${keys.map(() => '?').join(',')})
+     GROUP BY conv_key`).all(...keys);
+  return rows.map(row => ({ conv_key: row.conv_key, title: row.title ?? '' }));
+}
+
 export function listSessions(
   store: Store,
   limit = 50,
   cursor: string | null = null,
   live: SessionLive | null = null,
+  title: 'full' | 'light' = 'full',
 ): Page<SessionRow> {
   const size = checkLimit(limit, 100);
   const bound = cursor === null
@@ -239,9 +253,11 @@ export function listSessions(
           LIMIT ?`).all(bound.lastMs, bound.convKey, size + 1)) as SessionCandidateRow[];
     if (rows.length === 0) return { candidates: rows, detail: [] as SessionDbRow[] };
     const pageKeys = rows.slice(0, size).map(row => row.conv_key);
+    // title === 'light' 时标题子查询不出列，行里标题保持空；回填由 getSessionTitles 单取。
+    const titleColumn = title === 'light' ? `'' AS title` : `CASE WHEN ${SESSION_TITLE_GUARD_SQL} THEN ${SESSION_TITLE_SQL} END AS title`;
     const detail = store.read.query<SessionDbRow, string[]>(`
         SELECT conv_key, MAX(started_ms) AS last_ms, COUNT(*) AS request_count,
-               CASE WHEN ${SESSION_TITLE_GUARD_SQL} THEN ${SESSION_TITLE_SQL} END AS title,
+               ${titleColumn},
                -- 同旧查询：agents 是 magpie 的客户端标签，不是 actor 身份。
                GROUP_CONCAT(DISTINCT agent) AS agents,
                SUM(cost) AS cost_usd,
