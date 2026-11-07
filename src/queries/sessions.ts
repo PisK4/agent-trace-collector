@@ -203,9 +203,41 @@ export type SessionTitleMap = { conv_key: string; title: string }[];
 
 export function getSessionTitles(store: Store, keys: string[]): SessionTitleMap {
   if (keys.length === 0) return [];
+  // 异步回填优先极速：只拿同会话本地标题（exclude 模型标题 + user 派生标题），
+  // 不算跨组绑定子查询；跨组标题在生产库上单会话约 216ms，20 个就是数秒，
+  // 是 sessionsTitle 超时的主因。同会话命中率在实测里已覆盖多数，失败保留空标题。
   const rows = store.read.query<{ conv_key: string; title: string | null }, string[]>(
-    `SELECT request.conv_key AS conv_key,
-            CASE WHEN ${SESSION_TITLE_GUARD_SQL} THEN ${SESSION_TITLE_SQL} END AS title
+    `SELECT request.conv_key AS conv_key, COALESCE(
+      (SELECT r1.model_title FROM request r1
+       JOIN derive_queue q1 ON q1.conv_key = r1.conv_key AND q1.actor = r1.actor
+       WHERE r1.conv_key = request.conv_key AND r1.purpose_chain = 'exclude'
+         AND r1.model_title IS NOT NULL AND r1.purpose_pending = 0
+         AND ${groupCurrentSql('q1')}
+       ORDER BY r1.started_ms DESC, r1.req_id DESC LIMIT 1),
+      (SELECT ${derivedColSql('q2', 'e2', 'r2', 'title')} FROM request r2
+       JOIN derive_queue q2 ON q2.conv_key = r2.conv_key AND q2.actor = r2.actor
+       LEFT JOIN derive_request_result e2 ON e2.generation = q2.published_generation AND e2.req_id = r2.req_id
+       WHERE r2.conv_key = request.conv_key AND ${derivedColSql('q2', 'e2', 'r2', 'title_source')} = 'user_delta'
+         AND r2.purpose_chain = 'participate' AND ${derivedColSql('q2', 'e2', 'r2', 'chain_role')} = 'main'
+         AND ${derivedColSql('q2', 'e2', 'r2', 'title')} IS NOT NULL AND r2.purpose_pending = 0
+         AND ${groupCurrentSql('q2')}
+       ORDER BY r2.started_ms ASC, r2.req_id ASC LIMIT 1),
+      (SELECT ${derivedColSql('q3', 'e3', 'r3', 'title')} FROM request r3
+       JOIN derive_queue q3 ON q3.conv_key = r3.conv_key AND q3.actor = r3.actor
+       LEFT JOIN derive_request_result e3 ON e3.generation = q3.published_generation AND e3.req_id = r3.req_id
+       WHERE r3.conv_key = request.conv_key AND ${derivedColSql('q3', 'e3', 'r3', 'title_source')} = 'user_delta'
+         AND r3.purpose_chain = 'participate' AND ${derivedColSql('q3', 'e3', 'r3', 'title')} IS NOT NULL
+         AND r3.purpose_pending = 0
+         AND ${groupCurrentSql('q3')}
+       ORDER BY r3.started_ms ASC, r3.req_id ASC LIMIT 1),
+      (SELECT ${derivedColSql('q4', 'e4', 'r4', 'title')} FROM request r4
+       JOIN derive_queue q4 ON q4.conv_key = r4.conv_key AND q4.actor = r4.actor
+       LEFT JOIN derive_request_result e4 ON e4.generation = q4.published_generation AND e4.req_id = r4.req_id
+       WHERE r4.conv_key = request.conv_key AND r4.purpose_chain = 'participate'
+         AND ${derivedColSql('q4', 'e4', 'r4', 'title')} IS NOT NULL AND r4.purpose_pending = 0
+         AND ${groupCurrentSql('q4')}
+       ORDER BY r4.started_ms ASC, r4.req_id ASC LIMIT 1)
+    ) AS title
      FROM request
      WHERE conv_key IN (${keys.map(() => '?').join(',')})
      GROUP BY conv_key`).all(...keys);
