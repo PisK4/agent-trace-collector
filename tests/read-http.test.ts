@@ -35,8 +35,8 @@ test('编码会话键并把取消传到 fetcher', async () => {
 test('游标与会话键一起编码，null 参数不进 URL', async () => {
   const { fetcher, calls } = scriptedFetch([{}]);
   const transport = createHttpReadTransport({ fetcher });
-  await transport.execute('sessions', { limit: 20, cursor: 'x+y/z' }, { signal: new AbortController().signal });
-  expect(calls[0]!.url).toBe('/api/sessions?limit=20&cursor=x%2By%2Fz');
+  await transport.execute('sessions', { limit: 20, cursor: 'x+y/z', title: 'light' }, { signal: new AbortController().signal });
+  expect(calls[0]!.url).toBe('/api/sessions?limit=20&cursor=x%2By%2Fz&title=light');
   await transport.execute('turns', { key: 'k', from: null }, { signal: new AbortController().signal });
   expect(calls[1]!.url).toBe('/api/sessions/k/turns');
   await transport.execute('turns', { key: 'k', from: 7 }, { signal: new AbortController().signal });
@@ -177,7 +177,7 @@ test('fetcher 返回但信号已取消时拒绝 cancelled', async () => {
   const controller = new AbortController();
   const { fetcher } = scriptedFetch([{ body: { items: [] } }]);
   const transport = createHttpReadTransport({ fetcher });
-  const pending = transport.execute('sessions', { limit: 1, cursor: null }, { signal: controller.signal });
+  const pending = transport.execute('sessions', { limit: 1, cursor: null, title: 'light' }, { signal: controller.signal });
   controller.abort();
   try {
     await pending;
@@ -264,7 +264,7 @@ test('页面与目录响应的顶层形状校验', async () => {
   type HttpTransport = ReturnType<typeof createHttpReadTransport>;
   const cases: Array<{ run: (t: HttpTransport) => Promise<unknown>; body: unknown }> = [
     { body: { items: 'no' },
-      run: t => t.execute('sessions', { limit: 1, cursor: null }, { signal: signal() }) },
+      run: t => t.execute('sessions', { limit: 1, cursor: null, title: 'light' }, { signal: signal() }) },
     { body: { length: 0 },
       run: t => t.execute('bgJobs', { key: 'k' }, { signal: signal() }) },
     { body: null,
@@ -308,7 +308,7 @@ test('合法页面与读取结果原样返回', async () => {
     },
   }]);
   const transport = createHttpReadTransport({ fetcher });
-  const page = await transport.execute('sessions', { limit: 1, cursor: null },
+  const page = await transport.execute('sessions', { limit: 1, cursor: null, title: 'light' },
     { signal: new AbortController().signal });
   expect(page.items).toHaveLength(1);
 });

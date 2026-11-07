@@ -38,7 +38,12 @@ export function createHttpReadTransport({ fetcher, baseUrl = '', headers }) {
       case 'sessions': {
         const params = new URLSearchParams({ limit: String(input.limit) });
         if (input.cursor !== null) params.set('cursor', input.cursor);
+        if (input.title !== 'full') params.set('title', input.title);
         return `/api/sessions?${params}`;
+      }
+      case 'sessionsTitle': {
+        const params = new URLSearchParams({ keys: JSON.stringify(input.keys) });
+        return `/api/sessions/titles?${params}`;
       }
       case 'requests': {
         const params = new URLSearchParams({ direction: input.direction, limit: String(input.limit) });
@@ -138,6 +143,12 @@ export function createHttpReadTransport({ fetcher, baseUrl = '', headers }) {
         if (!isObj(parsed) || !Array.isArray(parsed.items)
           || !(parsed.next_cursor === null || parsed.next_cursor === undefined
             || typeof parsed.next_cursor === 'string')) reject();
+        return;
+      case 'sessionsTitle':
+        if (!isObj(parsed) || !Array.isArray(parsed.titles)) reject();
+        for (const entry of parsed.titles) {
+          if (!isObj(entry) || typeof entry.conv_key !== 'string' || typeof entry.title !== 'string') reject();
+        }
         return;
       case 'bgJobs':
         if (!Array.isArray(parsed)) reject();

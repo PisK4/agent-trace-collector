@@ -1188,6 +1188,7 @@ test('会话列表跨页按 conv_key 去重', async () => {
   fx.respond('sessions', input => input.cursor === 'c1'
     ? { items: [session('b'), session('a')], next_cursor: null }
     : { items: [session('a'), session('b')], next_cursor: 'c1' });
+  fx.respond('sessionsTitle', (input: { keys: string[] }) => ({ titles: input.keys.map((key: string) => ({ conv_key: key, title: key })) }));
   const store = createReaderStore(fx.transport);
   await store.loadSessions();
   await store.loadSessions('c1');
@@ -1200,6 +1201,7 @@ test('会话列表并发加载只发一次请求', async () => {
   const gate = new Promise<void>(resolve => { release = resolve; });
   const fx = createFixtureReadTransport();
   fx.respond('sessions', () => gate.then(() => ({ items: [session('a')], next_cursor: null })));
+  fx.respond('sessionsTitle', (input: { keys: string[] }) => ({ titles: input.keys.map((key: string) => ({ conv_key: key, title: key })) }));
   const store = createReaderStore(fx.transport);
   const first = store.loadSessions();
   const second = store.loadSessions();
