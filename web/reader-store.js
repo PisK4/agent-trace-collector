@@ -72,9 +72,9 @@ import { createReadScheduler } from './read-scheduler.js';
  * @param {import('../src/read-contract').ReadTransport} transport 具名读取的唯一执行通道；store 不拼 URL、不 Fetch。
  * @param {(id: number) => void} [onReadChanged] 记录快照异步变化（作废、自动重读
  *   换新或失败）时通知页面重绘；迟到响应与会话切换后的旧任务不通知。
- * @param {{ autoRereadCooldownMs?: number, scheduler?: object, onTurnsChanged?: () => void, onSummaryChanged?: () => void, onTodoChanged?: () => void }} [options]
+ * @param {{ autoRereadCooldownMs?: number, scheduler?: object, onTurnsChanged?: () => void, onSummaryChanged?: () => void, onTodoChanged?: () => void, onSessionsChanged?: () => void }} [options]
  *   自动重读的冷却窗口，默认 10 秒；scheduler 透传给内部有界调度器；轮次快照、会话
- *   汇总与待办落地（ready 或 absent）时通知，测试可注入短窗。
+ *   汇总与待办落地（ready 或 absent）时通知，测试可注入短窗；标题回填与标题分次落地时触发。
  * @returns {ReaderStore}
  */
 export function createReaderStore(transport, onReadChanged, options) {
@@ -84,6 +84,7 @@ export function createReaderStore(transport, onReadChanged, options) {
   const onTurnsChanged = options?.onTurnsChanged ?? null;
   const onSummaryChanged = options?.onSummaryChanged ?? null;
   const onTodoChanged = options?.onTodoChanged ?? null;
+  const onSessionsChanged = options?.onSessionsChanged ?? null;
   const scheduler = createReadScheduler(options?.scheduler);
   /** 页面级读取（会话列表、统计）的取消边界；dispose 时一并取消。 */
   let pageScope = {};
@@ -288,17 +289,34 @@ export function createReaderStore(transport, onReadChanged, options) {
     if (sessionsInflight !== null) return sessionsInflight;
     sessionsInflight = (async () => {
       try {
-        const page = await execute(pageScope, 'sessions', { limit: 20, cursor: cursor ?? null });
+        // 首屏先轻量：标题子查询改为异步回填，列表先出。
+        const light = await execute(pageScope, 'sessions', { limit: 20, cursor: cursor ?? null, title: 'light' });
         // 并发调用已共享同一个在途请求；分页边界仍可能把同一会话返回两次
         // （末条时间相同），按 conv_key 去重，保留先出现的一条。
         /** @type {Map<string, import('../src/queries/sessions').SessionRow>} */
         const seen = new Map();
-        for (const item of [...(cursor ? sessions.items : []), ...page.items]) {
+        for (const item of [...(cursor ? sessions.items : []), ...light.items]) {
           if (!seen.has(item.conv_key)) seen.set(item.conv_key, item);
         }
         sessions.items = [...seen.values()];
-        sessions.cursor = page.next_cursor;
+        sessions.cursor = light.next_cursor;
         sessions.error = null;
+        onSessionsChanged?.();
+        // 标题回填：首屏先渲染带空标题的行，随后按 keys 拉回标题，逐项覆盖。
+        const keys = light.items.map((/** @type {{conv_key: string}} */ item) => item.conv_key);
+        if (keys.length > 0) {
+          try {
+            const titles = await execute(pageScope, 'sessionsTitle', { keys });
+            const byKey = new Map(titles.titles.map((/** @type {{conv_key: string, title: string}} */ entry) => [entry.conv_key, entry.title]));
+            for (const item of sessions.items) {
+              const title = byKey.get(item.conv_key);
+              if (title !== undefined) item.title = title;
+            }
+            onSessionsChanged?.();
+          } catch {
+            // 标题失败不阻断列表：失败保留空标题，用户仍可点进会话。
+          }
+        }
       } catch (error) {
         sessions.error = error instanceof Error ? error.message : 'load_failed';
       } finally {

@@ -216,6 +216,12 @@ body.rail-collapsed .col-rail,body.rail-collapsed .resize-handle{visibility:hidd
 .group-label .grp-n{font:10.5px var(--mono);color:var(--muted);letter-spacing:0;text-transform:none}
 .sess-more{display:flex;justify-content:center;padding:10px 0 4px}
 .sess-empty{padding:16px 8px;font-size:12px;color:var(--muted)}
+/* 骨架条：左栏首屏占位，与真实行同高同位，列表到达即整段替换。 */
+.sess-skeleton{display:flex;flex-direction:column;justify-content:center;gap:8px;height:44px;padding:0 8px 0 9px;margin-bottom:1px;border-radius:6px}
+.sess-skel-title,.sess-skel-meta{display:block;height:10px;border-radius:4px;background:var(--line);animation:sess-skel-pulse 1.1s ease-in-out infinite alternate}
+.sess-skel-title{height:12px}
+.sess-skel-meta{width:42%}
+@keyframes sess-skel-pulse{from{opacity:.55}to{opacity:1}}
 /* 插画 0.35s 淡入：节点出现后由 JS 隔帧加 .is-in；静态降级与 reduce 直接就位。 */
 .spider-art{opacity:0;transition:opacity .35s ease}
 .spider-art.is-in,.spider-art[data-motion="static"]{opacity:1}

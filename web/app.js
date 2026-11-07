@@ -247,7 +247,8 @@ if (typeof document !== 'undefined') {
     // 轮次快照与会话汇总落地（出现/消失、折叠区就绪）同样重绘两栏。
     { onTurnsChanged: () => { consumePendingTurn(); renderMain(); renderRail(); },
       onSummaryChanged: () => { consumePendingSummary(); renderMain(); renderRail(); },
-      onTodoChanged: () => { renderRail(); } });
+      onTodoChanged: () => { renderRail(); },
+      onSessionsChanged: () => { renderSessions(); renderFilters(); } });
   /** @type {Map<string, boolean>} 折叠开合按稳定键保存（键含 req id），重绘后恢复。 */
   const folds = new Map();
   /** @type {Map<number, number>} 结构折叠内选中的消息 ord 按 req id 保存：UI 选择留在页面，不进 store。 */
@@ -2767,6 +2768,8 @@ if (typeof document !== 'undefined') {
   document.documentElement.lang = htmlLang();
   applyStaticTexts();
   initLayout(applyLocaleChrome);
+  // 骨架先出：会话列表请求在飞时左栏与主栏显示骨架条，不再黑屏等待。
+  el('sessions-list').innerHTML = skeletonSessionsHtml();
   void (async () => {
     let listError = null;
     try {
@@ -2784,7 +2787,13 @@ if (typeof document !== 'undefined') {
       // 默认落点跳过折叠行：打开页面就进一个列表里看不到的探针组，等于没折叠。
       const first = /** @type {SessionRow | undefined} */ (store.getSessions().items
         .find(s => !s.flags.includes('probe') && !s.flags.includes('bypass')));
-      if (first) dispatch({ kind: 'open-session', sessionKey: first.conv_key, wantedTrace: null });
+      if (first) {
+        dispatch({ kind: 'open-session', sessionKey: first.conv_key, wantedTrace: null });
+      } else {
+        // 标题未回填时默认选中用原始列表首项选入，标题后续回填会自动跟上。
+        const firstAnyway = /** @type {SessionRow | undefined} */ (store.getSessions().items[0]);
+        if (firstAnyway) dispatch({ kind: 'open-session', sessionKey: firstAnyway.conv_key, wantedTrace: null });
+      }
     }
     // 列表（与默认选中意图）到手先提交左栏：请求窗口是另一个请求，可能等很久；
     // 会话列表可独立使用，不等正文。此后 renderAll 会按窗口结果重画全部区块。
@@ -2793,4 +2802,13 @@ if (typeof document !== 'undefined') {
     if (state.session !== null) await selectSession(state.session, traceIdFromParam(qp.get('trace')));
     else renderAll();
   })();
+}
+
+/** 左栏骨架：三段占位条，等会话列表首屏到达后替换。 */
+function skeletonSessionsHtml() {
+  return ['62%', '48%', '73%', '39%'].map(width => `
+    <div class="sess-skeleton" aria-hidden="true">
+      <span class="sess-skel-title" style="width:${width}"></span>
+      <span class="sess-skel-meta"></span>
+    </div>`).join('');
 }

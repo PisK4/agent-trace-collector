@@ -52,7 +52,8 @@ export type BatchPage<T> = { items: BatchItem<T>[]; next_index: number | null };
  * 服务端路由，HTTP 层继续显式解析与校验。
  */
 export type ReadOperations = {
-  sessions: { input: { limit: number; cursor: string | null }; output: Page<SessionRow> };
+  sessions: { input: { limit: number; cursor: string | null; title: 'full' | 'light' }; output: Page<SessionRow> };
+  sessionsTitle: { input: { keys: string[] }; output: { titles: { conv_key: string; title: string }[] } };
   requests: { input: { key: string; limit: number; cursor: string | null;
     direction: 'forward' | 'older' }; output: Page<RequestRow> };
   detail: { input: { id: number }; output: ReadingDetail };
